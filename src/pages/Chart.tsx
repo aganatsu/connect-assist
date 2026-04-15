@@ -129,17 +129,17 @@ export default function Chart() {
             <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk"]}>
               {/* Confluence Score */}
               <AccordionItem value="confluence">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Zap className="h-3 w-3 text-primary" />
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Zap className="h-3.5 w-3.5 text-primary" />
                     Confluence Score
                     <span className={`font-mono font-bold ml-auto ${confluenceScore >= 6 ? 'text-success' : confluenceScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
                       {confluenceScore}/10
                     </span>
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5 text-[10px]">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
                     <div className="flex justify-between"><span className="text-muted-foreground">HTF Bias</span>
                       <span className={bias === 'bullish' ? 'text-success' : bias === 'bearish' ? 'text-destructive' : ''}>{bias}</span>
                     </div>
@@ -147,7 +147,7 @@ export default function Chart() {
                       <span className={structure.trend === 'bullish' ? 'text-success' : structure.trend === 'bearish' ? 'text-destructive' : ''}>{structure.trend || 'N/A'}</span>
                     </div>
                     {analysis?.reasoning?.slice(0, 3).map((r: string, i: number) => (
-                      <p key={i} className="text-[9px] text-muted-foreground">• {r}</p>
+                      <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
                     ))}
                   </div>
                 </AccordionContent>
@@ -155,14 +155,14 @@ export default function Chart() {
 
               {/* Market Structure */}
               <AccordionItem value="structure">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Activity className="h-3 w-3 text-primary" />
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Activity className="h-3.5 w-3.5 text-primary" />
                     Market Structure
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5 text-[10px]">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
                     <div className="flex justify-between"><span className="text-muted-foreground">BOS</span><span className="font-mono">{structure.bos?.length || 0}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">CHoCH</span><span className="font-mono">{structure.choch?.length || 0}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Active OBs</span><span className="font-mono">{activeOBs.length}</span></div>
@@ -174,20 +174,20 @@ export default function Chart() {
 
               {/* Entry Checklist */}
               <AccordionItem value="checklist">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle className="h-3 w-3 text-primary" />
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle className="h-3.5 w-3.5 text-primary" />
                     Entry Checklist
-                    <span className={`text-[9px] font-bold ml-auto ${
+                    <span className={`text-[10px] font-bold ml-auto ${
                       checklist.rating === 'A+' ? 'text-success' : checklist.rating === 'Strong' ? 'text-success' : checklist.rating === 'Moderate' ? 'text-warning' : 'text-destructive'
                     }`}>{checklist.passCount}/{checklist.total} — {checklist.rating}</span>
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1">
                     {checklist.items.map((item, i) => (
-                      <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                        {item.pass ? <CheckCircle className="h-2.5 w-2.5 text-success shrink-0" /> : <XCircle className="h-2.5 w-2.5 text-destructive shrink-0" />}
+                      <div key={i} className="flex items-center gap-2 text-[11px]">
+                        {item.pass ? <CheckCircle className="h-3 w-3 text-success shrink-0" /> : <XCircle className="h-3 w-3 text-destructive shrink-0" />}
                         <span className={item.pass ? "text-foreground" : "text-muted-foreground"}>{item.name}</span>
                       </div>
                     ))}
@@ -197,14 +197,14 @@ export default function Chart() {
 
               {/* Session / Kill Zone */}
               <AccordionItem value="session">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Clock className="h-3 w-3 text-primary" />
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Clock className="h-3.5 w-3.5 text-primary" />
                     Session / Kill Zone
                   </span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5 text-[10px]">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
                     <div className="flex justify-between"><span className="text-muted-foreground">Current Session</span><span>{session}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Kill Zone</span>
                       <span className={kz.active ? 'text-primary font-medium' : 'text-muted-foreground'}>{kz.active ? kz.name : 'None'}</span>
@@ -216,34 +216,34 @@ export default function Chart() {
               {/* Premium / Discount */}
               {analysis?.premiumDiscount && (
                 <AccordionItem value="premium">
-                  <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                    <span className="flex items-center gap-1.5">
-                      <Target className="h-3 w-3 text-primary" />
+                  <AccordionTrigger className="text-xs px-3 py-2">
+                    <span className="flex items-center gap-2">
+                      <Target className="h-3.5 w-3.5 text-primary" />
                       Premium / Discount
-                      <span className="text-[9px] font-medium ml-auto">{analysis.premiumDiscount.currentZone}</span>
+                      <span className="text-[10px] font-medium ml-auto">{analysis.premiumDiscount.currentZone}</span>
                     </span>
                   </AccordionTrigger>
-                  <AccordionContent className="px-2 pb-1">
-                    <div className="bg-secondary/30 border border-border p-1.5 space-y-1.5">
-                      <div className="relative h-16 border border-border overflow-hidden">
-                        <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-1.5">
-                          <span className="text-[8px] text-destructive font-medium">PREMIUM</span>
+                  <AccordionContent className="px-3 pb-2">
+                    <div className="bg-secondary/30 border border-border p-2 space-y-2">
+                      <div className="relative h-20 border border-border overflow-hidden">
+                        <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2">
+                          <span className="text-[10px] text-destructive font-medium">PREMIUM</span>
                         </div>
                         <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                          <span className="text-[8px] text-muted-foreground font-mono">{analysis.premiumDiscount.equilibrium.toFixed(5)}</span>
+                          <span className="text-[10px] text-muted-foreground font-mono">{analysis.premiumDiscount.equilibrium.toFixed(5)}</span>
                         </div>
-                        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-1.5">
-                          <span className="text-[8px] text-success font-medium">DISCOUNT</span>
+                        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2">
+                          <span className="text-[10px] text-success font-medium">DISCOUNT</span>
                         </div>
-                        <div className="absolute left-1/2 w-2 h-2 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
+                        <div className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
                           style={{ top: `${100 - analysis.premiumDiscount.zonePercent}%` }} />
                       </div>
-                      <div className="flex justify-between text-[9px] text-muted-foreground font-mono">
+                      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
                         <span>H: {analysis.premiumDiscount.swingHigh.toFixed(5)}</span>
                         <span className="text-primary">{analysis.premiumDiscount.zonePercent.toFixed(0)}%</span>
                         <span>L: {analysis.premiumDiscount.swingLow.toFixed(5)}</span>
                       </div>
-                      {analysis.premiumDiscount.oteZone && <p className="text-[9px] text-primary font-medium">✦ OTE Zone Active</p>}
+                      {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
                     </div>
                   </AccordionContent>
                 </AccordionItem>
@@ -252,16 +252,16 @@ export default function Chart() {
               {/* Judas Swing */}
               {analysis?.judasSwing?.detected && (
                 <AccordionItem value="judas">
-                  <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                    <span className="flex items-center gap-1.5 text-primary">
+                  <AccordionTrigger className="text-xs px-3 py-2">
+                    <span className="flex items-center gap-2 text-primary">
                       ⚡ Judas Swing
-                      <span className="text-[9px] ml-auto">{analysis.judasSwing.type}</span>
+                      <span className="text-[10px] ml-auto">{analysis.judasSwing.type}</span>
                     </span>
                   </AccordionTrigger>
-                  <AccordionContent className="px-2 pb-1">
-                    <div className="bg-primary/5 border border-primary/20 p-1.5 text-[10px]">
+                  <AccordionContent className="px-3 pb-2">
+                    <div className="bg-primary/5 border border-primary/20 p-2 text-[11px]">
                       <p>{analysis.judasSwing.description}</p>
-                      <p className="mt-0.5 text-muted-foreground font-mono">Midnight Open: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>
+                      <p className="mt-1 text-muted-foreground font-mono">Midnight Open: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>
                     </div>
                   </AccordionContent>
                 </AccordionItem>
@@ -269,11 +269,11 @@ export default function Chart() {
 
               {/* Key Levels */}
               <AccordionItem value="levels">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5"><Target className="h-3 w-3 text-warning" /> Key Levels</span>
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2"><Target className="h-3.5 w-3.5 text-warning" /> Key Levels</span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5 text-[10px]">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
                     {pdLevels ? (
                       <>
                         <div className="flex justify-between"><span className="text-muted-foreground">PDH</span><span className="font-mono">{pdLevels.pdh?.toFixed(5)}</span></div>
@@ -288,11 +288,11 @@ export default function Chart() {
 
               {/* Risk Calculator */}
               <AccordionItem value="risk">
-                <AccordionTrigger className="text-[11px] px-2 py-1.5">
-                  <span className="flex items-center gap-1.5"><Shield className="h-3 w-3 text-primary" /> Risk Calculator</span>
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2"><Shield className="h-3.5 w-3.5 text-primary" /> Risk Calculator</span>
                 </AccordionTrigger>
-                <AccordionContent className="px-2 pb-1">
-                  <div className="bg-secondary/30 border border-border p-1.5 space-y-0.5 text-[10px]">
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
                     <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">${balance.toFixed(2)}</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Risk %</span><span className="font-mono">{riskPct}%</span></div>
                     <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">${riskAmount.toFixed(2)}</span></div>
