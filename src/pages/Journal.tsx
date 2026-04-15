@@ -15,7 +15,9 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid,
 } from "recharts";
-import { Filter, Calculator, Plus, X, BookOpen } from "lucide-react";
+import { Filter, Calculator, Plus, X, BookOpen, Download, Import } from "lucide-react";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getChartTheme } from "@/lib/chartTheme";
 
 const ALL_SYMBOLS = ["all", ...INSTRUMENTS.map(i => i.symbol)];
 const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep + OB", "Premium/Discount + BOS", "FVG Fill + Confluence", "Manual"];
