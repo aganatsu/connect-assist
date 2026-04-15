@@ -1,95 +1,130 @@
 
 
-# Gap Analysis: What's Built vs. What's Missing
+# UI/UX Overhaul Plan — SMC Trading Dashboard
 
-## Already Done
-- Database: 9 tables with RLS (trades, bot_configs, broker_connections, paper_accounts, paper_positions, paper_trade_history, trade_reasonings, trade_post_mortems, user_settings)
-- Auth: Email/password + Google OAuth, protected routes
-- Edge Functions: market-data, smc-analysis, paper-trading, bot-config, trades, broker-connections, broker-execute, user-settings, fundamentals
-- Pages: Dashboard, Chart, ICT Analysis, Bot Monitor, Journal, Backtest, Settings
-- API layer: unified `src/lib/api.ts` client
-
-## What's NOT Done Yet
-
-### 1. Chart Page — Hardcoded Mock Data
-The Chart page panels (Market Bias, Market Structure, Key Levels, Risk Calculator) show **static hardcoded values** (e.g. "Bullish", "1.0855"). It should call the `smc-analysis` Edge Function with real candle data, like the ICT Analysis page does.
-
-### 2. Backtest — Client-Side Random Data Only
-The Backtest page generates **random fake results** (`generateBacktestResults`). It should call the SMC analysis engine on historical candles from the market-data function. No Edge Function for backtesting exists.
-
-### 3. Live Price Feed / WebSocket
-No real-time price streaming. The spec calls for WebSocket at 5-second intervals with live bid/ask. Currently all data is fetched on-demand via REST. A polling approach (5-10s intervals) fetching quotes from the market-data function is the feasible alternative.
-
-### 4. Dashboard — Live Prices Grid
-The Dashboard shows balance/equity/positions but has **no live prices grid** showing current prices for all watched pairs.
-
-### 5. Dashboard — Active Signals Panel
-No display of current SMC signals with confluence scores before they become trades.
-
-### 6. Journal — Manual Trade Entry
-The Journal only displays trades fetched from the DB. There's no form to **manually add trades** with notes, screenshots, tags, setup type, or SMC context.
-
-### 7. Journal — Performance Analytics per Pair/Setup
-The Journal has basic stats but no **breakdown by pair or by setup type** (e.g. "BOS+OB win rate: 72%").
-
-### 8. Fundamental Analysis Page
-The `fundamentals` Edge Function exists but there's **no frontend page** for the economic calendar, event countdown timers, or news sentiment.
-
-### 9. Bot Config — Editable Parameters
-Settings shows bot config as read-only key/value pairs. The user can't **edit individual parameters** — only reset to defaults.
-
-### 10. Currency Strength Meter
-The SMC analysis function supports `currency_strength` but it's not displayed anywhere in the UI.
-
-### 11. Pair Correlation Matrix
-The SMC function supports `correlation` but no UI shows it.
-
-### 12. Missing Pairs
-Spec lists USD/CHF and EUR/JPY — these aren't in the instrument lists on most pages.
+This plan transforms the current dashboard from a standard sidebar-app into the brutalist trading workstation described in the spec. The changes are organized by priority and grouped logically.
 
 ---
 
-## Implementation Plan
+## What's Already Built (No Changes Needed)
+- 7 views: Dashboard, Chart, ICT Analysis, Bot, Journal, Backtest, Settings
+- Dark theme with semantic colors (success/destructive/warning/primary)
+- Sidebar navigation with collapsible icons
+- All core data flows (live quotes, SMC analysis, paper trading, scan logs)
+- Bot controls, scan history, trade journal, backtest engine
+- Session map, kill zones, premium/discount, currency strength
+- Settings with broker connections, risk management, bot config presets
 
-### Step 1: Wire Chart Page to Real SMC Data
-- Fetch candles via `marketApi.candles()` for the selected symbol/timeframe
-- Call `smcApi.fullAnalysis()` and populate the side panels with real structure, bias, order blocks, FVGs, and key levels
-- Add a dynamic risk calculator using account balance from paper-trading status
+## What Needs to Change
 
-### Step 2: Build Backtest Edge Function
-- Create `supabase/functions/backtest/index.ts` that fetches historical candles, runs SMC analysis bar-by-bar, simulates entries/exits based on confluence scoring
-- Update `Backtest.tsx` to call the edge function instead of generating random data
-- Display real equity curve, drawdown, monthly P&L from the engine output
+### 1. Design System Overhaul (Global CSS)
+Replace current rounded, soft design with brutalist terminal aesthetic:
+- **Zero border radius** everywhere (`--radius: 0px`)
+- Add **Space Grotesk** (headings/labels) and **IBM Plex Mono** (all numbers/prices) fonts
+- Enable tabular numerals globally on mono font
+- Update color tokens to OKLCH-based palette (near-black bg, cyan accent instead of blue)
+- Add custom CSS classes: `.panel` (4px borders), `.glow-cyan`, `.glow-border-left`, `.status-dot-active` (pulsing)
+- Custom scrollbar styling (6px, dark track)
 
-### Step 3: Live Prices Grid on Dashboard
-- Add a polling query (10s interval) that fetches quotes for all watched pairs via `marketApi.quote()`
-- Display a price grid with bid/ask, spread, daily change, and session indicator
-- Add active signals section showing pending SMC setups with confluence scores
+**Files:** `index.html` (font imports), `src/index.css`, `tailwind.config.ts`
 
-### Step 4: Create Fundamentals Page
-- New `src/pages/Fundamentals.tsx` with economic calendar view
-- Call `fundamentalsApi.data()` to get events, display with impact badges (high/medium/low)
-- Event countdown timers, currency-pair mapping
-- Add route to App.tsx and sidebar nav
+### 2. Navigation — Icon Rail (Replace Sidebar)
+Replace the current `AppSidebar` + `AppShell` with a **48px vertical icon rail**:
+- Fixed left rail with icons only (no text, no collapsing)
+- Active state: 2px cyan left border + cyan bg tint
+- Hover tooltips showing label + keyboard shortcut
+- **Keyboard shortcuts**: `1`-`7` for view switching, `/` for instrument search, `Escape` to dismiss
+- Instrument search panel: slides out from rail on `/` press, filters instruments, dispatches `smc-symbol-change` event
 
-### Step 5: Journal Manual Trade Entry + Analytics
-- Add a dialog/form for manual trade entry with fields: symbol, direction, entry/exit price, notes, setup type, screenshot URL, timeframe, tags
-- Add "Performance by Pair" and "Performance by Setup" tab with win rate / profit factor breakdowns
-- Wire `tradesApi.create()` for manual entries
+**Files:** New `src/components/IconRail.tsx`, new `src/components/InstrumentSearch.tsx`, update `src/components/AppShell.tsx`
 
-### Step 6: Editable Bot Config
-- Replace read-only config display with editable form fields (inputs, switches, selects)
-- Group by category (strategy, risk, entry, exit, instruments, sessions)
-- Call `botConfigApi.update()` on save
-- Add strategy presets (conservative, moderate, aggressive)
+### 3. Status Bar (Footer)
+Add a **24px footer** across the bottom:
+- Connection status (green/red WiFi icon)
+- "PAPER MODE" label
+- Data source label ("Yahoo Finance")
+- Local clock (updated every 60s)
 
-### Step 7: Currency Strength + Correlation
-- Add a "Market Overview" section to Dashboard or ICT Analysis showing currency strength meter (bar chart)
-- Add correlation matrix display (heatmap or table)
-- Call `smcApi.currencyStrength()` and `smcApi.correlation()`
+**Files:** New `src/components/StatusBar.tsx`, update `src/components/AppShell.tsx`
 
-### Step 8: Add Missing Pairs + Polish
-- Add USD/CHF, EUR/JPY, NZD/USD to all instrument lists
-- Add live quote polling to Chart page header (current price + spread)
-- Session/killzone indicator on Chart page
+### 4. Dashboard View Enhancements
+- Add **Active Signals Strip** below live prices (signals from latest scan)
+- Add **Bot Activity Timeline** at bottom (last 20 events with colored icons and timestamps)
+- Apply mono font to all price/number displays
+- Flash animation on price changes
+
+**Files:** Update `src/pages/Index.tsx`
+
+### 5. Chart View — Analysis Panel Upgrades
+Add missing accordion panels to the right sidebar:
+- **Confluence Score panel** — large score display with bias badge
+- **Multi-Timeframe panel** — weekly/daily/4H/1H trend badges
+- **Entry Checklist** — pass/fail items with go/no-go score rating (A+/Strong/Moderate/Weak)
+- **Session / Kill Zone panel** — current session, active KZ, session high/low
+- **Judas Swing panel** — detection status, type, midnight open
+- Make analysis panel **collapsible** (hide/show entire right side)
+
+**Files:** Update `src/pages/Chart.tsx`
+
+### 6. Bot View — Full Spec Layout
+Major restructure into three-zone layout:
+- **Top control bar**: Start/Stop/Pause + manual order form (collapsible) + engine status badge + mode toggle
+- **Manual Order Form**: Order type, symbol, direction, size, trigger price, SL, TP, reason, score
+- **Left column (~65%)**: Tabbed positions (Open / Pending / Closed Today / All History)
+- **Right column (~35%)**: Account summary, strategy metrics, autonomous engine controls, latest scan results with factor tags
+- **Bottom zone**: Live log stream with colored icons
+- **Safety overlays**: Kill switch banner (full-width red), live mode banner, live mode confirmation dialog
+
+**Files:** Update `src/pages/BotView.tsx`
+
+### 7. Journal View — Trade Detail Panel
+- Add **clickable trade rows** that open a slide-in detail panel (~35% width)
+- Detail panel shows: full trade card, signal reasoning, post-mortem section
+- Add **date range picker** to filter bar
+- Performance tab: add daily P&L bar chart
+
+**Files:** Update `src/pages/Journal.tsx`
+
+### 8. Backtest View — Configuration Sidebar
+Restructure into two-pane layout:
+- **Left config sidebar** with collapsible sections: General, Spread/Slippage, Strategy (SMC toggles), Risk, Entry, Exit, Sessions
+- Add missing parameters: cooldown, pyramiding, close-on-reverse, trailing stop, break-even, partial TP, time-based exit
+- Results: add monthly P&L heatmap, setup distribution, exit distribution, long vs short breakdown
+- **Saved runs** with localStorage persistence and comparison mode
+
+**Files:** Update `src/pages/Backtest.tsx`
+
+### 9. Settings — Bot Config as Full-Screen Modal
+Move bot configuration from Settings tab into a **full-screen modal overlay** accessible from Bot view's "Config" button:
+- 8 sections: Strategy, Risk, Entry, Exit, Instruments, Sessions, Notifications, Protection
+- Uses toggle/number/select/section primitives
+- Progressive disclosure with collapsible subsections
+
+**Files:** New `src/components/BotConfigModal.tsx`, update `src/pages/BotView.tsx`, update `src/pages/Settings.tsx`
+
+### 10. ICT Analysis — Missing Panels
+Add:
+- **Correlation Matrix** — color-coded grid of pair correlations
+- **Fundamentals section** — economic calendar with countdowns (already exists on separate page, integrate here)
+
+**Files:** Update `src/pages/IctAnalysis.tsx`
+
+---
+
+## Implementation Order
+1. Design system + fonts (CSS/Tailwind) — foundation for everything
+2. Icon rail + status bar + AppShell restructure
+3. Dashboard enhancements
+4. Chart view panels
+5. Bot view full restructure + config modal
+6. Journal detail panel
+7. Backtest config sidebar
+8. ICT Analysis additions
+
+## Technical Notes
+- Keyboard shortcuts use a global `useEffect` with `keydown` listener, disabled when `activeElement` is an input/textarea
+- Instrument search dispatches `window.dispatchEvent(new CustomEvent('smc-symbol-change', { detail: { symbol } }))`
+- Views listen via `useEffect` + `addEventListener`
+- All number displays get `font-mono` class with `font-feature-settings: "tnum" 1`
+- No backend changes needed — this is purely frontend UI/UX
 
