@@ -125,7 +125,7 @@ export default function Chart() {
 
         {/* Analysis Panels */}
         {panelOpen && (
-          <div className="w-60 overflow-y-auto space-y-0">
+          <div className="w-80 overflow-y-auto space-y-0">
             <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk"]}>
               {/* Confluence Score */}
               <AccordionItem value="confluence">
