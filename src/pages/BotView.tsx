@@ -23,6 +23,7 @@ export default function BotView() {
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
+  const [selectedPairIdx, setSelectedPairIdx] = useState(0);
 
   // Order form state
   const [orderType, setOrderType] = useState("market");
