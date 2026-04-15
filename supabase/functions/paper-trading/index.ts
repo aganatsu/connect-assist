@@ -11,6 +11,8 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
   "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
+  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
+  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1200 },
   "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
   "XAU/USD": { pipSize: 0.01, lotUnits: 100, marginPerLot: 2000 },
@@ -21,6 +23,88 @@ function calcPnl(dir: string, entry: number, current: number, size: number, symb
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
   return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
+}
+
+// ─── Post-Mortem Generation ─────────────────────────────────────────
+function generatePostMortem(
+  position: any, exitPrice: number, pnl: number, pnlPips: number, closeReason: string,
+): any {
+  const entryPrice = parseFloat(position.entry_price);
+  const signalScore = parseFloat(position.signal_score || "0");
+  const signalReason = position.signal_reason || "";
+  const openTime = position.open_time;
+  const closedAt = new Date().toISOString();
+
+  // Determine outcome
+  const outcome = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "Breakeven";
+
+  // Parse factors from signal reason
+  const factorNames = [
+    "Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount",
+    "Session/Kill Zone", "Judas Swing", "PD/PW Levels", "Reversal Candle", "Liquidity Sweep",
+  ];
+  const presentFactors = factorNames.filter(f => signalReason.includes(f));
+  const absentFactors = factorNames.filter(f => !signalReason.includes(f));
+
+  // Calculate hold duration
+  let holdDuration = "Unknown";
+  try {
+    const openMs = new Date(openTime).getTime();
+    const closeMs = new Date(closedAt).getTime();
+    const diffMs = closeMs - openMs;
+    const hours = Math.floor(diffMs / 3600000);
+    const minutes = Math.floor((diffMs % 3600000) / 60000);
+    holdDuration = `${hours}h ${minutes}m`;
+  } catch {}
+
+  // Generate insights
+  let whatWorked = "";
+  let whatFailed = "";
+  let lessonLearned = "";
+
+  if (outcome === "Win") {
+    whatWorked = presentFactors.length > 0
+      ? `Confluence factors aligned correctly: ${presentFactors.join(", ")}`
+      : "Trade direction was correct";
+    whatFailed = absentFactors.length > 0
+      ? `Not all factors were present: missing ${absentFactors.join(", ")}`
+      : "All factors aligned — textbook setup";
+    lessonLearned = signalScore >= 7
+      ? "High-confluence setup played out as expected. Continue targeting similar setups."
+      : "Trade won despite moderate confluence. Consider if the setup was fortunate or skill-based.";
+  } else if (outcome === "Loss") {
+    whatWorked = presentFactors.length > 0
+      ? `These factors were correctly identified: ${presentFactors.join(", ")}`
+      : "Signal was generated but lacked strong confluence";
+    whatFailed = closeReason === "sl_hit"
+      ? "Stop loss was hit — market structure changed after entry or SL was too tight"
+      : `Trade closed with loss: ${closeReason}`;
+    lessonLearned = signalScore < 7
+      ? `Confluence score was ${signalScore}/10. Consider raising minimum threshold to reduce weak signals.`
+      : "Setup had good confluence but market conditions shifted. Review if HTF bias was truly aligned.";
+  } else {
+    whatWorked = "Trade reached breakeven — partial validation of the setup";
+    whatFailed = "Insufficient momentum for follow-through to TP";
+    lessonLearned = "Consider tighter entry timing or wider TP targets for similar setups.";
+  }
+
+  return {
+    outcome,
+    pnl,
+    pnlPips,
+    holdDuration,
+    exitReason: closeReason,
+    confluenceScore: signalScore,
+    factorsPresent: presentFactors,
+    factorsAbsent: absentFactors,
+    whatWorked,
+    whatFailed,
+    lessonLearned,
+    entryPrice,
+    exitPrice,
+    direction: position.direction,
+    symbol: position.symbol,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -46,6 +130,7 @@ Deno.serve(async (req) => {
       const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
 
       const balance = parseFloat(account?.balance || "10000");
+      const peakBalance = parseFloat(account?.peak_balance || "10000");
       const posArr = (positions || []).map((p: any) => ({
         id: p.position_id, symbol: p.symbol, direction: p.direction,
         size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
@@ -68,6 +153,7 @@ Deno.serve(async (req) => {
       }));
       const wins = histArr.filter((t: any) => t.pnl > 0).length;
       const losses = histArr.filter((t: any) => t.pnl <= 0).length;
+      const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
 
       return respond({
         balance, equity: balance + unrealizedPnl, unrealizedPnl,
@@ -81,8 +167,14 @@ Deno.serve(async (req) => {
         rejectedCount: account?.rejected_count || 0,
         executionMode: account?.execution_mode || "paper",
         killSwitchActive: account?.kill_switch_active || false,
-        dailyPnl: 0, drawdown: 0, marginUsed: 0, freeMargin: balance + unrealizedPnl,
-        marginLevel: 0, uptime: 0, strategy: { name: "SMC Default", winRate: histArr.length > 0 ? (wins / histArr.length) * 100 : 0, avgRR: 0, profitFactor: 0, expectancy: 0, maxDrawdown: 0 },
+        dailyPnl: 0, drawdown,
+        marginUsed: 0, freeMargin: balance + unrealizedPnl,
+        marginLevel: 0, uptime: 0,
+        strategy: {
+          name: "SMC Default",
+          winRate: histArr.length > 0 ? (wins / histArr.length) * 100 : 0,
+          avgRR: 0, profitFactor: 0, expectancy: 0, maxDrawdown: drawdown,
+        },
         log: [],
       });
     }
@@ -90,16 +182,13 @@ Deno.serve(async (req) => {
     // ── Place order ──
     if (action === "place_order") {
       const { symbol, direction, size, stopLoss, takeProfit, signalReason, signalScore } = payload;
-      // Ensure account exists
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
       if (!account) {
         await supabase.from("paper_accounts").insert({ user_id: user.id, balance: "10000", peak_balance: "10000", daily_pnl_base: "10000" });
       }
-      // Get current price via market data
       const positionId = crypto.randomUUID().slice(0, 8);
       const orderId = crypto.randomUUID().slice(0, 8);
       const now = new Date().toISOString();
-      // Use payload entry price or 0
       const entryPrice = payload.entryPrice || 0;
 
       await supabase.from("paper_positions").insert({
@@ -122,6 +211,7 @@ Deno.serve(async (req) => {
 
       const ep = exitPrice || parseFloat(pos.current_price);
       const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
+      const closeReason = payload.reason || "manual";
 
       // Record in history
       await supabase.from("paper_trade_history").insert({
@@ -129,7 +219,7 @@ Deno.serve(async (req) => {
         direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
         exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
         open_time: pos.open_time, closed_at: new Date().toISOString(),
-        close_reason: payload.reason || "manual", signal_reason: pos.signal_reason || "",
+        close_reason: closeReason, signal_reason: pos.signal_reason || "",
         signal_score: pos.signal_score, order_id: pos.order_id,
       });
 
@@ -137,18 +227,36 @@ Deno.serve(async (req) => {
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
       const newBalance = parseFloat(account.balance) + pnl;
       const newPeak = Math.max(parseFloat(account.peak_balance), newBalance);
-      await supabase.from("paper_accounts").update({ balance: newBalance.toString(), peak_balance: newPeak.toString() }).eq("user_id", user.id);
+      await supabase.from("paper_accounts").update({
+        balance: newBalance.toString(),
+        peak_balance: newPeak.toString(),
+      }).eq("user_id", user.id);
+
+      // Generate post-mortem
+      const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, closeReason);
+      await supabase.from("trade_post_mortems").insert({
+        user_id: user.id,
+        position_id: pos.position_id,
+        symbol: pos.symbol,
+        exit_reason: closeReason,
+        exit_price: ep.toString(),
+        pnl: pnl.toString(),
+        what_worked: postMortem.whatWorked,
+        what_failed: postMortem.whatFailed,
+        lesson_learned: postMortem.lessonLearned,
+        detail_json: postMortem,
+      });
 
       // Remove position
       await supabase.from("paper_positions").delete().eq("id", pos.id);
 
-      return respond({ success: true, pnl, pnlPips });
+      return respond({ success: true, pnl, pnlPips, postMortem });
     }
 
     // ── Engine controls ──
     if (action === "start_engine") {
       await ensureAccount(supabase, user.id);
-      await supabase.from("paper_accounts").update({ is_running: true, started_at: new Date().toISOString() }).eq("user_id", user.id);
+      await supabase.from("paper_accounts").update({ is_running: true, is_paused: false, started_at: new Date().toISOString() }).eq("user_id", user.id);
       return respond({ success: true });
     }
     if (action === "pause_engine") {
@@ -160,25 +268,72 @@ Deno.serve(async (req) => {
       return respond({ success: true });
     }
     if (action === "kill_switch") {
-      await supabase.from("paper_accounts").update({ kill_switch_active: payload.active }).eq("user_id", user.id);
-      if (payload.active) {
-        // Close all positions
-        const { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id);
-        // Would need to close each — simplified here
-        await supabase.from("paper_accounts").update({ is_running: false, is_paused: false }).eq("user_id", user.id);
+      const active = payload.active;
+      if (active) {
+        // Close all open positions
+        const { data: positions } = await supabase.from("paper_positions").select("*")
+          .eq("user_id", user.id).eq("position_status", "open");
+        const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).single();
+
+        if (positions && positions.length > 0) {
+          let totalPnl = 0;
+          for (const pos of positions) {
+            const ep = parseFloat(pos.current_price);
+            const { pnl, pnlPips } = calcPnl(pos.direction, parseFloat(pos.entry_price), ep, parseFloat(pos.size), pos.symbol);
+            totalPnl += pnl;
+
+            await supabase.from("paper_trade_history").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+              exit_price: ep.toString(), pnl: pnl.toString(), pnl_pips: pnlPips.toString(),
+              open_time: pos.open_time, closed_at: new Date().toISOString(),
+              close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
+              signal_score: pos.signal_score, order_id: pos.order_id,
+            });
+
+            const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, "kill_switch");
+            await supabase.from("trade_post_mortems").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              exit_reason: "kill_switch", exit_price: ep.toString(), pnl: pnl.toString(),
+              what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
+              lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
+            });
+          }
+
+          await supabase.from("paper_positions").delete().eq("user_id", user.id);
+
+          if (account) {
+            const newBal = parseFloat(account.balance) + totalPnl;
+            await supabase.from("paper_accounts").update({
+              balance: newBal.toString(),
+              peak_balance: Math.max(parseFloat(account.peak_balance), newBal).toString(),
+            }).eq("user_id", user.id);
+          }
+        }
+
+        await supabase.from("paper_accounts").update({
+          kill_switch_active: true, is_running: false, is_paused: false,
+        }).eq("user_id", user.id);
+      } else {
+        await supabase.from("paper_accounts").update({ kill_switch_active: false }).eq("user_id", user.id);
       }
       return respond({ success: true });
     }
+
     if (action === "reset_account") {
       await supabase.from("paper_positions").delete().eq("user_id", user.id);
       await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
+      await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
+      await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
+      await supabase.from("scan_logs").delete().eq("user_id", user.id);
       await supabase.from("paper_accounts").update({
         balance: "10000", peak_balance: "10000", is_running: false, is_paused: false,
         scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: "10000",
-        kill_switch_active: false, execution_mode: "paper",
+        daily_pnl_date: "", kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
       return respond({ success: true });
     }
+
     if (action === "set_execution_mode") {
       await supabase.from("paper_accounts").update({ execution_mode: payload.mode }).eq("user_id", user.id);
       return respond({ success: true });

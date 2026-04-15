@@ -1,17 +1,40 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
-// ─── Config ─────────────────────────────────────────────────────────
-const SCAN_PAIRS = [
-  "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-  "GBP/JPY", "EUR/GBP", "NZD/USD", "USD/CHF", "EUR/JPY",
-];
+// ─── Default Config (overridden by bot_configs) ─────────────────────
+const DEFAULTS = {
+  minConfluence: 6,
+  htfBiasRequired: true,
+  entryTimeframe: "15min",
+  htfTimeframe: "1day",
+  onlyBuyInDiscount: true,
+  onlySellInPremium: true,
+  riskPerTrade: 1,
+  maxDailyLoss: 5,
+  maxDrawdown: 15,
+  maxOpenPositions: 5,
+  maxPerSymbol: 2,
+  portfolioHeat: 10,
+  minRiskReward: 1.5,
+  tpMethod: "rr_ratio",
+  tpRatio: 2.0,
+  slMethod: "structure",
+  slBufferPips: 2,
+  breakEvenEnabled: true,
+  breakEvenPips: 20,
+  enabledSessions: ["London", "New York"],
+  enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
+  instruments: [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF",
+  ],
+};
 
 const YAHOO_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
   "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
   "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
-  "EUR/JPY": "EURJPY=X",
+  "EUR/JPY": "EURJPY=X", "XAU/USD": "GC=F",
 };
 
 const SPECS: Record<string, { pipSize: number; lotUnits: number }> = {
@@ -25,19 +48,19 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number }> = {
   "NZD/USD": { pipSize: 0.0001, lotUnits: 100000 },
   "USD/CHF": { pipSize: 0.0001, lotUnits: 100000 },
   "EUR/JPY": { pipSize: 0.01, lotUnits: 100000 },
+  "XAU/USD": { pipSize: 0.01, lotUnits: 100 },
 };
-
-const MIN_CONFLUENCE = 6; // Minimum score to place a trade
-const DEFAULT_RISK_PERCENT = 1; // 1% risk per trade
-const MAX_OPEN_POSITIONS = 3;
 
 // ─── Types ──────────────────────────────────────────────────────────
 interface Candle { datetime: string; open: number; high: number; low: number; close: number; volume?: number; }
 interface SwingPoint { index: number; price: number; type: "high" | "low"; datetime: string; }
 interface OrderBlock { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; mitigatedPercent: number; }
 interface FairValueGap { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; }
+interface LiquidityPool { price: number; type: "buy-side" | "sell-side"; strength: number; datetime: string; swept: boolean; }
+interface ReasoningFactor { name: string; present: boolean; weight: number; detail: string; }
 
-// ─── SMC Analysis (inline to avoid cross-function imports) ──────────
+// ─── SMC Analysis Functions ─────────────────────────────────────────
+
 function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[] {
   const swings: SwingPoint[] = [];
   for (let i = lookback; i < candles.length - lookback; i++) {
@@ -57,20 +80,22 @@ function analyzeMarketStructure(candles: Candle[]) {
   const highs = swings.filter(s => s.type === "high"), lows = swings.filter(s => s.type === "low");
   let currentTrend = "ranging";
   const bos: any[] = [], choch: any[] = [];
+
   for (let i = 1; i < highs.length; i++) {
     if (highs[i].price > highs[i - 1].price) {
-      if (currentTrend === "bearish") choch.push({ type: "bullish", price: highs[i].price });
-      else bos.push({ type: "bullish", price: highs[i].price });
+      if (currentTrend === "bearish") choch.push({ type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
+      else bos.push({ type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
       currentTrend = "bullish";
     }
   }
   for (let i = 1; i < lows.length; i++) {
     if (lows[i].price < lows[i - 1].price) {
-      if (currentTrend === "bullish") choch.push({ type: "bearish", price: lows[i].price });
-      else bos.push({ type: "bearish", price: lows[i].price });
+      if (currentTrend === "bullish") choch.push({ type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
+      else bos.push({ type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
       currentTrend = "bearish";
     }
   }
+
   let trend: "bullish" | "bearish" | "ranging" = "ranging";
   if (highs.length >= 2 && lows.length >= 2) {
     const rH = highs.slice(-2), rL = lows.slice(-2);
@@ -122,6 +147,122 @@ function detectFVGs(candles: Candle[]): FairValueGap[] {
   return fvgs;
 }
 
+function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPool[] {
+  const pools: LiquidityPool[] = [];
+  const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
+  const tol = priceRange * tolerance;
+  const last = candles[candles.length - 1];
+  const usedH = new Set<number>(), usedL = new Set<number>();
+
+  for (let i = 0; i < candles.length; i++) {
+    if (usedH.has(i)) continue;
+    let count = 1;
+    for (let j = i + 1; j < candles.length; j++) {
+      if (usedH.has(j)) continue;
+      if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
+    }
+    if (count >= 2) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
+  }
+  for (let i = 0; i < candles.length; i++) {
+    if (usedL.has(i)) continue;
+    let count = 1;
+    for (let j = i + 1; j < candles.length; j++) {
+      if (usedL.has(j)) continue;
+      if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
+    }
+    if (count >= 2) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
+  }
+  return pools.sort((a, b) => b.strength - a.strength);
+}
+
+function detectJudasSwing(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
+  const none = { detected: false, type: null as any, confirmed: false, description: "No Judas Swing" };
+  if (candles.length < 20) return none;
+  const recent = candles.slice(-20);
+  const midnightOpen = recent[0].open;
+  const range = Math.max(...recent.map(c => c.high)) - Math.min(...recent.map(c => c.low));
+  const firstHalf = recent.slice(0, 10);
+  const secondHalf = recent.slice(10);
+  const currentClose = recent[recent.length - 1].close;
+
+  // Check for bullish Judas: price drops below open then reverses above
+  const firstHalfLow = Math.min(...firstHalf.map(c => c.low));
+  const dropBelow = midnightOpen - firstHalfLow;
+  if (dropBelow > range * 0.3 && currentClose > midnightOpen) {
+    return { detected: true, type: "bullish", confirmed: true, description: `Bullish Judas: false break below ${midnightOpen.toFixed(5)}, reversed above` };
+  }
+
+  // Check for bearish Judas: price spikes above open then reverses below
+  const firstHalfHigh = Math.max(...firstHalf.map(c => c.high));
+  const spikeAbove = firstHalfHigh - midnightOpen;
+  if (spikeAbove > range * 0.3 && currentClose < midnightOpen) {
+    return { detected: true, type: "bearish", confirmed: true, description: `Bearish Judas: false break above ${midnightOpen.toFixed(5)}, reversed below` };
+  }
+
+  return none;
+}
+
+function detectReversalCandle(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null } {
+  if (candles.length < 2) return { detected: false, type: null };
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const bodySize = Math.abs(last.close - last.open);
+  const totalRange = last.high - last.low;
+  if (totalRange === 0) return { detected: false, type: null };
+
+  // Pin bar: body < 30% of range, wick > 60% of range
+  const upperWick = last.high - Math.max(last.open, last.close);
+  const lowerWick = Math.min(last.open, last.close) - last.low;
+
+  // Bullish pin bar
+  if (bodySize / totalRange < 0.3 && lowerWick / totalRange > 0.6 && last.close > last.open) {
+    return { detected: true, type: "bullish" };
+  }
+  // Bearish pin bar
+  if (bodySize / totalRange < 0.3 && upperWick / totalRange > 0.6 && last.close < last.open) {
+    return { detected: true, type: "bearish" };
+  }
+
+  // Bullish engulfing
+  if (prev.close < prev.open && last.close > last.open && last.open <= prev.close && last.close >= prev.open) {
+    return { detected: true, type: "bullish" };
+  }
+  // Bearish engulfing
+  if (prev.close > prev.open && last.close < last.open && last.open >= prev.close && last.close <= prev.open) {
+    return { detected: true, type: "bearish" };
+  }
+
+  return { detected: false, type: null };
+}
+
+function calculatePDLevels(dailyCandles: Candle[]) {
+  if (dailyCandles.length < 10) return null;
+  const prev = dailyCandles[dailyCandles.length - 2];
+  const weekCandles = dailyCandles.slice(-5);
+  return {
+    pdh: prev.high, pdl: prev.low, pdo: prev.open, pdc: prev.close,
+    pwh: Math.max(...weekCandles.map(c => c.high)),
+    pwl: Math.min(...weekCandles.map(c => c.low)),
+    pwo: weekCandles[0].open,
+    pwc: weekCandles[weekCandles.length - 1].close,
+  };
+}
+
+function calculatePremiumDiscount(candles: Candle[]) {
+  const swings = detectSwingPoints(candles);
+  const highs = swings.filter(s => s.type === "high");
+  const lows = swings.filter(s => s.type === "low");
+  const sh = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : candles[candles.length - 1].high;
+  const sl = lows.length > 0 ? Math.min(...lows.map(l => l.price)) : candles[candles.length - 1].low;
+  const eq = (sh + sl) / 2;
+  const range = sh - sl;
+  const cp = candles[candles.length - 1].close;
+  const zp = range > 0 ? ((cp - sl) / range) * 100 : 50;
+  const zone = zp > 55 ? "premium" : zp < 45 ? "discount" : "equilibrium";
+  const oteZone = zp >= 62 && zp <= 79;
+  return { swingHigh: sh, swingLow: sl, equilibrium: eq, currentZone: zone, zonePercent: zp, oteZone };
+}
+
 function detectSession() {
   const now = new Date();
   const utcH = now.getUTCHours();
@@ -132,96 +273,189 @@ function detectSession() {
   return { name, active, isKillZone };
 }
 
-function calculatePremiumDiscount(candles: Candle[]) {
-  const swings = detectSwingPoints(candles);
-  const highs = swings.filter(s => s.type === "high");
-  const lows = swings.filter(s => s.type === "low");
-  const sh = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : candles[candles.length - 1].high;
-  const sl = lows.length > 0 ? Math.min(...lows.map(l => l.price)) : candles[candles.length - 1].low;
-  const range = sh - sl;
-  const cp = candles[candles.length - 1].close;
-  const zp = range > 0 ? ((cp - sl) / range) * 100 : 50;
-  const zone = zp > 55 ? "premium" : zp < 45 ? "discount" : "equilibrium";
-  return { swingHigh: sh, swingLow: sl, currentZone: zone, zonePercent: zp };
-}
-
-function runConfluenceScore(candles: Candle[]) {
+// ─── Full 9-Factor Confluence Scoring ───────────────────────────────
+function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
   const fvgs = detectFVGs(candles);
-  const session = detectSession();
+  const liquidityPools = detectLiquidityPools(candles);
+  const judasSwing = detectJudasSwing(candles);
+  const reversalCandle = detectReversalCandle(candles);
   const pd = calculatePremiumDiscount(candles);
+  const session = detectSession();
+  const pdLevels = dailyCandles ? calculatePDLevels(dailyCandles) : null;
 
-  let score = 0;
-  const reasoning: string[] = [];
-
-  // Trend confirmation
-  if (structure.trend !== "ranging") { score += 2; reasoning.push(`${structure.trend} trend`); }
-
-  // Active order blocks near price
-  const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
   const lastPrice = candles[candles.length - 1].close;
-  const spec = { pipSize: 0.0001 }; // default
-  const nearbyOBs = activeOBs.filter(ob => {
-    const dist = Math.abs(lastPrice - (ob.high + ob.low) / 2);
-    return dist < lastPrice * 0.005; // within 0.5%
-  });
-  if (nearbyOBs.length > 0) { score += 2.5; reasoning.push(`${nearbyOBs.length} nearby OBs`); }
-  else if (activeOBs.length > 0) { score += 1; reasoning.push(`${activeOBs.length} active OBs (not nearby)`); }
+  let score = 0;
+  const factors: ReasoningFactor[] = [];
 
-  // FVGs
-  const activeFVGs = fvgs.filter(f => !f.mitigated);
-  if (activeFVGs.length > 0) { score += 1.5; reasoning.push(`${activeFVGs.length} unfilled FVGs`); }
+  // ── Factor 1: Market Structure (max 2.0) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (structure.trend !== "ranging") { pts += 1; detail = `${structure.trend} trend`; }
+    if (structure.choch.length > 0) { pts += 1; detail += `, ${structure.choch.length} CHoCH`; }
+    else if (structure.bos.length > 0) { pts += 0.5; detail += `, ${structure.bos.length} BOS`; }
+    pts = Math.min(2, pts);
+    score += pts;
+    factors.push({ name: "Market Structure", present: pts > 0, weight: 2.0, detail: detail || "Ranging — no trend" });
+  }
 
-  // Premium/discount alignment
-  if (structure.trend === "bullish" && pd.currentZone === "discount") { score += 2; reasoning.push("Bullish in discount zone"); }
-  else if (structure.trend === "bearish" && pd.currentZone === "premium") { score += 2; reasoning.push("Bearish in premium zone"); }
-  else if (pd.currentZone !== "equilibrium") { score += 0.5; reasoning.push(`In ${pd.currentZone} zone`); }
+  // ── Factor 2: Order Block (max 2.0) ──
+  {
+    const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
+    let pts = 0;
+    let detail = "";
+    // Check if price is INSIDE an active OB
+    const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
+    if (insideOB) {
+      pts = 2.0;
+      detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+    } else if (activeOBs.length > 0) {
+      pts = 0.5;
+      detail = `${activeOBs.length} active OBs nearby`;
+    }
+    score += pts;
+    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
+  }
 
-  // Kill zone bonus
-  if (session.isKillZone) { score += 1; reasoning.push(`${session.name} kill zone`); }
+  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  {
+    const activeFVGs = fvgs.filter(f => !f.mitigated);
+    let pts = 0;
+    let detail = "";
+    const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
+    if (insideFVG) {
+      pts = 1.5;
+      detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
+    } else if (activeFVGs.length > 0) {
+      pts = 0.5;
+      detail = `${activeFVGs.length} unfilled FVGs in range`;
+    }
+    score += pts;
+    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: 1.5, detail: detail || "No active FVGs" });
+  }
 
-  // BOS/CHoCH recency
-  if (structure.bos.length > 0) { score += 0.5; reasoning.push("Recent BOS"); }
-  if (structure.choch.length > 0) { score += 0.5; reasoning.push("CHoCH detected"); }
+  // ── Factor 4: Premium/Discount (max 2.0) ──
+  {
+    let pts = 0;
+    let detail = `Price at ${pd.zonePercent.toFixed(1)}% — ${pd.currentZone} zone`;
+    if (structure.trend === "bullish" && pd.currentZone === "discount") { pts += 1.5; }
+    else if (structure.trend === "bearish" && pd.currentZone === "premium") { pts += 1.5; }
+    if (pd.oteZone) { pts += 0.5; detail += " — OTE zone active"; }
+    pts = Math.min(2, pts);
+    score += pts;
+    factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
+  }
+
+  // ── Factor 5: Kill Zone (max 1.0) ──
+  {
+    const pts = session.isKillZone ? 1 : 0;
+    const detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    score += pts;
+    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
+  }
+
+  // ── Factor 6: Judas Swing (max 1.0) ──
+  {
+    let pts = 0;
+    if (judasSwing.detected && judasSwing.confirmed) pts = 1;
+    else if (judasSwing.detected) pts = 0.5;
+    score += pts;
+    factors.push({ name: "Judas Swing", present: pts > 0, weight: 1.0, detail: judasSwing.description });
+  }
+
+  // ── Factor 7: PD/PW Levels (max 0.5) ──
+  {
+    let pts = 0;
+    let detail = "No PD/PW levels";
+    if (pdLevels) {
+      const threshold = lastPrice * 0.002;
+      const nearLevel = [
+        { name: "PDH", price: pdLevels.pdh }, { name: "PDL", price: pdLevels.pdl },
+        { name: "PWH", price: pdLevels.pwh }, { name: "PWL", price: pdLevels.pwl },
+      ].find(l => Math.abs(lastPrice - l.price) <= threshold);
+      if (nearLevel) {
+        pts = 0.5;
+        detail = `Price near ${nearLevel.name} (${nearLevel.price.toFixed(5)})`;
+      } else {
+        detail = `PDH=${pdLevels.pdh.toFixed(5)}, PDL=${pdLevels.pdl.toFixed(5)}, PWH=${pdLevels.pwh.toFixed(5)}, PWL=${pdLevels.pwl.toFixed(5)}`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 0.5, detail });
+  }
+
+  // ── Factor 8: Reversal Candle (max 0.5) ──
+  {
+    const pts = reversalCandle.detected ? 0.5 : 0;
+    const detail = reversalCandle.detected ? `${reversalCandle.type} reversal candle on latest bar` : "No reversal pattern";
+    score += pts;
+    factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail });
+  }
+
+  // ── Factor 9: Liquidity Sweep (max 0.5) ──
+  {
+    const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
+    const pts = sweptPool ? 0.5 : 0;
+    const detail = sweptPool ? `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)` : "No recent liquidity sweep";
+    score += pts;
+    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 0.5, detail });
+  }
 
   score = Math.min(10, Math.round(score * 10) / 10);
 
-  // Determine trade direction
+  // Determine direction
   let direction: "long" | "short" | null = null;
   if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
   else if (structure.trend === "bearish" && pd.currentZone !== "discount") direction = "short";
 
-  // Calculate SL/TP from nearest OB or swing
+  // Calculate SL/TP (structure-based)
   let stopLoss: number | null = null;
   let takeProfit: number | null = null;
   const swings = structure.swingPoints;
+  const spec = SPECS[candles[0]?.datetime ? "EUR/USD" : "EUR/USD"]; // will be overridden per-symbol
 
   if (direction === "long") {
-    const recentLows = swings.filter(s => s.type === "low").slice(-3);
-    if (recentLows.length > 0) stopLoss = Math.min(...recentLows.map(s => s.price)) - lastPrice * 0.0005;
-    const recentHighs = swings.filter(s => s.type === "high").slice(-3);
-    if (recentHighs.length > 0 && stopLoss) {
+    const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
+    if (recentLows.length > 0) {
+      const nearestLow = Math.max(...recentLows.map(s => s.price)); // nearest below
+      stopLoss = nearestLow - config.slBufferPips * 0.0001; // will adjust for JPY pairs
+    }
+    if (stopLoss) {
       const risk = lastPrice - stopLoss;
-      takeProfit = lastPrice + risk * 2; // 2:1 RR
+      takeProfit = lastPrice + risk * config.tpRatio;
     }
   } else if (direction === "short") {
-    const recentHighs = swings.filter(s => s.type === "high").slice(-3);
-    if (recentHighs.length > 0) stopLoss = Math.max(...recentHighs.map(s => s.price)) + lastPrice * 0.0005;
+    const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
+    if (recentHighs.length > 0) {
+      const nearestHigh = Math.min(...recentHighs.map(s => s.price));
+      stopLoss = nearestHigh + config.slBufferPips * 0.0001;
+    }
     if (stopLoss) {
       const risk = stopLoss - lastPrice;
-      takeProfit = lastPrice - risk * 2;
+      takeProfit = lastPrice - risk * config.tpRatio;
     }
   }
 
-  return { score, reasoning, direction, structure, session, pd, stopLoss, takeProfit, lastPrice };
+  const presentFactors = factors.filter(f => f.present);
+  const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
+  const summary = direction
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)`;
+
+  return {
+    score, direction, bias, summary, factors,
+    structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit,
+  };
 }
 
 // ─── Fetch candles from Yahoo ───────────────────────────────────────
-async function fetchCandles(symbol: string): Promise<Candle[]> {
+async function fetchCandles(symbol: string, interval = "15m", range = "5d"): Promise<Candle[]> {
   const yahooSymbol = YAHOO_SYMBOLS[symbol];
   if (!yahooSymbol) return [];
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=15m&range=5d`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${interval}&range=${range}`;
   try {
     const res = await fetch(url, { headers: { "User-Agent": "SMC-Bot-Scanner/1.0" } });
     const data = await res.json();
@@ -240,14 +474,141 @@ async function fetchCandles(symbol: string): Promise<Candle[]> {
   } catch { return []; }
 }
 
-// ─── Calculate position size based on risk ──────────────────────────
+// ─── Position sizing ────────────────────────────────────────────────
 function calculatePositionSize(balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const size = riskAmount / (slDistance * spec.lotUnits);
-  return Math.max(0.01, Math.min(1, Math.round(size * 100) / 100)); // 0.01 to 1 lot
+  const pipValue = spec.pipSize * spec.lotUnits;
+  const slPips = slDistance / spec.pipSize;
+  const size = riskAmount / (slPips * (pipValue / spec.lotUnits * spec.lotUnits / 1)); // simplified: riskAmount / (slDistance * lotUnits)
+  const lots = riskAmount / (slDistance * spec.lotUnits);
+  return Math.max(0.01, Math.min(1, Math.round(lots * 100) / 100));
+}
+
+// ─── Load user config ───────────────────────────────────────────────
+async function loadConfig(supabase: any, userId: string) {
+  const { data } = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).maybeSingle();
+  if (!data?.config_json) return { ...DEFAULTS };
+  return { ...DEFAULTS, ...(data.config_json as any) };
+}
+
+// ─── Safety Gates ───────────────────────────────────────────────────
+interface GateResult { passed: boolean; reason: string; }
+
+async function runSafetyGates(
+  supabase: any, userId: string, symbol: string, direction: string,
+  analysis: any, config: typeof DEFAULTS, account: any, openPositions: any[],
+  dailyCandles: Candle[] | null,
+): Promise<GateResult[]> {
+  const gates: GateResult[] = [];
+
+  // Gate 1: HTF Bias Alignment
+  if (config.htfBiasRequired && dailyCandles && dailyCandles.length >= 10) {
+    const htfStructure = analyzeMarketStructure(dailyCandles);
+    const htfTrend = htfStructure.trend;
+    const entryBias = direction === "long" ? "bullish" : "bearish";
+    if (htfTrend !== "ranging" && htfTrend !== entryBias) {
+      gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+    } else {
+      gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
+    }
+  } else {
+    gates.push({ passed: true, reason: "HTF check skipped" });
+  }
+
+  // Gate 2: Premium/Discount zone filter
+  if (config.onlyBuyInDiscount && direction === "long" && analysis.pd.currentZone === "premium") {
+    gates.push({ passed: false, reason: "Buying in premium zone rejected" });
+  } else if (config.onlySellInPremium && direction === "short" && analysis.pd.currentZone === "discount") {
+    gates.push({ passed: false, reason: "Selling in discount zone rejected" });
+  } else {
+    gates.push({ passed: true, reason: "P/D zone OK" });
+  }
+
+  // Gate 3: Instrument enabled
+  if (!config.instruments.includes(symbol)) {
+    gates.push({ passed: false, reason: `${symbol} not in enabled instruments` });
+  } else {
+    gates.push({ passed: true, reason: `${symbol} enabled` });
+  }
+
+  // Gate 4: Max open positions
+  if (openPositions.length >= config.maxOpenPositions) {
+    gates.push({ passed: false, reason: `Max positions (${config.maxOpenPositions}) reached` });
+  } else {
+    gates.push({ passed: true, reason: `${openPositions.length}/${config.maxOpenPositions} positions` });
+  }
+
+  // Gate 5: Max per symbol
+  const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
+  if (symbolPositions >= config.maxPerSymbol) {
+    gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
+  } else {
+    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}` });
+  }
+
+  // Gate 6: Portfolio heat
+  const balance = parseFloat(account.balance || "10000");
+  const totalExposure = openPositions.reduce((sum: number, p: any) => {
+    const size = parseFloat(p.size || "0");
+    const spec = SPECS[p.symbol] || SPECS["EUR/USD"];
+    return sum + (size * spec.lotUnits * parseFloat(p.entry_price || "0"));
+  }, 0);
+  const heatPercent = balance > 0 ? (totalExposure / balance / 100) * 100 : 0; // simplified
+  // For forex with leverage, heat = sum of (risk per position) / balance
+  // Simplified: just count risk% per position
+  const totalRiskPercent = openPositions.length * config.riskPerTrade;
+  if (totalRiskPercent >= config.portfolioHeat) {
+    gates.push({ passed: false, reason: `Portfolio heat ${totalRiskPercent}% >= ${config.portfolioHeat}% limit` });
+  } else {
+    gates.push({ passed: true, reason: `Portfolio heat ${totalRiskPercent}%` });
+  }
+
+  // Gate 7: Daily loss limit
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
+  const actualBase = account.daily_pnl_date === todayStr ? dailyPnlBase : balance;
+  const dailyLoss = actualBase - balance;
+  const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
+  if (dailyLossPercent >= config.maxDailyLoss) {
+    gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+  } else {
+    gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+  }
+
+  // Gate 8: Max drawdown
+  const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
+  const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
+  if (drawdownPercent >= config.maxDrawdown) {
+    gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+  } else {
+    gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+  }
+
+  // Gate 9: Min confluence (redundant but per spec)
+  if (analysis.score < config.minConfluence) {
+    gates.push({ passed: false, reason: `Score ${analysis.score} < ${config.minConfluence} threshold` });
+  } else {
+    gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
+  }
+
+  // Gate 10: Min R:R
+  if (analysis.stopLoss && analysis.takeProfit) {
+    const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
+    const reward = Math.abs(analysis.takeProfit - analysis.lastPrice);
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < config.minRiskReward) {
+      gates.push({ passed: false, reason: `R:R ${rr.toFixed(2)} < ${config.minRiskReward} minimum` });
+    } else {
+      gates.push({ passed: true, reason: `R:R ${rr.toFixed(2)}` });
+    }
+  } else {
+    gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
+  }
+
+  return gates;
 }
 
 // ─── Main Handler ───────────────────────────────────────────────────
@@ -258,12 +619,10 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-    // Support both authenticated user calls and cron (service role)
     const authHeader = req.headers.get("Authorization");
     let userId: string | null = null;
 
     if (authHeader && authHeader !== `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}`) {
-      // User-initiated scan
       const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
         global: { headers: { Authorization: authHeader } },
       });
@@ -273,12 +632,9 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const action = body.action || "scan";
-
-    // If user-initiated, use their ID. For cron, scan all running accounts.
     const adminClient = createClient(supabaseUrl, supabaseKey);
 
     if (action === "scan_logs") {
-      // Return recent scan logs for a user
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const { data } = await adminClient.from("scan_logs").select("*")
         .eq("user_id", userId).order("scanned_at", { ascending: false }).limit(20);
@@ -291,9 +647,9 @@ Deno.serve(async (req) => {
       return respond(result);
     }
 
-    // Cron scan: find all accounts with is_running=true
     if (action === "scan" || action === "cron") {
-      const { data: accounts } = await adminClient.from("paper_accounts").select("*").eq("is_running", true).eq("kill_switch_active", false);
+      const { data: accounts } = await adminClient.from("paper_accounts").select("*")
+        .eq("is_running", true).eq("kill_switch_active", false);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", scanned: 0 });
 
       const results = [];
@@ -317,112 +673,192 @@ Deno.serve(async (req) => {
 });
 
 async function runScanForUser(supabase: any, userId: string) {
-  // Get account
+  const config = await loadConfig(supabase, userId);
+
+  // Session + day check
+  const now = new Date();
+  const dayOfWeek = now.getUTCDay(); // 0=Sun
+  if (!config.enabledDays.includes(dayOfWeek)) {
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled" };
+  }
+  const session = detectSession();
+  if (!config.enabledSessions.some((s: string) => session.name.includes(s)) && session.name !== "Off-Hours") {
+    // Allow scanning even in off-hours but note it
+  }
+
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
   const balance = parseFloat(account.balance || "10000");
   const isPaused = account.is_paused;
 
-  // Count open positions
-  const { data: openPositions } = await supabase.from("paper_positions").select("symbol").eq("user_id", userId).eq("position_status", "open");
-  const openCount = openPositions?.length || 0;
-  const openSymbols = new Set((openPositions || []).map((p: any) => p.symbol));
+  const { data: openPositions } = await supabase.from("paper_positions").select("*")
+    .eq("user_id", userId).eq("position_status", "open");
+  const openPosArr = openPositions || [];
 
-  // Get user risk settings
-  const { data: settings } = await supabase.from("user_settings").select("risk_settings_json").eq("user_id", userId).maybeSingle();
-  const riskPercent = settings?.risk_settings_json?.riskPerTrade || DEFAULT_RISK_PERCENT;
+  // Update daily PnL base if new day
+  const todayStr = now.toISOString().slice(0, 10);
+  if (account.daily_pnl_date !== todayStr) {
+    await supabase.from("paper_accounts").update({
+      daily_pnl_date: todayStr,
+      daily_pnl_base: account.balance,
+    }).eq("user_id", userId);
+  }
 
   const scanDetails: any[] = [];
   let signalsFound = 0;
   let tradesPlaced = 0;
+  let rejectedCount = 0;
 
-  // Scan each pair
-  for (const pair of SCAN_PAIRS) {
-    if (openSymbols.has(pair)) {
-      scanDetails.push({ pair, status: "skipped", reason: "Position already open" });
+  for (const pair of config.instruments) {
+    if (!YAHOO_SYMBOLS[pair]) {
+      scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
     }
 
-    const candles = await fetchCandles(pair);
+    // Delay between instruments to avoid rate limiting
+    if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 500));
+
+    // Fetch 15m and daily candles
+    const [candles, dailyCandles] = await Promise.all([
+      fetchCandles(pair, "15m", "5d"),
+      fetchCandles(pair, "1d", "1y"),
+    ]);
+
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
       continue;
     }
 
-    const analysis = runConfluenceScore(candles);
+    const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config);
+
     const detail: any = {
       pair,
       score: analysis.score,
       direction: analysis.direction,
       trend: analysis.structure.trend,
       zone: analysis.pd.currentZone,
+      zonePercent: analysis.pd.zonePercent,
       session: analysis.session.name,
       killZone: analysis.session.isKillZone,
-      reasoning: analysis.reasoning,
+      bias: analysis.bias,
+      summary: analysis.summary,
+      factorCount: analysis.factors.filter(f => f.present).length,
+      factors: analysis.factors,
       status: "analyzed",
     };
 
-    if (analysis.score >= MIN_CONFLUENCE && analysis.direction && !isPaused) {
+    if (analysis.score >= config.minConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
-      if (openCount + tradesPlaced < MAX_OPEN_POSITIONS && analysis.stopLoss) {
-        // Calculate position size
-        const size = calculatePositionSize(balance, riskPercent, analysis.lastPrice, analysis.stopLoss, pair);
+      // Run safety gates
+      const gates = await runSafetyGates(
+        supabase, userId, pair, analysis.direction,
+        analysis, config, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
+      );
+      const allPassed = gates.every(g => g.passed);
+      detail.gates = gates;
+
+      if (allPassed && analysis.stopLoss && analysis.takeProfit) {
+        // Adjust SL buffer for JPY pairs
+        const spec = SPECS[pair] || SPECS["EUR/USD"];
+        let sl = analysis.stopLoss;
+        let tp = analysis.takeProfit;
+
+        // Recalculate SL with correct pip size
+        if (analysis.direction === "long") {
+          const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
+          if (swingLows.length > 0) {
+            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - config.slBufferPips * spec.pipSize;
+            const risk = analysis.lastPrice - sl;
+            tp = analysis.lastPrice + risk * config.tpRatio;
+          }
+        } else {
+          const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
+          if (swingHighs.length > 0) {
+            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + config.slBufferPips * spec.pipSize;
+            const risk = sl - analysis.lastPrice;
+            tp = analysis.lastPrice - risk * config.tpRatio;
+          }
+        }
+
+        const size = calculatePositionSize(balance, config.riskPerTrade, analysis.lastPrice, sl, pair);
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
-        const now = new Date().toISOString();
+        const nowStr = new Date().toISOString();
 
+        // Place position
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
           symbol: pair,
-          direction: analysis.direction === "long" ? "long" : "short",
+          direction: analysis.direction,
           size: size.toString(),
           entry_price: analysis.lastPrice.toString(),
           current_price: analysis.lastPrice.toString(),
-          stop_loss: analysis.stopLoss?.toString() || null,
-          take_profit: analysis.takeProfit?.toString() || null,
-          open_time: now,
-          signal_reason: analysis.reasoning.join("; "),
+          stop_loss: sl.toString(),
+          take_profit: tp.toString(),
+          open_time: nowStr,
+          signal_reason: analysis.summary,
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
+        });
+
+        // Store trade reasoning
+        await supabase.from("trade_reasonings").insert({
+          user_id: userId,
+          position_id: positionId,
+          symbol: pair,
+          direction: analysis.direction,
+          confluence_score: Math.round(analysis.score),
+          summary: analysis.summary,
+          bias: analysis.bias,
+          session: analysis.session.name,
+          timeframe: "15m",
+          factors_json: analysis.factors,
         });
 
         tradesPlaced++;
         detail.status = "trade_placed";
         detail.size = size;
         detail.entryPrice = analysis.lastPrice;
-        detail.stopLoss = analysis.stopLoss;
-        detail.takeProfit = analysis.takeProfit;
+        detail.stopLoss = sl;
+        detail.takeProfit = tp;
+        detail.positionId = positionId;
+
+        // Add to virtual open positions for subsequent gates
+        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString() });
       } else {
-        detail.status = "signal_only";
-        detail.reason = openCount + tradesPlaced >= MAX_OPEN_POSITIONS ? "Max positions reached" : "No valid SL";
+        rejectedCount++;
+        detail.status = "rejected";
+        const failedGates = gates.filter(g => !g.passed);
+        detail.rejectionReasons = failedGates.map(g => g.reason);
       }
     } else {
-      detail.status = analysis.score >= MIN_CONFLUENCE ? "paused" : "below_threshold";
+      detail.status = analysis.score >= config.minConfluence ? (isPaused ? "paused" : "no_direction") : "below_threshold";
     }
 
     scanDetails.push(detail);
   }
 
-  // Update scan counters
+  // Update counters
   await supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
     signal_count: (account.signal_count || 0) + signalsFound,
+    rejected_count: (account.rejected_count || 0) + rejectedCount,
   }).eq("user_id", userId);
 
   // Log the scan
   await supabase.from("scan_logs").insert({
     user_id: userId,
-    pairs_scanned: SCAN_PAIRS.length,
+    pairs_scanned: config.instruments.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
     details_json: scanDetails,
   });
 
-  return { pairsScanned: SCAN_PAIRS.length, signalsFound, tradesPlaced, details: scanDetails };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails };
 }
 
 function respond(data: any, status = 200) {
