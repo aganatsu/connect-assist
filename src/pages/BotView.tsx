@@ -361,3 +361,67 @@ function ScanLogLine({ log }: { log: any }) {
     </div>
   );
 }
+
+function ScanSignalDetail({ signal: d }: { signal: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+
+  return (
+    <div className="border-b border-border/30 last:border-b-0">
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between text-[10px] py-1.5 hover:bg-secondary/30 transition-colors px-1">
+        <div className="flex items-center gap-1.5">
+          {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+          <span className="font-medium">{d.pair}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
+          <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+          <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-1 pb-2 space-y-1.5">
+          {/* Factors */}
+          {d.factors && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Factors ({d.factorCount || 0}/9)</p>
+              {d.factors.map((f: any, fi: number) => (
+                <div key={fi} className="flex items-start gap-1 text-[9px]">
+                  <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
+                  <div>
+                    <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
+                    {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Risk Gates */}
+          {d.gates && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
+              {d.gates.map((g: any, gi: number) => (
+                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                  <span>{g.passed ? "✓" : "✗"}</span>
+                  <span>{g.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Rejection Reasons */}
+          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+              {d.rejectionReasons.map((r: string, ri: number) => (
+                <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+              ))}
+            </div>
+          )}
+          {/* Summary */}
+          {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
