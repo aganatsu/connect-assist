@@ -49,7 +49,7 @@ export default function Fundamentals() {
     staleTime: 300000,
   });
 
-  const events = (data?.events || data || []) as any[];
+  const events: any[] = Array.isArray(data?.events) ? data.events : Array.isArray(data) ? data : [];
 
   const filtered = events.filter((e: any) => {
     if (filterImpact !== "all" && e.impact !== filterImpact) return false;
