@@ -18,9 +18,13 @@ export const INSTRUMENTS: Instrument[] = [
   { symbol: 'USD/CAD', name: 'US Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
   { symbol: 'EUR/GBP', name: 'Euro / British Pound', type: 'forex', pipSize: 0.0001 },
   { symbol: 'NZD/USD', name: 'New Zealand Dollar / US Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'USD/CHF', name: 'US Dollar / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'EUR/JPY', name: 'Euro / Japanese Yen', type: 'forex', pipSize: 0.01 },
   { symbol: 'XAU/USD', name: 'Gold / US Dollar', type: 'commodity', pipSize: 0.01 },
   { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', type: 'crypto', pipSize: 0.01 },
 ];
+
+export const FOREX_PAIRS = INSTRUMENTS.filter(i => i.type === 'forex').map(i => i.symbol);
 
 export const TIMEFRAMES: { value: Timeframe; label: string }[] = [
   { value: '1week', label: '1W' },
@@ -30,6 +34,37 @@ export const TIMEFRAMES: { value: Timeframe; label: string }[] = [
   { value: '15min', label: '15M' },
   { value: '5min', label: '5M' },
 ];
+
+export const SESSIONS = [
+  { name: "Sydney", start: 21, end: 6, color: "hsl(270, 55%, 70%)" },
+  { name: "Asian", start: 0, end: 8, color: "hsl(280, 60%, 65%)" },
+  { name: "London", start: 7, end: 16, color: "hsl(210, 100%, 52%)" },
+  { name: "New York", start: 12, end: 21, color: "hsl(38, 92%, 50%)" },
+];
+
+export const KILL_ZONES = [
+  { name: "Asian KZ", start: 0, end: 3, color: "hsl(280, 60%, 65%)" },
+  { name: "London KZ", start: 7, end: 9, color: "hsl(210, 100%, 52%)" },
+  { name: "NY KZ", start: 12, end: 14, color: "hsl(38, 92%, 50%)" },
+  { name: "London Close KZ", start: 15, end: 16, color: "hsl(142, 72%, 45%)" },
+];
+
+export function getCurrentSession(): string {
+  const h = new Date().getUTCHours();
+  if (h >= 7 && h < 12) return "London";
+  if (h >= 12 && h < 16) return "London/NY Overlap";
+  if (h >= 16 && h < 21) return "New York";
+  if (h >= 21 || h < 6) return "Sydney/Asian";
+  return "Asian";
+}
+
+export function isInKillzone(): { active: boolean; name: string } {
+  const h = new Date().getUTCHours();
+  for (const kz of KILL_ZONES) {
+    if (h >= kz.start && h < kz.end) return { active: true, name: kz.name };
+  }
+  return { active: false, name: "" };
+}
 
 // Demo data generators
 export function generateEquityCurve(days = 90): { date: string; equity: number; drawdown: number; pnl: number }[] {
