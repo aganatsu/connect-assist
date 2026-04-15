@@ -82,6 +82,12 @@ export const paperApi = {
   setExecutionMode: (mode: "paper" | "live") => invokeFunction("paper-trading", { action: "set_execution_mode", mode }),
 };
 
+// ── Bot Scanner ──
+export const scannerApi = {
+  manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
+  logs: () => invokeFunction("bot-scanner", { action: "scan_logs" }),
+};
+
 // ── Fundamentals ──
 export const fundamentalsApi = {
   data: () => invokeFunction("fundamentals", { action: "data" }),
