@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -135,7 +135,10 @@ export default function BotView() {
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
               {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
             </Button>
-            <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => killMut.mutate()}>
+            <div className="w-px h-5 bg-border" />
+            <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
+              if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
+            }}>
               <AlertTriangle className="h-3 w-3 mr-1" /> Kill
             </Button>
 
@@ -201,8 +204,8 @@ export default function BotView() {
                       <th className="text-left py-1 px-1">Signal</th><th className="py-1 px-1"></th>
                     </tr></thead>
                     <tbody>
-                      {d.positions.map((p: any) => (
-                        <tr key={p.id} className="border-b border-border/30 hover:bg-secondary/30">
+                      {d.positions.map((p: any, idx: number) => (
+                        <tr key={p.id} className={`border-b border-border/30 hover:bg-secondary/30 ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}>
                           <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
                           <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                           <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
@@ -212,7 +215,16 @@ export default function BotView() {
                           <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
                           <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
                           <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
-                          <td className="py-1.5 px-1"><button onClick={() => paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))} className="text-destructive hover:text-destructive/80 text-[10px]">✕</button></td>
+                          <td className="py-1.5 px-1">
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
+                                  paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                }
+                              }}
+                              className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                            >✕ Close</button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -259,7 +271,9 @@ export default function BotView() {
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
                   {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Manual Scan
                 </Button>
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => resetMut.mutate()}>Reset Account</Button>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => {
+                  if (window.confirm("Reset account to $10,000? This will close all positions and clear all trade history. This cannot be undone.")) resetMut.mutate();
+                }}>Reset Account</Button>
               </CardContent>
             </Card>
 
@@ -330,7 +344,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
       </tr></thead>
       <tbody>
         {trades.slice(0, 30).map((t: any, i: number) => (
-          <tr key={i} className="border-b border-border/30 hover:bg-secondary/30">
+          <tr key={i} className={`border-b border-border/30 hover:bg-secondary/30 ${i % 2 === 1 ? "bg-secondary/10" : ""}`}>
             <td className="py-1 px-1">{t.symbol}</td>
             <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
             <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>

@@ -15,7 +15,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid,
 } from "recharts";
-import { Filter, Calculator, Plus, X } from "lucide-react";
+import { Filter, Calculator, Plus, X, BookOpen } from "lucide-react";
 
 const ALL_SYMBOLS = ["all", ...INSTRUMENTS.map(i => i.symbol)];
 const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep + OB", "Premium/Discount + BOS", "FVG Fill + Confluence", "Manual"];
@@ -163,7 +163,13 @@ export default function JournalView() {
               <Card>
                 <CardContent className="pt-3">
                   {isLoading ? <p className="text-xs text-muted-foreground py-4 text-center">Loading...</p> :
-                  filteredTrades.length === 0 ? <p className="text-xs text-muted-foreground py-4 text-center">No trades yet</p> : (
+                  filteredTrades.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                      <BookOpen className="h-10 w-10 mb-3 opacity-20" />
+                      <p className="text-sm font-medium">No trades recorded yet</p>
+                      <p className="text-[11px] mt-1 text-center max-w-xs">Add trades manually with the "+ Add Trade" button, or they'll appear here automatically when your bot closes positions.</p>
+                    </div>
+                  ) : (
                     <table className="w-full text-[11px]">
                       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>

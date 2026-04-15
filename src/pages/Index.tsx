@@ -217,18 +217,26 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-[240px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={equityData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                  <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
-                  <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
-                  <ReferenceLine y={10000} stroke="hsl(220, 8%, 50%)" strokeDasharray="3 3" strokeOpacity={0.5} />
-                  <Line type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" strokeWidth={2} dot={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+            {(!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
+              <div className="h-[240px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
+                <TrendingUp className="h-8 w-8 mb-2 opacity-30" />
+                <p className="text-xs">No trade history yet</p>
+                <p className="text-[10px] mt-1">Equity curve will appear after your first closed trade</p>
+              </div>
+            ) : (
+              <div className="h-[240px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={equityData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
+                    <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
+                    <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
+                    <ReferenceLine y={10000} stroke="hsl(220, 8%, 50%)" strokeDasharray="3 3" strokeOpacity={0.5} />
+                    <Line type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" strokeWidth={2} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </CardContent>
         </Card>
 
