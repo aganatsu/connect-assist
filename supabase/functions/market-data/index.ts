@@ -5,7 +5,8 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 const YAHOO_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
   "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
-  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "BTC/USD": "BTC-USD",
+  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
+  "EUR/JPY": "EURJPY=X", "BTC/USD": "BTC-USD",
   "ETH/USD": "ETH-USD", "XAU/USD": "GC=F", "XAG/USD": "SI=F",
 };
 
