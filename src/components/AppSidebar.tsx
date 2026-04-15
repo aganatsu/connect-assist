@@ -1,9 +1,9 @@
-import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar } from "lucide-react";
+import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { useLocation } from "react-router-dom";
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel,
-  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, useSidebar,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter, useSidebar,
 } from "@/components/ui/sidebar";
 
 const navItems = [
@@ -20,6 +20,14 @@ const navItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
+  const { theme, setTheme } = useTheme();
+
+  const cycleTheme = () => {
+    const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
+    setTheme(next);
+  };
+
+  const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
 
   return (
     <Sidebar collapsible="icon">
@@ -46,6 +54,16 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter className="p-2">
+        <button
+          onClick={cycleTheme}
+          className="flex items-center gap-2 w-full px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+          title={`Theme: ${theme}`}
+        >
+          <ThemeIcon className="h-4 w-4 shrink-0" />
+          {!collapsed && <span className="capitalize">{theme}</span>}
+        </button>
+      </SidebarFooter>
     </Sidebar>
   );
 }
