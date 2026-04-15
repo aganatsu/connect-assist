@@ -201,6 +201,23 @@ Deno.serve(async (req) => {
       const losses = histArr.filter((t: any) => t.pnl <= 0).length;
       const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
 
+      // Compute daily P&L from today's closed trades
+      const todayStr = new Date().toISOString().split("T")[0];
+      const dailyPnl = histArr
+        .filter((t: any) => t.closedAt?.startsWith(todayStr))
+        .reduce((s: number, t: any) => s + t.pnl, 0);
+
+      // Build equity curve from trade history
+      const equityCurve: { date: string; equity: number }[] = [];
+      if (histArr.length > 0) {
+        const sorted = [...histArr].sort((a: any, b: any) => (a.closedAt || "").localeCompare(b.closedAt || ""));
+        let runningBalance = 10000;
+        for (const t of sorted) {
+          runningBalance += t.pnl;
+          equityCurve.push({ date: t.closedAt, equity: runningBalance });
+        }
+      }
+
       return respond({
         balance, equity: balance + unrealizedPnl, unrealizedPnl,
         positions: posArr, pendingOrders: pending || [],
@@ -213,7 +230,7 @@ Deno.serve(async (req) => {
         rejectedCount: account?.rejected_count || 0,
         executionMode: account?.execution_mode || "paper",
         killSwitchActive: account?.kill_switch_active || false,
-        dailyPnl: 0, drawdown,
+        dailyPnl, drawdown, equityCurve,
         marginUsed: 0, freeMargin: balance + unrealizedPnl,
         marginLevel: 0, uptime: 0,
         strategy: {
@@ -235,7 +252,17 @@ Deno.serve(async (req) => {
       const positionId = crypto.randomUUID().slice(0, 8);
       const orderId = crypto.randomUUID().slice(0, 8);
       const now = new Date().toISOString();
-      const entryPrice = payload.entryPrice || 0;
+      let entryPrice = payload.entryPrice || 0;
+
+      // For market orders with no entry price, fetch live price
+      if (!entryPrice || entryPrice === 0) {
+        const livePrice = await fetchLivePrice(symbol);
+        if (livePrice) {
+          entryPrice = livePrice;
+        } else {
+          throw new Error("Could not fetch live price for " + symbol);
+        }
+      }
 
       await supabase.from("paper_positions").insert({
         user_id: user.id, position_id: positionId, symbol, direction, size: size.toString(),

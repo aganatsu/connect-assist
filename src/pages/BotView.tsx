@@ -212,7 +212,7 @@ export default function BotView() {
                           <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
                           <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
                           <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
-                          <td className="py-1.5 px-1"><button onClick={() => paperApi.closePosition(p.positionId).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))} className="text-destructive hover:text-destructive/80 text-[10px]">✕</button></td>
+                          <td className="py-1.5 px-1"><button onClick={() => paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))} className="text-destructive hover:text-destructive/80 text-[10px]">✕</button></td>
                         </tr>
                       ))}
                     </tbody>

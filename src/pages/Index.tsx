@@ -7,7 +7,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
-import { paperApi, tradesApi, marketApi, smcApi, scannerApi } from "@/lib/api";
+import { paperApi, marketApi, smcApi, scannerApi } from "@/lib/api";
 import { TrendingUp, TrendingDown, Zap, Clock, Activity, AlertTriangle, CheckCircle } from "lucide-react";
 
 type TimeRange = "1W" | "1M" | "3M" | "6M" | "ALL";
@@ -23,15 +23,6 @@ export default function Dashboard() {
     refetchInterval: 10000,
   });
 
-  const { data: tradeStats } = useQuery({
-    queryKey: ["trade-stats"],
-    queryFn: () => tradesApi.stats(),
-  });
-
-  const { data: equityCurve } = useQuery({
-    queryKey: ["equity-curve"],
-    queryFn: () => tradesApi.equityCurve(),
-  });
 
   const { data: liveQuotes } = useQuery({
     queryKey: ["live-quotes"],
@@ -70,23 +61,22 @@ export default function Dashboard() {
   const profitPct = ((profit / 10000) * 100).toFixed(1);
   const dailyPnl = botStatus?.dailyPnl ?? 0;
   const positions = botStatus?.positions ?? [];
-  const winRate = tradeStats?.winRate ?? 0;
-  const totalTrades = tradeStats?.totalTrades ?? 0;
-  const wins = tradeStats?.wins ?? 0;
-  const losses = tradeStats?.losses ?? 0;
+  const winRate = botStatus?.winRate ?? 0;
+  const totalTrades = botStatus?.totalTrades ?? 0;
+  const wins = botStatus?.wins ?? 0;
+  const losses = botStatus?.losses ?? 0;
   const session = getCurrentSession();
   const kz = isInKillzone();
 
   const equityData = useMemo(() => {
-    if (!equityCurve || equityCurve.length === 0) {
-      return Array.from({ length: 30 }, (_, i) => ({
-        date: `Day ${i + 1}`, equity: 10000 + Math.random() * 500 * (i / 30), drawdown: Math.random() * 3,
-      }));
+    const curve = botStatus?.equityCurve;
+    if (!curve || curve.length === 0) {
+      return [{ date: "Now", equity: balance, drawdown: 0 }];
     }
-    return equityCurve.map((p: any) => ({
-      date: p.date?.split("T")[0] ?? "", equity: 10000 + p.cumulative, drawdown: 0,
+    return curve.map((p: any) => ({
+      date: p.date?.split("T")[0] ?? "", equity: p.equity, drawdown: 0,
     }));
-  }, [equityCurve]);
+  }, [botStatus?.equityCurve, balance]);
 
   const strengthData = useMemo(() => {
     if (!currencyStrength) return [];
@@ -139,7 +129,7 @@ export default function Dashboard() {
           {[
             { label: "Balance", value: formatMoney(balance), sub: `${formatMoney(profit, true)} (${profitPct}%)`, color: profit >= 0 ? "text-success" : "text-destructive" },
             { label: "Today P&L", value: formatMoney(dailyPnl, true), sub: `${totalTrades} trades`, color: dailyPnl >= 0 ? "text-success" : "text-destructive" },
-            { label: "Open Positions", value: String(positions.length), sub: `${formatMoney(positions.reduce((s: number, p: any) => s + Math.abs(p.pnl || 0), 0))} exposure` },
+            { label: "Open Positions", value: String(positions.length), sub: `${formatMoney(positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0), true)} unrealized`, color: positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0) >= 0 ? "text-success" : "text-destructive" },
             { label: "Win Rate", value: `${winRate.toFixed(1)}%`, sub: `${wins}W / ${losses}L`, color: winRate >= 50 ? "text-success" : "text-destructive" },
           ].map((kpi) => (
             <Card key={kpi.label}>
