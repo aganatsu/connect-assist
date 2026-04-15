@@ -4,19 +4,37 @@ import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { formatMoney } from "@/lib/marketData";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { paperApi, scannerApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
-  TrendingUp, TrendingDown, Minus, Clock, Shield, ShieldCheck, ShieldX,
-  ChevronDown, ChevronUp,
+  TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
+  ChevronDown, ChevronUp, Plus, Settings, Activity,
 } from "lucide-react";
+import { BotConfigModal } from "@/components/BotConfigModal";
 
 export default function BotView() {
   const queryClient = useQueryClient();
+  const [orderFormOpen, setOrderFormOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
+  const [liveModeConfirm, setLiveModeConfirm] = useState(false);
 
-  const { data: status, isLoading } = useQuery({
+  // Order form state
+  const [orderType, setOrderType] = useState("market");
+  const [orderSymbol, setOrderSymbol] = useState("EUR/USD");
+  const [orderDirection, setOrderDirection] = useState<"long" | "short">("long");
+  const [orderSize, setOrderSize] = useState("0.01");
+  const [orderTrigger, setOrderTrigger] = useState("");
+  const [orderSL, setOrderSL] = useState("");
+  const [orderTP, setOrderTP] = useState("");
+  const [orderReason, setOrderReason] = useState("");
+  const [orderScore, setOrderScore] = useState("5");
+
+  const { data: status } = useQuery({
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 5000,
@@ -28,34 +46,27 @@ export default function BotView() {
     refetchInterval: 30000,
   });
 
-  const startMutation = useMutation({
-    mutationFn: () => paperApi.startEngine(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); },
-  });
-  const pauseMutation = useMutation({
-    mutationFn: () => paperApi.pauseEngine(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); },
-  });
-  const stopMutation = useMutation({
-    mutationFn: () => paperApi.stopEngine(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); },
-  });
-  const killMutation = useMutation({
-    mutationFn: () => paperApi.killSwitch(true),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); },
-  });
-  const resetMutation = useMutation({
-    mutationFn: () => paperApi.resetAccount(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Account reset"); },
+  const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
+  const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
+  const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
+  const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); } });
+  const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
+  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Account reset"); } });
+  const scanMut = useMutation({
+    mutationFn: () => scannerApi.manualScan(),
+    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(`Scan: ${data.signalsFound} signals, ${data.tradesPlaced} trades`); },
+    onError: (err: any) => toast.error(err.message),
   });
 
-  const scanMutation = useMutation({
-    mutationFn: () => scannerApi.manualScan(),
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
-      queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
-      toast.success(`Scan complete: ${data.signalsFound} signals, ${data.tradesPlaced} trades, ${data.rejected || 0} rejected`);
-    },
+  const orderMut = useMutation({
+    mutationFn: () => paperApi.placeOrder({
+      symbol: orderSymbol, direction: orderDirection, size: parseFloat(orderSize) || 0.01,
+      entryPrice: parseFloat(orderTrigger) || 0,
+      stopLoss: orderSL ? parseFloat(orderSL) : undefined,
+      takeProfit: orderTP ? parseFloat(orderTP) : undefined,
+      signalReason: orderReason, signalScore: parseInt(orderScore) || 5,
+    }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Order placed"); setOrderFormOpen(false); },
     onError: (err: any) => toast.error(err.message),
   });
 
@@ -63,286 +74,286 @@ export default function BotView() {
     isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
     scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
-    killSwitchActive: false, drawdown: 0, uptime: 0, strategy: { name: "SMC Default" },
+    killSwitchActive: false, drawdown: 0,
   };
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
+  const closedToday = (d.tradeHistory || []).filter((t: any) => {
+    const today = new Date().toISOString().split('T')[0];
+    return t.closedAt?.startsWith(today);
+  });
 
   return (
     <AppShell>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Bot Monitor</h1>
-            <p className="text-sm text-muted-foreground">Autonomous SMC scanner — 9-factor confluence, 10 safety gates</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => scanMutation.mutate()} disabled={scanMutation.isPending}>
-              {scanMutation.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />}
-              Scan Now
+      <div className="flex flex-col h-[calc(100vh-4.5rem)]">
+        {/* Live Mode Banner */}
+        {d.executionMode === "live" && (
+          <div className="bg-destructive/20 border border-destructive text-destructive px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
+            <span>⚠ LIVE TRADING ACTIVE — Real Money at Risk</span>
+            <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive text-destructive" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
+              Switch to Paper
             </Button>
-            <Button size="sm" variant={d.isRunning ? "secondary" : "default"} onClick={() => startMutation.mutate()} disabled={d.isRunning && !d.isPaused}>
+          </div>
+        )}
+
+        {/* Top Control Bar */}
+        <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap">
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
               <Play className="h-3 w-3 mr-1" /> Start
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => pauseMutation.mutate()} disabled={!d.isRunning || d.isPaused}>
+            <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
               <Pause className="h-3 w-3 mr-1" /> Pause
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => stopMutation.mutate()} disabled={!d.isRunning}>
+            <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
               <Square className="h-3 w-3 mr-1" /> Stop
             </Button>
-            <Button size="sm" variant="destructive" onClick={() => killMutation.mutate()}>
+          </div>
+
+          <div className="w-px h-5 bg-border" />
+
+          <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
+            <Plus className="h-3 w-3 mr-1" /> Order
+          </Button>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
+            <Settings className="h-3 w-3 mr-1" /> Config
+          </Button>
+
+          <div className="w-px h-5 bg-border" />
+
+          {/* Engine status */}
+          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+            <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
+            {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped"}
+          </span>
+
+          <span className={`text-[10px] font-medium px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+            {d.executionMode === "live" ? "LIVE" : "PAPER"}
+          </span>
+
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
+              {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
+            </Button>
+            <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => killMut.mutate()}>
               <AlertTriangle className="h-3 w-3 mr-1" /> Kill
             </Button>
+
+            <div className="flex gap-3 text-[10px] text-muted-foreground">
+              <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
+              <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
+              <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
+              <span>WR: <strong className={`${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(0)}%</strong></span>
+            </div>
           </div>
         </div>
 
-        {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-          {[
-            { label: "Status", value: d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped", color: d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground" },
-            { label: "Mode", value: d.executionMode === "live" ? "LIVE" : "Paper", color: d.executionMode === "live" ? "text-destructive" : "" },
-            { label: "Balance", value: formatMoney(d.balance) },
-            { label: "Equity", value: formatMoney(d.equity) },
-            { label: "Drawdown", value: `${(d.drawdown || 0).toFixed(1)}%`, color: (d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : "" },
-            { label: "Win/Loss", value: `${d.wins}W / ${d.losses}L` },
-            { label: "Win Rate", value: `${(d.winRate || 0).toFixed(1)}%`, color: (d.winRate || 0) >= 50 ? "text-success" : "text-destructive" },
-            { label: "Kill Switch", value: d.killSwitchActive ? "ACTIVE" : "Off", color: d.killSwitchActive ? "text-destructive" : "text-success" },
-          ].map(kpi => (
-            <Card key={kpi.label}>
-              <CardContent className="pt-3 pb-2">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{kpi.label}</p>
-                <p className={`text-sm font-bold mt-0.5 ${kpi.color || ""}`}>{kpi.value}</p>
+        {/* Manual Order Form (collapsible) */}
+        {orderFormOpen && (
+          <div className="py-2 border-b border-border">
+            <div className="flex items-end gap-2 flex-wrap">
+              <div className="w-24"><Label className="text-[10px]">Type</Label>
+                <select value={orderType} onChange={e => setOrderType(e.target.value)} className="w-full bg-card border border-border px-1.5 py-1 text-[11px]">
+                  <option value="market">Market</option><option value="buy_limit">Buy Limit</option><option value="sell_limit">Sell Limit</option><option value="buy_stop">Buy Stop</option><option value="sell_stop">Sell Stop</option>
+                </select>
+              </div>
+              <div className="w-24"><Label className="text-[10px]">Symbol</Label>
+                <select value={orderSymbol} onChange={e => setOrderSymbol(e.target.value)} className="w-full bg-card border border-border px-1.5 py-1 text-[11px]">
+                  {INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-0.5">
+                <button onClick={() => setOrderDirection("long")} className={`px-3 py-1 text-[11px] font-medium ${orderDirection === "long" ? "bg-success text-success-foreground" : "bg-secondary text-muted-foreground"}`}>BUY</button>
+                <button onClick={() => setOrderDirection("short")} className={`px-3 py-1 text-[11px] font-medium ${orderDirection === "short" ? "bg-destructive text-destructive-foreground" : "bg-secondary text-muted-foreground"}`}>SELL</button>
+              </div>
+              <div className="w-16"><Label className="text-[10px]">Size</Label><Input value={orderSize} onChange={e => setOrderSize(e.target.value)} className="h-7 text-[11px]" /></div>
+              {orderType !== "market" && <div className="w-20"><Label className="text-[10px]">Trigger</Label><Input value={orderTrigger} onChange={e => setOrderTrigger(e.target.value)} className="h-7 text-[11px]" /></div>}
+              <div className="w-20"><Label className="text-[10px]">SL</Label><Input value={orderSL} onChange={e => setOrderSL(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
+              <div className="w-20"><Label className="text-[10px]">TP</Label><Input value={orderTP} onChange={e => setOrderTP(e.target.value)} className="h-7 text-[11px]" placeholder="0.00000" /></div>
+              <div className="w-14"><Label className="text-[10px]">Score</Label><Input type="number" min={0} max={10} value={orderScore} onChange={e => setOrderScore(e.target.value)} className="h-7 text-[11px]" /></div>
+              <Button size="sm" className={`h-7 text-[11px] ${orderDirection === "long" ? "bg-success hover:bg-success/80" : "bg-destructive hover:bg-destructive/80"}`} onClick={() => orderMut.mutate()}>
+                {orderDirection === "long" ? "BUY" : "SELL"} {orderSymbol}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Main workspace: 65/35 split */}
+        <div className="flex-1 flex gap-3 mt-2 min-h-0">
+          {/* Left: Tabbed Positions (~65%) */}
+          <div className="flex-[2] flex flex-col min-h-0">
+            <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
+              <TabsList className="h-7 shrink-0">
+                <TabsTrigger value="open" className="text-[11px] h-6">Open ({d.positions?.length || 0})</TabsTrigger>
+                <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
+                <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
+              </TabsList>
+              <TabsContent value="open" className="flex-1 overflow-auto mt-1">
+                {(!d.positions || d.positions.length === 0) ? (
+                  <p className="text-xs text-muted-foreground py-8 text-center border border-dashed border-border">No open positions. Click "+ Order" to place a trade.</p>
+                ) : (
+                  <table className="w-full text-[11px] font-mono">
+                    <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
+                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
+                      <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
+                      <th className="text-right py-1 px-1">P&L</th><th className="text-right py-1 px-1">Size</th>
+                      <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
+                      <th className="text-left py-1 px-1">Signal</th><th className="py-1 px-1"></th>
+                    </tr></thead>
+                    <tbody>
+                      {d.positions.map((p: any) => (
+                        <tr key={p.id} className="border-b border-border/30 hover:bg-secondary/30">
+                          <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                          <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
+                          <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
+                          <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
+                          <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
+                          <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
+                          <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
+                          <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
+                          <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
+                          <td className="py-1.5 px-1"><button onClick={() => paperApi.closePosition(p.positionId).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))} className="text-destructive hover:text-destructive/80 text-[10px]">✕</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </TabsContent>
+              <TabsContent value="today" className="flex-1 overflow-auto mt-1">
+                <TradeHistoryTable trades={closedToday} />
+              </TabsContent>
+              <TabsContent value="history" className="flex-1 overflow-auto mt-1">
+                <TradeHistoryTable trades={d.tradeHistory || []} />
+              </TabsContent>
+            </Tabs>
+          </div>
+
+          {/* Right sidebar (~35%) */}
+          <div className="flex-1 overflow-y-auto space-y-2">
+            {/* Account Summary */}
+            <Card>
+              <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Account</p>
+                <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{formatMoney(d.balance)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{formatMoney(d.equity)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Daily P&L</span><span className={`font-mono font-medium ${d.dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(d.dailyPnl, true)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Drawdown</span><span className={`font-mono ${(d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : ""}`}>{(d.drawdown || 0).toFixed(1)}%</span></div>
               </CardContent>
             </Card>
-          ))}
-        </div>
 
-        {/* Counters */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex gap-6 text-sm flex-wrap">
-              <span>Scans: <strong>{d.scanCount}</strong></span>
-              <span>Signals: <strong>{d.signalCount}</strong></span>
-              <span>Trades: <strong>{d.totalTrades}</strong></span>
-              <span>Rejected: <strong className="text-warning">{d.rejectedCount}</strong></span>
-            </div>
-          </CardContent>
-        </Card>
+            {/* Strategy Metrics */}
+            <Card>
+              <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Metrics</p>
+                <div className="flex justify-between"><span className="text-muted-foreground">Win Rate</span><span className={`font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(1)}%</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Win / Loss</span><span className="font-mono">{d.wins}W / {d.losses}L</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Total Trades</span><span className="font-mono">{d.totalTrades}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Rejected</span><span className="font-mono text-warning">{d.rejectedCount}</span></div>
+              </CardContent>
+            </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Active Positions */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Active Positions ({d.positions?.length || 0})</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {(!d.positions || d.positions.length === 0) ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">No open positions</p>
-              ) : (
-                <div className="space-y-2">
-                  {d.positions.map((p: any) => (
-                    <div key={p.id} className="flex items-center justify-between p-2 rounded bg-secondary/30 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className={p.direction === "long" ? "text-success" : "text-destructive"}>
-                          {p.direction === "long" ? "▲" : "▼"}
-                        </span>
-                        <span className="font-medium">{p.symbol}</span>
-                        <span className="text-muted-foreground">{parseFloat(p.size)?.toFixed(2)} lots</span>
+            {/* Engine Controls */}
+            <Card>
+              <CardContent className="pt-3 pb-2 space-y-2 text-[11px]">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Engine</p>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
+                  {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Manual Scan
+                </Button>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => resetMut.mutate()}>Reset Account</Button>
+              </CardContent>
+            </Card>
+
+            {/* Latest Scan Results */}
+            {logs.length > 0 && logs[0]?.details_json && (
+              <Card>
+                <CardHeader className="pb-1 pt-3"><CardTitle className="text-[11px]">Latest Scan</CardTitle></CardHeader>
+                <CardContent className="space-y-1">
+                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 6).map((d: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
+                      <div className="flex items-center gap-1.5">
+                        {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+                        <span className="font-medium">{d.pair}</span>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-muted-foreground">SL: {p.stopLoss?.toFixed(5) || "—"}</span>
-                        <span className="text-muted-foreground">TP: {p.takeProfit?.toFixed(5) || "—"}</span>
-                        <span className={`font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-                          {formatMoney(p.pnl, true)}
+                      <div className="flex items-center gap-1.5">
+                        <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
+                        <span className={`text-[9px] ${d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground"}`}>
+                          {d.status === "trade_placed" ? "📈" : d.status === "rejected" ? "🛡" : "—"}
                         </span>
                       </div>
                     </div>
                   ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Trade History */}
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base">Recent Trades</CardTitle>
-                <Button size="sm" variant="ghost" onClick={() => resetMutation.mutate()}>Reset Account</Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {(!d.tradeHistory || d.tradeHistory.length === 0) ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">No trade history yet</p>
-              ) : (
-                <div className="space-y-1 max-h-64 overflow-y-auto">
-                  {d.tradeHistory.slice(0, 20).map((t: any, i: number) => (
-                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/30">
-                      <div className="flex items-center gap-2">
-                        <span className={t.direction === "long" ? "text-success" : "text-destructive"}>
-                          {t.direction === "long" ? "▲" : "▼"}
-                        </span>
-                        <span>{t.symbol}</span>
-                        <Badge variant="outline" className="text-[9px]">{t.closeReason}</Badge>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">{t.pnlPips?.toFixed(1)} pips</span>
-                        <span className={`font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-                          {formatMoney(t.pnl, true)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Scan History */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Scan History</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {logs.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">No scans yet — click "Scan Now" or start the engine</p>
-            ) : (
-              <div className="space-y-3">
-                {logs.map((log: any) => (
-                  <ScanLogEntry key={log.id} log={log} />
-                ))}
-              </div>
+                </CardContent>
+              </Card>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
+
+        {/* Bottom: Live Log */}
+        <div className="h-44 border-t border-border mt-2 pt-2 overflow-y-auto shrink-0">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Live Log</p>
+          {logs.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground text-center py-4">No scans yet — click "Scan Now" or start the engine</p>
+          ) : (
+            <div className="space-y-0.5">
+              {logs.slice(0, 15).map((log: any) => (
+                <ScanLogLine key={log.id} log={log} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Kill Switch Banner */}
+        {d.killSwitchActive && (
+          <div className="fixed bottom-6 left-12 right-0 bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between z-50">
+            <span className="text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
+            </div>
+          </div>
+        )}
+
+        <BotConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
       </div>
     </AppShell>
   );
 }
 
-function ScanLogEntry({ log }: { log: any }) {
-  const [expanded, setExpanded] = useState(false);
-  const details = log.details_json || [];
-
+function TradeHistoryTable({ trades }: { trades: any[] }) {
+  if (!trades || trades.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No trades</p>;
   return (
-    <div className="border border-border/50 rounded-lg p-3">
-      <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpanded(!expanded)}>
-        <div className="flex items-center gap-3 text-sm">
-          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-muted-foreground">{new Date(log.scanned_at).toLocaleString()}</span>
-          <Badge variant="outline" className="text-[10px]">{log.pairs_scanned} pairs</Badge>
-          {log.signals_found > 0 && (
-            <Badge variant="default" className="text-[10px] bg-primary/20 text-primary">{log.signals_found} signals</Badge>
-          )}
-          {log.trades_placed > 0 && (
-            <Badge className="text-[10px] bg-success/20 text-success">{log.trades_placed} trades</Badge>
-          )}
-        </div>
-        <span className="text-xs text-muted-foreground">{expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}</span>
-      </div>
-
-      {expanded && details.length > 0 && (
-        <div className="mt-3 space-y-1">
-          {details.map((d: any, i: number) => (
-            <ScanDetailRow key={i} detail={d} />
-          ))}
-        </div>
-      )}
-    </div>
+    <table className="w-full text-[11px] font-mono">
+      <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
+        <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
+        <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Exit</th>
+        <th className="text-right py-1 px-1">Pips</th><th className="text-right py-1 px-1">P&L</th>
+        <th className="text-left py-1 px-1">Reason</th>
+      </tr></thead>
+      <tbody>
+        {trades.slice(0, 30).map((t: any, i: number) => (
+          <tr key={i} className="border-b border-border/30 hover:bg-secondary/30">
+            <td className="py-1 px-1">{t.symbol}</td>
+            <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
+            <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>
+            <td className="py-1 px-1 text-right">{parseFloat(t.exitPrice)?.toFixed(5)}</td>
+            <td className="py-1 px-1 text-right">{t.pnlPips?.toFixed(1)}</td>
+            <td className={`py-1 px-1 text-right font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</td>
+            <td className="py-1 px-1 text-[10px] text-muted-foreground">{t.closeReason}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
-function ScanDetailRow({ detail }: { detail: any }) {
-  const [showFactors, setShowFactors] = useState(false);
-  const d = detail;
-
+function ScanLogLine({ log }: { log: any }) {
+  const time = new Date(log.scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   return (
-    <div className="rounded bg-secondary/20 text-xs">
-      <div className="flex items-center justify-between py-1.5 px-2 cursor-pointer" onClick={() => setShowFactors(!showFactors)}>
-        <div className="flex items-center gap-2">
-          {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> :
-           d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> :
-           <Minus className="h-3 w-3 text-muted-foreground" />}
-          <span className="font-medium">{d.pair}</span>
-          <span className="text-muted-foreground">{d.trend || "—"}</span>
-          <span className="text-muted-foreground">{d.zone ? `(${d.zone})` : ""}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {d.factorCount != null && (
-            <span className="text-muted-foreground">{d.factorCount}/9</span>
-          )}
-          <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>
-            {d.score?.toFixed(1) || "—"}
-          </span>
-          <Badge variant="outline" className={`text-[9px] ${
-            d.status === "trade_placed" ? "border-success/50 text-success" :
-            d.status === "rejected" ? "border-destructive/50 text-destructive" :
-            d.status === "signal_only" || d.status === "no_direction" ? "border-primary/50 text-primary" :
-            ""
-          }`}>
-            {d.status === "trade_placed" ? "📈 Traded" :
-             d.status === "rejected" ? "🛡 Rejected" :
-             d.status === "signal_only" ? "⚡ Signal" :
-             d.status === "skipped" ? "⏭ Skip" :
-             d.status === "below_threshold" ? "📉 Low" :
-             d.status === "paused" ? "⏸ Paused" :
-             d.status === "no_direction" ? "↔ No Bias" : d.status}
-          </Badge>
-        </div>
-      </div>
-
-      {showFactors && (
-        <div className="px-3 pb-2 space-y-1.5">
-          {/* Factors */}
-          {d.factors && d.factors.length > 0 && (
-            <div className="space-y-0.5">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">Confluence Factors</p>
-              {d.factors.map((f: any, j: number) => (
-                <div key={j} className="flex items-center gap-2 text-[11px]">
-                  <span className={f.present ? "text-success" : "text-muted-foreground/50"}>{f.present ? "✓" : "✗"}</span>
-                  <span className={`font-medium ${f.present ? "" : "text-muted-foreground/50"}`}>{f.name}</span>
-                  <span className="text-muted-foreground">{f.weight}</span>
-                  <span className="text-muted-foreground truncate max-w-[300px]">{f.detail}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Safety Gates */}
-          {d.gates && d.gates.length > 0 && (
-            <div className="space-y-0.5">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">Safety Gates</p>
-              {d.gates.map((g: any, j: number) => (
-                <div key={j} className="flex items-center gap-2 text-[11px]">
-                  {g.passed ? <ShieldCheck className="h-3 w-3 text-success" /> : <ShieldX className="h-3 w-3 text-destructive" />}
-                  <span className={g.passed ? "" : "text-destructive"}>{g.reason}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Rejection reasons */}
-          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
-            <div className="mt-1 p-1.5 rounded bg-destructive/10 text-destructive text-[11px]">
-              <strong>Rejected:</strong> {d.rejectionReasons.join("; ")}
-            </div>
-          )}
-
-          {/* Trade details */}
-          {d.status === "trade_placed" && (
-            <div className="mt-1 p-1.5 rounded bg-success/10 text-success text-[11px]">
-              <strong>Executed:</strong> {d.direction} {d.size?.toFixed(2)} lots @ {d.entryPrice?.toFixed(5)} | SL: {d.stopLoss?.toFixed(5)} | TP: {d.takeProfit?.toFixed(5)}
-            </div>
-          )}
-
-          {/* Summary */}
-          {d.summary && (
-            <p className="text-[11px] text-muted-foreground italic mt-1">{d.summary}</p>
-          )}
-        </div>
-      )}
+    <div className="flex items-center gap-2 text-[10px] py-0.5">
+      <span className="font-mono text-muted-foreground w-16 shrink-0">{time}</span>
+      <Activity className="h-2.5 w-2.5 text-primary shrink-0" />
+      <span>{log.pairs_scanned} pairs scanned</span>
+      {log.signals_found > 0 && <span className="text-primary">⚡ {log.signals_found} signals</span>}
+      {log.trades_placed > 0 && <span className="text-success">✓ {log.trades_placed} trades</span>}
     </div>
   );
 }

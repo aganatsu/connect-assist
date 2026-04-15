@@ -1,24 +1,28 @@
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/AppSidebar";
+import { useState, useCallback } from "react";
+import { IconRail } from "@/components/IconRail";
+import { InstrumentSearch } from "@/components/InstrumentSearch";
+import { StatusBar } from "@/components/StatusBar";
 
 interface AppShellProps {
   children: React.ReactNode;
 }
 
 export function AppShell({ children }: AppShellProps) {
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  const toggleSearch = useCallback(() => setSearchOpen((v) => !v), []);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+
   return (
-    <SidebarProvider>
-      <div className="min-h-screen flex w-full">
-        <AppSidebar />
-        <div className="flex-1 flex flex-col">
-          <header className="h-12 flex items-center border-b border-border px-2">
-            <SidebarTrigger className="ml-1" />
-          </header>
-          <main className="flex-1 p-6 overflow-auto">
-            {children}
-          </main>
-        </div>
+    <div className="h-screen flex flex-col">
+      <div className="flex-1 flex min-h-0">
+        <IconRail onSearchToggle={toggleSearch} />
+        {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} />}
+        <main className="flex-1 p-4 overflow-auto">
+          {children}
+        </main>
       </div>
-    </SidebarProvider>
+      <StatusBar />
+    </div>
   );
 }
