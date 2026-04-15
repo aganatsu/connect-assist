@@ -23,6 +23,7 @@ export default function BotView() {
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
+  const [selectedPairIdx, setSelectedPairIdx] = useState(0);
 
   // Order form state
   const [orderType, setOrderType] = useState("market");
@@ -343,32 +344,77 @@ export default function BotView() {
               </CardContent>
             </Card>
 
-            {/* Latest Scan Results — Expandable */}
-            {logs.length > 0 && logs[0]?.details_json && (
-              <Card>
-                <CardHeader className="pb-1 pt-3"><CardTitle className="text-[11px]">Latest Scan</CardTitle></CardHeader>
-                <CardContent className="space-y-0">
-                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 8).map((d: any, i: number) => (
-                    <ScanSignalDetail key={i} signal={d} />
-                  ))}
-                </CardContent>
-              </Card>
-            )}
           </div>
         </div>
 
-        {/* Bottom: Live Log */}
-        <div className="h-44 border-t border-border mt-2 pt-2 overflow-y-auto shrink-0">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Live Log</p>
-          {logs.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground text-center py-4">No scans yet — click "Scan Now" or start the engine</p>
-          ) : (
-            <div className="space-y-0.5">
-              {logs.slice(0, 15).map((log: any) => (
-                <ScanLogLine key={log.id} log={log} />
-              ))}
+        {/* Bottom: Scan Master-Detail 60/40 */}
+        <div className="h-56 border-t border-border mt-2 pt-2 shrink-0 flex gap-0 min-h-0">
+          {/* Left: Latest Scan Pairs (60%) */}
+          <div className="w-[60%] flex flex-col min-h-0 border-r border-border pr-2">
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                Latest Scan
+                {logs.length > 0 && logs[0]?.scanned_at && (
+                  <span className="ml-2 text-foreground font-mono">
+                    — {new Date(logs[0].scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </span>
+                )}
+              </p>
+              {logs.length > 0 && (
+                <span className="text-[9px] text-muted-foreground">
+                  {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
+                </span>
+              )}
             </div>
-          )}
+            <div className="flex-1 overflow-y-auto">
+              {(() => {
+                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+                if (latestDetails.length === 0) {
+                  return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
+                }
+                return (
+                  <div className="space-y-0">
+                    {latestDetails.map((sig: any, i: number) => {
+                      const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
+                      const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+                      const isSelected = selectedPairIdx === i;
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => setSelectedPairIdx(i)}
+                          className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+                            <span className="font-medium">{sig.pair}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`font-mono font-bold ${sig.score >= 6 ? "text-success" : sig.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{sig.score?.toFixed(1)}</span>
+                            <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* Right: Detail Breakdown (40%) */}
+          <div className="w-[40%] flex flex-col min-h-0 pl-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
+            <div className="flex-1 overflow-y-auto">
+              {(() => {
+                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+                const selected = latestDetails[selectedPairIdx];
+                if (!selected) {
+                  return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
+                }
+                return <ScanDetailInline signal={selected} />;
+              })()}
+            </div>
+          </div>
         </div>
 
         {/* Kill Switch Banner */}
@@ -487,6 +533,65 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
           {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+function ScanDetailInline({ signal: d }: { signal: any }) {
+  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+
+  return (
+    <div className="space-y-2">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
+        <span className="text-[11px] font-bold">{d.pair}</span>
+        <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
+        <span className={`text-[10px] font-mono font-bold ml-auto ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}/10</span>
+      </div>
+
+      {/* Factors */}
+      {d.factors && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Factors ({d.factorCount || 0}/9)</p>
+          {d.factors.map((f: any, fi: number) => (
+            <div key={fi} className="flex items-start gap-1 text-[9px]">
+              <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
+              <div>
+                <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
+                {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Risk Gates */}
+      {d.gates && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+          {d.gates.map((g: any, gi: number) => (
+            <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+              <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+              <span>{g.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Rejection Reasons */}
+      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+          {d.rejectionReasons.map((r: string, ri: number) => (
+            <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Summary */}
+      {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
     </div>
   );
 }
