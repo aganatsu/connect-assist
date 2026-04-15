@@ -3,35 +3,45 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import Index from "./pages/Index.tsx";
-import Chart from "./pages/Chart.tsx";
-import IctAnalysis from "./pages/IctAnalysis.tsx";
-import BotView from "./pages/BotView.tsx";
-import Journal from "./pages/Journal.tsx";
-import Backtest from "./pages/Backtest.tsx";
-import SettingsPage from "./pages/Settings.tsx";
-import NotFound from "./pages/NotFound.tsx";
+import { AuthProvider } from "@/contexts/AuthContext";
+import ProtectedRoute from "@/components/ProtectedRoute";
+import Index from "./pages/Index";
+import Chart from "./pages/Chart";
+import IctAnalysis from "./pages/IctAnalysis";
+import BotView from "./pages/BotView";
+import Journal from "./pages/Journal";
+import Backtest from "./pages/Backtest";
+import SettingsPage from "./pages/Settings";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import ResetPassword from "./pages/ResetPassword";
+import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/chart" element={<Chart />} />
-          <Route path="/ict-analysis" element={<IctAnalysis />} />
-          <Route path="/bot" element={<BotView />} />
-          <Route path="/journal" element={<Journal />} />
-          <Route path="/backtest" element={<Backtest />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
+    <AuthProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+            <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
+            <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
+            <Route path="/bot" element={<ProtectedRoute><BotView /></ProtectedRoute>} />
+            <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
+            <Route path="/backtest" element={<ProtectedRoute><Backtest /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </AuthProvider>
   </QueryClientProvider>
 );
 
