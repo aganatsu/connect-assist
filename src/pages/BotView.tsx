@@ -206,27 +206,46 @@ export default function BotView() {
                     </tr></thead>
                     <tbody>
                       {d.positions.map((p: any, idx: number) => (
-                        <tr key={p.id} className={`border-b border-border/30 hover:bg-secondary/30 ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}>
-                          <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
-                          <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
-                          <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
-                          <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
-                          <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
-                          <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
-                          <td className="py-1.5 px-1">
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                  paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
-                                }
-                              }}
-                              className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
-                            >✕ Close</button>
-                          </td>
-                        </tr>
+                        <React.Fragment key={p.id}>
+                          <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
+                            onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
+                            <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                            <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
+                            <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
+                            <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
+                            <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
+                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
+                            <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
+                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                  }
+                                }}
+                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                              >✕ Close</button>
+                            </td>
+                          </tr>
+                          {expandedPosition === p.id && (
+                            <tr>
+                              <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
+                                <div className="space-y-1 text-[10px]">
+                                  <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
+                                  <p className="text-foreground">{p.signalReason || "No reasoning recorded"}</p>
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{p.orderId}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{new Date(p.openTime).toLocaleString()}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
