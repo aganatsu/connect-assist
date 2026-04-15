@@ -1,60 +1,53 @@
 import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import {
-  Settings, Link2, Shield, Palette, Keyboard, Info,
-} from "lucide-react";
+import { Settings, Link2, Shield, Palette, Keyboard, Info, Plus, Trash2 } from "lucide-react";
+import { brokerApi, settingsApi, botConfigApi } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 
-type SettingsTab = "broker" | "risk" | "preferences" | "shortcuts" | "about";
+type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "broker", label: "Broker Connection", icon: Link2 },
   { id: "risk", label: "Risk Management", icon: Shield },
+  { id: "bot", label: "Bot Configuration", icon: Settings },
   { id: "preferences", label: "Preferences", icon: Palette },
-  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
   { id: "about", label: "About", icon: Info },
 ];
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("broker");
+  const { signOut } = useAuth();
 
   return (
     <AppShell>
       <div className="flex gap-6 min-h-[calc(100vh-7rem)]">
-        {/* Settings Sidebar */}
         <div className="w-56 shrink-0 space-y-1">
-          <h1 className="text-lg font-bold mb-4 flex items-center gap-2">
-            <Settings className="h-5 w-5" /> Settings
-          </h1>
+          <h1 className="text-lg font-bold mb-4 flex items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
           {TABS.map(tab => {
             const Icon = tab.icon;
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors ${
-                  activeTab === tab.id
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                {tab.label}
-              </button>
+                  activeTab === tab.id ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                }`}><Icon className="h-4 w-4" />{tab.label}</button>
             );
           })}
+          <button onClick={() => signOut()} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-destructive hover:bg-destructive/10 mt-4">
+            Sign out
+          </button>
         </div>
-
-        {/* Content */}
         <div className="flex-1 max-w-2xl">
           {activeTab === "broker" && <BrokerSettings />}
           {activeTab === "risk" && <RiskSettings />}
+          {activeTab === "bot" && <BotConfigSettings />}
           {activeTab === "preferences" && <PreferencesSettings />}
-          {activeTab === "shortcuts" && <ShortcutsSettings />}
           {activeTab === "about" && <AboutSettings />}
         </div>
       </div>
@@ -63,34 +56,61 @@ export default function SettingsPage() {
 }
 
 function BrokerSettings() {
+  const queryClient = useQueryClient();
   const [brokerType, setBrokerType] = useState<"oanda" | "metaapi">("metaapi");
+  const [displayName, setDisplayName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [isLive, setIsLive] = useState(false);
+
+  const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
+
+  const createMutation = useMutation({
+    mutationFn: () => brokerApi.create({ broker_type: brokerType, display_name: displayName || brokerType, api_key: apiKey, account_id: accountId, is_live: isLive }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection saved"); setApiKey(""); setAccountId(""); setDisplayName(""); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.delete(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection removed"); },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.test(id),
+    onSuccess: (data: any) => toast.success(`Connected! Balance: ${data.balance} ${data.currency || ""}`),
+    onError: (e: any) => toast.error(`Test failed: ${e.message}`),
+  });
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold">Broker Connection</h2>
+      <h2 className="text-xl font-bold">Broker Connections</h2>
+      {(connections as any[]).map((c: any) => (
+        <Card key={c.id}>
+          <CardContent className="pt-4 flex items-center justify-between">
+            <div>
+              <p className="font-medium text-sm">{c.display_name}</p>
+              <p className="text-xs text-muted-foreground">{c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
+              <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
       <Card>
-        <CardContent className="pt-4 space-y-4">
-          <div>
-            <Label className="text-xs">Broker Type</Label>
+        <CardHeader><CardTitle className="text-base flex items-center gap-2"><Plus className="h-4 w-4" /> Add Connection</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div><Label className="text-xs">Broker Type</Label>
             <select value={brokerType} onChange={e => setBrokerType(e.target.value as any)} className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm">
-              <option value="metaapi">MetaAPI (MT4/MT5)</option>
-              <option value="oanda">OANDA</option>
-            </select>
-          </div>
-          <div>
-            <Label className="text-xs">API Key / Token</Label>
-            <Input type="password" placeholder="Enter your API key" className="mt-1" />
-          </div>
-          <div>
-            <Label className="text-xs">Account ID</Label>
-            <Input placeholder="Enter account ID" className="mt-1" />
-          </div>
-          <button
-            onClick={() => toast.success("Connection settings saved")}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90"
-          >
-            Save Connection
-          </button>
+              <option value="metaapi">MetaAPI (MT4/MT5)</option><option value="oanda">OANDA</option>
+            </select></div>
+          <div><Label className="text-xs">Display Name</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="My Account" className="mt-1" /></div>
+          <div><Label className="text-xs">API Key / Token</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="mt-1" /></div>
+          <div><Label className="text-xs">Account ID</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} className="mt-1" /></div>
+          <div className="flex items-center gap-2"><Switch checked={isLive} onCheckedChange={setIsLive} /><Label className="text-sm">Live account</Label></div>
+          <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId}>Save Connection</Button>
         </CardContent>
       </Card>
     </div>
@@ -98,30 +118,67 @@ function BrokerSettings() {
 }
 
 function RiskSettings() {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
+  const risk = settings?.risk_settings_json || {};
+  const [maxRisk, setMaxRisk] = useState(risk.maxRiskPerTrade ?? 1);
+  const [maxDD, setMaxDD] = useState(risk.maxDailyDrawdown ?? 3);
+  const [maxPos, setMaxPos] = useState(risk.maxOpenPositions ?? 5);
+  const [defaultRR, setDefaultRR] = useState(risk.defaultRR ?? 3);
+
+  const saveMutation = useMutation({
+    mutationFn: () => settingsApi.upsert({ maxRiskPerTrade: maxRisk, maxDailyDrawdown: maxDD, maxOpenPositions: maxPos, defaultRR }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Risk settings saved"); },
+  });
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Risk Management</h2>
-      <Card>
-        <CardContent className="pt-4 space-y-4">
-          {[
-            { label: "Max Risk per Trade (%)", defaultVal: "1.0" },
-            { label: "Max Daily Drawdown (%)", defaultVal: "3.0" },
-            { label: "Max Open Positions", defaultVal: "5" },
-            { label: "Default Risk:Reward", defaultVal: "3.0" },
-          ].map(f => (
-            <div key={f.label}>
-              <Label className="text-xs">{f.label}</Label>
-              <Input type="number" defaultValue={f.defaultVal} className="mt-1" />
+      <Card><CardContent className="pt-4 space-y-4">
+        {[
+          { label: "Max Risk per Trade (%)", value: maxRisk, set: setMaxRisk },
+          { label: "Max Daily Drawdown (%)", value: maxDD, set: setMaxDD },
+          { label: "Max Open Positions", value: maxPos, set: setMaxPos },
+          { label: "Default Risk:Reward", value: defaultRR, set: setDefaultRR },
+        ].map(f => (<div key={f.label}><Label className="text-xs">{f.label}</Label><Input type="number" value={f.value} onChange={e => f.set(parseFloat(e.target.value) || 0)} className="mt-1" /></div>))}
+        <Button onClick={() => saveMutation.mutate()}>Save Risk Settings</Button>
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function BotConfigSettings() {
+  const queryClient = useQueryClient();
+  const { data: config, isLoading } = useQuery({ queryKey: ["bot-config"], queryFn: () => botConfigApi.get() });
+
+  const resetMutation = useMutation({
+    mutationFn: () => botConfigApi.reset(),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["bot-config"] }); toast.success("Bot config reset to defaults"); },
+  });
+
+  if (isLoading) return <p className="text-muted-foreground">Loading config...</p>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold">Bot Configuration</h2>
+        <Button variant="outline" size="sm" onClick={() => resetMutation.mutate()}>Reset to Defaults</Button>
+      </div>
+      {config && Object.entries(config).map(([section, values]: [string, any]) => (
+        <Card key={section}>
+          <CardHeader className="pb-2"><CardTitle className="text-sm capitalize">{section.replace(/([A-Z])/g, " $1")}</CardTitle></CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {typeof values === "object" && values !== null && Object.entries(values).map(([key, val]: [string, any]) => (
+                <div key={key} className="flex justify-between py-1 border-b border-border/20">
+                  <span className="text-muted-foreground">{key}</span>
+                  <span className="font-medium">{typeof val === "boolean" ? (val ? "✓" : "✗") : typeof val === "object" ? "..." : String(val)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-          <button
-            onClick={() => toast.success("Risk settings saved")}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded text-sm font-medium hover:bg-primary/90"
-          >
-            Save Risk Settings
-          </button>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
@@ -130,51 +187,18 @@ function PreferencesSettings() {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Preferences</h2>
-      <Card>
-        <CardContent className="pt-4 space-y-4">
-          {[
-            { label: "Show desktop notifications", defaultChecked: true },
-            { label: "Sound alerts on trade execution", defaultChecked: true },
-            { label: "Auto-refresh dashboard", defaultChecked: true },
-            { label: "Compact mode", defaultChecked: false },
-          ].map(pref => (
-            <div key={pref.label} className="flex items-center justify-between">
-              <Label className="text-sm">{pref.label}</Label>
-              <Switch defaultChecked={pref.defaultChecked} />
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function ShortcutsSettings() {
-  const shortcuts = [
-    { key: "Ctrl + D", action: "Go to Dashboard" },
-    { key: "Ctrl + C", action: "Go to Chart" },
-    { key: "Ctrl + J", action: "Go to Journal" },
-    { key: "Ctrl + B", action: "Go to Backtest" },
-    { key: "Ctrl + S", action: "Go to Settings" },
-    { key: "Ctrl + /", action: "Toggle sidebar" },
-    { key: "Esc", action: "Close modal / panel" },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold">Keyboard Shortcuts</h2>
-      <Card>
-        <CardContent className="pt-4">
-          <div className="space-y-2">
-            {shortcuts.map(s => (
-              <div key={s.key} className="flex items-center justify-between py-2 border-b border-border/30 last:border-0">
-                <span className="text-sm text-muted-foreground">{s.action}</span>
-                <kbd className="px-2 py-1 bg-secondary rounded text-xs font-mono">{s.key}</kbd>
-              </div>
-            ))}
+      <Card><CardContent className="pt-4 space-y-4">
+        {[
+          { label: "Show desktop notifications", defaultChecked: true },
+          { label: "Sound alerts on trade execution", defaultChecked: true },
+          { label: "Auto-refresh dashboard", defaultChecked: true },
+          { label: "Compact mode", defaultChecked: false },
+        ].map(pref => (
+          <div key={pref.label} className="flex items-center justify-between">
+            <Label className="text-sm">{pref.label}</Label><Switch defaultChecked={pref.defaultChecked} />
           </div>
-        </CardContent>
-      </Card>
+        ))}
+      </CardContent></Card>
     </div>
   );
 }
@@ -183,30 +207,11 @@ function AboutSettings() {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">About</h2>
-      <Card>
-        <CardContent className="pt-4 space-y-3">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">App</span>
-            <span>SMC Trading Dashboard</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Version</span>
-            <span>2.0.0</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Stack</span>
-            <span>React + Lovable Cloud</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Strategy</span>
-            <span>Smart Money Concepts (ICT)</span>
-          </div>
-          <p className="text-xs text-muted-foreground mt-4 pt-4 border-t border-border">
-            Built for professional forex & crypto traders using ICT/SMC methodologies.
-            This dashboard provides real-time monitoring, analysis, and journaling — the trading bot runs independently.
-          </p>
-        </CardContent>
-      </Card>
+      <Card><CardContent className="pt-4 space-y-3">
+        {[["App", "SMC Trading Dashboard"], ["Version", "2.0.0"], ["Stack", "React + Lovable Cloud"], ["Strategy", "Smart Money Concepts (ICT)"]].map(([k, v]) => (
+          <div key={k} className="flex justify-between text-sm"><span className="text-muted-foreground">{k}</span><span>{v}</span></div>
+        ))}
+      </CardContent></Card>
     </div>
   );
 }
