@@ -108,6 +108,24 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
           </Tooltip>
         );
       })}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Theme toggle */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={cycleTheme}
+            className="w-10 h-10 flex items-center justify-center text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors mb-2"
+          >
+            <ThemeIcon className="h-4 w-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="text-xs">
+          Theme: {theme}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
