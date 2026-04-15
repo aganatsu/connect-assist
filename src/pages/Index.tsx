@@ -7,7 +7,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
-import { paperApi, tradesApi, marketApi, smcApi, scannerApi } from "@/lib/api";
+import { paperApi, marketApi, smcApi, scannerApi } from "@/lib/api";
 import { TrendingUp, TrendingDown, Zap, Clock, Activity, AlertTriangle, CheckCircle } from "lucide-react";
 
 type TimeRange = "1W" | "1M" | "3M" | "6M" | "ALL";
