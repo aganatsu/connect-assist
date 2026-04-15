@@ -59,7 +59,7 @@ export default function IctAnalysis() {
   });
 
   const strengthData = currencyStrength
-    ? Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({ currency, score: typeof score === 'number' ? score : 0 })).sort((a, b) => b.score - a.score)
+    ? Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({ currency, score: typeof score === 'number' ? score : 0 })).sort((a, b) => a.score - b.score)
     : [];
 
   // Correlation matrix (simplified from quote changes)
@@ -156,16 +156,36 @@ export default function IctAnalysis() {
               <AccordionContent>
                 <div className="bg-secondary/30 border border-border p-3">
                   {analysisLoading ? <p className="text-xs text-muted-foreground">Analyzing...</p> : analysis ? (
-                    <div className="space-y-2 text-[11px]">
-                      <div className="flex gap-4">
-                        <span>Trend: <strong className={analysis.structure.trend === "bullish" ? "text-success" : analysis.structure.trend === "bearish" ? "text-destructive" : ""}>{analysis.structure.trend}</strong></span>
-                        <span>BOS: <strong className="font-mono">{analysis.structure.bos?.length || 0}</strong></span>
-                        <span>CHoCH: <strong className="font-mono">{analysis.structure.choch?.length || 0}</strong></span>
+                    <div className="space-y-3 text-[11px]">
+                      <div className="flex items-center gap-3">
+                        <span className="text-muted-foreground">Trend:</span>
+                        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                          analysis.structure.trend === "bullish" ? "bg-success/15 text-success border border-success/30" :
+                          analysis.structure.trend === "bearish" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                          "bg-muted/30 text-muted-foreground border border-border"
+                        }`}>{analysis.structure.trend}</span>
                       </div>
-                      <div className="flex gap-4">
-                        <span>OBs: <strong className="font-mono">{analysis.orderBlocks?.filter((ob: any) => !ob.mitigated).length || 0}</strong></span>
-                        <span>FVGs: <strong className="font-mono">{analysis.fvgs?.filter((f: any) => !f.mitigated).length || 0}</strong></span>
-                        <span>Liq Pools: <strong className="font-mono">{analysis.liquidityPools?.length || 0}</strong></span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
+                          <span className="text-muted-foreground">BOS</span>
+                          <span className="font-mono font-bold text-foreground">{analysis.structure.bos?.length || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
+                          <span className="text-muted-foreground">CHoCH</span>
+                          <span className="font-mono font-bold text-primary">{analysis.structure.choch?.length || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
+                          <span className="text-muted-foreground">Active OBs</span>
+                          <span className="font-mono font-bold text-warning">{analysis.orderBlocks?.filter((ob: any) => !ob.mitigated).length || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
+                          <span className="text-muted-foreground">Unfilled FVGs</span>
+                          <span className="font-mono font-bold text-primary">{analysis.fvgs?.filter((f: any) => !f.mitigated).length || 0}</span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border col-span-2">
+                          <span className="text-muted-foreground">Liquidity Pools</span>
+                          <span className="font-mono font-bold text-foreground">{analysis.liquidityPools?.length || 0}</span>
+                        </div>
                       </div>
                     </div>
                   ) : <p className="text-xs text-muted-foreground">No data</p>}
