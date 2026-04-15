@@ -536,3 +536,62 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
     </div>
   );
 }
+
+function ScanDetailInline({ signal: d }: { signal: any }) {
+  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+
+  return (
+    <div className="space-y-2">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
+        <span className="text-[11px] font-bold">{d.pair}</span>
+        <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
+        <span className={`text-[10px] font-mono font-bold ml-auto ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}/10</span>
+      </div>
+
+      {/* Factors */}
+      {d.factors && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Factors ({d.factorCount || 0}/9)</p>
+          {d.factors.map((f: any, fi: number) => (
+            <div key={fi} className="flex items-start gap-1 text-[9px]">
+              <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
+              <div>
+                <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
+                {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Risk Gates */}
+      {d.gates && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+          {d.gates.map((g: any, gi: number) => (
+            <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+              <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+              <span>{g.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Rejection Reasons */}
+      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+          {d.rejectionReasons.map((r: string, ri: number) => (
+            <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Summary */}
+      {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+    </div>
+  );
+}
