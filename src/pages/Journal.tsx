@@ -24,6 +24,8 @@ const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep +
 
 export default function JournalView() {
   const queryClient = useQueryClient();
+  const { resolvedTheme } = useTheme();
+  const ct = getChartTheme(resolvedTheme);
   const [filterSymbol, setFilterSymbol] = useState("all");
   const [filterDirection, setFilterDirection] = useState<"all" | "long" | "short">("all");
   const [addOpen, setAddOpen] = useState(false);
