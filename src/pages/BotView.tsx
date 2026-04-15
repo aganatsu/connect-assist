@@ -288,7 +288,6 @@ export default function BotView() {
                 </CardContent>
               </Card>
             )}
-            )}
           </div>
         </div>
 
