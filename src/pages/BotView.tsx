@@ -277,27 +277,17 @@ export default function BotView() {
               </CardContent>
             </Card>
 
-            {/* Latest Scan Results */}
+            {/* Latest Scan Results — Expandable */}
             {logs.length > 0 && logs[0]?.details_json && (
               <Card>
                 <CardHeader className="pb-1 pt-3"><CardTitle className="text-[11px]">Latest Scan</CardTitle></CardHeader>
-                <CardContent className="space-y-1">
-                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 6).map((d: any, i: number) => (
-                    <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
-                      <div className="flex items-center gap-1.5">
-                        {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-                        <span className="font-medium">{d.pair}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
-                        <span className={`text-[9px] ${d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground"}`}>
-                          {d.status === "trade_placed" ? "📈" : d.status === "rejected" ? "🛡" : "—"}
-                        </span>
-                      </div>
-                    </div>
+                <CardContent className="space-y-0">
+                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 8).map((d: any, i: number) => (
+                    <ScanSignalDetail key={i} signal={d} />
                   ))}
                 </CardContent>
               </Card>
+            )}
             )}
           </div>
         </div>
