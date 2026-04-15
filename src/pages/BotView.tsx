@@ -263,26 +263,72 @@ export default function BotView() {
           {/* Right sidebar (~35%) */}
           <div className="flex-1 overflow-y-auto space-y-2">
             {/* Account Summary */}
-            <Card>
-              <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Account</p>
-                <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{formatMoney(d.balance)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{formatMoney(d.equity)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Daily P&L</span><span className={`font-mono font-medium ${d.dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(d.dailyPnl, true)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Drawdown</span><span className={`font-mono ${(d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : ""}`}>{(d.drawdown || 0).toFixed(1)}%</span></div>
-              </CardContent>
-            </Card>
+            {(() => {
+              const positions = d.positions || [];
+              const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
+              const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
+              const longCount = positions.filter((p: any) => p.direction === "long").length;
+              const shortCount = positions.filter((p: any) => p.direction === "short").length;
+              const bestPos = positions.length > 0 ? positions.reduce((best: any, p: any) => (p.pnl || 0) > (best.pnl || 0) ? p : best, positions[0]) : null;
+              const worstPos = positions.length > 0 ? positions.reduce((worst: any, p: any) => (p.pnl || 0) < (worst.pnl || 0) ? p : worst, positions[0]) : null;
+              const equity = parseFloat(d.balance) + unrealizedPnl;
+              const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
+              const history = d.tradeHistory || [];
+              const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
+              const avgWin = d.wins > 0 ? history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.wins : 0;
+              const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;
+              const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
-            {/* Strategy Metrics */}
-            <Card>
-              <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Metrics</p>
-                <div className="flex justify-between"><span className="text-muted-foreground">Win Rate</span><span className={`font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(1)}%</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Win / Loss</span><span className="font-mono">{d.wins}W / {d.losses}L</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Total Trades</span><span className="font-mono">{d.totalTrades}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Rejected</span><span className="font-mono text-warning">{d.rejectedCount}</span></div>
-              </CardContent>
-            </Card>
+              return (
+                <>
+                  <Card>
+                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Account</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{formatMoney(d.balance)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{formatMoney(equity)}</span></div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Unrealized P&L</span>
+                        <span className={`font-mono font-bold ${unrealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(unrealizedPnl, true)}</span>
+                      </div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Daily P&L</span><span className={`font-mono font-medium ${d.dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(d.dailyPnl, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Return</span><span className={`font-mono font-medium ${profitPct >= 0 ? "text-success" : "text-destructive"}`}>{profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Drawdown</span><span className={`font-mono ${(d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : ""}`}>{(d.drawdown || 0).toFixed(1)}%</span></div>
+                    </CardContent>
+                  </Card>
+
+                  {/* Exposure */}
+                  <Card>
+                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Exposure</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Open Positions</span><span className="font-mono font-bold">{positions.length}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Long / Short</span><span className="font-mono"><span className="text-success">{longCount}L</span> / <span className="text-destructive">{shortCount}S</span></span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Lots</span><span className="font-mono">{totalExposure.toFixed(2)}</span></div>
+                      {bestPos && bestPos.pnl !== 0 && (
+                        <div className="flex justify-between"><span className="text-muted-foreground">Best Open</span><span className="font-mono text-success text-[10px]">{bestPos.symbol} {formatMoney(bestPos.pnl, true)}</span></div>
+                      )}
+                      {worstPos && worstPos.pnl !== 0 && (
+                        <div className="flex justify-between"><span className="text-muted-foreground">Worst Open</span><span className="font-mono text-destructive text-[10px]">{worstPos.symbol} {formatMoney(worstPos.pnl, true)}</span></div>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Performance Metrics */}
+                  <Card>
+                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Performance</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Win Rate</span><span className={`font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(1)}%</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Win / Loss</span><span className="font-mono">{d.wins}W / {d.losses}L</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Trades</span><span className="font-mono">{d.totalTrades}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Realized P&L</span><span className={`font-mono ${totalRealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(totalRealizedPnl, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Win</span><span className="font-mono text-success">{formatMoney(avgWin, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Loss</span><span className="font-mono text-destructive">{formatMoney(avgLoss, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Profit Factor</span><span className="font-mono">{profitFactor > 0 ? profitFactor.toFixed(2) : "—"}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Rejected</span><span className="font-mono text-warning">{d.rejectedCount}</span></div>
+                    </CardContent>
+                  </Card>
+                </>
+              );
+            })()}
 
             {/* Engine Controls */}
             <Card>
