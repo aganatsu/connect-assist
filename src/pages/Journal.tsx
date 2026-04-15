@@ -128,6 +128,12 @@ export default function JournalView() {
             <div className="flex items-center gap-2">
               <Dialog open={addOpen} onOpenChange={setAddOpen}>
                 <DialogTrigger asChild><Button size="sm" className="h-7 text-[11px]"><Plus className="h-3 w-3 mr-1" /> Add Trade</Button></DialogTrigger>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
+                <Import className="h-3 w-3 mr-1" /> {importMutation.isPending ? "Importing…" : "Import Bot Trades"}
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleExportCSV} disabled={filteredTrades.length === 0}>
+                <Download className="h-3 w-3 mr-1" /> CSV
+              </Button>
                 <DialogContent className="max-w-md">
                   <DialogHeader><DialogTitle>Add Manual Trade</DialogTitle></DialogHeader>
                   <div className="space-y-3">
