@@ -9,7 +9,8 @@ import { paperApi, scannerApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
-  TrendingUp, TrendingDown, Minus, Clock,
+  TrendingUp, TrendingDown, Minus, Clock, Shield, ShieldCheck, ShieldX,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
 
 export default function BotView() {
@@ -53,7 +54,7 @@ export default function BotView() {
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
-      toast.success(`Scan complete: ${data.signalsFound} signals, ${data.tradesPlaced} trades placed`);
+      toast.success(`Scan complete: ${data.signalsFound} signals, ${data.tradesPlaced} trades, ${data.rejected || 0} rejected`);
     },
     onError: (err: any) => toast.error(err.message),
   });
@@ -62,7 +63,7 @@ export default function BotView() {
     isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
     scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
-    killSwitchActive: false, uptime: 0, strategy: { name: "SMC Default" },
+    killSwitchActive: false, drawdown: 0, uptime: 0, strategy: { name: "SMC Default" },
   };
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
@@ -74,7 +75,7 @@ export default function BotView() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">Bot Monitor</h1>
-            <p className="text-sm text-muted-foreground">Autonomous SMC scanner & paper trading engine</p>
+            <p className="text-sm text-muted-foreground">Autonomous SMC scanner — 9-factor confluence, 10 safety gates</p>
           </div>
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => scanMutation.mutate()} disabled={scanMutation.isPending}>
@@ -97,14 +98,16 @@ export default function BotView() {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
           {[
             { label: "Status", value: d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped", color: d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground" },
             { label: "Mode", value: d.executionMode === "live" ? "LIVE" : "Paper", color: d.executionMode === "live" ? "text-destructive" : "" },
             { label: "Balance", value: formatMoney(d.balance) },
             { label: "Equity", value: formatMoney(d.equity) },
+            { label: "Drawdown", value: `${(d.drawdown || 0).toFixed(1)}%`, color: (d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : "" },
             { label: "Win/Loss", value: `${d.wins}W / ${d.losses}L` },
             { label: "Win Rate", value: `${(d.winRate || 0).toFixed(1)}%`, color: (d.winRate || 0) >= 50 ? "text-success" : "text-destructive" },
+            { label: "Kill Switch", value: d.killSwitchActive ? "ACTIVE" : "Off", color: d.killSwitchActive ? "text-destructive" : "text-success" },
           ].map(kpi => (
             <Card key={kpi.label}>
               <CardContent className="pt-3 pb-2">
@@ -114,6 +117,18 @@ export default function BotView() {
             </Card>
           ))}
         </div>
+
+        {/* Counters */}
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex gap-6 text-sm flex-wrap">
+              <span>Scans: <strong>{d.scanCount}</strong></span>
+              <span>Signals: <strong>{d.signalCount}</strong></span>
+              <span>Trades: <strong>{d.totalTrades}</strong></span>
+              <span>Rejected: <strong className="text-warning">{d.rejectedCount}</strong></span>
+            </div>
+          </CardContent>
+        </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Active Positions */}
@@ -133,11 +148,15 @@ export default function BotView() {
                           {p.direction === "long" ? "▲" : "▼"}
                         </span>
                         <span className="font-medium">{p.symbol}</span>
-                        <span className="text-muted-foreground">{p.size?.toFixed(2)} lots</span>
+                        <span className="text-muted-foreground">{parseFloat(p.size)?.toFixed(2)} lots</span>
                       </div>
-                      <span className={`font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-                        {formatMoney(p.pnl, true)}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-muted-foreground">SL: {p.stopLoss?.toFixed(5) || "—"}</span>
+                        <span className="text-muted-foreground">TP: {p.takeProfit?.toFixed(5) || "—"}</span>
+                        <span className={`font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                          {formatMoney(p.pnl, true)}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -165,11 +184,14 @@ export default function BotView() {
                           {t.direction === "long" ? "▲" : "▼"}
                         </span>
                         <span>{t.symbol}</span>
-                        <span className="text-muted-foreground">{t.closeReason}</span>
+                        <Badge variant="outline" className="text-[9px]">{t.closeReason}</Badge>
                       </div>
-                      <span className={`font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-                        {formatMoney(t.pnl, true)}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">{t.pnlPips?.toFixed(1)} pips</span>
+                        <span className={`font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                          {formatMoney(t.pnl, true)}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -178,20 +200,7 @@ export default function BotView() {
           </Card>
         </div>
 
-        {/* Counters */}
-        <Card>
-          <CardContent className="pt-4">
-            <div className="flex gap-6 text-sm flex-wrap">
-              <span>Scans: <strong>{d.scanCount}</strong></span>
-              <span>Signals: <strong>{d.signalCount}</strong></span>
-              <span>Trades: <strong>{d.totalTrades}</strong></span>
-              <span>Rejected: <strong>{d.rejectedCount}</strong></span>
-              <span>Kill Switch: <strong className={d.killSwitchActive ? "text-destructive" : "text-success"}>{d.killSwitchActive ? "ACTIVE" : "Off"}</strong></span>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Scan Logs */}
+        {/* Scan History */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Scan History</CardTitle>
@@ -216,7 +225,6 @@ export default function BotView() {
 function ScanLogEntry({ log }: { log: any }) {
   const [expanded, setExpanded] = useState(false);
   const details = log.details_json || [];
-  const signals = details.filter((d: any) => d.status === "trade_placed" || d.status === "signal_only");
 
   return (
     <div className="border border-border/50 rounded-lg p-3">
@@ -232,33 +240,107 @@ function ScanLogEntry({ log }: { log: any }) {
             <Badge className="text-[10px] bg-success/20 text-success">{log.trades_placed} trades</Badge>
           )}
         </div>
-        <span className="text-xs text-muted-foreground">{expanded ? "▲" : "▼"}</span>
+        <span className="text-xs text-muted-foreground">{expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}</span>
       </div>
 
       {expanded && details.length > 0 && (
         <div className="mt-3 space-y-1">
           {details.map((d: any, i: number) => (
-            <div key={i} className="flex items-center justify-between text-xs py-1 px-2 rounded bg-secondary/20">
-              <div className="flex items-center gap-2">
-                {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> :
-                 d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> :
-                 <Minus className="h-3 w-3 text-muted-foreground" />}
-                <span className="font-medium">{d.pair}</span>
-                <span className="text-muted-foreground">{d.trend || "—"}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`font-mono ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>
-                  {d.score?.toFixed(1) || "—"}
-                </span>
-                <Badge variant="outline" className="text-[9px]">
-                  {d.status === "trade_placed" ? "📈 Traded" :
-                   d.status === "signal_only" ? "⚡ Signal" :
-                   d.status === "skipped" ? "⏭ Skip" :
-                   d.status === "below_threshold" ? "📉 Low" : d.status}
-                </Badge>
-              </div>
-            </div>
+            <ScanDetailRow key={i} detail={d} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScanDetailRow({ detail }: { detail: any }) {
+  const [showFactors, setShowFactors] = useState(false);
+  const d = detail;
+
+  return (
+    <div className="rounded bg-secondary/20 text-xs">
+      <div className="flex items-center justify-between py-1.5 px-2 cursor-pointer" onClick={() => setShowFactors(!showFactors)}>
+        <div className="flex items-center gap-2">
+          {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> :
+           d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> :
+           <Minus className="h-3 w-3 text-muted-foreground" />}
+          <span className="font-medium">{d.pair}</span>
+          <span className="text-muted-foreground">{d.trend || "—"}</span>
+          <span className="text-muted-foreground">{d.zone ? `(${d.zone})` : ""}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {d.factorCount != null && (
+            <span className="text-muted-foreground">{d.factorCount}/9</span>
+          )}
+          <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>
+            {d.score?.toFixed(1) || "—"}
+          </span>
+          <Badge variant="outline" className={`text-[9px] ${
+            d.status === "trade_placed" ? "border-success/50 text-success" :
+            d.status === "rejected" ? "border-destructive/50 text-destructive" :
+            d.status === "signal_only" || d.status === "no_direction" ? "border-primary/50 text-primary" :
+            ""
+          }`}>
+            {d.status === "trade_placed" ? "📈 Traded" :
+             d.status === "rejected" ? "🛡 Rejected" :
+             d.status === "signal_only" ? "⚡ Signal" :
+             d.status === "skipped" ? "⏭ Skip" :
+             d.status === "below_threshold" ? "📉 Low" :
+             d.status === "paused" ? "⏸ Paused" :
+             d.status === "no_direction" ? "↔ No Bias" : d.status}
+          </Badge>
+        </div>
+      </div>
+
+      {showFactors && (
+        <div className="px-3 pb-2 space-y-1.5">
+          {/* Factors */}
+          {d.factors && d.factors.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">Confluence Factors</p>
+              {d.factors.map((f: any, j: number) => (
+                <div key={j} className="flex items-center gap-2 text-[11px]">
+                  <span className={f.present ? "text-success" : "text-muted-foreground/50"}>{f.present ? "✓" : "✗"}</span>
+                  <span className={`font-medium ${f.present ? "" : "text-muted-foreground/50"}`}>{f.name}</span>
+                  <span className="text-muted-foreground">{f.weight}</span>
+                  <span className="text-muted-foreground truncate max-w-[300px]">{f.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Safety Gates */}
+          {d.gates && d.gates.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">Safety Gates</p>
+              {d.gates.map((g: any, j: number) => (
+                <div key={j} className="flex items-center gap-2 text-[11px]">
+                  {g.passed ? <ShieldCheck className="h-3 w-3 text-success" /> : <ShieldX className="h-3 w-3 text-destructive" />}
+                  <span className={g.passed ? "" : "text-destructive"}>{g.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Rejection reasons */}
+          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+            <div className="mt-1 p-1.5 rounded bg-destructive/10 text-destructive text-[11px]">
+              <strong>Rejected:</strong> {d.rejectionReasons.join("; ")}
+            </div>
+          )}
+
+          {/* Trade details */}
+          {d.status === "trade_placed" && (
+            <div className="mt-1 p-1.5 rounded bg-success/10 text-success text-[11px]">
+              <strong>Executed:</strong> {d.direction} {d.size?.toFixed(2)} lots @ {d.entryPrice?.toFixed(5)} | SL: {d.stopLoss?.toFixed(5)} | TP: {d.takeProfit?.toFixed(5)}
+            </div>
+          )}
+
+          {/* Summary */}
+          {d.summary && (
+            <p className="text-[11px] text-muted-foreground italic mt-1">{d.summary}</p>
+          )}
         </div>
       )}
     </div>
