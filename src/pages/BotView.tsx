@@ -3,16 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/marketData";
-import { paperApi } from "@/lib/api";
+import { paperApi, scannerApi } from "@/lib/api";
 import { toast } from "sonner";
-import { Clock, Play, Pause, Square, AlertTriangle, CheckCircle, XCircle, Activity } from "lucide-react";
-
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
-}
+import {
+  Play, Pause, Square, AlertTriangle, Scan, Loader2,
+  TrendingUp, TrendingDown, Minus, Clock,
+} from "lucide-react";
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -21,6 +19,12 @@ export default function BotView() {
     queryKey: ["paper-status"],
     queryFn: () => paperApi.status(),
     refetchInterval: 5000,
+  });
+
+  const { data: scanLogs } = useQuery({
+    queryKey: ["scan-logs"],
+    queryFn: () => scannerApi.logs(),
+    refetchInterval: 30000,
   });
 
   const startMutation = useMutation({
@@ -44,6 +48,16 @@ export default function BotView() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Account reset"); },
   });
 
+  const scanMutation = useMutation({
+    mutationFn: () => scannerApi.manualScan(),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
+      toast.success(`Scan complete: ${data.signalsFound} signals, ${data.tradesPlaced} trades placed`);
+    },
+    onError: (err: any) => toast.error(err.message),
+  });
+
   const d = status || {
     isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
     positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
@@ -51,15 +65,22 @@ export default function BotView() {
     killSwitchActive: false, uptime: 0, strategy: { name: "SMC Default" },
   };
 
+  const logs = Array.isArray(scanLogs) ? scanLogs : [];
+
   return (
     <AppShell>
       <div className="space-y-6">
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">Bot Monitor</h1>
-            <p className="text-sm text-muted-foreground">Paper trading engine controls & status</p>
+            <p className="text-sm text-muted-foreground">Autonomous SMC scanner & paper trading engine</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => scanMutation.mutate()} disabled={scanMutation.isPending}>
+              {scanMutation.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />}
+              Scan Now
+            </Button>
             <Button size="sm" variant={d.isRunning ? "secondary" : "default"} onClick={() => startMutation.mutate()} disabled={d.isRunning && !d.isPaused}>
               <Play className="h-3 w-3 mr-1" /> Start
             </Button>
@@ -83,7 +104,7 @@ export default function BotView() {
             { label: "Balance", value: formatMoney(d.balance) },
             { label: "Equity", value: formatMoney(d.equity) },
             { label: "Win/Loss", value: `${d.wins}W / ${d.losses}L` },
-            { label: "Win Rate", value: `${d.winRate.toFixed(1)}%`, color: d.winRate >= 50 ? "text-success" : "text-destructive" },
+            { label: "Win Rate", value: `${(d.winRate || 0).toFixed(1)}%`, color: (d.winRate || 0) >= 50 ? "text-success" : "text-destructive" },
           ].map(kpi => (
             <Card key={kpi.label}>
               <CardContent className="pt-3 pb-2">
@@ -160,7 +181,7 @@ export default function BotView() {
         {/* Counters */}
         <Card>
           <CardContent className="pt-4">
-            <div className="flex gap-6 text-sm">
+            <div className="flex gap-6 text-sm flex-wrap">
               <span>Scans: <strong>{d.scanCount}</strong></span>
               <span>Signals: <strong>{d.signalCount}</strong></span>
               <span>Trades: <strong>{d.totalTrades}</strong></span>
@@ -169,7 +190,77 @@ export default function BotView() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Scan Logs */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Scan History</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {logs.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">No scans yet — click "Scan Now" or start the engine</p>
+            ) : (
+              <div className="space-y-3">
+                {logs.map((log: any) => (
+                  <ScanLogEntry key={log.id} log={log} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
+  );
+}
+
+function ScanLogEntry({ log }: { log: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const details = log.details_json || [];
+  const signals = details.filter((d: any) => d.status === "trade_placed" || d.status === "signal_only");
+
+  return (
+    <div className="border border-border/50 rounded-lg p-3">
+      <div className="flex items-center justify-between cursor-pointer" onClick={() => setExpanded(!expanded)}>
+        <div className="flex items-center gap-3 text-sm">
+          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-muted-foreground">{new Date(log.scanned_at).toLocaleString()}</span>
+          <Badge variant="outline" className="text-[10px]">{log.pairs_scanned} pairs</Badge>
+          {log.signals_found > 0 && (
+            <Badge variant="default" className="text-[10px] bg-primary/20 text-primary">{log.signals_found} signals</Badge>
+          )}
+          {log.trades_placed > 0 && (
+            <Badge className="text-[10px] bg-success/20 text-success">{log.trades_placed} trades</Badge>
+          )}
+        </div>
+        <span className="text-xs text-muted-foreground">{expanded ? "▲" : "▼"}</span>
+      </div>
+
+      {expanded && details.length > 0 && (
+        <div className="mt-3 space-y-1">
+          {details.map((d: any, i: number) => (
+            <div key={i} className="flex items-center justify-between text-xs py-1 px-2 rounded bg-secondary/20">
+              <div className="flex items-center gap-2">
+                {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> :
+                 d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> :
+                 <Minus className="h-3 w-3 text-muted-foreground" />}
+                <span className="font-medium">{d.pair}</span>
+                <span className="text-muted-foreground">{d.trend || "—"}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`font-mono ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>
+                  {d.score?.toFixed(1) || "—"}
+                </span>
+                <Badge variant="outline" className="text-[9px]">
+                  {d.status === "trade_placed" ? "📈 Traded" :
+                   d.status === "signal_only" ? "⚡ Signal" :
+                   d.status === "skipped" ? "⏭ Skip" :
+                   d.status === "below_threshold" ? "📉 Low" : d.status}
+                </Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
