@@ -164,7 +164,14 @@ Deno.serve(async (req) => {
     // ── Get account state ──
     if (action === "status") {
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
-      const { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open");
+      let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open");
+      // Update current prices from live market data
+      if (positions && positions.length > 0) {
+        await updatePositionPrices(supabase, positions);
+        // Re-fetch with updated prices
+        const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open");
+        positions = refreshed || positions;
+      }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
       const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
 
