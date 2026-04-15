@@ -50,6 +50,12 @@ export default function JournalView() {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const importMutation = useMutation({
+    mutationFn: () => tradesApi.importFromPaper(),
+    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["trades"] }); toast.success(`Imported ${data?.imported ?? 0} bot trades`); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const handleAddTrade = () => {
     createMutation.mutate({
       symbol: formSymbol, direction: formDirection, entry_price: formEntry, entry_time: new Date().toISOString(),
@@ -57,6 +63,21 @@ export default function JournalView() {
       setup_type: formSetup, timeframe: formTimeframe, notes: formNotes,
       risk_percent: formRisk || null, risk_reward: formRR || null, pnl_amount: formPnl || null,
     });
+  };
+
+  const handleExportCSV = () => {
+    const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Notes"];
+    const rows = filteredTrades.map((t: any) => [
+      t.entry_time?.split("T")[0] ?? "", t.symbol, t.direction, t.setup_type || "",
+      t.entry_price, t.exit_price || "", t.pnl_amount || "", t.risk_reward || "",
+      t.risk_percent || "", (t.notes || "").replace(/"/g, '""'),
+    ]);
+    const csv = [headers.join(","), ...rows.map(r => r.map((v: string) => `"${v}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `trades_${new Date().toISOString().split("T")[0]}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    toast.success("CSV downloaded");
   };
 
   const filteredTrades = useMemo(() => {
