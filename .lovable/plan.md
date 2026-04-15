@@ -1,45 +1,50 @@
 
 
-# Scan Master-Detail: 60/40 Layout
+# Fix Four System Gaps
 
-## What changes
+## 1. Auto-import bot trades into Journal
 
-Replace the bottom "Live Log" strip (lines 360-372) and the right-sidebar "Latest Scan" card (lines 346-356) with a new 60/40 split panel at the bottom of the page.
+**Problem:** Paper trades closed by the bot (stored in `paper_trade_history`) never appear in the `trades` journal table.
 
-## Layout
+**Solution:** Add an "Import Bot Trades" button on the Journal page that fetches `paper_trade_history` records and inserts them into the `trades` table, skipping duplicates. We'll match on `position_id` to avoid double-imports.
 
-```text
-┌──────────────────────────────────────────────────────────────┐
-│  Control Bar + Order Form (unchanged)                        │
-├────────────────────────────────────┬─────────────────────────┤
-│  Positions / History Tabs          │ Account / Exposure /    │
-│  (unchanged)                       │ Performance / Engine    │
-│                                    │ (unchanged, minus the   │
-│                                    │  "Latest Scan" card)    │
-├─────────────────────────┬──────────┴─────────────────────────┤
-│  LATEST SCAN (60%)      │  DETAIL BREAKDOWN (40%)            │
-│                         │                                    │
-│  EUR/USD  ▲ long  7.2  PLACED  ← │  Factors (6/9)          │
-│  GBP/USD  ▼ short 4.1  SKIP      │  ✓ Market Structure     │
-│  USD/JPY  — 2.0  REJECTED        │  ✗ Volume Confirm       │
-│  AUD/USD  ▲ long  5.5  SKIP      │  Risk Gates             │
-│                                   │  ✓ Max DD ok            │
-│  (click a row to see detail →)    │  Rejection Reasons      │
-│                                   │  ⚠ Spread too wide      │
-└─────────────────────────┴─────────────────────────────────────┘
-```
+- Add a new action in the `trades` edge function: `import_from_paper` — queries `paper_trade_history` for the user, checks which `position_id`s already exist in `trades`, and inserts the missing ones with mapped fields (symbol, direction, entry/exit price, pnl, etc.)
+- Add an "Import Bot Trades" button next to "Add Trade" in the Journal UI that calls this new action
+- Show a toast with count of imported trades
 
-## Implementation (single file: `src/pages/BotView.tsx`)
+## 2. P&L Reporting / CSV Export
 
-1. **Add state**: `selectedPairIdx` (number, default `0`) to track which pair row is selected in the scan list.
+**Problem:** No way to export journal data or performance stats.
 
-2. **Remove "Latest Scan" card** from the right sidebar (lines 346-356).
+**Solution:** Add a "Download CSV" button on the Journal page (Performance tab) that exports filtered trades as a CSV file client-side. No edge function needed — we already have the trades data in memory.
 
-3. **Replace bottom "Live Log" div** (lines 360-372) with the 60/40 master-detail panel:
-   - **Left panel (60%)**: List all pairs from `logs[0].details_json`. Each row shows: direction icon, pair name, confluence score, status badge (PLACED/SKIP/REJECTED). Clicking a row sets `selectedPairIdx`. Selected row highlighted with `bg-primary/10 border-l-2 border-primary`.
-   - **Right panel (40%)**: Shows the full `ScanSignalDetail` content (factors, gates, rejection reasons, summary) for the selected pair — rendered inline (always expanded), not as a collapsible.
+- Generate CSV from `filteredTrades` array with columns: Date, Symbol, Direction, Setup, Entry, Exit, P&L, R:R, Risk%, Notes
+- Trigger browser download via `Blob` + `URL.createObjectURL`
+- Place button in the Journal header area next to filters
 
-4. **Add scan timestamp header** above the left panel showing when the latest scan occurred (e.g., "Latest Scan — 07:00:15 PM") and how many pairs were scanned.
+## 3. Theme-aware Recharts colors
 
-5. **Empty state**: If no scan data exists, show a centered message: "No scans yet — click Scan Now".
+**Problem:** Charts in Journal use hardcoded dark-mode HSL values for grid lines, axes, and tooltip backgrounds. They break in light mode.
+
+**Solution:** Replace hardcoded HSL strings with CSS variable references using `useTheme()`.
+
+- Create a small helper object `chartTheme(resolvedTheme)` that returns grid stroke, axis stroke, and tooltip background colors based on the current theme
+- Apply to all four Recharts instances in Journal (equity curve, daily P&L) and any charts on other pages
+- Light mode: lighter grids, dark text, white tooltip bg. Dark mode: current colors.
+
+## 4. Dynamic StatusBar mode
+
+**Problem:** StatusBar hardcodes "PAPER MODE" text.
+
+**Solution:** Query the `paper_accounts` table via the existing `paperApi.status()` to read the actual `execution_mode` field.
+
+- Import `useQuery` and `paperApi` in StatusBar
+- Fetch `paper-status` (already cached by BotView with 5s refetch)
+- Display `execution_mode === "live"` as "LIVE MODE" (red/destructive) or "PAPER MODE" (yellow/warning)
+- Show open position count from the status data as well
+
+## Files to modify
+- `supabase/functions/trades/index.ts` — add `import_from_paper` action
+- `src/pages/Journal.tsx` — import button, CSV export button, theme-aware chart colors
+- `src/components/StatusBar.tsx` — dynamic mode from database
 
