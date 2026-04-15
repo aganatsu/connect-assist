@@ -1,9 +1,8 @@
 # Project Memory
 
 ## Core
-SMC Trading Dashboard. Autonomous bot scanner implemented as edge function.
-Lovable Cloud backend. React 18, Vite 5, Tailwind v3.
-pg_cron runs bot-scanner every 5min for active accounts.
+SMC Trading Dashboard. Lovable Cloud backend. React 18, Vite 5, Tailwind v3.
+Full bot engine in edge functions: 9-factor scoring, 10 safety gates, reasoning, post-mortems.
 
 ## Memories
-- [Bot engine](mem://constraints/no-bot-logic) — Autonomous scanner edge function, pg_cron, scan_logs table
+- [Bot spec](mem://constraints/no-bot-logic) — Full 9-factor confluence scoring, safety gates, trade reasoning, post-mortem system
