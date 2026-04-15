@@ -1,0 +1,10 @@
+---
+name: Bot engine source available
+description: Full bot engine source from GitHub repo is available at /tmp/smc-trading-dashboard-main/server/
+type: feature
+---
+The user's full trading bot system source code has been provided from their GitHub repo (smc-trading-dashboard).
+Key server files: botEngine.ts, smcAnalysis.ts, botConfig.ts, liveExecution.ts, paperTrading.ts, backtest.ts, marketData.ts, wsPriceFeed.ts, brokers/oanda.ts, brokers/metaapi.ts.
+Database schema ported to Lovable Cloud (9 tables with RLS).
+Bot engine runs as a persistent loop — keep external or restructure as cron-triggered Edge Function.
+Stateless pieces (SMC analysis, bot config CRUD, trade journal) → Edge Functions.
