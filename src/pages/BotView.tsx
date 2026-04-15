@@ -1,45 +1,12 @@
 import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/marketData";
-import {
-  Bot, Activity, Clock, TrendingUp, TrendingDown,
-  AlertTriangle, CheckCircle, XCircle, Pause, Play,
-} from "lucide-react";
-
-// Demo bot data — read-only display, NO execution logic
-const DEMO_BOT_STATUS = {
-  isRunning: true,
-  uptime: 14523,
-  strategy: "SMC BOS + OB Confluence",
-  mode: "Paper Trading",
-  balance: 12450.75,
-  equity: 12620.30,
-  dailyPnl: 185.30,
-  openPositions: 3,
-  todayTrades: 4,
-  todayWins: 3,
-  todayLosses: 1,
-  maxDrawdown: 3.2,
-  currentDrawdown: 0.8,
-};
-
-const DEMO_LOG = [
-  { time: "14:32:05", type: "trade", message: "LONG EUR/USD @ 1.0842 — OB + BOS confluence, 1:3 RR" },
-  { time: "14:30:12", type: "signal", message: "Signal detected: EUR/USD BOS above 1.0835 on 4H" },
-  { time: "14:15:00", type: "scan", message: "Scanning 10 instruments on 4H timeframe" },
-  { time: "13:45:22", type: "reject", message: "GBP/USD signal rejected — outside London KZ" },
-  { time: "13:30:00", type: "scan", message: "Scanning 10 instruments on 1H timeframe" },
-  { time: "13:12:18", type: "trade", message: "CLOSED SHORT GBP/JPY @ 189.42 — TP hit, +$280" },
-  { time: "12:55:44", type: "signal", message: "Signal detected: XAU/USD FVG fill on 15M" },
-  { time: "12:30:00", type: "scan", message: "Scanning 10 instruments on 4H timeframe" },
-];
-
-const DEMO_ACTIVE_POSITIONS = [
-  { symbol: "EUR/USD", direction: "long", entry: 1.0842, current: 1.0867, pnl: 250, duration: "2h 15m", rr: "1.8:1" },
-  { symbol: "GBP/USD", direction: "short", entry: 1.2715, current: 1.2698, pnl: 170, duration: "4h 30m", rr: "2.1:1" },
-  { symbol: "XAU/USD", direction: "long", entry: 2345.50, current: 2362.80, pnl: 1730, duration: "1h 45m", rr: "1.2:1" },
-];
+import { paperApi } from "@/lib/api";
+import { toast } from "sonner";
+import { Clock, Play, Pause, Square, AlertTriangle, CheckCircle, XCircle, Activity } from "lucide-react";
 
 function formatUptime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -48,7 +15,41 @@ function formatUptime(seconds: number): string {
 }
 
 export default function BotView() {
-  const d = DEMO_BOT_STATUS;
+  const queryClient = useQueryClient();
+
+  const { data: status, isLoading } = useQuery({
+    queryKey: ["paper-status"],
+    queryFn: () => paperApi.status(),
+    refetchInterval: 5000,
+  });
+
+  const startMutation = useMutation({
+    mutationFn: () => paperApi.startEngine(),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); },
+  });
+  const pauseMutation = useMutation({
+    mutationFn: () => paperApi.pauseEngine(),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); },
+  });
+  const stopMutation = useMutation({
+    mutationFn: () => paperApi.stopEngine(),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); },
+  });
+  const killMutation = useMutation({
+    mutationFn: () => paperApi.killSwitch(true),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); },
+  });
+  const resetMutation = useMutation({
+    mutationFn: () => paperApi.resetAccount(),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Account reset"); },
+  });
+
+  const d = status || {
+    isRunning: false, isPaused: false, balance: 10000, equity: 10000, dailyPnl: 0,
+    positions: [], tradeHistory: [], totalTrades: 0, winRate: 0, wins: 0, losses: 0,
+    scanCount: 0, signalCount: 0, rejectedCount: 0, executionMode: "paper",
+    killSwitchActive: false, uptime: 0, strategy: { name: "SMC Default" },
+  };
 
   return (
     <AppShell>
@@ -56,35 +57,38 @@ export default function BotView() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">Bot Monitor</h1>
-            <p className="text-sm text-muted-foreground">Read-only status — bot runs externally</p>
+            <p className="text-sm text-muted-foreground">Paper trading engine controls & status</p>
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-              d.isRunning ? 'bg-success/20 text-success' : 'bg-destructive/20 text-destructive'
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${d.isRunning ? 'bg-success animate-pulse' : 'bg-destructive'}`} />
-              {d.isRunning ? 'Running' : 'Stopped'}
-            </span>
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Clock className="h-3 w-3" /> Uptime: {formatUptime(d.uptime)}
-            </span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant={d.isRunning ? "secondary" : "default"} onClick={() => startMutation.mutate()} disabled={d.isRunning && !d.isPaused}>
+              <Play className="h-3 w-3 mr-1" /> Start
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => pauseMutation.mutate()} disabled={!d.isRunning || d.isPaused}>
+              <Pause className="h-3 w-3 mr-1" /> Pause
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => stopMutation.mutate()} disabled={!d.isRunning}>
+              <Square className="h-3 w-3 mr-1" /> Stop
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => killMutation.mutate()}>
+              <AlertTriangle className="h-3 w-3 mr-1" /> Kill
+            </Button>
           </div>
         </div>
 
-        {/* KPI Row */}
+        {/* KPIs */}
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
           {[
-            { label: "Strategy", value: d.strategy, small: true },
-            { label: "Mode", value: d.mode },
+            { label: "Status", value: d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped", color: d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground" },
+            { label: "Mode", value: d.executionMode === "live" ? "LIVE" : "Paper", color: d.executionMode === "live" ? "text-destructive" : "" },
             { label: "Balance", value: formatMoney(d.balance) },
-            { label: "Today P&L", value: formatMoney(d.dailyPnl, true), color: d.dailyPnl >= 0 ? 'text-success' : 'text-destructive' },
-            { label: "Win/Loss", value: `${d.todayWins}W / ${d.todayLosses}L` },
-            { label: "Drawdown", value: `${d.currentDrawdown}% / ${d.maxDrawdown}%`, color: d.currentDrawdown > 5 ? 'text-destructive' : 'text-muted-foreground' },
+            { label: "Equity", value: formatMoney(d.equity) },
+            { label: "Win/Loss", value: `${d.wins}W / ${d.losses}L` },
+            { label: "Win Rate", value: `${d.winRate.toFixed(1)}%`, color: d.winRate >= 50 ? "text-success" : "text-destructive" },
           ].map(kpi => (
             <Card key={kpi.label}>
               <CardContent className="pt-3 pb-2">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{kpi.label}</p>
-                <p className={`text-sm font-bold mt-0.5 ${kpi.color || ''} ${kpi.small ? 'text-xs' : ''}`}>{kpi.value}</p>
+                <p className={`text-sm font-bold mt-0.5 ${kpi.color || ""}`}>{kpi.value}</p>
               </CardContent>
             </Card>
           ))}
@@ -94,57 +98,77 @@ export default function BotView() {
           {/* Active Positions */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Active Positions ({DEMO_ACTIVE_POSITIONS.length})</CardTitle>
+              <CardTitle className="text-base">Active Positions ({d.positions?.length || 0})</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-2">
-                {DEMO_ACTIVE_POSITIONS.map(p => (
-                  <div key={p.symbol} className="flex items-center justify-between p-2 rounded bg-secondary/30 text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className={`${p.direction === 'long' ? 'text-success' : 'text-destructive'}`}>
-                        {p.direction === 'long' ? '▲' : '▼'}
-                      </span>
-                      <span className="font-medium">{p.symbol}</span>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <span className="text-muted-foreground">{p.duration}</span>
-                      <span className="text-muted-foreground">RR {p.rr}</span>
-                      <span className={`font-medium ${p.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>
+              {(!d.positions || d.positions.length === 0) ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No open positions</p>
+              ) : (
+                <div className="space-y-2">
+                  {d.positions.map((p: any) => (
+                    <div key={p.id} className="flex items-center justify-between p-2 rounded bg-secondary/30 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className={p.direction === "long" ? "text-success" : "text-destructive"}>
+                          {p.direction === "long" ? "▲" : "▼"}
+                        </span>
+                        <span className="font-medium">{p.symbol}</span>
+                        <span className="text-muted-foreground">{p.size?.toFixed(2)} lots</span>
+                      </div>
+                      <span className={`font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
                         {formatMoney(p.pnl, true)}
                       </span>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          {/* Activity Log */}
+          {/* Trade History */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Activity Log</CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Recent Trades</CardTitle>
+                <Button size="sm" variant="ghost" onClick={() => resetMutation.mutate()}>Reset Account</Button>
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="space-y-1 max-h-64 overflow-y-auto">
-                {DEMO_LOG.map((log, i) => {
-                  const icons = {
-                    trade: <CheckCircle className="h-3 w-3 text-success" />,
-                    signal: <Activity className="h-3 w-3 text-primary" />,
-                    scan: <Clock className="h-3 w-3 text-muted-foreground" />,
-                    reject: <XCircle className="h-3 w-3 text-destructive" />,
-                  };
-                  return (
-                    <div key={i} className="flex items-start gap-2 text-xs py-1.5 border-b border-border/30 last:border-0">
-                      {icons[log.type as keyof typeof icons]}
-                      <span className="text-muted-foreground w-14 shrink-0">{log.time}</span>
-                      <span>{log.message}</span>
+              {(!d.tradeHistory || d.tradeHistory.length === 0) ? (
+                <p className="text-sm text-muted-foreground py-4 text-center">No trade history yet</p>
+              ) : (
+                <div className="space-y-1 max-h-64 overflow-y-auto">
+                  {d.tradeHistory.slice(0, 20).map((t: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border/30">
+                      <div className="flex items-center gap-2">
+                        <span className={t.direction === "long" ? "text-success" : "text-destructive"}>
+                          {t.direction === "long" ? "▲" : "▼"}
+                        </span>
+                        <span>{t.symbol}</span>
+                        <span className="text-muted-foreground">{t.closeReason}</span>
+                      </div>
+                      <span className={`font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                        {formatMoney(t.pnl, true)}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
+
+        {/* Counters */}
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex gap-6 text-sm">
+              <span>Scans: <strong>{d.scanCount}</strong></span>
+              <span>Signals: <strong>{d.signalCount}</strong></span>
+              <span>Trades: <strong>{d.totalTrades}</strong></span>
+              <span>Rejected: <strong>{d.rejectedCount}</strong></span>
+              <span>Kill Switch: <strong className={d.killSwitchActive ? "text-destructive" : "text-success"}>{d.killSwitchActive ? "ACTIVE" : "Off"}</strong></span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
   );
