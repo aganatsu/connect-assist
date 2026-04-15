@@ -195,7 +195,11 @@ export default function BotView() {
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(!d.positions || d.positions.length === 0) ? (
-                  <p className="text-xs text-muted-foreground py-8 text-center border border-dashed border-border">No open positions. Click "+ Order" to place a trade.</p>
+                  <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
+                    <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
+                    <p className="text-xs font-medium text-muted-foreground">No open positions</p>
+                    <p className="text-[10px] text-muted-foreground/70 mt-1">Click "+ Order" to place a trade or start the bot scanner</p>
+                  </div>
                 ) : (
                   <table className="w-full text-[11px] font-mono">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
@@ -234,7 +238,7 @@ export default function BotView() {
                             <tr>
                               <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
                                 <div className="space-y-1 text-[10px]">
-                                  <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
+                                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                                   <p className="text-foreground">{p.signalReason || "No reasoning recorded"}</p>
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
                                     <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>

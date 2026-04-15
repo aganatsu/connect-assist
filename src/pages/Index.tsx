@@ -133,10 +133,10 @@ export default function Dashboard() {
             { label: "Win Rate", value: `${winRate.toFixed(1)}%`, sub: `${wins}W / ${losses}L`, color: winRate >= 50 ? "text-success" : "text-destructive" },
           ].map((kpi) => (
             <Card key={kpi.label}>
-              <CardContent className="pt-3 pb-2">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{kpi.label}</p>
-                <p className={`text-xl font-bold font-mono mt-0.5 ${kpi.color || ""}`}>{kpi.value}</p>
-                <p className={`text-[10px] mt-0.5 ${kpi.color || "text-muted-foreground"}`}>{kpi.sub}</p>
+              <CardContent className="pt-4 pb-3">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wider">{kpi.label}</p>
+                <p className={`text-xl font-bold font-mono mt-1 ${kpi.color || ""}`}>{kpi.value}</p>
+                <p className={`text-xs mt-1 ${kpi.color || "text-muted-foreground"}`}>{kpi.sub}</p>
               </CardContent>
             </Card>
           ))}
@@ -156,21 +156,21 @@ export default function Dashboard() {
                 const inst = INSTRUMENTS.find(i => i.symbol === pair);
                 const decimals = (inst?.pipSize ?? 0.0001) < 0.01 ? 5 : 3;
                 return (
-                  <div key={pair} className="p-2 bg-secondary/30 border border-border">
+                  <div key={pair} className="p-2.5 bg-secondary/30 border border-border">
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-medium">{pair}</span>
+                      <span className="text-xs font-medium">{pair}</span>
                       {q?.change != null && (
-                        <span className={`text-[9px] flex items-center gap-0.5 ${q.change >= 0 ? 'text-success' : 'text-destructive'}`}>
+                        <span className={`text-[10px] flex items-center gap-0.5 ${q.change >= 0 ? 'text-success' : 'text-destructive'}`}>
                           {q.change >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                           {q.change >= 0 ? '+' : ''}{q.change?.toFixed(2)}%
                         </span>
                       )}
                     </div>
-                    <p className="text-sm font-mono font-bold mt-0.5">
+                    <p className="text-sm font-mono font-bold mt-1">
                       {q?.price?.toFixed(decimals) ?? '—'}
                     </p>
                     {q?.spread != null && (
-                      <p className="text-[9px] text-muted-foreground">{q.spread.toFixed(1)} spread</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{q.spread.toFixed(1)} spread</p>
                     )}
                   </div>
                 );
@@ -183,19 +183,22 @@ export default function Dashboard() {
         {latestSignals.length > 0 && (
           <div className="flex gap-2 overflow-x-auto pb-1">
             {latestSignals.map((sig: any, i: number) => (
-              <div key={i} className={`shrink-0 p-2 border-l-2 bg-card border border-border ${
+              <div key={i} className={`shrink-0 p-3 border-l-2 bg-card border border-border min-w-[200px] ${
                 sig.direction === 'long' ? 'border-l-success' : sig.direction === 'short' ? 'border-l-destructive' : 'border-l-muted-foreground'
               }`}>
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-bold">{sig.pair}</span>
-                  <span className={`text-[10px] font-medium ${sig.direction === 'long' ? 'text-success' : 'text-destructive'}`}>
+                  <span className={`text-[11px] font-medium ${sig.direction === 'long' ? 'text-success' : 'text-destructive'}`}>
                     {sig.direction === 'long' ? '▲ BUY' : '▼ SELL'}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[10px] font-mono text-primary">{sig.score?.toFixed(1)}/10</span>
-                  <span className="text-[9px] text-muted-foreground truncate max-w-[120px]">{sig.summary || sig.trend}</span>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[11px] font-mono text-primary font-bold">{sig.score?.toFixed(1)}/10</span>
+                  <span className="text-[10px] text-muted-foreground">{sig.status === 'trade_placed' ? '✓ Placed' : sig.status === 'rejected' ? '✗ Rejected' : 'Skip'}</span>
                 </div>
+                {(sig.summary || sig.trend) && (
+                  <p className="text-[10px] text-muted-foreground mt-1 line-clamp-2">{sig.summary || sig.trend}</p>
+                )}
               </div>
             ))}
           </div>
@@ -219,9 +222,9 @@ export default function Dashboard() {
           <CardContent>
             {(!botStatus?.equityCurve || botStatus.equityCurve.length === 0) ? (
               <div className="h-[240px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
-                <TrendingUp className="h-8 w-8 mb-2 opacity-30" />
-                <p className="text-xs">No trade history yet</p>
-                <p className="text-[10px] mt-1">Equity curve will appear after your first closed trade</p>
+                <TrendingUp className="h-10 w-10 mb-3 opacity-20" />
+                <p className="text-sm font-medium">No trade history yet</p>
+                <p className="text-xs mt-1 text-muted-foreground/70">Equity curve will appear after your first closed trade</p>
               </div>
             ) : (
               <div className="h-[240px]">
@@ -272,7 +275,11 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               {positions.length === 0 ? (
-                <p className="text-xs text-muted-foreground py-4 text-center">No open positions</p>
+                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+                  <Activity className="h-8 w-8 mb-2 opacity-20" />
+                  <p className="text-xs font-medium">No open positions</p>
+                  <p className="text-[10px] mt-1 text-muted-foreground/70">Positions will appear here when the bot opens trades</p>
+                </div>
               ) : (
                 <table className="w-full text-[11px] font-mono">
                   <thead>
@@ -309,24 +316,28 @@ export default function Dashboard() {
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm">Bot Activity</CardTitle></CardHeader>
           <CardContent>
-            <div className="flex gap-4 text-[10px] text-muted-foreground mb-3">
+            <div className="flex gap-4 text-xs text-muted-foreground mb-3">
               <span>Scans: <strong className="text-foreground">{botStatus?.scanCount ?? 0}</strong></span>
               <span>Signals: <strong className="text-foreground">{botStatus?.signalCount ?? 0}</strong></span>
               <span>Trades: <strong className="text-foreground">{botStatus?.totalTrades ?? 0}</strong></span>
               <span>Rejected: <strong className="text-warning">{botStatus?.rejectedCount ?? 0}</strong></span>
             </div>
             {activityLog.length > 0 ? (
-              <div className="space-y-1 max-h-48 overflow-y-auto">
+                <div className="space-y-1 max-h-48 overflow-y-auto">
                 {activityLog.map((ev, i) => (
-                  <div key={i} className="flex items-center gap-2 text-[10px] py-1 border-b border-border/30">
-                    <span className="font-mono text-muted-foreground w-12 shrink-0">{ev.time}</span>
-                    <Activity className="h-2.5 w-2.5 text-primary shrink-0" />
+                  <div key={i} className="flex items-center gap-2 text-xs py-1.5 border-b border-border/30">
+                    <span className="font-mono text-muted-foreground w-14 shrink-0">{ev.time}</span>
+                    <Activity className="h-3 w-3 text-primary shrink-0" />
                     <span className="text-foreground">{ev.message}</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground text-center py-2">No activity yet</p>
+              <div className="flex flex-col items-center justify-center py-6 text-muted-foreground">
+                <Clock className="h-8 w-8 mb-2 opacity-20" />
+                <p className="text-xs font-medium">No activity yet</p>
+                <p className="text-[10px] mt-1 text-muted-foreground/70">Start the bot or run a manual scan</p>
+              </div>
             )}
           </CardContent>
         </Card>
