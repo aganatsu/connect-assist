@@ -7,8 +7,8 @@ import {
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatMoney, INSTRUMENTS, getCurrentSession, isInKillzone } from "@/lib/marketData";
-import { paperApi, tradesApi, marketApi, smcApi } from "@/lib/api";
-import { TrendingUp, TrendingDown, Zap, Clock } from "lucide-react";
+import { paperApi, tradesApi, marketApi, smcApi, scannerApi } from "@/lib/api";
+import { TrendingUp, TrendingDown, Zap, Clock, Activity, AlertTriangle, CheckCircle } from "lucide-react";
 
 type TimeRange = "1W" | "1M" | "3M" | "6M" | "ALL";
 
@@ -33,25 +33,18 @@ export default function Dashboard() {
     queryFn: () => tradesApi.equityCurve(),
   });
 
-  // Live prices polling
   const { data: liveQuotes } = useQuery({
     queryKey: ["live-quotes"],
     queryFn: async () => {
       const results: Record<string, any> = {};
-      // Fetch in parallel batches
-      const promises = WATCHED_PAIRS.map(async (pair) => {
-        try {
-          const q = await marketApi.quote(pair);
-          results[pair] = q;
-        } catch { results[pair] = null; }
-      });
-      await Promise.all(promises);
+      await Promise.all(WATCHED_PAIRS.map(async (pair) => {
+        try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; }
+      }));
       return results;
     },
     refetchInterval: 10000,
   });
 
-  // Currency strength
   const { data: currencyStrength } = useQuery({
     queryKey: ["currency-strength"],
     queryFn: () => {
@@ -64,6 +57,12 @@ export default function Dashboard() {
     },
     enabled: !!liveQuotes,
     staleTime: 30000,
+  });
+
+  const { data: scanLogs } = useQuery({
+    queryKey: ["scan-logs"],
+    queryFn: () => scannerApi.logs(),
+    refetchInterval: 30000,
   });
 
   const balance = botStatus?.balance ?? 10000;
@@ -96,64 +95,68 @@ export default function Dashboard() {
     })).sort((a, b) => b.score - a.score);
   }, [currencyStrength]);
 
+  // Latest scan signals
+  const latestSignals = useMemo(() => {
+    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    if (logs.length === 0) return [];
+    const latest = logs[0];
+    const details = Array.isArray(latest?.details_json) ? latest.details_json : [];
+    return details.filter((d: any) => d.score >= 4).slice(0, 5);
+  }, [scanLogs]);
+
+  // Bot activity timeline
+  const activityLog = useMemo(() => {
+    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    const events: { time: string; type: string; message: string }[] = [];
+    logs.slice(0, 10).forEach((log: any) => {
+      const time = new Date(log.scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      events.push({ time, type: "scan", message: `Scanned ${log.pairs_scanned} pairs — ${log.signals_found} signals, ${log.trades_placed} trades` });
+    });
+    return events.slice(0, 20);
+  }, [scanLogs]);
+
   return (
     <AppShell>
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">SMC Trading Dashboard</h1>
-            <p className="text-muted-foreground text-sm flex items-center gap-2">
+            <h1 className="text-xl font-bold">SMC Trading Dashboard</h1>
+            <p className="text-muted-foreground text-xs flex items-center gap-2">
               <Clock className="h-3 w-3" /> {session}
               {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-              botStatus?.isRunning ? "bg-success/20 text-success" : "bg-muted/20 text-muted-foreground"
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${botStatus?.isRunning ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
-              {botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
-            </span>
-          </div>
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium ${
+            botStatus?.isRunning ? "text-success" : "text-muted-foreground"
+          }`}>
+            <span className={`${botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
+            {botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
+          </span>
         </div>
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Balance</p>
-              <p className="text-2xl font-bold mt-1">{formatMoney(balance)}</p>
-              <p className={`text-xs mt-1 ${profit >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(profit, true)} ({profitPct}%)</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Today P&L</p>
-              <p className={`text-2xl font-bold mt-1 ${dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(dailyPnl, true)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{totalTrades} trades</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Open Positions</p>
-              <p className="text-2xl font-bold mt-1">{positions.length}</p>
-              <p className="text-xs text-muted-foreground mt-1">{formatMoney(positions.reduce((s: number, p: any) => s + Math.abs(p.pnl || 0), 0))} exposure</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">Win Rate</p>
-              <p className={`text-2xl font-bold mt-1 ${winRate >= 50 ? "text-success" : "text-destructive"}`}>{winRate.toFixed(1)}%</p>
-              <p className="text-xs text-muted-foreground mt-1">{wins}W / {losses}L</p>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[
+            { label: "Balance", value: formatMoney(balance), sub: `${formatMoney(profit, true)} (${profitPct}%)`, color: profit >= 0 ? "text-success" : "text-destructive" },
+            { label: "Today P&L", value: formatMoney(dailyPnl, true), sub: `${totalTrades} trades`, color: dailyPnl >= 0 ? "text-success" : "text-destructive" },
+            { label: "Open Positions", value: String(positions.length), sub: `${formatMoney(positions.reduce((s: number, p: any) => s + Math.abs(p.pnl || 0), 0))} exposure` },
+            { label: "Win Rate", value: `${winRate.toFixed(1)}%`, sub: `${wins}W / ${losses}L`, color: winRate >= 50 ? "text-success" : "text-destructive" },
+          ].map((kpi) => (
+            <Card key={kpi.label}>
+              <CardContent className="pt-3 pb-2">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{kpi.label}</p>
+                <p className={`text-xl font-bold font-mono mt-0.5 ${kpi.color || ""}`}>{kpi.value}</p>
+                <p className={`text-[10px] mt-0.5 ${kpi.color || "text-muted-foreground"}`}>{kpi.sub}</p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         {/* Live Prices Grid */}
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Zap className="h-4 w-4 text-primary" /> Live Prices
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Zap className="h-3.5 w-3.5 text-primary" /> Live Prices
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -163,11 +166,11 @@ export default function Dashboard() {
                 const inst = INSTRUMENTS.find(i => i.symbol === pair);
                 const decimals = (inst?.pipSize ?? 0.0001) < 0.01 ? 5 : 3;
                 return (
-                  <div key={pair} className="p-2 rounded bg-secondary/30 border border-border/50">
+                  <div key={pair} className="p-2 bg-secondary/30 border border-border">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">{pair}</span>
+                      <span className="text-[10px] font-medium">{pair}</span>
                       {q?.change != null && (
-                        <span className={`text-[10px] flex items-center gap-0.5 ${q.change >= 0 ? 'text-success' : 'text-destructive'}`}>
+                        <span className={`text-[9px] flex items-center gap-0.5 ${q.change >= 0 ? 'text-success' : 'text-destructive'}`}>
                           {q.change >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
                           {q.change >= 0 ? '+' : ''}{q.change?.toFixed(2)}%
                         </span>
@@ -177,7 +180,7 @@ export default function Dashboard() {
                       {q?.price?.toFixed(decimals) ?? '—'}
                     </p>
                     {q?.spread != null && (
-                      <p className="text-[10px] text-muted-foreground">{q.spread.toFixed(1)} spread</p>
+                      <p className="text-[9px] text-muted-foreground">{q.spread.toFixed(1)} spread</p>
                     )}
                   </div>
                 );
@@ -186,15 +189,37 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
+        {/* Active Signals Strip */}
+        {latestSignals.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {latestSignals.map((sig: any, i: number) => (
+              <div key={i} className={`shrink-0 p-2 border-l-2 bg-card border border-border ${
+                sig.direction === 'long' ? 'border-l-success' : sig.direction === 'short' ? 'border-l-destructive' : 'border-l-muted-foreground'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold">{sig.pair}</span>
+                  <span className={`text-[10px] font-medium ${sig.direction === 'long' ? 'text-success' : 'text-destructive'}`}>
+                    {sig.direction === 'long' ? '▲ BUY' : '▼ SELL'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[10px] font-mono text-primary">{sig.score?.toFixed(1)}/10</span>
+                  <span className="text-[9px] text-muted-foreground truncate max-w-[120px]">{sig.summary || sig.trend}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Equity Curve */}
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Equity Curve</CardTitle>
+              <CardTitle className="text-sm">Equity Curve</CardTitle>
               <div className="flex gap-1">
                 {(["1W", "1M", "3M", "6M", "ALL"] as TimeRange[]).map((range) => (
                   <button key={range} onClick={() => setTimeRange(range)}
-                    className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded transition-colors ${
+                    className={`px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
                       timeRange === range ? "bg-primary/20 text-primary border border-primary/40" : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                     }`}>{range}</button>
                 ))}
@@ -202,37 +227,37 @@ export default function Dashboard() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-[280px]">
+            <div className="h-[240px]">
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={equityData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 16%, 18%)" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" />
-                  <YAxis tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
-                  <Tooltip contentStyle={{ backgroundColor: "hsl(220, 18%, 10%)", border: "1px solid hsl(220, 16%, 18%)", borderRadius: "8px" }} />
-                  <ReferenceLine y={10000} stroke="hsl(215, 15%, 55%)" strokeDasharray="3 3" strokeOpacity={0.5} />
-                  <Line type="monotone" dataKey="equity" stroke="hsl(210, 100%, 52%)" strokeWidth={2} dot={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
+                  <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
+                  <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
+                  <ReferenceLine y={10000} stroke="hsl(220, 8%, 50%)" strokeDasharray="3 3" strokeOpacity={0.5} />
+                  <Line type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" strokeWidth={2} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {/* Currency Strength */}
           {strengthData.length > 0 && (
             <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-base">Currency Strength</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle className="text-sm">Currency Strength</CardTitle></CardHeader>
               <CardContent>
-                <div className="h-[200px]">
+                <div className="h-[180px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={strengthData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 16%, 18%)" />
-                      <XAxis type="number" tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" />
-                      <YAxis dataKey="currency" type="category" tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" width={35} />
-                      <Tooltip contentStyle={{ backgroundColor: "hsl(220, 18%, 10%)", border: "1px solid hsl(220, 16%, 18%)", borderRadius: "8px" }} />
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
+                      <XAxis type="number" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
+                      <YAxis dataKey="currency" type="category" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" width={35} />
+                      <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
                       <Bar dataKey="score">
                         {strengthData.map((entry, i) => (
-                          <Cell key={i} fill={entry.score >= 0 ? 'hsl(142, 72%, 45%)' : 'hsl(0, 72%, 51%)'} />
+                          <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />
                         ))}
                       </Bar>
                     </BarChart>
@@ -245,57 +270,66 @@ export default function Dashboard() {
           {/* Active Positions */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Active Positions ({positions.length})</CardTitle>
+              <CardTitle className="text-sm">Active Positions ({positions.length})</CardTitle>
             </CardHeader>
             <CardContent>
               {positions.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">No open positions</p>
+                <p className="text-xs text-muted-foreground py-4 text-center">No open positions</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border text-muted-foreground">
-                        <th className="text-left py-2 px-1">Symbol</th>
-                        <th className="text-left py-2 px-1">Dir</th>
-                        <th className="text-right py-2 px-1">Entry</th>
-                        <th className="text-right py-2 px-1">Current</th>
-                        <th className="text-right py-2 px-1">P&L</th>
-                        <th className="text-right py-2 px-1">Size</th>
+                <table className="w-full text-[11px] font-mono">
+                  <thead>
+                    <tr className="border-b border-border text-muted-foreground">
+                      <th className="text-left py-1.5 px-1">Symbol</th>
+                      <th className="text-left py-1.5 px-1">Dir</th>
+                      <th className="text-right py-1.5 px-1">Entry</th>
+                      <th className="text-right py-1.5 px-1">P&L</th>
+                      <th className="text-right py-1.5 px-1">Size</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {positions.map((p: any) => (
+                      <tr key={p.id} className="border-b border-border/50 hover:bg-secondary/30">
+                        <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                        <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
+                          {p.direction === "long" ? "▲" : "▼"}
+                        </td>
+                        <td className="py-1.5 px-1 text-right">{p.entryPrice?.toFixed(5)}</td>
+                        <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                          {formatMoney(p.pnl, true)}
+                        </td>
+                        <td className="py-1.5 px-1 text-right">{p.size?.toFixed(2)}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {positions.map((p: any) => (
-                        <tr key={p.id} className="border-b border-border/50 hover:bg-secondary/30">
-                          <td className="py-2 px-1 font-medium">{p.symbol}</td>
-                          <td className={`py-2 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
-                            {p.direction === "long" ? "▲ Long" : "▼ Short"}
-                          </td>
-                          <td className="py-2 px-1 text-right">{p.entryPrice?.toFixed(5)}</td>
-                          <td className="py-2 px-1 text-right">{p.currentPrice?.toFixed(5)}</td>
-                          <td className={`py-2 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-                            {formatMoney(p.pnl, true)}
-                          </td>
-                          <td className="py-2 px-1 text-right">{p.size?.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                    ))}
+                  </tbody>
+                </table>
               )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Bot Activity */}
+        {/* Bot Activity Timeline */}
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-base">Bot Activity</CardTitle></CardHeader>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Bot Activity</CardTitle></CardHeader>
           <CardContent>
-            <div className="flex gap-4 text-xs text-muted-foreground">
-              <span>Scans: {botStatus?.scanCount ?? 0}</span>
-              <span>Signals: {botStatus?.signalCount ?? 0}</span>
-              <span>Trades: {botStatus?.totalTrades ?? 0}</span>
-              <span>Rejected: {botStatus?.rejectedCount ?? 0}</span>
+            <div className="flex gap-4 text-[10px] text-muted-foreground mb-3">
+              <span>Scans: <strong className="text-foreground">{botStatus?.scanCount ?? 0}</strong></span>
+              <span>Signals: <strong className="text-foreground">{botStatus?.signalCount ?? 0}</strong></span>
+              <span>Trades: <strong className="text-foreground">{botStatus?.totalTrades ?? 0}</strong></span>
+              <span>Rejected: <strong className="text-warning">{botStatus?.rejectedCount ?? 0}</strong></span>
             </div>
+            {activityLog.length > 0 ? (
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {activityLog.map((ev, i) => (
+                  <div key={i} className="flex items-center gap-2 text-[10px] py-1 border-b border-border/30">
+                    <span className="font-mono text-muted-foreground w-12 shrink-0">{ev.time}</span>
+                    <Activity className="h-2.5 w-2.5 text-primary shrink-0" />
+                    <span className="text-foreground">{ev.message}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground text-center py-2">No activity yet</p>
+            )}
           </CardContent>
         </Card>
       </div>
