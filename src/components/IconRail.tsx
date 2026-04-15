@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useTheme } from "@/contexts/ThemeContext";
 
 const NAV_ITEMS = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard, shortcut: "1" },
@@ -24,6 +25,13 @@ interface IconRailProps {
 export function IconRail({ onSearchToggle }: IconRailProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { theme, setTheme } = useTheme();
+
+  const cycleTheme = () => {
+    const next = theme === "dark" ? "light" : theme === "light" ? "system" : "dark";
+    setTheme(next);
+  };
+  const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -100,6 +108,24 @@ export function IconRail({ onSearchToggle }: IconRailProps) {
           </Tooltip>
         );
       })}
+
+      {/* Spacer */}
+      <div className="flex-1" />
+
+      {/* Theme toggle */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={cycleTheme}
+            className="w-10 h-10 flex items-center justify-center text-sidebar-foreground hover:text-foreground hover:bg-sidebar-accent transition-colors mb-2"
+          >
+            <ThemeIcon className="h-4 w-4" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="text-xs">
+          Theme: {theme}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }
