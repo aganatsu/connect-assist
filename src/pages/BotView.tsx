@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ export default function BotView() {
   const [orderFormOpen, setOrderFormOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
+  const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
 
   // Order form state
   const [orderType, setOrderType] = useState("market");
@@ -205,27 +206,46 @@ export default function BotView() {
                     </tr></thead>
                     <tbody>
                       {d.positions.map((p: any, idx: number) => (
-                        <tr key={p.id} className={`border-b border-border/30 hover:bg-secondary/30 ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}>
-                          <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
-                          <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
-                          <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
-                          <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
-                          <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
-                          <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
-                          <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
-                          <td className="py-1.5 px-1">
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                  paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
-                                }
-                              }}
-                              className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
-                            >✕ Close</button>
-                          </td>
-                        </tr>
+                        <React.Fragment key={p.id}>
+                          <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
+                            onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
+                            <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                            <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
+                            <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
+                            <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
+                            <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
+                            <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
+                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
+                            <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
+                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                  }
+                                }}
+                                className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                              >✕ Close</button>
+                            </td>
+                          </tr>
+                          {expandedPosition === p.id && (
+                            <tr>
+                              <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
+                                <div className="space-y-1 text-[10px]">
+                                  <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
+                                  <p className="text-foreground">{p.signalReason || "No reasoning recorded"}</p>
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{p.orderId}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{new Date(p.openTime).toLocaleString()}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
@@ -277,24 +297,13 @@ export default function BotView() {
               </CardContent>
             </Card>
 
-            {/* Latest Scan Results */}
+            {/* Latest Scan Results — Expandable */}
             {logs.length > 0 && logs[0]?.details_json && (
               <Card>
                 <CardHeader className="pb-1 pt-3"><CardTitle className="text-[11px]">Latest Scan</CardTitle></CardHeader>
-                <CardContent className="space-y-1">
-                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 6).map((d: any, i: number) => (
-                    <div key={i} className="flex items-center justify-between text-[10px] py-0.5">
-                      <div className="flex items-center gap-1.5">
-                        {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-                        <span className="font-medium">{d.pair}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
-                        <span className={`text-[9px] ${d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground"}`}>
-                          {d.status === "trade_placed" ? "📈" : d.status === "rejected" ? "🛡" : "—"}
-                        </span>
-                      </div>
-                    </div>
+                <CardContent className="space-y-0">
+                  {(Array.isArray(logs[0].details_json) ? logs[0].details_json : []).slice(0, 8).map((d: any, i: number) => (
+                    <ScanSignalDetail key={i} signal={d} />
                   ))}
                 </CardContent>
               </Card>
@@ -368,6 +377,70 @@ function ScanLogLine({ log }: { log: any }) {
       <span>{log.pairs_scanned} pairs scanned</span>
       {log.signals_found > 0 && <span className="text-primary">⚡ {log.signals_found} signals</span>}
       {log.trades_placed > 0 && <span className="text-success">✓ {log.trades_placed} trades</span>}
+    </div>
+  );
+}
+
+function ScanSignalDetail({ signal: d }: { signal: any }) {
+  const [expanded, setExpanded] = useState(false);
+  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+
+  return (
+    <div className="border-b border-border/30 last:border-b-0">
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between text-[10px] py-1.5 hover:bg-secondary/30 transition-colors px-1">
+        <div className="flex items-center gap-1.5">
+          {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
+          <span className="font-medium">{d.pair}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
+          <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+          <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-1 pb-2 space-y-1.5">
+          {/* Factors */}
+          {d.factors && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Factors ({d.factorCount || 0}/9)</p>
+              {d.factors.map((f: any, fi: number) => (
+                <div key={fi} className="flex items-start gap-1 text-[9px]">
+                  <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
+                  <div>
+                    <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
+                    {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Risk Gates */}
+          {d.gates && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
+              {d.gates.map((g: any, gi: number) => (
+                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                  <span>{g.passed ? "✓" : "✗"}</span>
+                  <span>{g.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Rejection Reasons */}
+          {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+            <div className="space-y-0.5">
+              <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+              {d.rejectionReasons.map((r: string, ri: number) => (
+                <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+              ))}
+            </div>
+          )}
+          {/* Summary */}
+          {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+        </div>
+      )}
     </div>
   );
 }
