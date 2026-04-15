@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  :root, .dark {
     --font-sans: 'Space Grotesk', system-ui, sans-serif;
     --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
 
@@ -53,6 +53,59 @@
 
     --cyan: 185 80% 55%;
     --bullish: 155 70% 45%;
+    --bearish: 0 72% 51%;
+  }
+
+  .light {
+    --font-sans: 'Space Grotesk', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+
+    --background: 0 0% 98%;
+    --foreground: 240 10% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 10%;
+
+    --primary: 185 80% 40%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 240 10% 10%;
+
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 8% 46%;
+
+    --accent: 220 14% 94%;
+    --accent-foreground: 240 10% 10%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 87%;
+    --input: 220 13% 87%;
+    --ring: 185 80% 40%;
+
+    --radius: 0px;
+
+    --sidebar-background: 0 0% 97%;
+    --sidebar-foreground: 220 8% 40%;
+    --sidebar-primary: 185 80% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 94%;
+    --sidebar-accent-foreground: 240 10% 10%;
+    --sidebar-border: 220 13% 87%;
+    --sidebar-ring: 185 80% 40%;
+
+    --success: 155 70% 35%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 0%;
+
+    --cyan: 185 80% 40%;
+    --bullish: 155 70% 35%;
     --bearish: 0 72% 51%;
   }
 }
@@ -120,12 +173,12 @@
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: hsl(240, 10%, 8%);
+  background: hsl(var(--background));
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(240, 6%, 25%);
+  background: hsl(var(--border));
   border-radius: 0;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(240, 6%, 35%);
+  background: hsl(var(--muted-foreground));
 }
