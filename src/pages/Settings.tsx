@@ -7,9 +7,10 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap } from "lucide-react";
+import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor } from "lucide-react";
 import { brokerApi, settingsApi, botConfigApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import { INSTRUMENTS } from "@/lib/marketData";
 
 type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
@@ -345,21 +346,51 @@ function BotConfigSettings() {
 }
 
 function PreferencesSettings() {
+  const { theme, setTheme } = useTheme();
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Preferences</h2>
-      <Card><CardContent className="pt-4 space-y-4">
-        {[
-          { label: "Show desktop notifications", defaultChecked: true },
-          { label: "Sound alerts on trade execution", defaultChecked: true },
-          { label: "Auto-refresh dashboard", defaultChecked: true },
-          { label: "Compact mode", defaultChecked: false },
-        ].map(pref => (
-          <div key={pref.label} className="flex items-center justify-between">
-            <Label className="text-sm">{pref.label}</Label><Switch defaultChecked={pref.defaultChecked} />
+
+      {/* Theme */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Theme</CardTitle></CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-3 gap-2">
+            {([
+              { id: "dark" as const, label: "Dark", icon: Moon },
+              { id: "light" as const, label: "Light", icon: Sun },
+              { id: "system" as const, label: "System", icon: Monitor },
+            ]).map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => setTheme(opt.id)}
+                className={`flex items-center gap-2 px-4 py-3 border text-sm transition-colors ${theme === opt.id ? "border-primary bg-primary/10 text-primary font-medium" : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"}`}
+              >
+                <opt.icon className="h-4 w-4" />
+                {opt.label}
+              </button>
+            ))}
           </div>
-        ))}
-      </CardContent></Card>
+        </CardContent>
+      </Card>
+
+      {/* Other Preferences */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Notifications & Display</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          {[
+            { label: "Show desktop notifications", defaultChecked: true },
+            { label: "Sound alerts on trade execution", defaultChecked: true },
+            { label: "Auto-refresh dashboard", defaultChecked: true },
+            { label: "Compact mode", defaultChecked: false },
+          ].map(pref => (
+            <div key={pref.label} className="flex items-center justify-between">
+              <Label className="text-sm">{pref.label}</Label><Switch defaultChecked={pref.defaultChecked} />
+            </div>
+          ))}
+        </CardContent>
+      </Card>
     </div>
   );
 }
