@@ -3,30 +3,19 @@ import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Clock, BarChart3, Grid3X3, Target, Calendar } from "lucide-react";
+import { Clock, Target, Calendar, BarChart3 } from "lucide-react";
 import { smcApi, marketApi } from "@/lib/api";
+import { INSTRUMENTS, SESSIONS, KILL_ZONES } from "@/lib/marketData";
+import {
+  BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+} from "recharts";
 
-const SYMBOLS = ["EUR/USD", "GBP/USD", "USD/JPY", "GBP/JPY", "AUD/USD", "USD/CAD", "XAU/USD", "BTC/USD"];
-
-const SESSIONS = [
-  { name: "Sydney", start: 21, end: 6, color: "hsl(270, 55%, 70%)" },
-  { name: "Asian", start: 0, end: 8, color: "hsl(280, 60%, 65%)" },
-  { name: "London", start: 7, end: 16, color: "hsl(210, 100%, 52%)" },
-  { name: "New York", start: 12, end: 21, color: "hsl(38, 92%, 50%)" },
-];
-
-const KILL_ZONES = [
-  { name: "Asian KZ", start: 0, end: 3, color: "hsl(280, 60%, 65%)" },
-  { name: "London KZ", start: 7, end: 9, color: "hsl(210, 100%, 52%)" },
-  { name: "NY KZ", start: 12, end: 14, color: "hsl(38, 92%, 50%)" },
-  { name: "London Close KZ", start: 15, end: 16, color: "hsl(142, 72%, 45%)" },
-];
+const SYMBOLS = INSTRUMENTS.map(i => i.symbol);
 
 export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
   const currentHour = new Date().getUTCHours();
 
-  // Fetch candles for selected symbol
   const { data: candles } = useQuery({
     queryKey: ["candles", selectedSymbol],
     queryFn: () => marketApi.candles(selectedSymbol, "1h", 200),
@@ -39,7 +28,6 @@ export default function IctAnalysis() {
     staleTime: 300000,
   });
 
-  // Run SMC analysis
   const { data: analysis, isLoading: analysisLoading } = useQuery({
     queryKey: ["smc-analysis", selectedSymbol, candles?.length],
     queryFn: () => smcApi.fullAnalysis(candles!, dailyCandles),
@@ -47,12 +35,45 @@ export default function IctAnalysis() {
     staleTime: 60000,
   });
 
-  // Session info
   const { data: sessionInfo } = useQuery({
     queryKey: ["session-info"],
     queryFn: () => smcApi.session(),
     refetchInterval: 60000,
   });
+
+  // Currency strength
+  const { data: liveQuotes } = useQuery({
+    queryKey: ["ict-live-quotes"],
+    queryFn: async () => {
+      const results: Record<string, any> = {};
+      const pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"];
+      await Promise.all(pairs.map(async (pair) => {
+        try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; }
+      }));
+      return results;
+    },
+    staleTime: 30000,
+  });
+
+  const { data: currencyStrength } = useQuery({
+    queryKey: ["ict-currency-strength", liveQuotes],
+    queryFn: () => {
+      if (!liveQuotes) return null;
+      const pairData: Record<string, { change: number }> = {};
+      Object.entries(liveQuotes).forEach(([pair, q]: [string, any]) => {
+        if (q?.change != null) pairData[pair] = { change: q.change };
+      });
+      return Object.keys(pairData).length > 0 ? smcApi.currencyStrength(pairData) : null;
+    },
+    enabled: !!liveQuotes,
+    staleTime: 30000,
+  });
+
+  const strengthData = currencyStrength
+    ? Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({
+        currency, score: typeof score === 'number' ? score : 0,
+      })).sort((a, b) => b.score - a.score)
+    : [];
 
   return (
     <AppShell>
@@ -72,7 +93,6 @@ export default function IctAnalysis() {
           </select>
         </div>
 
-        {/* Reasoning */}
         {analysis?.reasoning && analysis.reasoning.length > 0 && (
           <Card>
             <CardContent className="pt-4">
@@ -155,6 +175,36 @@ export default function IctAnalysis() {
                       </div>
                     </div>
                   ) : <p className="text-sm text-muted-foreground">No data</p>}
+                </CardContent>
+              </Card>
+            </AccordionContent>
+          </AccordionItem>
+
+          {/* Currency Strength */}
+          <AccordionItem value="strength">
+            <AccordionTrigger className="text-sm">
+              <span className="flex items-center gap-2"><BarChart3 className="h-4 w-4" /> Currency Strength</span>
+            </AccordionTrigger>
+            <AccordionContent>
+              <Card className="border-0 bg-secondary/30">
+                <CardContent className="pt-4">
+                  {strengthData.length > 0 ? (
+                    <div className="h-[200px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={strengthData} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 16%, 18%)" />
+                          <XAxis type="number" tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" />
+                          <YAxis dataKey="currency" type="category" tick={{ fontSize: 10 }} stroke="hsl(215, 15%, 55%)" width={35} />
+                          <Tooltip contentStyle={{ backgroundColor: "hsl(220, 18%, 10%)", border: "1px solid hsl(220, 16%, 18%)", borderRadius: "8px" }} />
+                          <Bar dataKey="score">
+                            {strengthData.map((entry, i) => (
+                              <Cell key={i} fill={entry.score >= 0 ? 'hsl(142, 72%, 45%)' : 'hsl(0, 72%, 51%)'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : <p className="text-sm text-muted-foreground">Loading strength data...</p>}
                 </CardContent>
               </Card>
             </AccordionContent>
