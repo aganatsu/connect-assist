@@ -1,10 +1,11 @@
 ---
 name: Bot engine source available
-description: Full bot engine source from GitHub repo is available at /tmp/smc-trading-dashboard-main/server/
+description: Full bot engine source from GitHub repo is available; autonomous scanner now implemented as edge function
 type: feature
 ---
 The user's full trading bot system source code has been provided from their GitHub repo (smc-trading-dashboard).
 Key server files: botEngine.ts, smcAnalysis.ts, botConfig.ts, liveExecution.ts, paperTrading.ts, backtest.ts, marketData.ts, wsPriceFeed.ts, brokers/oanda.ts, brokers/metaapi.ts.
-Database schema ported to Lovable Cloud (9 tables with RLS).
-Bot engine runs as a persistent loop — keep external or restructure as cron-triggered Edge Function.
-Stateless pieces (SMC analysis, bot config CRUD, trade journal) → Edge Functions.
+Database schema ported to Lovable Cloud (9 tables + scan_logs with RLS).
+Autonomous bot-scanner edge function created — runs SMC analysis on all pairs, places paper trades when confluence >= 6.
+pg_cron job runs bot-scanner every 5 minutes for all accounts with is_running=true.
+Manual "Scan Now" button available in BotView UI.
