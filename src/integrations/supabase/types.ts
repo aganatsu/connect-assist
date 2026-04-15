@@ -257,6 +257,39 @@ export type Database = {
         }
         Relationships: []
       }
+      scan_logs: {
+        Row: {
+          created_at: string
+          details_json: Json | null
+          id: string
+          pairs_scanned: number
+          scanned_at: string
+          signals_found: number
+          trades_placed: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          details_json?: Json | null
+          id?: string
+          pairs_scanned?: number
+          scanned_at?: string
+          signals_found?: number
+          trades_placed?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          details_json?: Json | null
+          id?: string
+          pairs_scanned?: number
+          scanned_at?: string
+          signals_found?: number
+          trades_placed?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
       trade_post_mortems: {
         Row: {
           created_at: string
