@@ -1,6 +1,45 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
+// ─── Yahoo Finance Symbol Mapping ───────────────────────────────────
+const YAHOO_SYMBOLS: Record<string, string> = {
+  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
+  "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
+  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
+  "EUR/JPY": "EURJPY=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F",
+};
+
+async function fetchLivePrice(symbol: string): Promise<number | null> {
+  const yahooSymbol = YAHOO_SYMBOLS[symbol];
+  if (!yahooSymbol) return null;
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1d`;
+    const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
+    const data = await res.json();
+    const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+    return price ? Number(price) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function updatePositionPrices(supabase: any, positions: any[]): Promise<void> {
+  if (!positions || positions.length === 0) return;
+  const symbols = [...new Set(positions.map((p: any) => p.symbol))];
+  const priceMap: Record<string, number> = {};
+  await Promise.all(symbols.map(async (sym) => {
+    const price = await fetchLivePrice(sym);
+    if (price !== null) priceMap[sym] = price;
+  }));
+  await Promise.all(positions.map(async (p: any) => {
+    const livePrice = priceMap[p.symbol];
+    if (livePrice !== undefined) {
+      await supabase.from("paper_positions").update({ current_price: livePrice.toString() }).eq("id", p.id);
+    }
+  }));
+}
+
 // ─── Instrument Specs ───────────────────────────────────────────────
 const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: number }> = {
   "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
