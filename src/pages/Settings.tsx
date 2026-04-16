@@ -111,7 +111,7 @@ function BrokerSettings() {
   });
 
   const addOverride = () => {
-    if (!newOverrideSymbol.trim()) return;
+    if (!newOverrideSymbol.trim() || !newOverrideSuffix.trim()) return;
     setSymbolOverrides(prev => ({ ...prev, [newOverrideSymbol.trim().toUpperCase()]: newOverrideSuffix.trim() }));
     setNewOverrideSymbol("");
     setNewOverrideSuffix("");
@@ -134,7 +134,7 @@ function BrokerSettings() {
                 </p>
                 {!isEditing && c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym} → ${(sfx as string) || '(no suffix)'}`).join(", ")}
+                    Mappings: {Object.entries(c.symbol_overrides).map(([sym, brokerSym]) => `${sym} → ${brokerSym as string}`).join(", ")}
                   </p>
                 )}
               </div>
@@ -156,27 +156,32 @@ function BrokerSettings() {
               <div className="space-y-3 border-t border-border pt-3">
                 <div>
                   <Label className="text-xs">Default Symbol Suffix</Label>
-                  <Input value={editSuffix} onChange={e => setEditSuffix(e.target.value)} placeholder="e.g. b" className="mt-1 h-8 text-sm" />
-                  <p className="text-[10px] text-muted-foreground mt-1">E.g. EURUSD → EURUSD{editSuffix || 'b'}</p>
+                  <Input value={editSuffix} onChange={e => setEditSuffix(e.target.value)} placeholder="e.g. .pro" className="mt-1 h-8 text-sm" />
+                  <p className="text-[10px] text-muted-foreground mt-1">Appended to all symbols unless remapped below. E.g. EURUSD → EURUSD{editSuffix || '.pro'}</p>
                 </div>
 
-                {/* Overrides */}
+                {/* Symbol Mappings */}
                 <div className="space-y-2">
-                  <Label className="text-xs">Symbol Overrides</Label>
+                  <Label className="text-xs">Symbol Mappings</Label>
+                  <p className="text-[10px] text-muted-foreground">Map app symbols to exact broker symbols. These override the default suffix entirely.</p>
                   {Object.keys(editOverrides).length > 0 && (
                     <div className="border border-border rounded overflow-hidden">
-                      {Object.entries(editOverrides).map(([sym, sfx]) => (
-                        <div key={sym} className="flex items-center justify-between px-3 py-1.5 text-xs border-b border-border last:border-0">
-                          <span className="font-mono">{sym} → {(sfx as string) || '(no suffix)'} <span className="text-primary">= {sym}{sfx as string}</span></span>
+                      <div className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 bg-secondary/50 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                        <span>App Symbol</span><span>Broker Symbol</span><span></span>
+                      </div>
+                      {Object.entries(editOverrides).map(([sym, brokerSym]) => (
+                        <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
+                          <span className="font-mono font-medium">{sym}</span>
+                          <span className="font-mono text-primary">{brokerSym as string}</span>
                           <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => { const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); }}><Trash2 className="h-3 w-3" /></Button>
                         </div>
                       ))}
                     </div>
                   )}
                   <div className="flex gap-2">
-                    <Input value={editNewSymbol} onChange={e => setEditNewSymbol(e.target.value)} placeholder="e.g. XAUUSD" className="h-7 text-xs flex-1" />
-                    <Input value={editNewSuffix} onChange={e => setEditNewSuffix(e.target.value)} placeholder="e.g. m" className="h-7 text-xs w-20" />
-                    <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!editNewSymbol.trim()} onClick={() => {
+                    <Input value={editNewSymbol} onChange={e => setEditNewSymbol(e.target.value)} placeholder="App symbol (e.g. NAS100)" className="h-7 text-xs flex-1" />
+                    <Input value={editNewSuffix} onChange={e => setEditNewSuffix(e.target.value)} placeholder="Broker symbol (e.g. USA100)" className="h-7 text-xs flex-1" />
+                    <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!editNewSymbol.trim() || !editNewSuffix.trim()} onClick={() => {
                       setEditOverrides(prev => ({ ...prev, [editNewSymbol.trim().toUpperCase()]: editNewSuffix.trim() }));
                       setEditNewSymbol(""); setEditNewSuffix("");
                     }}>Add</Button>
@@ -206,26 +211,25 @@ function BrokerSettings() {
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Auth Token (JWT)" : "API Key / Token"}</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={brokerType === "metaapi" ? "eyJhbGci..." : ""} className="mt-1" /></div>
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Account ID (UUID)" : "Account ID"}</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder={brokerType === "metaapi" ? "5e83d5a3-cbd9-..." : ""} className="mt-1" /></div>
           <div>
-            <Label className="text-xs">Default Symbol Suffix (e.g. 'r', '.pro', '.raw')</Label>
-            <Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder="r" className="mt-1" />
-            <p className="text-[10px] text-muted-foreground mt-1">This suffix is appended to all symbols unless overridden below. E.g. EURUSD → EURUSD{symbolSuffix || 'r'}</p>
+            <Label className="text-xs">Default Symbol Suffix (e.g. '.pro', '.raw', 'r')</Label>
+            <Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder=".pro" className="mt-1" />
+            <p className="text-[10px] text-muted-foreground mt-1">Appended to all symbols unless remapped below. E.g. EURUSD → EURUSD{symbolSuffix || '.pro'}</p>
           </div>
           
-          {/* Symbol Overrides */}
+          {/* Symbol Mappings */}
           <div className="space-y-2">
-            <Label className="text-xs">Symbol Overrides</Label>
-            <p className="text-[10px] text-muted-foreground">Override the default suffix for specific symbols. Add symbols that need a different suffix than "{symbolSuffix || '(default)'}".</p>
+            <Label className="text-xs">Symbol Mappings</Label>
+            <p className="text-[10px] text-muted-foreground">Map app symbols to exact broker symbols. These override the default suffix entirely.</p>
             
             {Object.keys(symbolOverrides).length > 0 && (
               <div className="border border-border rounded overflow-hidden">
-                <div className="grid grid-cols-[1fr_80px_auto_40px] gap-2 px-3 py-1.5 bg-secondary/50 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                  <span>Symbol</span><span>Suffix</span><span>Resolves to</span><span></span>
+                <div className="grid grid-cols-[1fr_1fr_40px] gap-2 px-3 py-1.5 bg-secondary/50 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  <span>App Symbol</span><span>Broker Symbol</span><span></span>
                 </div>
-                {Object.entries(symbolOverrides).map(([sym, sfx]) => (
-                  <div key={sym} className="grid grid-cols-[1fr_80px_auto_40px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
+                {Object.entries(symbolOverrides).map(([sym, brokerSym]) => (
+                  <div key={sym} className="grid grid-cols-[1fr_1fr_40px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
                     <span className="font-mono font-medium">{sym}</span>
-                    <span className="font-mono text-muted-foreground">{(sfx as string) || '(no suffix)'}</span>
-                    <span className="font-mono text-primary text-[11px]">{sym}{sfx as string}</span>
+                    <span className="font-mono text-primary">{brokerSym as string}</span>
                     <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                       const next = { ...symbolOverrides };
                       delete next[sym];
@@ -237,9 +241,9 @@ function BrokerSettings() {
             )}
             
             <div className="flex gap-2">
-              <Input value={newOverrideSymbol} onChange={e => setNewOverrideSymbol(e.target.value)} placeholder="e.g. XAUUSD" className="h-8 text-xs flex-1" />
-              <Input value={newOverrideSuffix} onChange={e => setNewOverrideSuffix(e.target.value)} placeholder="e.g. m" className="h-8 text-xs w-20" />
-              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={addOverride} disabled={!newOverrideSymbol.trim()}>Add</Button>
+              <Input value={newOverrideSymbol} onChange={e => setNewOverrideSymbol(e.target.value)} placeholder="App symbol (e.g. NAS100)" className="h-8 text-xs flex-1" />
+              <Input value={newOverrideSuffix} onChange={e => setNewOverrideSuffix(e.target.value)} placeholder="Broker symbol (e.g. USA100)" className="h-8 text-xs flex-1" />
+              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={addOverride} disabled={!newOverrideSymbol.trim() || !newOverrideSuffix.trim()}>Add</Button>
             </div>
           </div>
 
