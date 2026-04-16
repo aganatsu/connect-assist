@@ -28,6 +28,15 @@ const DEFAULTS = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
     "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF",
   ],
+  openingRange: {
+    enabled: false,
+    candleCount: 24,
+    useBias: true,
+    useJudasSwing: true,
+    useKeyLevels: true,
+    usePremiumDiscount: false,
+    waitForCompletion: true,
+  },
 };
 
 const YAHOO_SYMBOLS: Record<string, string> = {
@@ -248,33 +257,24 @@ function calculatePDLevels(dailyCandles: Candle[]) {
   };
 }
 
-function calculatePremiumDiscount(candles: Candle[]) {
-  const swings = detectSwingPoints(candles);
-  const highs = swings.filter(s => s.type === "high");
-  const lows = swings.filter(s => s.type === "low");
-  const sh = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : candles[candles.length - 1].high;
-  const sl = lows.length > 0 ? Math.min(...lows.map(l => l.price)) : candles[candles.length - 1].low;
-  const eq = (sh + sl) / 2;
-  const range = sh - sl;
-  const cp = candles[candles.length - 1].close;
-  const zp = range > 0 ? ((cp - sl) / range) * 100 : 50;
-  const zone = zp > 55 ? "premium" : zp < 45 ? "discount" : "equilibrium";
-  const oteZone = zp >= 62 && zp <= 79;
-  return { swingHigh: sh, swingLow: sl, equilibrium: eq, currentZone: zone, zonePercent: zp, oteZone };
-}
+// ─── Opening Range ──────────────────────────────────────────────────
+interface OpeningRangeResult { high: number; low: number; midpoint: number; completed: boolean; }
 
-function detectSession() {
+function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
+  if (!hourlyCandles || hourlyCandles.length === 0) return null;
+  // Get the start of the current UTC trading day
   const now = new Date();
-  const utcH = now.getUTCHours();
-  let name = "Off-Hours", active = false, isKillZone = false;
-  if (utcH >= 0 && utcH < 8) { name = "Asian"; active = true; isKillZone = utcH >= 0 && utcH < 4; }
-  else if (utcH >= 7 && utcH < 16) { name = "London"; active = true; isKillZone = utcH >= 7 && utcH < 10; }
-  else if (utcH >= 12 && utcH < 21) { name = "New York"; active = true; isKillZone = utcH >= 12 && utcH < 15; }
-  return { name, active, isKillZone };
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const todayCandles = hourlyCandles.filter(c => c.datetime >= todayStart);
+  if (todayCandles.length === 0) return null;
+  const orCandles = todayCandles.slice(0, candleCount);
+  const high = Math.max(...orCandles.map(c => c.high));
+  const low = Math.min(...orCandles.map(c => c.low));
+  return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
-// ─── Full 9-Factor Confluence Scoring ───────────────────────────────
-function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS) {
+// ─── Full 9-Factor Confluence Scoring (+ Opening Range) ─────────────
+function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
   const fvgs = detectFVGs(candles);
@@ -403,6 +403,63 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 0.5, detail });
   }
 
+  // ── Opening Range Enhancements ──
+  const or = config.openingRange?.enabled && hourlyCandles
+    ? computeOpeningRange(hourlyCandles, config.openingRange.candleCount || 24)
+    : null;
+
+  if (or && config.openingRange?.enabled) {
+    // (a) OR Bias boost — modifies Factor 1
+    if (config.openingRange.useBias && or.completed) {
+      if (lastPrice > or.high) { score += 0.5; factors[0].detail += " | OR bias: bullish (above OR high)"; }
+      else if (lastPrice < or.low) { score += 0.5; factors[0].detail += " | OR bias: bearish (below OR low)"; }
+    }
+
+    // (b) OR Judas Swing — enhances Factor 6
+    if (config.openingRange.useJudasSwing && or.completed) {
+      const recentCandles = candles.slice(-10);
+      const sweptHigh = recentCandles.some(c => c.high > or.high);
+      const sweptLow = recentCandles.some(c => c.low < or.low);
+      if (sweptHigh && lastPrice < or.high) {
+        score += 0.5;
+        const f6 = factors.find(f => f.name === "Judas Swing");
+        if (f6) { f6.present = true; f6.detail += " | OR high swept then reversed"; }
+      }
+      if (sweptLow && lastPrice > or.low) {
+        score += 0.5;
+        const f6 = factors.find(f => f.name === "Judas Swing");
+        if (f6) { f6.present = true; f6.detail += " | OR low swept then reversed"; }
+      }
+    }
+
+    // (c) OR Key Levels — enhances Factor 7
+    if (config.openingRange.useKeyLevels && or.completed) {
+      const threshold = lastPrice * 0.002;
+      const orLevels = [
+        { name: "OR High", price: or.high },
+        { name: "OR Low", price: or.low },
+        { name: "OR Mid", price: or.midpoint },
+      ];
+      const nearOR = orLevels.find(l => Math.abs(lastPrice - l.price) <= threshold);
+      if (nearOR) {
+        score += 0.5;
+        const f7 = factors.find(f => f.name === "PD/PW Levels");
+        if (f7) { f7.present = true; f7.detail += ` | Near ${nearOR.name} (${nearOR.price.toFixed(5)})`; }
+      }
+    }
+
+    // (d) OR Premium/Discount override — modifies Factor 4
+    if (config.openingRange.usePremiumDiscount && or.completed) {
+      const orRange = or.high - or.low;
+      if (orRange > 0) {
+        const orZonePercent = ((lastPrice - or.low) / orRange) * 100;
+        const orZone = orZonePercent > 55 ? "premium" : orZonePercent < 45 ? "discount" : "equilibrium";
+        const f4 = factors.find(f => f.name === "Premium/Discount");
+        if (f4) { f4.detail += ` | OR zone: ${orZone} (${orZonePercent.toFixed(1)}%)`; }
+      }
+    }
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Determine direction
@@ -496,6 +553,8 @@ async function loadConfig(supabase: any, userId: string) {
   if (!Array.isArray(merged.instruments) || merged.instruments.length === 0) {
     merged.instruments = DEFAULTS.instruments;
   }
+  // Ensure openingRange defaults are merged
+  merged.openingRange = { ...DEFAULTS.openingRange, ...(merged.openingRange || {}) };
   return merged;
 }
 
@@ -613,6 +672,18 @@ async function runSafetyGates(
     gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
   }
 
+  // Gate 11: Opening Range — wait for completion
+  if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
+    const now = new Date();
+    const hoursSinceMidnight = now.getUTCHours() + now.getUTCMinutes() / 60;
+    const candleCount = config.openingRange.candleCount || 24;
+    if (hoursSinceMidnight < candleCount) {
+      gates.push({ passed: false, reason: `OR not complete: ${Math.floor(hoursSinceMidnight)}/${candleCount}h elapsed` });
+    } else {
+      gates.push({ passed: true, reason: `OR complete: ${candleCount}h elapsed` });
+    }
+  }
+
   return gates;
 }
 
@@ -724,18 +795,22 @@ async function runScanForUser(supabase: any, userId: string) {
     // Delay between instruments to avoid rate limiting
     if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 500));
 
-    // Fetch 15m and daily candles
-    const [candles, dailyCandles] = await Promise.all([
+    // Fetch 15m, daily, and optionally 1h candles
+    const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, "15m", "5d"),
       fetchCandles(pair, "1d", "1y"),
-    ]);
+    ];
+    if (config.openingRange?.enabled) {
+      fetchPromises.push(fetchCandles(pair, "1h", "2d"));
+    }
+    const [candles, dailyCandles, hourlyCandles] = await Promise.all(fetchPromises);
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
       continue;
     }
 
-    const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config);
+    const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config, hourlyCandles);
 
     const detail: any = {
       pair,
