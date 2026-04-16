@@ -275,10 +275,16 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {/* Currency Strength */}
-          {strengthData.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Currency Strength</CardTitle></CardHeader>
-              <CardContent>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Currency Strength</CardTitle></CardHeader>
+            <CardContent>
+              {strengthData.length === 0 ? (
+                <div className="h-[180px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
+                  <Activity className="h-8 w-8 mb-2 opacity-20" />
+                  <p className="text-xs font-medium">Loading currency strength…</p>
+                  <p className="text-[10px] mt-1 text-muted-foreground/70">Requires live price data with change %</p>
+                </div>
+              ) : (
                 <div className="h-[180px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={strengthData} layout="vertical">
@@ -294,9 +300,9 @@ export default function Dashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              )}
+            </CardContent>
+          </Card>
 
           {/* Active Positions */}
           <Card>
