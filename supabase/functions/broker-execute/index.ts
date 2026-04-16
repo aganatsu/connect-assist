@@ -47,14 +47,14 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) throw new Error(`OANDA error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
         const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
           headers: { "auth-token": conn.api_key },
         });
-        if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond(await res.json());
       }
     }
@@ -65,14 +65,14 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/openTrades`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) throw new Error(`OANDA error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
         const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
           headers: { "auth-token": conn.api_key },
         });
-        if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond(await res.json());
       }
     }
@@ -185,14 +185,15 @@ Deno.serve(async (req) => {
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    console.error("broker-execute error:", error?.message || error);
+    return new Response(JSON.stringify({ error: error.message, fallback: true }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    status, headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
