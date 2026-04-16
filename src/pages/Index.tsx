@@ -94,12 +94,16 @@ export default function Dashboard() {
       return [{ date: "Now", equity: balance, drawdown: 0 }];
     }
 
-    return filtered.map((p: any, i: number) => {
+    return filtered.map((p: any) => {
       const d = new Date(p.date);
-      // Show time for 1W, date for longer ranges
-      const label = timeRange === "1W"
-        ? d.toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-        : d.toLocaleDateString([], { month: "short", day: "numeric" });
+      let label: string;
+      if (timeRange === "1W") {
+        label = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } else if (timeRange === "1M") {
+        label = `${d.getMonth() + 1}/${d.getDate()}`;
+      } else {
+        label = d.toLocaleDateString([], { month: "short", day: "numeric" });
+      }
       return { date: label, equity: p.equity, drawdown: 0 };
     });
   }, [botStatus?.equityCurve, balance, timeRange]);
@@ -271,10 +275,16 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {/* Currency Strength */}
-          {strengthData.length > 0 && (
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm">Currency Strength</CardTitle></CardHeader>
-              <CardContent>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">Currency Strength</CardTitle></CardHeader>
+            <CardContent>
+              {strengthData.length === 0 ? (
+                <div className="h-[180px] flex flex-col items-center justify-center text-muted-foreground border border-dashed border-border">
+                  <Activity className="h-8 w-8 mb-2 opacity-20" />
+                  <p className="text-xs font-medium">Loading currency strength…</p>
+                  <p className="text-[10px] mt-1 text-muted-foreground/70">Requires live price data with change %</p>
+                </div>
+              ) : (
                 <div className="h-[180px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={strengthData} layout="vertical">
@@ -290,9 +300,9 @@ export default function Dashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              )}
+            </CardContent>
+          </Card>
 
           {/* Active Positions */}
           <Card>
