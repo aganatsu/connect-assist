@@ -1648,7 +1648,8 @@ async function runScanForUser(supabase: any, userId: string) {
           }
         }
 
-        // Mirror to MT5 only when the account is explicitly in live mode
+        // Mirror to brokers only when the account is explicitly in live mode
+        console.log(`Mirror check for ${pair}: execution_mode=${account.execution_mode}, positionId=${positionId}`);
         try {
           if (account.execution_mode === "live") {
             const { data: connections } = await supabase.from("broker_connections")
