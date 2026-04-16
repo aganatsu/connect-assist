@@ -446,9 +446,12 @@ export default function BotView() {
                           onClick={() => setSelectedPairIdx(i)}
                           className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                         >
-                          <div className="flex items-center gap-1.5">
-                            {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
-                            <span className="font-medium">{sig.pair}</span>
+                          <div className="min-w-0 flex items-center gap-1.5">
+                            {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
+                            <div className="min-w-0">
+                              <span className="font-medium block">{sig.pair}</span>
+                              {sig.reason && <span className="block truncate text-[9px] text-muted-foreground">{sig.reason}</span>}
+                            </div>
                           </div>
                           <div className="flex items-center gap-1.5">
                             <span className={`font-mono font-bold ${sig.score >= 6 ? "text-success" : sig.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{sig.score?.toFixed(1)}</span>
@@ -612,6 +615,13 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
         <span className={`text-[10px] font-mono font-bold ml-auto ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}/10</span>
       </div>
+
+      {d.reason && (
+        <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
+          <p className="mt-1 text-[10px] text-foreground">{d.reason}</p>
+        </div>
+      )}
 
       {/* Factors */}
       {d.factors && (
