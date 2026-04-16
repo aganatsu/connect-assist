@@ -1518,6 +1518,38 @@ async function runScanForUser(supabase: any, userId: string) {
             const curBal = parseFloat((await supabase.from("paper_accounts").select("balance").eq("user_id", userId).single()).data?.balance || "10000");
             const newBal = curBal + oppPnl;
             await supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
+
+            // Mirror close to all broker connections
+            if (account.execution_mode === "live") {
+              const { data: closeConns } = await supabase.from("broker_connections")
+                .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              if (closeConns && closeConns.length > 0) {
+                for (const conn of closeConns) {
+                  try {
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    const closeBaseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+                    const closeHeaders: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+                    const posRes = await fetch(`${closeBaseUrl}/positions`, { headers: closeHeaders });
+                    if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
+                    const brokerPositions: any[] = await posRes.json();
+                    const brokerPos = brokerPositions.find((p: any) => p.comment?.includes(`paper:${opp.position_id}`));
+                    if (brokerPos) {
+                      const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                      console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                    } else {
+                      console.log(`Reverse close [${conn.display_name}]: no matching position for paper:${opp.position_id}`);
+                    }
+                  } catch (e: any) {
+                    console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
+                  }
+                }
+              }
+            }
           }
         }
 
