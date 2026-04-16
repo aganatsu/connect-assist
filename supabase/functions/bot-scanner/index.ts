@@ -28,6 +28,15 @@ const DEFAULTS = {
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
     "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF",
   ],
+  openingRange: {
+    enabled: false,
+    candleCount: 24,
+    useBias: true,
+    useJudasSwing: true,
+    useKeyLevels: true,
+    usePremiumDiscount: false,
+    waitForCompletion: true,
+  },
 };
 
 const YAHOO_SYMBOLS: Record<string, string> = {

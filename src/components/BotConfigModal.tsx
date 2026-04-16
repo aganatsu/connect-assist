@@ -8,7 +8,7 @@ import { Slider } from "@/components/ui/slider";
 import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS } from "@/lib/marketData";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3 } from "lucide-react";
 
 const PRESETS = {
   conservative: { confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, description: "Low risk, high confluence" },
@@ -55,6 +55,7 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
     { id: "instruments", label: "Instruments", icon: Globe },
     { id: "sessions", label: "Sessions", icon: Clock },
     { id: "protection", label: "Protection", icon: ShieldAlert },
+    { id: "openingRange", label: "Opening Range", icon: BarChart3 },
   ];
 
   return (
@@ -258,6 +259,26 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                         <span className="text-sm font-mono font-bold text-destructive w-10 text-right">{config.protection?.circuitBreakerPct ?? 20}%</span>
                       </div>
                     </FieldGroup>
+                  </div>
+                )}
+
+                {activeTab === "openingRange" && (
+                  <div className="space-y-5">
+                    <SectionHeader title="Opening Range" description="Use the first N hourly candles of the trading day to derive bias, levels, and filters" />
+                    <ToggleField label="Enable Opening Range" description="Master toggle — all sub-features require this to be on" checked={config.openingRange?.enabled ?? false} onChange={v => updateField('openingRange', 'enabled', v)} />
+                    <FieldGroup label="Candle Count" description="Number of 1h candles that define the opening range (default 24)">
+                      <Input type="number" value={config.openingRange?.candleCount ?? 24} onChange={e => updateField('openingRange', 'candleCount', Math.max(1, parseInt(e.target.value) || 24))} min={1} max={48} className="h-9 text-sm" disabled={!config.openingRange?.enabled} />
+                    </FieldGroup>
+                    <div className="grid grid-cols-2 gap-3">
+                      <ToggleField label="Daily Bias from OR" description="Determine bullish/bearish bias based on price vs OR range" checked={config.openingRange?.useBias ?? true} onChange={v => updateField('openingRange', 'useBias', v)} />
+                      <ToggleField label="Judas Swing Detection" description="Detect fake breakouts (sweeps) of OR high/low" checked={config.openingRange?.useJudasSwing ?? true} onChange={v => updateField('openingRange', 'useJudasSwing', v)} />
+                      <ToggleField label="OR Key Levels" description="Use OR high, low, midpoint as support/resistance" checked={config.openingRange?.useKeyLevels ?? true} onChange={v => updateField('openingRange', 'useKeyLevels', v)} />
+                      <ToggleField label="Premium/Discount from OR" description="Use OR range instead of swing range for P/D zones" checked={config.openingRange?.usePremiumDiscount ?? false} onChange={v => updateField('openingRange', 'usePremiumDiscount', v)} />
+                    </div>
+                    <ToggleField label="Wait for OR Completion" description="Don't trade until the opening range candle count is fully formed" checked={config.openingRange?.waitForCompletion ?? true} onChange={v => updateField('openingRange', 'waitForCompletion', v)} />
+                    {!config.openingRange?.enabled && (
+                      <p className="text-[10px] text-muted-foreground italic">Enable the master toggle above to activate sub-features.</p>
+                    )}
                   </div>
                 )}
               </>

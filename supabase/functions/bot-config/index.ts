@@ -117,5 +117,14 @@ function getDefaultConfig() {
       cumulativeLossLimit: 0, haltOnDailyTarget: false, haltOnDailyLoss: true,
     },
     account: { startingBalance: 10000, leverage: 100, mode: "paper" },
+    openingRange: {
+      enabled: false,
+      candleCount: 24,
+      useBias: true,
+      useJudasSwing: true,
+      useKeyLevels: true,
+      usePremiumDiscount: false,
+      waitForCompletion: true,
+    },
   };
 }
