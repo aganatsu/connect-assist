@@ -225,13 +225,86 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                       <FieldGroup label="Cooldown Between Trades (minutes)" description="Minimum wait time between consecutive trades">
                         <Input type="number" value={config.entry?.cooldownMinutes ?? 30} onChange={e => updateField('entry', 'cooldownMinutes', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
                       </FieldGroup>
-                      <FieldGroup label="SL Buffer (pips)" description="Extra pips added beyond structure for stop loss placement">
+                      <FieldGroup label="SL Buffer (pips)" description="Extra pips added beyond structure/OB for stop loss placement">
                         <Input type="number" value={config.entry?.slBufferPips ?? 2} onChange={e => updateField('entry', 'slBufferPips', parseFloat(e.target.value) || 0)} step={0.5} min={0} max={20} className="h-9 text-sm" />
                       </FieldGroup>
                       <ToggleField label="Close on Reverse Signal" description="Auto-close position when an opposite signal appears" checked={config.entry?.closeOnReverse ?? false} onChange={v => updateField('entry', 'closeOnReverse', v)} />
                     </div>
+
+                    {/* ── Stop Loss Method ── */}
                     <div className="border-t border-border pt-4 space-y-4">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit</p>
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Stop Loss Method</p>
+                      <FieldGroup label="SL Method" description="How the stop loss price is calculated">
+                        <Select value={config.exit?.stopLossMethod ?? "structure"} onValueChange={v => updateField('exit', 'stopLossMethod', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fixed_pips">Fixed Pips</SelectItem>
+                            <SelectItem value="atr_based">ATR Based</SelectItem>
+                            <SelectItem value="structure">Structure (Swing)</SelectItem>
+                            <SelectItem value="below_ob">Below/Above Order Block</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FieldGroup>
+                      {(config.exit?.stopLossMethod === "fixed_pips" || config.exit?.stopLossMethod === undefined) && config.exit?.stopLossMethod === "fixed_pips" && (
+                        <FieldGroup label="Fixed SL Pips" description="Distance in pips from entry">
+                          <Input type="number" value={config.exit?.fixedSLPips ?? 25} onChange={e => updateField('exit', 'fixedSLPips', parseFloat(e.target.value) || 0)} step={1} min={1} className="h-9 text-sm" />
+                        </FieldGroup>
+                      )}
+                      {config.exit?.stopLossMethod === "atr_based" && (
+                        <div className="grid grid-cols-2 gap-4">
+                          <FieldGroup label="ATR Multiple" description="Multiplier applied to ATR value">
+                            <Input type="number" value={config.exit?.slATRMultiple ?? 1.5} onChange={e => updateField('exit', 'slATRMultiple', parseFloat(e.target.value) || 0)} step={0.1} min={0.5} max={5} className="h-9 text-sm" />
+                          </FieldGroup>
+                          <FieldGroup label="ATR Period" description="Number of candles for ATR calculation">
+                            <Input type="number" value={config.exit?.slATRPeriod ?? 14} onChange={e => updateField('exit', 'slATRPeriod', parseInt(e.target.value) || 14)} min={5} max={50} className="h-9 text-sm" />
+                          </FieldGroup>
+                        </div>
+                      )}
+                      {(config.exit?.stopLossMethod === "structure" || (!config.exit?.stopLossMethod)) && (
+                        <p className="text-[10px] text-muted-foreground italic">SL placed below nearest swing low (longs) or above nearest swing high (shorts) + buffer pips.</p>
+                      )}
+                      {config.exit?.stopLossMethod === "below_ob" && (
+                        <p className="text-[10px] text-muted-foreground italic">SL placed below nearest unmitigated bullish OB (longs) or above bearish OB (shorts) + buffer pips.</p>
+                      )}
+                    </div>
+
+                    {/* ── Take Profit Method ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Take Profit Method</p>
+                      <FieldGroup label="TP Method" description="How the take profit price is calculated">
+                        <Select value={config.exit?.takeProfitMethod ?? "rr_ratio"} onValueChange={v => updateField('exit', 'takeProfitMethod', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="fixed_pips">Fixed Pips</SelectItem>
+                            <SelectItem value="rr_ratio">R:R Ratio</SelectItem>
+                            <SelectItem value="next_level">Next Structure Level</SelectItem>
+                            <SelectItem value="atr_multiple">ATR Multiple</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FieldGroup>
+                      {config.exit?.takeProfitMethod === "fixed_pips" && (
+                        <FieldGroup label="Fixed TP Pips" description="Distance in pips from entry">
+                          <Input type="number" value={config.exit?.fixedTPPips ?? 50} onChange={e => updateField('exit', 'fixedTPPips', parseFloat(e.target.value) || 0)} step={1} min={1} className="h-9 text-sm" />
+                        </FieldGroup>
+                      )}
+                      {(config.exit?.takeProfitMethod === "rr_ratio" || !config.exit?.takeProfitMethod) && (
+                        <FieldGroup label="R:R Ratio" description="TP = SL distance × this ratio">
+                          <Input type="number" value={config.exit?.tpRRRatio ?? 2.0} onChange={e => updateField('exit', 'tpRRRatio', parseFloat(e.target.value) || 0)} step={0.5} min={1} max={10} className="h-9 text-sm" />
+                        </FieldGroup>
+                      )}
+                      {config.exit?.takeProfitMethod === "next_level" && (
+                        <p className="text-[10px] text-muted-foreground italic">TP targets nearest PDH/PDL/PWH/PWL or liquidity pool. Falls back to Fixed Pips if none found.</p>
+                      )}
+                      {config.exit?.takeProfitMethod === "atr_multiple" && (
+                        <FieldGroup label="TP ATR Multiple" description="TP = ATR × this multiplier">
+                          <Input type="number" value={config.exit?.tpATRMultiple ?? 2.0} onChange={e => updateField('exit', 'tpATRMultiple', parseFloat(e.target.value) || 0)} step={0.1} min={1} max={10} className="h-9 text-sm" />
+                        </FieldGroup>
+                      )}
+                    </div>
+
+                    {/* ── Exit Management ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit Management</p>
                       <div className="grid grid-cols-2 gap-4">
                         <ToggleField label="Trailing Stop" description="Move SL as price moves in favor" checked={config.exit?.trailingStop ?? false} onChange={v => updateField('exit', 'trailingStop', v)} />
                         <ToggleField label="Break Even" description="Move SL to entry once in profit" checked={config.exit?.breakEven ?? false} onChange={v => updateField('exit', 'breakEven', v)} />
