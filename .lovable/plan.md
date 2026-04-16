@@ -1,34 +1,30 @@
 
 
-# Show All Active Broker Connections (MT4 + MT5)
+# Fix Symbol Suffix UX — Make It Clear & Functional
 
 ## Problem
-The bot view only looks for **one** MetaAPI connection (`broker_type === "metaapi"`) and displays a hardcoded "MT5 Connected" badge. If you have both MT4 and MT5 accounts connected (both use MetaAPI under the hood), only one shows up and the label is always "MT5".
+The current form is confusing: you type a single "Default Symbol Suffix" but if you need different suffixes for different symbols (e.g. `r` for forex, `m` for gold, `b` for indices), you have to manually add overrides one-by-one. Plus the override display is buggy (showing `B → ""` with empty suffix).
 
 ## Solution
-Show **all active broker connections** as individual badges using each connection's `display_name`, and update the text references from "MT5" to "Broker" for generality.
+Replace the single text field + manual overrides with a **symbol-suffix table** approach:
+
+1. **Keep the Default Suffix field** — this applies to any symbol not explicitly listed
+2. **Improve the Symbol Overrides section**:
+   - Show overrides as a clean editable table with columns: Symbol | Suffix | Delete
+   - Show the resolved symbol name preview (e.g. `XAUUSD` + `m` = `XAUUSDm`)
+   - Fix the display bug where empty suffixes show as `""`— show `(none)` instead
+   - Clear the input fields after adding an override
+3. **Add a helper note** explaining: "Default suffix applies to all symbols. Add overrides below for symbols that need a different suffix."
 
 ## Changes
 
-### `src/pages/BotView.tsx`
+### `src/pages/Settings.tsx`
+- Fix `addOverride` to clear inputs after adding (`setNewOverrideSymbol("")` / `setNewOverrideSuffix("")`)
+- Show resolved symbol preview next to each override (e.g. `XAUUSD + m → XAUUSDm`)
+- Display `(no suffix)` instead of `""` when override suffix is empty
+- Add clearer helper text explaining the default vs override relationship
+- Minor layout improvements to the overrides list
 
-1. **Replace single `mt5Connection`** variable with a filtered array of all active connections:
-   ```typescript
-   const activeConnections = Array.isArray(brokerConns) 
-     ? brokerConns.filter((c: any) => c.is_active) 
-     : [];
-   ```
-
-2. **Replace the single badge** (lines 163-171) with a loop that renders one badge per active connection, showing the `display_name`:
-   ```text
-   Before:  [MT5 Connected]
-   After:   [Try ✓] [No Spread ✓]   (or "Connect Broker" if none)
-   ```
-
-3. **Update mode-switch banners** (lines 117, 119): Change "MT5 mirroring" text to "broker mirroring" since it could be MT4 or MT5.
-
-4. **Update "Connect MT5" fallback** button text to "Connect Broker".
-
-### Files Changed
-- `src/pages/BotView.tsx` — show all active connections by name, generalize MT5 references
+### No backend changes needed
+The `symbol_suffix` and `symbol_overrides` columns already exist and work correctly. This is purely a UI clarity fix.
 
