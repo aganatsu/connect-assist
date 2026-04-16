@@ -82,10 +82,9 @@ Deno.serve(async (req) => {
         }
 
         try {
-          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
+          const provRes = await undiciFetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
             headers: { "auth-token": authToken, "Content-Type": "application/json" },
-            client: metaHttpClient,
-          } as any);
+          });
           if (!provRes.ok) {
             const errText = await provRes.text();
             throw new Error(`MetaAPI error ${provRes.status}: ${errText}`);
