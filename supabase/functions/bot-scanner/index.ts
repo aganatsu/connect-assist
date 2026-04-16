@@ -26,7 +26,8 @@ const DEFAULTS = {
   enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
   instruments: [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
+    "XAU/USD", "BTC/USD",
   ],
   openingRange: {
     enabled: false,
