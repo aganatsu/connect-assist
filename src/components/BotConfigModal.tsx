@@ -84,8 +84,9 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                   ...config,
                   strategy: { ...(config.strategy || {}), confluenceThreshold: preset.confluenceThreshold },
                   risk: { ...(config.risk || {}), riskPerTrade: preset.riskPerTrade, maxDailyDrawdown: preset.maxDailyDrawdown, maxConcurrentTrades: preset.maxConcurrentTrades },
+                  tradingStyle: { ...(config.tradingStyle || {}), mode: preset.tradingStyle },
                 });
-                toast.info(`Applied ${key} preset`);
+                toast.info(`Applied ${key} preset → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
               }} className="p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
                 <p className="text-xs font-bold capitalize">{key}</p>
                 <p className="text-[10px] text-muted-foreground mt-0.5">{preset.description}</p>
