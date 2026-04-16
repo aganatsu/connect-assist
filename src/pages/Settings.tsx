@@ -222,6 +222,9 @@ function PreferencesSettings() {
               <Button onClick={() => saveTelegramMutation.mutate()} disabled={!telegramChatId}>Save</Button>
             </div>
           </div>
+          {telegramChatId && (
+            <TestNotificationButton chatId={telegramChatId} />
+          )}
         </CardContent>
       </Card>
 
