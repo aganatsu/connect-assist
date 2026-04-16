@@ -658,6 +658,9 @@ Deno.serve(async (req) => {
               what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
+            // Mirror close to brokers
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
           }
 
           await supabase.from("paper_positions").delete().eq("user_id", user.id);
