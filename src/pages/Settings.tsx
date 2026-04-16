@@ -326,24 +326,62 @@ function BotConfigSettings() {
   );
 }
 
+type TgChat = { id: string; label: string };
+
 function PreferencesSettings() {
   const { theme, setTheme } = useTheme();
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
   const prefs = settings?.preferences_json || {};
-  const [telegramChatId, setTelegramChatId] = useState(prefs.telegramChatId || "");
+
+  // Normalise: support legacy `telegramChatId` and new `telegramChatIds[]`
+  const initialChats: TgChat[] = (() => {
+    const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
+    if (list.length > 0) return list.map((c: any) => typeof c === "string" ? { id: c, label: "" } : { id: String(c.id ?? ""), label: c.label ?? "" }).filter((c: TgChat) => c.id);
+    if (prefs.telegramChatId) return [{ id: String(prefs.telegramChatId), label: "Default" }];
+    return [];
+  })();
+
+  const [chats, setChats] = useState<TgChat[]>(initialChats);
+  const [newId, setNewId] = useState("");
+  const [newLabel, setNewLabel] = useState("");
 
   useEffect(() => {
-    if (settings?.preferences_json?.telegramChatId) {
-      setTelegramChatId(settings.preferences_json.telegramChatId);
+    const p = settings?.preferences_json;
+    if (!p) return;
+    const list = Array.isArray(p.telegramChatIds) ? p.telegramChatIds : [];
+    if (list.length > 0) {
+      setChats(list.map((c: any) => typeof c === "string" ? { id: c, label: "" } : { id: String(c.id ?? ""), label: c.label ?? "" }).filter((c: TgChat) => c.id));
+    } else if (p.telegramChatId) {
+      setChats([{ id: String(p.telegramChatId), label: "Default" }]);
     }
   }, [settings]);
 
   const saveTelegramMutation = useMutation({
-    mutationFn: () => settingsApi.upsert(undefined, { ...prefs, telegramChatId }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Telegram chat ID saved"); },
+    mutationFn: (next: TgChat[]) => settingsApi.upsert(undefined, {
+      ...prefs,
+      telegramChatIds: next,
+      telegramChatId: next[0]?.id || "", // keep legacy field in sync (first ID)
+    }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Telegram chats saved"); },
     onError: (e: any) => toast.error(e.message),
   });
+
+  const addChat = () => {
+    const id = newId.trim();
+    if (!id) return;
+    if (chats.some(c => c.id === id)) { toast.error("Chat ID already added"); return; }
+    const next = [...chats, { id, label: newLabel.trim() || `Chat ${chats.length + 1}` }];
+    setChats(next);
+    setNewId(""); setNewLabel("");
+    saveTelegramMutation.mutate(next);
+  };
+
+  const removeChat = (id: string) => {
+    const next = chats.filter(c => c.id !== id);
+    setChats(next);
+    saveTelegramMutation.mutate(next);
+  };
 
   return (
     <div className="space-y-4">
@@ -353,17 +391,32 @@ function PreferencesSettings() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="text-sm">Telegram Notifications</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-xs text-muted-foreground">Get trade alerts on Telegram. Send <code>/start</code> to <a href="https://t.me/smc007_bot" target="_blank" className="text-primary underline">@smc007_bot</a>, then paste your Chat ID below.</p>
-          <div>
-            <Label className="text-xs">Chat ID</Label>
-            <div className="flex gap-2 mt-1">
-              <Input value={telegramChatId} onChange={e => setTelegramChatId(e.target.value)} placeholder="e.g. 123456789" />
-              <Button onClick={() => saveTelegramMutation.mutate()} disabled={!telegramChatId}>Save</Button>
+          <p className="text-xs text-muted-foreground">Get trade alerts on Telegram. Send <code>/start</code> to <a href="https://t.me/smc007_bot" target="_blank" className="text-primary underline">@smc007_bot</a>, then add one or more Chat IDs below. Notifications are sent to all of them.</p>
+
+          {chats.length > 0 && (
+            <div className="border border-border rounded overflow-hidden">
+              <div className="grid grid-cols-[1fr_1.5fr_auto_auto] gap-2 px-3 py-1.5 bg-secondary/50 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                <span>Label</span><span>Chat ID</span><span>Test</span><span></span>
+              </div>
+              {chats.map(c => (
+                <div key={c.id} className="grid grid-cols-[1fr_1.5fr_auto_auto] gap-2 px-3 py-2 text-xs items-center border-t border-border">
+                  <span className="font-medium truncate">{c.label || "—"}</span>
+                  <span className="font-mono text-primary truncate">{c.id}</span>
+                  <TestNotificationButton chatId={c.id} compact />
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => removeChat(c.id)}><Trash2 className="h-3 w-3" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label className="text-xs">Add Chat ID</Label>
+            <div className="flex gap-2">
+              <Input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="Label (e.g. Phone)" className="h-8 text-xs flex-1" />
+              <Input value={newId} onChange={e => setNewId(e.target.value)} placeholder="Chat ID (e.g. 123456789)" className="h-8 text-xs flex-1" />
+              <Button size="sm" className="h-8" onClick={addChat} disabled={!newId.trim()}><Plus className="h-3 w-3" /></Button>
             </div>
           </div>
-          {telegramChatId && (
-            <TestNotificationButton chatId={telegramChatId} />
-          )}
         </CardContent>
       </Card>
 
@@ -423,24 +476,31 @@ function AboutSettings() {
   );
 }
 
-function TestNotificationButton({ chatId }: { chatId: string }) {
+function TestNotificationButton({ chatId, compact = false }: { chatId: string; compact?: boolean }) {
   const [isSending, setIsSending] = useState(false);
 
   const sendTestNotification = async () => {
     setIsSending(true);
     try {
-      const { data, error } = await supabase.functions.invoke('telegram-notify', {
+      const { error } = await supabase.functions.invoke('telegram-notify', {
         body: { chat_id: chatId, message: '🔔 <b>Test Notification</b>\n\nYour Telegram notifications are working! You will receive alerts here when trades are placed.' }
       });
-
       if (error) throw error;
-      toast.success('Test notification sent! Check Telegram.');
+      toast.success(`Test sent to ${chatId}`);
     } catch (e: any) {
       toast.error(`Failed to send: ${e.message}`);
     } finally {
       setIsSending(false);
     }
   };
+
+  if (compact) {
+    return (
+      <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={sendTestNotification} disabled={isSending}>
+        {isSending ? '…' : 'Test'}
+      </Button>
+    );
+  }
 
   return (
     <Button variant="outline" size="sm" onClick={sendTestNotification} disabled={isSending} className="w-full">
