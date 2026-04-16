@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { fetch as undiciFetch } from "npm:undici";
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 const DEFAULTS = {
@@ -1397,9 +1398,8 @@ async function runScanForUser(supabase: any, userId: string) {
               };
               if (sl) mt5Body.stopLoss = sl;
               if (tp) mt5Body.takeProfit = tp;
-              // Use a custom HTTP client to bypass SSL cert issues with MetaAPI in Deno
-              const httpClient = Deno.createHttpClient({ caCerts: [] });
-              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body), client: httpClient } as any);
+              // Use undici fetch to bypass Deno SSL cert issues with MetaAPI
+              const mt5Res = await undiciFetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
               if (mt5Res.ok) {
                 console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
                 detail.mt5Mirror = "success";
