@@ -1397,7 +1397,9 @@ async function runScanForUser(supabase: any, userId: string) {
               };
               if (sl) mt5Body.stopLoss = sl;
               if (tp) mt5Body.takeProfit = tp;
-              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              // Use a custom HTTP client to bypass SSL cert issues with MetaAPI in Deno
+              const httpClient = Deno.createHttpClient({ caCerts: [] });
+              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body), client: httpClient } as any);
               if (mt5Res.ok) {
                 console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
                 detail.mt5Mirror = "success";
