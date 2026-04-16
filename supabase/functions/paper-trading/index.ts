@@ -81,8 +81,16 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     if (!connections || connections.length === 0) return { success: false, error: "no_connection" };
     const conn = connections[0];
 
-    const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`;
-    const headers: Record<string, string> = { "auth-token": conn.api_key, "Content-Type": "application/json" };
+    // Auto-detect swapped fields: JWT tokens start with "eyJ", account IDs are UUIDs
+    let authToken = conn.api_key;
+    let metaAccountId = conn.account_id;
+    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+      authToken = conn.account_id;
+      metaAccountId = conn.api_key;
+    }
+
+    const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+    const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
 
     if (params.action === "open") {
       const body: any = {
@@ -122,8 +130,13 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
 
     return { success: false, error: "unknown action" };
   } catch (e: any) {
-    console.error("MT5 mirror error:", e.message);
-    return { success: false, error: e.message };
+    const msg = e?.message || String(e);
+    if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
+      console.warn("MT5 mirror SSL issue — credentials saved, trade may still execute:", msg);
+      return { success: false, error: "SSL certificate issue — credentials are saved" };
+    }
+    console.error("MT5 mirror error:", msg);
+    return { success: false, error: msg };
   }
 }
 
@@ -227,12 +240,12 @@ Deno.serve(async (req) => {
     // ── Get account state ──
     if (action === "status") {
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
-      let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open");
+      let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
       // Update current prices from live market data
       if (positions && positions.length > 0) {
         await updatePositionPrices(supabase, positions);
         // Re-fetch with updated prices
-        const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open");
+        const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
         positions = refreshed || positions;
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
