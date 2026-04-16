@@ -1396,7 +1396,7 @@ async function runScanForUser(supabase: any, userId: string) {
                 authToken = conn.account_id;
                 metaAccountId = conn.api_key;
               }
-              const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+              const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
               const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
               const mt5Body: any = {
                 actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
@@ -1406,8 +1406,7 @@ async function runScanForUser(supabase: any, userId: string) {
               };
               if (sl) mt5Body.stopLoss = sl;
               if (tp) mt5Body.takeProfit = tp;
-              // Use undici fetch to bypass Deno SSL cert issues with MetaAPI
-              const mt5Res = await undiciFetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
               if (mt5Res.ok) {
                 console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
                 detail.mt5Mirror = "success";

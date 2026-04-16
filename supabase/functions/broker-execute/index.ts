@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
+        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
           headers: { "auth-token": conn.api_key },
         });
         if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
@@ -60,7 +60,7 @@ Deno.serve(async (req) => {
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
+        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
           headers: { "auth-token": conn.api_key },
         });
         if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
@@ -96,7 +96,7 @@ Deno.serve(async (req) => {
         if (stopLoss) body.stopLoss = stopLoss;
         if (takeProfit) body.takeProfit = takeProfit;
 
-        const res = await undiciFetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
+        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
         return respond(await res.json());
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
+        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
         });
