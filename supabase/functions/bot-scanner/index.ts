@@ -1537,13 +1537,27 @@ async function runScanForUser(supabase: any, userId: string) {
                     const posRes = await fetch(`${closeBaseUrl}/positions`, { headers: closeHeaders });
                     if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
                     const brokerPositions: any[] = await posRes.json();
-                    const brokerPos = brokerPositions.find((p: any) => p.comment?.includes(`paper:${opp.position_id}`));
-                    if (brokerPos) {
-                      const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
-                      console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
-                    } else {
-                      console.log(`Reverse close [${conn.display_name}]: no matching position for paper:${opp.position_id}`);
-                    }
+                    const commentTag = `paper:${opp.position_id}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    const brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      // Fallback: match by symbol
+                      const base = opp.symbol.replace("/", "");
+                      const overrides = conn.symbol_overrides || {};
+                      const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+                      const symFallback = brokerPositions.find((p: any) =>
+                        p.symbol === brokerSymbol || p.symbol === base ||
+                        p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+                      );
+                      if (symFallback) {
+                        const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: symFallback.id }) });
+                        console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed (symbol match)" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                      } else {
+                        console.log(`Reverse close [${conn.display_name}]: no matching position for paper:${opp.position_id}`);
+                      }
+                    } else if (brokerPos) {
                   } catch (e: any) {
                     console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
                   }

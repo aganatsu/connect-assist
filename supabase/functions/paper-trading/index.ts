@@ -196,14 +196,21 @@ async function closeBrokerPositions(supabase: any, userId: string, positionId: s
         const posRes = await fetch(`${baseUrl}/positions`, { headers });
         if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
         const brokerPositions: any[] = await posRes.json();
-        const brokerPos = brokerPositions.find((p: any) => p.comment?.includes(`paper:${positionId}`));
+        // MT4 truncates comments to ~31 chars, so use startsWith on the short prefix
+        const commentTag = `paper:${positionId}`;
+        const shortTag = commentTag.slice(0, 28); // safe for MT4 truncation
+        const brokerPos = brokerPositions.find((p: any) =>
+          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+        );
         if (!brokerPos) {
-          // Fallback: match by symbol
-          const resolvedSymbol = symbol.replace("/", "") + (conn.symbol_suffix || "");
-          const overrides = conn.symbol_overrides || {};
+          // Fallback: match by resolved broker symbol
           const base = symbol.replace("/", "");
-          const brokerSymbol = overrides[base] || resolvedSymbol;
-          const symMatch = brokerPositions.find((p: any) => p.symbol === brokerSymbol || p.symbol === base);
+          const overrides = conn.symbol_overrides || {};
+          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+          const symMatch = brokerPositions.find((p: any) =>
+            p.symbol === brokerSymbol || p.symbol === base ||
+            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+          );
           if (!symMatch) { results.push(`${conn.display_name}: position not found`); continue; }
           const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: symMatch.id };
           const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
