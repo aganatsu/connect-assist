@@ -1557,7 +1557,10 @@ async function runScanForUser(supabase: any, userId: string) {
                       } else {
                         console.log(`Reverse close [${conn.display_name}]: no matching position for paper:${opp.position_id}`);
                       }
-                    } else if (brokerPos) {
+                    } else {
+                      const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                      console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                    }
                   } catch (e: any) {
                     console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
                   }
