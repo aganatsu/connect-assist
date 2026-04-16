@@ -23,20 +23,6 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ classN
   { id: "about", label: "About", icon: Info },
 ];
 
-const STRATEGY_PRESETS = {
-  conservative: {
-    confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2,
-    defaultRR: 3, sessionFilter: ["london", "newyork"], description: "Low risk, high confluence only",
-  },
-  moderate: {
-    confluenceThreshold: 5, riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 4,
-    defaultRR: 2.5, sessionFilter: ["london", "newyork", "asian"], description: "Balanced risk and opportunity",
-  },
-  aggressive: {
-    confluenceThreshold: 3, riskPerTrade: 2, maxDailyDrawdown: 5, maxConcurrentTrades: 6,
-    defaultRR: 2, sessionFilter: ["london", "newyork", "asian", "sydney"], description: "Higher risk, more trades",
-  },
-};
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("broker");
