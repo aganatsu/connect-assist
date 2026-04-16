@@ -42,7 +42,8 @@ export default function Dashboard() {
       if (!liveQuotes) return null;
       const pairData: Record<string, { change: number }> = {};
       Object.entries(liveQuotes).forEach(([pair, q]: [string, any]) => {
-        if (q?.change != null) pairData[pair] = { change: q.change };
+        const pct = q?.percentChange ?? q?.change;
+        if (pct != null) pairData[pair] = { change: pct };
       });
       return Object.keys(pairData).length > 0 ? smcApi.currencyStrength(pairData) : null;
     },
