@@ -400,7 +400,18 @@ Deno.serve(async (req) => {
       // Remove position
       await supabase.from("paper_positions").delete().eq("id", pos.id);
 
-      return respond({ success: true, pnl, pnlPips, postMortem });
+      // Mirror close to MT5
+      let mt5Mirror: any = null;
+      mt5Mirror = await mirrorToMT5(supabase, user.id, {
+        action: "close", symbol: pos.symbol, positionId: pos.position_id,
+      });
+      if (mt5Mirror.success) {
+        console.log(`MT5 mirror: closed ${pos.symbol} position`);
+      } else if (mt5Mirror.error !== "no_connection") {
+        console.warn(`MT5 mirror close failed: ${mt5Mirror.error}`);
+      }
+
+      return respond({ success: true, pnl, pnlPips, postMortem, mt5Mirror });
     }
 
     // ── Engine controls ──
