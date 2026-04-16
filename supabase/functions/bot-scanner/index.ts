@@ -453,7 +453,7 @@ function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): Open
 }
 
 // ─── Full 9-Factor Confluence Scoring (+ Opening Range) ─────────────
-function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS, hourlyCandles?: Candle[]) {
+function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
   const fvgs = detectFVGs(candles);
@@ -469,12 +469,17 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const factors: ReasoningFactor[] = [];
 
   // ── Factor 1: Market Structure (max 2.0) ──
+  // Structure break toggle: if enableStructureBreak is false, skip CHoCH/BOS points
   {
     let pts = 0;
     let detail = "";
     if (structure.trend !== "ranging") { pts += 1; detail = `${structure.trend} trend`; }
-    if (structure.choch.length > 0) { pts += 1; detail += `, ${structure.choch.length} CHoCH`; }
-    else if (structure.bos.length > 0) { pts += 0.5; detail += `, ${structure.bos.length} BOS`; }
+    if (config.enableStructureBreak !== false) {
+      if (structure.choch.length > 0) { pts += 1; detail += `, ${structure.choch.length} CHoCH`; }
+      else if (structure.bos.length > 0) { pts += 0.5; detail += `, ${structure.bos.length} BOS`; }
+    } else {
+      detail += " (BOS/CHoCH disabled)";
+    }
     pts = Math.min(2, pts);
     score += pts;
     factors.push({ name: "Market Structure", present: pts > 0, weight: 2.0, detail: detail || "Ranging — no trend" });
@@ -482,17 +487,20 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 2: Order Block (max 2.0) ──
   {
-    const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
     let pts = 0;
     let detail = "";
-    // Check if price is INSIDE an active OB
-    const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
-    if (insideOB) {
-      pts = 2.0;
-      detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-    } else if (activeOBs.length > 0) {
-      pts = 0.5;
-      detail = `${activeOBs.length} active OBs nearby`;
+    if (config.enableOB !== false) {
+      const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
+      const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
+      if (insideOB) {
+        pts = 2.0;
+        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+      } else if (activeOBs.length > 0) {
+        pts = 0.5;
+        detail = `${activeOBs.length} active OBs nearby`;
+      }
+    } else {
+      detail = "Order Blocks disabled";
     }
     score += pts;
     factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
@@ -500,16 +508,20 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 3: Fair Value Gap (max 1.5) ──
   {
-    const activeFVGs = fvgs.filter(f => !f.mitigated);
     let pts = 0;
     let detail = "";
-    const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
-    if (insideFVG) {
-      pts = 1.5;
-      detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
-    } else if (activeFVGs.length > 0) {
-      pts = 0.5;
-      detail = `${activeFVGs.length} unfilled FVGs in range`;
+    if (config.enableFVG !== false) {
+      const activeFVGs = fvgs.filter(f => !f.mitigated);
+      const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
+      if (insideFVG) {
+        pts = 1.5;
+        detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
+      } else if (activeFVGs.length > 0) {
+        pts = 0.5;
+        detail = `${activeFVGs.length} unfilled FVGs in range`;
+      }
+    } else {
+      detail = "FVGs disabled";
     }
     score += pts;
     factors.push({ name: "Fair Value Gap", present: pts > 0, weight: 1.5, detail: detail || "No active FVGs" });
@@ -575,9 +587,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 9: Liquidity Sweep (max 0.5) ──
   {
-    const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
-    const pts = sweptPool ? 0.5 : 0;
-    const detail = sweptPool ? `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)` : "No recent liquidity sweep";
+    let pts = 0;
+    let detail = "";
+    if (config.enableLiquiditySweep !== false) {
+      const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
+      pts = sweptPool ? 0.5 : 0;
+      detail = sweptPool ? `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)` : "No recent liquidity sweep";
+    } else {
+      detail = "Liquidity Sweeps disabled";
+    }
     score += pts;
     factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 0.5, detail });
   }
@@ -726,15 +744,65 @@ function calculatePositionSize(balance: number, riskPercent: number, entryPrice:
 // ─── Load user config ───────────────────────────────────────────────
 async function loadConfig(supabase: any, userId: string) {
   const { data } = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).maybeSingle();
-  if (!data?.config_json) return { ...DEFAULTS };
-  const merged = { ...DEFAULTS, ...(data.config_json as any) };
-  // Ensure instruments is always a valid array
-  if (!Array.isArray(merged.instruments) || merged.instruments.length === 0) {
-    merged.instruments = DEFAULTS.instruments;
-  }
-  // Ensure openingRange defaults are merged
-  merged.openingRange = { ...DEFAULTS.openingRange, ...(merged.openingRange || {}) };
-  merged.tradingStyle = { ...DEFAULTS.tradingStyle, ...(merged.tradingStyle || {}) };
+  if (!data?.config_json) return { ...DEFAULTS, enableOB: true, enableFVG: true, enableLiquiditySweep: true, enableStructureBreak: true, cooldownMinutes: 0, closeOnReverse: false, trailingStopEnabled: false, partialTPEnabled: false, maxHoldHours: 0, killZoneOnly: false, maxConsecutiveLosses: 0, protectionMaxDailyLossDollar: 0 };
+
+  const raw = data.config_json as any;
+  const strategy = raw.strategy || {};
+  const risk = raw.risk || {};
+  const entry = raw.entry || {};
+  const exit = raw.exit || {};
+  const instruments = raw.instruments || {};
+  const sessions = raw.sessions || {};
+  const protection = raw.protection || {};
+
+  const merged = {
+    ...DEFAULTS,
+    // ── Strategy mappings ──
+    minConfluence: strategy.confluenceThreshold ?? raw.minConfluence ?? DEFAULTS.minConfluence,
+    htfBiasRequired: strategy.requireHTFBias ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
+    enableOB: strategy.useOrderBlocks ?? true,
+    enableFVG: strategy.useFVG ?? true,
+    enableLiquiditySweep: strategy.useLiquiditySweep ?? true,
+    enableStructureBreak: strategy.useStructureBreak ?? true,
+
+    // ── Risk mappings ──
+    riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
+    maxDailyLoss: risk.maxDailyDrawdown ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
+    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
+    minRiskReward: risk.minRR ?? risk.defaultRR ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
+    maxDrawdown: risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
+    tpRatio: risk.defaultRR ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+
+    // ── Entry mappings ──
+    cooldownMinutes: entry.cooldownMinutes ?? 0,
+    closeOnReverse: entry.closeOnReverse ?? false,
+
+    // ── Exit mappings ──
+    trailingStopEnabled: exit.trailingStop ?? raw.trailingStopEnabled ?? false,
+    breakEvenEnabled: exit.breakEven ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
+    partialTPEnabled: exit.partialTP ?? false,
+    maxHoldHours: exit.timeExitHours ?? 0,
+
+    // ── Instruments ──
+    instruments: Array.isArray(instruments.enabled) && instruments.enabled.length > 0
+      ? instruments.enabled
+      : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
+
+    // ── Sessions ──
+    enabledSessions: Array.isArray(sessions.filter) && sessions.filter.length > 0
+      ? sessions.filter
+      : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
+    killZoneOnly: sessions.killZoneOnly ?? false,
+
+    // ── Protection ──
+    maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
+    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? 0,
+
+    // ── Opening Range & Trading Style (already nested, keep as-is) ──
+    openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
+    tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
+  };
+
   return merged;
 }
 
@@ -864,6 +932,71 @@ async function runSafetyGates(
     }
   }
 
+  // Gate 12: Kill Zone Only
+  if (config.killZoneOnly) {
+    const assetProfile = getAssetProfile(symbol);
+    if (!assetProfile.skipSessionGate) {
+      const sess = detectSession();
+      if (!sess.isKillZone) {
+        gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
+      } else {
+        gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
+      }
+    } else {
+      gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+    }
+  }
+
+  // Gate 13: Cooldown
+  if (config.cooldownMinutes > 0) {
+    const { data: recentTrades } = await supabase.from("paper_trade_history").select("closed_at")
+      .eq("user_id", userId).eq("symbol", symbol).order("closed_at", { ascending: false }).limit(1);
+    if (recentTrades && recentTrades.length > 0) {
+      const lastClose = new Date(recentTrades[0].closed_at).getTime();
+      const elapsed = (Date.now() - lastClose) / 60000;
+      if (elapsed < config.cooldownMinutes) {
+        gates.push({ passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
+      } else {
+        gates.push({ passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
+      }
+    } else {
+      gates.push({ passed: true, reason: "No recent trades — cooldown OK" });
+    }
+  }
+
+  // Gate 14: Max Consecutive Losses
+  if (config.maxConsecutiveLosses > 0) {
+    const { data: recentHistory } = await supabase.from("paper_trade_history").select("pnl")
+      .eq("user_id", userId).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
+    if (recentHistory && recentHistory.length > 0) {
+      let consecutiveLosses = 0;
+      for (const t of recentHistory) {
+        if (parseFloat(t.pnl) < 0) consecutiveLosses++;
+        else break;
+      }
+      if (consecutiveLosses >= config.maxConsecutiveLosses) {
+        gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit` });
+      } else {
+        gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
+      }
+    } else {
+      gates.push({ passed: true, reason: "No trade history for consecutive loss check" });
+    }
+  }
+
+  // Gate 15: Dollar-based daily loss
+  if (config.protectionMaxDailyLossDollar > 0) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const { data: todayTrades } = await supabase.from("paper_trade_history").select("pnl")
+      .eq("user_id", userId).gte("closed_at", todayStr);
+    const dollarLoss = (todayTrades || []).reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
+    if (Math.abs(dollarLoss) >= config.protectionMaxDailyLossDollar) {
+      gates.push({ passed: false, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit` });
+    } else {
+      gates.push({ passed: true, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)}` });
+    }
+  }
+
   return gates;
 }
 
@@ -948,6 +1081,13 @@ async function runScanForUser(supabase: any, userId: string) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
+  // Session filter: normalize names for comparison
+  const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
+  const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
+  const assetProfile = getAssetProfile(config.instruments[0] || "EUR/USD");
+  if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) {
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `${session.name} session not enabled`, activeStyle: resolvedStyle };
+  }
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
@@ -1071,6 +1211,34 @@ async function runScanForUser(supabase: any, userId: string) {
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
+        // Close on Reverse: close existing opposite-direction positions for this symbol
+        if (config.closeOnReverse) {
+          const oppositeDir = analysis.direction === "long" ? "short" : "long";
+          const oppositePositions = openPosArr.filter(p => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
+          for (const opp of oppositePositions) {
+            // Close via paper_positions update + history insert
+            await supabase.from("paper_positions").update({ position_status: "closed" }).eq("position_id", opp.position_id).eq("user_id", userId);
+            await supabase.from("paper_trade_history").insert({
+              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
+              symbol: pair, direction: opp.direction, size: opp.size,
+              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
+              open_time: opp.open_time || nowStr, closed_at: nowStr,
+              close_reason: "reverse_signal",
+              pnl: "0", pnl_pips: "0",
+              signal_score: opp.signal_score || "0",
+            });
+          }
+        }
+
+        // Build exit flags metadata to store on the position
+        const exitFlags = {
+          trailingStop: config.trailingStopEnabled,
+          breakEven: config.breakEvenEnabled,
+          breakEvenPips: config.breakEvenPips,
+          partialTP: config.partialTPEnabled,
+          maxHoldHours: config.maxHoldHours,
+        };
+
         // Place position
         await supabase.from("paper_positions").insert({
           user_id: userId,
@@ -1083,7 +1251,7 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: analysis.summary,
+          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -1099,7 +1267,7 @@ async function runScanForUser(supabase: any, userId: string) {
           summary: analysis.summary,
           bias: analysis.bias,
           session: analysis.session.name,
-          timeframe: "15m",
+          timeframe: config.entryTimeframe,
           factors_json: analysis.factors,
         });
 
@@ -1110,9 +1278,10 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.stopLoss = sl;
         detail.takeProfit = tp;
         detail.positionId = positionId;
+        detail.exitFlags = exitFlags;
 
         // Add to virtual open positions for subsequent gates
-        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString() });
+        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
       } else {
         rejectedCount++;
         detail.status = "rejected";

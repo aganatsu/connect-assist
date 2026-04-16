@@ -8,35 +8,21 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor } from "lucide-react";
-import { brokerApi, settingsApi, botConfigApi } from "@/lib/api";
+import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { INSTRUMENTS } from "@/lib/marketData";
+import { BotConfigModal } from "@/components/BotConfigModal";
 
 type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "broker", label: "Broker Connection", icon: Link2 },
   { id: "risk", label: "Risk Management", icon: Shield },
-  { id: "bot", label: "Bot Configuration", icon: Settings },
+  { id: "bot", label: "Bot Configuration", icon: Zap },
   { id: "preferences", label: "Preferences", icon: Palette },
   { id: "about", label: "About", icon: Info },
 ];
 
-const STRATEGY_PRESETS = {
-  conservative: {
-    confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2,
-    defaultRR: 3, sessionFilter: ["london", "newyork"], description: "Low risk, high confluence only",
-  },
-  moderate: {
-    confluenceThreshold: 5, riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 4,
-    defaultRR: 2.5, sessionFilter: ["london", "newyork", "asian"], description: "Balanced risk and opportunity",
-  },
-  aggressive: {
-    confluenceThreshold: 3, riskPerTrade: 2, maxDailyDrawdown: 5, maxConcurrentTrades: 6,
-    defaultRR: 2, sessionFilter: ["london", "newyork", "asian", "sydney"], description: "Higher risk, more trades",
-  },
-};
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>("broker");
@@ -181,174 +167,22 @@ function RiskSettings() {
 }
 
 function BotConfigSettings() {
-  const queryClient = useQueryClient();
-  const { data: rawConfig, isLoading } = useQuery({ queryKey: ["bot-config"], queryFn: () => botConfigApi.get() });
-
-  const [config, setConfig] = useState<any>(null);
-  const [selectedPreset, setSelectedPreset] = useState<string>("");
-
-  useEffect(() => {
-    if (rawConfig && !config) setConfig(JSON.parse(JSON.stringify(rawConfig)));
-  }, [rawConfig]);
-
-  const saveMutation = useMutation({
-    mutationFn: () => botConfigApi.update(config),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["bot-config"] }); toast.success("Bot config saved"); },
-    onError: (e: any) => toast.error(e.message),
-  });
-
-  const resetMutation = useMutation({
-    mutationFn: () => botConfigApi.reset(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["bot-config"] }); setConfig(null); toast.success("Bot config reset"); },
-  });
-
-  const applyPreset = (presetKey: string) => {
-    const preset = STRATEGY_PRESETS[presetKey as keyof typeof STRATEGY_PRESETS];
-    if (!preset || !config) return;
-    setConfig({
-      ...config,
-      strategy: { ...(config.strategy || {}), confluenceThreshold: preset.confluenceThreshold },
-      risk: { ...(config.risk || {}), riskPerTrade: preset.riskPerTrade, maxDailyDrawdown: preset.maxDailyDrawdown, maxConcurrentTrades: preset.maxConcurrentTrades, defaultRR: preset.defaultRR },
-      sessions: { ...(config.sessions || {}), filter: preset.sessionFilter },
-    });
-    setSelectedPreset(presetKey);
-    toast.info(`Applied ${presetKey} preset`);
-  };
-
-  const updateField = (section: string, key: string, value: any) => {
-    setConfig((prev: any) => ({
-      ...prev,
-      [section]: { ...(prev[section] || {}), [key]: value },
-    }));
-  };
-
-  if (isLoading) return <p className="text-muted-foreground">Loading config...</p>;
+  const [modalOpen, setModalOpen] = useState(false);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold">Bot Configuration</h2>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => resetMutation.mutate()}>Reset Defaults</Button>
-          <Button size="sm" onClick={() => saveMutation.mutate()}>Save Config</Button>
-        </div>
-      </div>
-
-      {/* Strategy Presets */}
+      <h2 className="text-xl font-bold">Bot Configuration</h2>
       <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><Zap className="h-4 w-4" /> Strategy Presets</CardTitle></CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-3 gap-3">
-            {Object.entries(STRATEGY_PRESETS).map(([key, preset]) => (
-              <button key={key} onClick={() => applyPreset(key)}
-                className={`p-3 rounded border text-left transition-colors ${
-                  selectedPreset === key ? "border-primary bg-primary/10" : "border-border hover:border-primary/50"
-                }`}>
-                <p className="text-sm font-medium capitalize">{key}</p>
-                <p className="text-[10px] text-muted-foreground mt-1">{preset.description}</p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Risk: {preset.riskPerTrade}% · Confluence: {preset.confluenceThreshold}+</p>
-              </button>
-            ))}
-          </div>
+        <CardContent className="pt-6 space-y-4">
+          <p className="text-sm text-muted-foreground">
+            All bot settings — strategy toggles, risk parameters, instruments, sessions, entry/exit rules, and protection — are managed in one place.
+          </p>
+          <Button onClick={() => setModalOpen(true)} className="w-full flex items-center gap-2">
+            <Settings className="h-4 w-4" /> Open Full Bot Configuration
+          </Button>
         </CardContent>
       </Card>
-
-      {config && (
-        <>
-          {/* Strategy */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Strategy Parameters</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <div><Label className="text-xs">Confluence Threshold (1-10)</Label>
-                <Input type="number" min={1} max={10} value={config.strategy?.confluenceThreshold ?? 5}
-                  onChange={e => updateField('strategy', 'confluenceThreshold', parseInt(e.target.value) || 5)} className="mt-1" /></div>
-              <div className="flex items-center gap-2">
-                <Switch checked={config.strategy?.useOrderBlocks ?? true}
-                  onCheckedChange={v => updateField('strategy', 'useOrderBlocks', v)} />
-                <Label className="text-xs">Use Order Blocks</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={config.strategy?.useFVG ?? true}
-                  onCheckedChange={v => updateField('strategy', 'useFVG', v)} />
-                <Label className="text-xs">Use Fair Value Gaps</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={config.strategy?.useLiquiditySweep ?? true}
-                  onCheckedChange={v => updateField('strategy', 'useLiquiditySweep', v)} />
-                <Label className="text-xs">Use Liquidity Sweeps</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={config.strategy?.useStructureBreak ?? true}
-                  onCheckedChange={v => updateField('strategy', 'useStructureBreak', v)} />
-                <Label className="text-xs">Use Structure Breaks (BOS/CHoCH)</Label>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Risk */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Risk Management</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <div><Label className="text-xs">Risk per Trade (%)</Label>
-                <Input type="number" step={0.1} value={config.risk?.riskPerTrade ?? 1}
-                  onChange={e => updateField('risk', 'riskPerTrade', parseFloat(e.target.value) || 1)} className="mt-1" /></div>
-              <div><Label className="text-xs">Max Daily Drawdown (%)</Label>
-                <Input type="number" step={0.5} value={config.risk?.maxDailyDrawdown ?? 3}
-                  onChange={e => updateField('risk', 'maxDailyDrawdown', parseFloat(e.target.value) || 3)} className="mt-1" /></div>
-              <div><Label className="text-xs">Max Concurrent Trades</Label>
-                <Input type="number" min={1} max={20} value={config.risk?.maxConcurrentTrades ?? 5}
-                  onChange={e => updateField('risk', 'maxConcurrentTrades', parseInt(e.target.value) || 5)} className="mt-1" /></div>
-              <div><Label className="text-xs">Default R:R Target</Label>
-                <Input type="number" step={0.5} value={config.risk?.defaultRR ?? 3}
-                  onChange={e => updateField('risk', 'defaultRR', parseFloat(e.target.value) || 3)} className="mt-1" /></div>
-            </CardContent>
-          </Card>
-
-          {/* Instruments */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Instruments</CardTitle></CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-2">
-                {INSTRUMENTS.map(inst => {
-                  const enabled = config.instruments?.enabled?.includes(inst.symbol) ?? true;
-                  return (
-                    <div key={inst.symbol} className="flex items-center gap-2">
-                      <Switch checked={enabled} onCheckedChange={v => {
-                        const current = config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol);
-                        const next = v ? [...current, inst.symbol] : current.filter((s: string) => s !== inst.symbol);
-                        updateField('instruments', 'enabled', next);
-                      }} />
-                      <Label className="text-xs">{inst.symbol}</Label>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Sessions */}
-          <Card>
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Session Filters</CardTitle></CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-2">
-                {["asian", "london", "newyork", "sydney"].map(session => {
-                  const enabled = config.sessions?.filter?.includes(session) ?? true;
-                  return (
-                    <div key={session} className="flex items-center gap-2">
-                      <Switch checked={enabled} onCheckedChange={v => {
-                        const current = config.sessions?.filter || ["asian", "london", "newyork", "sydney"];
-                        const next = v ? [...current, session] : current.filter((s: string) => s !== session);
-                        updateField('sessions', 'filter', next);
-                      }} />
-                      <Label className="text-xs capitalize">{session}</Label>
-                    </div>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+      <BotConfigModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   );
 }
