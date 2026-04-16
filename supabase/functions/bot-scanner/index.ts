@@ -105,7 +105,7 @@ function calculateATR(candles: Candle[], period = 14): number {
   return atrSum / period;
 }
 
-
+function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
 
   // Calculate ATR from daily candles (14-period)
