@@ -182,7 +182,7 @@ function BotConfigSettings() {
           </Button>
         </CardContent>
       </Card>
-      <BotConfigModal open={modalOpen} onOpenChange={setModalOpen} />
+      <BotConfigModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>
   );
 }
