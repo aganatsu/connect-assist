@@ -766,6 +766,15 @@ async function loadConfig(supabase: any, userId: string) {
   const sessions = raw.sessions || {};
   const protection = raw.protection || {};
 
+  const enabledInstrumentMap = instruments.allowedInstruments && typeof instruments.allowedInstruments === "object"
+    ? instruments.allowedInstruments
+    : null;
+  const enabledInstrumentList = enabledInstrumentMap
+    ? Object.entries(enabledInstrumentMap)
+        .filter(([, enabled]) => Boolean(enabled))
+        .map(([symbol]) => symbol)
+    : null;
+
   const merged = {
     ...DEFAULTS,
     // ── Strategy mappings ──
@@ -795,9 +804,11 @@ async function loadConfig(supabase: any, userId: string) {
     maxHoldHours: exit.timeExitHours ?? 0,
 
     // ── Instruments ──
-    instruments: Array.isArray(instruments.enabled) && instruments.enabled.length > 0
-      ? instruments.enabled
-      : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
+    instruments: enabledInstrumentList && enabledInstrumentList.length > 0
+      ? enabledInstrumentList
+      : Array.isArray(instruments.enabled) && instruments.enabled.length > 0
+        ? instruments.enabled
+        : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
 
     // ── Sessions ──
     enabledSessions: Array.isArray(sessions.filter) && sessions.filter.length > 0
@@ -1328,37 +1339,43 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.positionId = positionId;
         detail.exitFlags = exitFlags;
 
-        // Mirror to MT5 if broker is connected
+        // Mirror to MT5 only when the account is explicitly in live mode
         try {
-          const { data: connections } = await supabase.from("broker_connections")
-            .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
-          if (connections && connections.length > 0) {
-            const conn = connections[0];
-            let authToken = conn.api_key;
-            let metaAccountId = conn.account_id;
-            if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-              authToken = conn.account_id;
-              metaAccountId = conn.api_key;
-            }
-            const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-            const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
-            const mt5Body: any = {
-              actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-              symbol: pair.replace("/", ""),
-              volume: size,
-              comment: `paper:${positionId}`,
-            };
-            if (sl) mt5Body.stopLoss = sl;
-            if (tp) mt5Body.takeProfit = tp;
-            const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
-            if (mt5Res.ok) {
-              console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
-              detail.mt5Mirror = "success";
+          if (account.execution_mode === "live") {
+            const { data: connections } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+            if (connections && connections.length > 0) {
+              const conn = connections[0];
+              let authToken = conn.api_key;
+              let metaAccountId = conn.account_id;
+              if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                authToken = conn.account_id;
+                metaAccountId = conn.api_key;
+              }
+              const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+              const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+              const mt5Body: any = {
+                actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                symbol: pair.replace("/", ""),
+                volume: size,
+                comment: `paper:${positionId}`,
+              };
+              if (sl) mt5Body.stopLoss = sl;
+              if (tp) mt5Body.takeProfit = tp;
+              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              if (mt5Res.ok) {
+                console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
+                detail.mt5Mirror = "success";
+              } else {
+                const errText = await mt5Res.text();
+                console.warn(`MT5 mirror failed [${mt5Res.status}]: ${errText}`);
+                detail.mt5Mirror = `failed: ${mt5Res.status}`;
+              }
             } else {
-              const errText = await mt5Res.text();
-              console.warn(`MT5 mirror failed [${mt5Res.status}]: ${errText}`);
-              detail.mt5Mirror = `failed: ${mt5Res.status}`;
+              detail.mt5Mirror = "skipped_no_connection";
             }
+          } else {
+            detail.mt5Mirror = "skipped_paper_mode";
           }
         } catch (e: any) {
           console.warn(`MT5 mirror error: ${e?.message || e}`);
