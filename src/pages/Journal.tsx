@@ -234,10 +234,10 @@ export default function JournalView() {
                     <div className="h-[200px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={equityCurveData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
-                          <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
+                          <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
+                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} />
                           <Area type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.1} strokeWidth={2} />
                         </AreaChart>
                       </ResponsiveContainer>
