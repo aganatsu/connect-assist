@@ -6,6 +6,7 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 const DEFAULTS = {
   minConfluence: 6,
   htfBiasRequired: true,
+  htfBiasHardVeto: false, // when true: ranging HTF blocks both sides; mismatch always blocks
   entryTimeframe: "15min",
   htfTimeframe: "1day",
   onlyBuyInDiscount: true,
@@ -939,6 +940,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
+    // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
+    htfBiasHardVeto: strategy.htfBiasHardVeto ?? raw.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
     // UI writes: useOrderBlocks; legacy DB: enableOB
     enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
     // UI writes: useFVG; legacy DB: enableFVG
@@ -1054,10 +1057,21 @@ async function runSafetyGates(
     const htfStructure = analyzeMarketStructure(dailyCandles);
     const htfTrend = htfStructure.trend;
     const entryBias = direction === "long" ? "bullish" : "bearish";
-    if (htfTrend !== "ranging" && htfTrend !== entryBias) {
-      gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+    const hardVeto = config.htfBiasHardVeto;
+    if (hardVeto) {
+      // Hard veto: must match exactly. Ranging blocks everything. No exceptions.
+      if (htfTrend !== entryBias) {
+        gates.push({ passed: false, reason: `HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
+      } else {
+        gates.push({ passed: true, reason: `HTF bias aligned (hard veto): Daily ${htfTrend}` });
+      }
     } else {
-      gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
+      // Soft mode: ranging allowed, only mismatch blocks
+      if (htfTrend !== "ranging" && htfTrend !== entryBias) {
+        gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+      } else {
+        gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
+      }
     }
   } else {
     gates.push({ passed: true, reason: "HTF check skipped" });
