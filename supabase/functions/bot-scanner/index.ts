@@ -936,15 +936,19 @@ async function runSafetyGates(
     gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
   }
 
-  // Gate 11: Opening Range — wait for completion
+  // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
     const now = new Date();
     const hoursSinceMidnight = now.getUTCHours() + now.getUTCMinutes() / 60;
     const candleCount = config.openingRange.candleCount || 24;
-    if (hoursSinceMidnight < candleCount) {
-      gates.push({ passed: false, reason: `OR not complete: ${Math.floor(hoursSinceMidnight)}/${candleCount}h elapsed` });
+    // Convert candle count to hours based on entry timeframe
+    const tfHours: Record<string, number> = { "1m": 1/60, "5m": 5/60, "15m": 0.25, "15min": 0.25, "30m": 0.5, "1h": 1, "4h": 4, "1d": 24 };
+    const hoursPerCandle = tfHours[config.entryTimeframe] || 1;
+    const requiredHours = candleCount * hoursPerCandle;
+    if (hoursSinceMidnight < requiredHours) {
+      gates.push({ passed: false, reason: `OR not complete: ${hoursSinceMidnight.toFixed(1)}/${requiredHours.toFixed(1)}h elapsed` });
     } else {
-      gates.push({ passed: true, reason: `OR complete: ${candleCount}h elapsed` });
+      gates.push({ passed: true, reason: `OR complete: ${requiredHours}h elapsed` });
     }
   }
 
