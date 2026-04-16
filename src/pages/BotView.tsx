@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { paperApi, scannerApi, brokerApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi, botConfigApi } from "@/lib/api";
+import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
@@ -48,6 +49,11 @@ export default function BotView() {
     queryKey: ["scan-logs"],
     queryFn: () => scannerApi.logs(),
     refetchInterval: 30000,
+  });
+
+  const { data: botConfig } = useQuery({
+    queryKey: ["bot-config"],
+    queryFn: () => botConfigApi.get(),
   });
 
   const { data: brokerConns } = useQuery({
