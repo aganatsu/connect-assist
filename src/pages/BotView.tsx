@@ -61,7 +61,7 @@ export default function BotView() {
     queryFn: () => brokerApi.list(),
     refetchInterval: 30000,
   });
-  const mt5Connection = Array.isArray(brokerConns) ? brokerConns.find((c: any) => c.broker_type === "metaapi" && c.is_active) : null;
+  const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
 
   const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
   const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
@@ -114,9 +114,9 @@ export default function BotView() {
         )}
         {d.executionMode !== "live" && (
           <div className="bg-muted border border-border px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
-            <span>📝 Paper Mode — trades are simulated, MT5 mirroring is OFF</span>
+            <span>📝 Paper Mode — trades are simulated, broker mirroring is OFF</span>
             <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => {
-              if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected MT5 account.")) {
+              if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected broker account(s).")) {
                 paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
               }
             }}>
@@ -160,13 +160,15 @@ export default function BotView() {
             {d.executionMode === "live" ? "LIVE" : "PAPER"}
           </span>
 
-          {mt5Connection ? (
-            <span className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
-              <Monitor className="h-2.5 w-2.5" /> MT5 Connected
-            </span>
+          {activeConnections.length > 0 ? (
+            activeConnections.map((conn: any) => (
+              <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
+                <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
+              </span>
+            ))
           ) : (
             <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
-              <Monitor className="h-2.5 w-2.5" /> Connect MT5
+              <Monitor className="h-2.5 w-2.5" /> Connect Broker
             </button>
           )}
 
