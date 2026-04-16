@@ -106,10 +106,25 @@ export default function Backtest() {
         }
       }
 
-      // Simulate each signal
+      // Simulate each signal deterministically based on score and confluence
+      // Score-based win probability: score 7+ = ~75% win, score 5-6 = ~55%, score <5 = ~35%
+      // Use a deterministic hash of signal properties instead of random
       signals.forEach((sig, idx) => {
-        const isWin = sig.score >= 5 ? Math.random() > 0.35 : Math.random() > 0.55;
-        const rr = isWin ? 1 + Math.random() * 3 : -(0.5 + Math.random() * 0.5);
+        // Deterministic hash from signal properties
+        const hashInput = `${sig.type}-${sig.direction}-${sig.price.toFixed(5)}-${idx}`;
+        let hash = 0;
+        for (let i = 0; i < hashInput.length; i++) {
+          hash = ((hash << 5) - hash + hashInput.charCodeAt(i)) | 0;
+        }
+        const hashNorm = Math.abs(hash % 1000) / 1000; // 0-1 deterministic value
+
+        const winThreshold = sig.score >= 7 ? 0.25 : sig.score >= 5 ? 0.45 : 0.65;
+        const isWin = hashNorm > winThreshold;
+
+        // RR determined by score: higher score = better RR on wins, tighter losses
+        const winRR = sig.score >= 7 ? 1.5 + (hashNorm * 2.5) : sig.score >= 5 ? 1 + (hashNorm * 2) : 0.8 + (hashNorm * 1.2);
+        const lossRR = sig.score >= 7 ? -(0.3 + hashNorm * 0.4) : sig.score >= 5 ? -(0.5 + hashNorm * 0.3) : -(0.7 + hashNorm * 0.3);
+        const rr = isWin ? winRR : lossRR;
         const pnl = rr * riskAmount;
         equity += pnl;
         peak = Math.max(peak, equity);
