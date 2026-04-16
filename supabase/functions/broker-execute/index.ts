@@ -4,11 +4,12 @@ import { fetch as undiciFetch } from "npm:undici@5.28.4";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
-// Resolve symbol name with per-symbol overrides or default suffix
+// Resolve symbol name: check full remap first, then apply default suffix
 function resolveSymbol(symbol: string, conn: any): string {
   const base = symbol.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  if (overrides[base]) return base + overrides[base];
+  // Full remap: override value IS the exact broker symbol
+  if (overrides[base]) return overrides[base];
   return base + (conn.symbol_suffix || "");
 }
 Deno.serve(async (req) => {
