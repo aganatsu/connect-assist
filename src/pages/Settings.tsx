@@ -8,10 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor } from "lucide-react";
-import { brokerApi, settingsApi, botConfigApi } from "@/lib/api";
+import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { INSTRUMENTS } from "@/lib/marketData";
+import { BotConfigModal } from "@/components/BotConfigModal";
 
 type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
 
