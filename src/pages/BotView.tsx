@@ -426,8 +426,48 @@ export default function BotView() {
               </CardContent>
             </Card>
 
-          </div>
-        </div>
+            {/* Live Broker Account (only in live mode) */}
+            {isLiveMode && primaryConnection && (
+              <Card>
+                <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {primaryConnection.display_name}</p>
+                  {brokerAccount ? (
+                    <>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
+                      {brokerAccount.equity && <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{brokerAccount.equity} {brokerAccount.currency || ""}</span></div>}
+                      {brokerAccount.margin != null && <div className="flex justify-between"><span className="text-muted-foreground">Margin Used</span><span className="font-mono">{brokerAccount.margin}</span></div>}
+                      {brokerAccount.freeMargin != null && <div className="flex justify-between"><span className="text-muted-foreground">Free Margin</span><span className="font-mono">{brokerAccount.freeMargin}</span></div>}
+                      {brokerAccount.marginLevel != null && <div className="flex justify-between"><span className="text-muted-foreground">Margin Level</span><span className="font-mono">{brokerAccount.marginLevel}%</span></div>}
+                      {brokerAccount.leverage && <div className="flex justify-between"><span className="text-muted-foreground">Leverage</span><span className="font-mono">1:{brokerAccount.leverage}</span></div>}
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground text-[10px]">Loading broker data...</p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Live Broker Open Trades */}
+            {isLiveMode && primaryConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
+              <Card>
+                <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions ({brokerOpenTrades.length})</p>
+                  {brokerOpenTrades.slice(0, 10).map((t: any, i: number) => (
+                    <div key={t.id || i} className="flex items-center justify-between text-[10px] py-0.5 border-b border-border/20 last:border-0">
+                      <div className="flex items-center gap-1">
+                        <span className={t.type === "SELL" || t.currentUnits < 0 || t.type === "POSITION_TYPE_SELL" ? "text-destructive" : "text-success"}>
+                          {t.type === "SELL" || t.currentUnits < 0 || t.type === "POSITION_TYPE_SELL" ? "▼" : "▲"}
+                        </span>
+                        <span className="font-mono font-medium">{t.instrument || t.symbol}</span>
+                      </div>
+                      <span className={`font-mono ${parseFloat(t.unrealizedPL || t.profit || t.unrealizedProfit || 0) >= 0 ? "text-success" : "text-destructive"}`}>
+                        {formatMoney(parseFloat(t.unrealizedPL || t.profit || t.unrealizedProfit || 0), true)}
+                      </span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
 
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className="h-56 border-t border-border mt-2 pt-2 shrink-0 flex gap-0 min-h-0">
