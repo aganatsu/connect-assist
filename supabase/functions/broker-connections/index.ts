@@ -1,8 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-
-// Custom HTTP client to bypass MetaAPI SSL cert issues in Deno
-const metaHttpClient = Deno.createHttpClient({ caCerts: [] });
+import { fetch as undiciFetch } from "npm:undici@5.28.4";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -84,10 +82,9 @@ Deno.serve(async (req) => {
         }
 
         try {
-          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
+          const provRes = await undiciFetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
             headers: { "auth-token": authToken, "Content-Type": "application/json" },
-            client: metaHttpClient,
-          } as any);
+          });
           if (!provRes.ok) {
             const errText = await provRes.text();
             throw new Error(`MetaAPI error ${provRes.status}: ${errText}`);
