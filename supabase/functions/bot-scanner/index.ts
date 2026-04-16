@@ -92,7 +92,20 @@ function getYahooRange(entryTf: string): string {
   return map[entryTf] || "5d";
 }
 
-function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
+// ─── Standalone ATR Calculation ─────────────────────────────────────
+function calculateATR(candles: Candle[], period = 14): number {
+  if (candles.length < period + 1) return 0;
+  let atrSum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const prev = candles[i - 1];
+    const curr = candles[i];
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    atrSum += tr;
+  }
+  return atrSum / period;
+}
+
+
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
 
   // Calculate ATR from daily candles (14-period)
