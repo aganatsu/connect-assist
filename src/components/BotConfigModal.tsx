@@ -180,6 +180,20 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 {activeTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
+                    <FieldGroup label="Auto Scan Interval" description="How often the bot scans for new trade setups (in seconds)">
+                      <Select value={String(config.scanner?.intervalSeconds ?? 30)} onValueChange={v => updateField('scanner', 'intervalSeconds', parseInt(v))}>
+                        <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="10">Every 10 seconds</SelectItem>
+                          <SelectItem value="15">Every 15 seconds</SelectItem>
+                          <SelectItem value="30">Every 30 seconds</SelectItem>
+                          <SelectItem value="60">Every 1 minute</SelectItem>
+                          <SelectItem value="120">Every 2 minutes</SelectItem>
+                          <SelectItem value="300">Every 5 minutes</SelectItem>
+                          <SelectItem value="600">Every 10 minutes</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FieldGroup>
                     <FieldGroup label="Confluence Threshold" description="Minimum score (1-10) required to consider a trade setup valid">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={1} className="flex-1" />
