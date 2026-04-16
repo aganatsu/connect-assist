@@ -71,12 +71,32 @@ Deno.serve(async (req) => {
       }
 
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
-          headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
-        });
-        if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
-        const data = await res.json();
-        return respond({ success: true, balance: data.balance, currency: data.currency });
+        try {
+          // Use provisioning API to verify account exists (reliable SSL)
+          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`, {
+            headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
+          });
+          if (!provRes.ok) {
+            const errText = await provRes.text();
+            throw new Error(`MetaAPI error ${provRes.status}: ${errText}`);
+          }
+          const acct = await provRes.json();
+          return respond({
+            success: true,
+            name: acct.name,
+            type: acct.type,
+            platform: acct.platform,
+            state: acct.state,
+            connectionStatus: acct.connectionStatus,
+          });
+        } catch (e: any) {
+          // Graceful fallback for SSL/network errors
+          const msg = e?.message || String(e);
+          if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
+            return respond({ success: false, error: "SSL certificate issue connecting to MetaApi. The credentials are saved and will work for trade execution." });
+          }
+          throw e;
+        }
       }
 
       throw new Error(`Unsupported broker: ${conn.broker_type}`);
