@@ -114,6 +114,35 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (action === "account_balance") {
+      if (conn.broker_type === "oanda") {
+        const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
+          headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+        });
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        const acct = (await res.json()).account;
+        return respond({
+          balance: parseFloat(acct.balance ?? "0"),
+          equity: parseFloat(acct.NAV ?? acct.balance ?? "0"),
+          currency: acct.currency ?? "USD",
+        });
+      }
+      if (conn.broker_type === "metaapi") {
+        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
+          headers: { "auth-token": conn.api_key },
+        });
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        const info: any = await res.json();
+        return respond({
+          balance: parseFloat(info.balance ?? "0"),
+          equity: parseFloat(info.equity ?? info.balance ?? "0"),
+          currency: info.currency ?? "USD",
+        });
+      }
+      throw new Error(`account_balance not supported for broker type: ${conn.broker_type}`);
+    }
+
     if (action === "symbol_specs") {
       const { symbol } = payload;
       if (!symbol) throw new Error("Missing symbol parameter");

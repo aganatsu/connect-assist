@@ -1332,6 +1332,8 @@ Deno.serve(async (req) => {
 
 async function runScanForUser(supabase: any, userId: string) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
+  const balanceCache: Record<string, number> = {};
+  const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
@@ -1690,8 +1692,36 @@ async function runScanForUser(supabase: any, userId: string) {
                   const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
                    const brokerSymbol = resolveSymbol(pair, conn);
 
-                   // ── Fetch live symbol specs from broker to clamp lot size ──
+                   // ── Fetch per-broker account balance and recalc lot size ──
                    let brokerVolume = size;
+                   try {
+                     if (balanceCache[conn.id] === undefined) {
+                       const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
+                       if (balRes.ok) {
+                         const balData: any = await balRes.json();
+                         balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
+                       } else {
+                         console.warn(`Broker balance fetch failed [${conn.display_name}] ${balRes.status} — skipping mirror`);
+                         mirrorResults.push(`${conn.display_name}: skipped (no balance)`);
+                         continue;
+                       }
+                     }
+                     const brokerBalance = balanceCache[conn.id];
+                     if (!brokerBalance || brokerBalance <= 0) {
+                       console.warn(`Broker [${conn.display_name}] balance is 0 — skipping mirror`);
+                       mirrorResults.push(`${conn.display_name}: skipped (zero balance)`);
+                       continue;
+                     }
+                     const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
+                     brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair);
+                     console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
+                   } catch (balErr: any) {
+                     console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);
+                     mirrorResults.push(`${conn.display_name}: skipped (balance error)`);
+                     continue;
+                   }
+
+                   // ── Fetch live symbol specs from broker to clamp lot size ──
                    const specCacheKey = `${conn.id}:${brokerSymbol}`;
                    if (!specCache[specCacheKey]) {
                      try {
@@ -1713,10 +1743,11 @@ async function runScanForUser(supabase: any, userId: string) {
                    }
                    const brokerSpec = specCache[specCacheKey];
                    if (brokerSpec) {
-                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, size));
+                     const preClamp = brokerVolume;
+                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, brokerVolume));
                      brokerVolume = Math.round(brokerVolume / brokerSpec.volumeStep) * brokerSpec.volumeStep;
                      brokerVolume = parseFloat(brokerVolume.toFixed(6)); // avoid floating-point artifacts
-                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${size} → ${brokerVolume}`);
+                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
                    }
 
                    const mt5Body: any = {
