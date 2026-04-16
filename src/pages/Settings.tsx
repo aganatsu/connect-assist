@@ -18,7 +18,7 @@ type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "broker", label: "Broker Connection", icon: Link2 },
   { id: "risk", label: "Risk Management", icon: Shield },
-  { id: "bot", label: "Bot Configuration", icon: Settings },
+  { id: "bot", label: "Bot Configuration", icon: Zap },
   { id: "preferences", label: "Preferences", icon: Palette },
   { id: "about", label: "About", icon: Info },
 ];

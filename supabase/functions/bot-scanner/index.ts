@@ -1081,6 +1081,13 @@ async function runScanForUser(supabase: any, userId: string) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
+  // Session filter: normalize names for comparison
+  const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
+  const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
+  const assetProfile = getAssetProfile(config.instruments[0] || "EUR/USD");
+  if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) {
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `${session.name} session not enabled`, activeStyle: resolvedStyle };
+  }
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
