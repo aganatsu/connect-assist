@@ -189,10 +189,41 @@ function BotConfigSettings() {
 
 function PreferencesSettings() {
   const { theme, setTheme } = useTheme();
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
+  const prefs = settings?.preferences_json || {};
+  const [telegramChatId, setTelegramChatId] = useState(prefs.telegramChatId || "");
+
+  useEffect(() => {
+    if (settings?.preferences_json?.telegramChatId) {
+      setTelegramChatId(settings.preferences_json.telegramChatId);
+    }
+  }, [settings]);
+
+  const saveTelegramMutation = useMutation({
+    mutationFn: () => settingsApi.upsert(undefined, { ...prefs, telegramChatId }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Telegram chat ID saved"); },
+    onError: (e: any) => toast.error(e.message),
+  });
 
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Preferences</h2>
+
+      {/* Telegram Notifications */}
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Telegram Notifications</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">Get trade alerts on Telegram. Send <code>/start</code> to <a href="https://t.me/smc007_bot" target="_blank" className="text-primary underline">@smc007_bot</a>, then paste your Chat ID below.</p>
+          <div>
+            <Label className="text-xs">Chat ID</Label>
+            <div className="flex gap-2 mt-1">
+              <Input value={telegramChatId} onChange={e => setTelegramChatId(e.target.value)} placeholder="e.g. 123456789" />
+              <Button onClick={() => saveTelegramMutation.mutate()} disabled={!telegramChatId}>Save</Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Theme */}
       <Card>
