@@ -113,10 +113,13 @@ export default function Dashboard() {
     if (!currencyStrength) return [];
     // API returns array: [{ currency, strength, rank }]
     const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
-    return arr.map((item: any) => ({
-      currency: item.currency || '?',
-      score: item.strength ?? item.score ?? 0,
-    })).filter((d: any) => d.currency !== '?').sort((a: any, b: any) => b.score - a.score);
+    return arr
+      .filter((item: any) => item.currency && typeof item.currency === 'string' && item.currency.length <= 4)
+      .map((item: any) => ({
+        currency: item.currency,
+        score: Math.round(((item.strength ?? item.score ?? 0) + Number.EPSILON) * 100) / 100,
+      }))
+      .sort((a: any, b: any) => b.score - a.score);
   }, [currencyStrength]);
 
   // Latest scan signals
