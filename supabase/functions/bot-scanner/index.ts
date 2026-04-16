@@ -479,7 +479,140 @@ function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): Open
   return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
-// ─── Full 9-Factor Confluence Scoring (+ Opening Range) ─────────────
+// ─── Full SL/TP Calculation Dispatch ────────────────────────────────
+interface SLTPInput {
+  direction: "long" | "short" | null;
+  lastPrice: number;
+  pipSize: number;
+  config: any;
+  swings: SwingPoint[];
+  orderBlocks: OrderBlock[];
+  liquidityPools: LiquidityPool[];
+  pdLevels: any;
+  atrValue: number;
+}
+
+function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
+  const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
+  if (!direction) return { stopLoss: null, takeProfit: null };
+
+  const buffer = (config.slBufferPips || 2) * pipSize;
+  let sl: number | null = null;
+  let tp: number | null = null;
+
+  // ── Stop Loss ──
+  const slMethod: string = config.slMethod || "structure";
+
+  if (slMethod === "fixed_pips") {
+    const dist = (config.fixedSLPips || 25) * pipSize;
+    sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+  } else if (slMethod === "atr_based") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.slATRMultiple || 1.5);
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    } else {
+      // Fallback to fixed_pips
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else if (slMethod === "below_ob") {
+    if (direction === "long") {
+      const bullishOBs = orderBlocks
+        .filter(ob => !ob.mitigated && ob.type === "bullish" && ob.low < lastPrice)
+        .sort((a, b) => b.low - a.low);
+      if (bullishOBs.length > 0) {
+        sl = bullishOBs[0].low - buffer;
+      }
+    } else {
+      const bearishOBs = orderBlocks
+        .filter(ob => !ob.mitigated && ob.type === "bearish" && ob.high > lastPrice)
+        .sort((a, b) => a.high - b.high);
+      if (bearishOBs.length > 0) {
+        sl = bearishOBs[0].high + buffer;
+      }
+    }
+    // Fallback to fixed_pips if no OB found
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else {
+    // Default: structure-based
+    if (direction === "long") {
+      const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
+      if (recentLows.length > 0) {
+        const nearestLow = Math.max(...recentLows.map(s => s.price));
+        sl = nearestLow - buffer;
+      }
+    } else {
+      const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
+      if (recentHighs.length > 0) {
+        const nearestHigh = Math.min(...recentHighs.map(s => s.price));
+        sl = nearestHigh + buffer;
+      }
+    }
+    // Fallback to fixed_pips if no swing found
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  }
+
+  // ── Take Profit ──
+  const tpMethod: string = config.tpMethod || "rr_ratio";
+  const slDistance = Math.abs(lastPrice - sl);
+
+  if (tpMethod === "fixed_pips") {
+    const dist = (config.fixedTPPips || 50) * pipSize;
+    tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+  } else if (tpMethod === "next_level") {
+    // Target nearest PD/PW level or liquidity pool
+    const targets: number[] = [];
+    if (direction === "long") {
+      if (pdLevels) {
+        if (pdLevels.pdh > lastPrice) targets.push(pdLevels.pdh);
+        if (pdLevels.pwh > lastPrice) targets.push(pdLevels.pwh);
+      }
+      liquidityPools
+        .filter(lp => lp.type === "buy-side" && lp.price > lastPrice && lp.strength >= 2)
+        .forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => a - b); // nearest first
+    } else {
+      if (pdLevels) {
+        if (pdLevels.pdl < lastPrice) targets.push(pdLevels.pdl);
+        if (pdLevels.pwl < lastPrice) targets.push(pdLevels.pwl);
+      }
+      liquidityPools
+        .filter(lp => lp.type === "sell-side" && lp.price < lastPrice && lp.strength >= 2)
+        .forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => b - a); // nearest first (descending)
+    }
+    if (targets.length > 0) {
+      tp = targets[0];
+    } else {
+      // Fallback to fixed_pips
+      const dist = (config.fixedTPPips || 50) * pipSize;
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    }
+  } else if (tpMethod === "atr_multiple") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.tpATRMultiple || 2.0);
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    } else {
+      // Fallback to rr_ratio
+      tp = direction === "long"
+        ? lastPrice + slDistance * (config.tpRatio || 2.0)
+        : lastPrice - slDistance * (config.tpRatio || 2.0);
+    }
+  } else {
+    // Default: rr_ratio
+    tp = direction === "long"
+      ? lastPrice + slDistance * (config.tpRatio || 2.0)
+      : lastPrice - slDistance * (config.tpRatio || 2.0);
+  }
+
+  return { stopLoss: sl, takeProfit: tp };
+}
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
