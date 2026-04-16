@@ -1,12 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, X } from "lucide-react";
-import { INSTRUMENTS } from "@/lib/marketData";
+import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 
 interface InstrumentSearchProps {
   open: boolean;
   onClose: () => void;
 }
+
+const TYPE_COLORS: Record<string, string> = {
+  forex: "text-blue-400",
+  index: "text-amber-400",
+  commodity: "text-yellow-400",
+  crypto: "text-purple-400",
+};
 
 export function InstrumentSearch({ open, onClose }: InstrumentSearchProps) {
   const [query, setQuery] = useState("");
@@ -47,6 +54,14 @@ export function InstrumentSearch({ open, onClose }: InstrumentSearchProps) {
     navigate("/chart");
   };
 
+  // Group filtered results by type
+  const grouped = INSTRUMENT_TYPES.filter(type => filtered.some(i => i.type === type))
+    .map(type => ({
+      type,
+      label: INSTRUMENT_TYPE_LABELS[type],
+      instruments: filtered.filter(i => i.type === type),
+    }));
+
   return (
     <div className="w-48 bg-sidebar border-r border-sidebar-border flex flex-col h-full">
       <div className="p-2 border-b border-sidebar-border flex items-center gap-2">
@@ -63,15 +78,24 @@ export function InstrumentSearch({ open, onClose }: InstrumentSearchProps) {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {filtered.map((inst) => (
-          <button
-            key={inst.symbol}
-            onClick={() => selectSymbol(inst.symbol)}
-            className="w-full text-left px-3 py-2 text-xs hover:bg-sidebar-accent transition-colors border-b border-sidebar-border/50"
-          >
-            <span className="font-medium text-foreground">{inst.symbol}</span>
-            <span className="block text-[10px] text-muted-foreground">{inst.name}</span>
-          </button>
+        {grouped.map(group => (
+          <div key={group.type}>
+            <div className="px-3 py-1.5 bg-sidebar-accent/50 sticky top-0">
+              <span className={`text-[9px] font-bold uppercase tracking-wider ${TYPE_COLORS[group.type] || "text-muted-foreground"}`}>
+                {group.label}
+              </span>
+            </div>
+            {group.instruments.map((inst) => (
+              <button
+                key={inst.symbol}
+                onClick={() => selectSymbol(inst.symbol)}
+                className="w-full text-left px-3 py-2 text-xs hover:bg-sidebar-accent transition-colors border-b border-sidebar-border/50"
+              >
+                <span className="font-medium text-foreground">{inst.symbol}</span>
+                <span className="block text-[10px] text-muted-foreground">{inst.name}</span>
+              </button>
+            ))}
+          </div>
         ))}
         {filtered.length === 0 && (
           <p className="text-xs text-muted-foreground p-3 text-center">No results</p>

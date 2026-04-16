@@ -947,9 +947,6 @@ async function runScanForUser(supabase: any, userId: string) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
-  if (!config.enabledSessions.some((s: string) => session.name.includes(s)) && session.name !== "Off-Hours") {
-    // Allow scanning even in off-hours but note it
-  }
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
@@ -1007,9 +1004,13 @@ async function runScanForUser(supabase: any, userId: string) {
     if (isAutoStyle) {
       pairStyle = detectOptimalStyle(candles, dailyCandles);
       // Apply per-instrument overrides
-      const pairConfig = { ...config, ...STYLE_OVERRIDES[pairStyle] };
       Object.assign(config, STYLE_OVERRIDES[pairStyle]);
     }
+
+    // Apply asset-class profile adjustments
+    const assetProfile = getAssetProfile(pair);
+    const adjustedSlBuffer = config.slBufferPips * assetProfile.slBufferMultiplier;
+    const adjustedMinConfluence = Math.max(1, config.minConfluence + assetProfile.minConfluenceAdj);
 
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config, hourlyCandles);
 
@@ -1030,7 +1031,7 @@ async function runScanForUser(supabase: any, userId: string) {
       tradingStyle: pairStyle,
     };
 
-    if (analysis.score >= config.minConfluence && analysis.direction && !isPaused) {
+    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -1051,14 +1052,14 @@ async function runScanForUser(supabase: any, userId: string) {
         if (analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
-            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - config.slBufferPips * spec.pipSize;
+            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
             const risk = analysis.lastPrice - sl;
             tp = analysis.lastPrice + risk * config.tpRatio;
           }
         } else {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
-            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + config.slBufferPips * spec.pipSize;
+            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
             const risk = sl - analysis.lastPrice;
             tp = analysis.lastPrice - risk * config.tpRatio;
           }
