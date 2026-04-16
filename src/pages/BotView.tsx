@@ -50,6 +50,13 @@ export default function BotView() {
     refetchInterval: 30000,
   });
 
+  const { data: brokerConns } = useQuery({
+    queryKey: ["broker-connections"],
+    queryFn: () => brokerApi.list(),
+    refetchInterval: 30000,
+  });
+  const mt5Connection = Array.isArray(brokerConns) ? brokerConns.find((c: any) => c.broker_type === "metaapi" && c.is_active) : null;
+
   const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
   const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
   const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
