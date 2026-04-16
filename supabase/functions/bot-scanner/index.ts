@@ -1615,23 +1615,33 @@ async function runScanForUser(supabase: any, userId: string) {
                   }
                   const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
                   const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
-                  const mt5Body: any = {
-                    actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                    symbol: resolveSymbol(pair, conn),
-                    volume: size,
-                    comment: `paper:${positionId}`,
-                  };
-                  if (sl) mt5Body.stopLoss = sl;
-                  if (tp) mt5Body.takeProfit = tp;
-                  const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
-                  if (mt5Res.ok) {
-                    console.log(`Broker mirror [${conn.display_name}]: opened ${pair} ${analysis.direction} ${size} lots`);
-                    mirrorResults.push(`${conn.display_name}: success`);
-                  } else {
-                    const errText = await mt5Res.text();
-                    console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${errText}`);
-                    mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
-                  }
+                   const brokerSymbol = resolveSymbol(pair, conn);
+                   const mt5Body: any = {
+                     actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                     symbol: brokerSymbol,
+                     volume: size,
+                     comment: `paper:${positionId}`,
+                   };
+                   if (sl) mt5Body.stopLoss = sl;
+                   if (tp) mt5Body.takeProfit = tp;
+                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${size} lots, SL=${sl}, TP=${tp}`);
+                   const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+                   const resBody = await mt5Res.text();
+                   if (mt5Res.ok) {
+                     console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
+                     // Check for stringCode errors in response (MetaAPI can return 200 with error)
+                     try {
+                       const parsed = JSON.parse(resBody);
+                       if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE") {
+                         console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
+                         mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                       } else {
+                         mirrorResults.push(`${conn.display_name}: success`);
+                       }
+                     } catch { mirrorResults.push(`${conn.display_name}: success`); }
+                   } else {
+                     console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
+                     mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
                 } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
