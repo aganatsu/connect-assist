@@ -1200,9 +1200,9 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 14: Max Consecutive Losses
+  // Gate 14: Max Consecutive Losses (with 4-hour auto-reset cooldown)
   if (config.maxConsecutiveLosses > 0) {
-    const { data: recentHistory } = await supabase.from("paper_trade_history").select("pnl")
+    const { data: recentHistory } = await supabase.from("paper_trade_history").select("pnl, closed_at")
       .eq("user_id", userId).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
     if (recentHistory && recentHistory.length > 0) {
       let consecutiveLosses = 0;
@@ -1211,7 +1211,16 @@ async function runSafetyGates(
         else break;
       }
       if (consecutiveLosses >= config.maxConsecutiveLosses) {
-        gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit` });
+        // Check if enough time has passed since the last loss to auto-reset (4 hours)
+        const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
+        const hoursSinceLast = (Date.now() - lastLossTime) / (1000 * 60 * 60);
+        const resetHours = 4;
+        if (hoursSinceLast >= resetHours) {
+          gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
+        } else {
+          const remaining = Math.ceil((resetHours - hoursSinceLast) * 60);
+          gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit — auto-resets in ${remaining}min` });
+        }
       } else {
         gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
       }
