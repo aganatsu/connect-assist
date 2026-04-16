@@ -743,9 +743,6 @@ function calculatePositionSize(balance: number, riskPercent: number, entryPrice:
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const pipValue = spec.pipSize * spec.lotUnits;
-  const slPips = slDistance / spec.pipSize;
-  const size = riskAmount / (slPips * (pipValue / spec.lotUnits * spec.lotUnits / 1)); // simplified: riskAmount / (slDistance * lotUnits)
   const lots = riskAmount / (slDistance * spec.lotUnits);
   // Scale max lot by asset type
   const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
@@ -822,6 +819,19 @@ async function loadConfig(supabase: any, userId: string) {
           ]
         : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
     killZoneOnly: sessions.killZoneOnly ?? false,
+
+    // ── Active Days (convert {mon:true,...} to day-of-week numbers) ──
+    enabledDays: sessions.activeDays
+      ? [
+          ...(sessions.activeDays.sun ? [0] : []),
+          ...(sessions.activeDays.mon ? [1] : []),
+          ...(sessions.activeDays.tue ? [2] : []),
+          ...(sessions.activeDays.wed ? [3] : []),
+          ...(sessions.activeDays.thu ? [4] : []),
+          ...(sessions.activeDays.fri ? [5] : []),
+          ...(sessions.activeDays.sat ? [6] : []),
+        ]
+      : (Array.isArray(raw.enabledDays) ? raw.enabledDays : DEFAULTS.enabledDays),
 
     // ── Protection ──
     maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
