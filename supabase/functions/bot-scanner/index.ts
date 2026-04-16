@@ -1328,6 +1328,43 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.positionId = positionId;
         detail.exitFlags = exitFlags;
 
+        // Mirror to MT5 if broker is connected
+        try {
+          const { data: connections } = await supabase.from("broker_connections")
+            .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+          if (connections && connections.length > 0) {
+            const conn = connections[0];
+            let authToken = conn.api_key;
+            let metaAccountId = conn.account_id;
+            if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+              authToken = conn.account_id;
+              metaAccountId = conn.api_key;
+            }
+            const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+            const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+            const mt5Body: any = {
+              actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+              symbol: pair.replace("/", ""),
+              volume: size,
+              comment: `paper:${positionId}`,
+            };
+            if (sl) mt5Body.stopLoss = sl;
+            if (tp) mt5Body.takeProfit = tp;
+            const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+            if (mt5Res.ok) {
+              console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
+              detail.mt5Mirror = "success";
+            } else {
+              const errText = await mt5Res.text();
+              console.warn(`MT5 mirror failed [${mt5Res.status}]: ${errText}`);
+              detail.mt5Mirror = `failed: ${mt5Res.status}`;
+            }
+          }
+        } catch (e: any) {
+          console.warn(`MT5 mirror error: ${e?.message || e}`);
+          detail.mt5Mirror = "error";
+        }
+
         // Add to virtual open positions for subsequent gates
         openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
       } else {
