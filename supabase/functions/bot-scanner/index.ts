@@ -1388,6 +1388,31 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.positionId = positionId;
         detail.exitFlags = exitFlags;
 
+        // Send Telegram notification
+        if (telegramChatId) {
+          try {
+            const emoji = analysis.direction === "long" ? "🟢" : "🔴";
+            const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
+              `<b>Symbol:</b> ${pair}\n` +
+              `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
+              `<b>Size:</b> ${size} lots\n` +
+              `<b>Entry:</b> ${analysis.lastPrice}\n` +
+              `<b>SL:</b> ${sl}\n` +
+              `<b>TP:</b> ${tp}\n` +
+              `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
+              `<b>Session:</b> ${analysis.session.name}\n` +
+              `<b>Summary:</b> ${analysis.summary || "—"}`;
+            await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}` },
+              body: JSON.stringify({ chat_id: telegramChatId, message: msg }),
+            });
+          } catch (e: any) {
+            console.warn("Telegram notify failed:", e?.message);
+          }
+        }
+
         // Mirror to MT5 only when the account is explicitly in live mode
         try {
           if (account.execution_mode === "live") {
