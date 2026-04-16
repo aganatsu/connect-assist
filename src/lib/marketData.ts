@@ -3,26 +3,59 @@
 export interface Instrument {
   symbol: string;
   name: string;
-  type: 'forex' | 'crypto' | 'commodity';
+  type: 'forex' | 'crypto' | 'commodity' | 'index';
   pipSize: number;
+  pointValue?: number;   // default 1
+  contractSize?: number; // default 100000 for forex
 }
 
 export type Timeframe = '1week' | '1day' | '4h' | '1h' | '15min' | '5min';
 
 export const INSTRUMENTS: Instrument[] = [
+  // ── Forex Majors ──
   { symbol: 'EUR/USD', name: 'Euro / US Dollar', type: 'forex', pipSize: 0.0001 },
   { symbol: 'GBP/USD', name: 'British Pound / US Dollar', type: 'forex', pipSize: 0.0001 },
   { symbol: 'USD/JPY', name: 'US Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
-  { symbol: 'GBP/JPY', name: 'British Pound / Japanese Yen', type: 'forex', pipSize: 0.01 },
   { symbol: 'AUD/USD', name: 'Australian Dollar / US Dollar', type: 'forex', pipSize: 0.0001 },
-  { symbol: 'USD/CAD', name: 'US Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
-  { symbol: 'EUR/GBP', name: 'Euro / British Pound', type: 'forex', pipSize: 0.0001 },
   { symbol: 'NZD/USD', name: 'New Zealand Dollar / US Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'USD/CAD', name: 'US Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
   { symbol: 'USD/CHF', name: 'US Dollar / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  // ── Forex Crosses ──
+  { symbol: 'EUR/GBP', name: 'Euro / British Pound', type: 'forex', pipSize: 0.0001 },
   { symbol: 'EUR/JPY', name: 'Euro / Japanese Yen', type: 'forex', pipSize: 0.01 },
-  { symbol: 'XAU/USD', name: 'Gold / US Dollar', type: 'commodity', pipSize: 0.01 },
-  { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', type: 'crypto', pipSize: 0.01 },
+  { symbol: 'GBP/JPY', name: 'British Pound / Japanese Yen', type: 'forex', pipSize: 0.01 },
+  { symbol: 'EUR/AUD', name: 'Euro / Australian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'EUR/CAD', name: 'Euro / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'EUR/CHF', name: 'Euro / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'EUR/NZD', name: 'Euro / New Zealand Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'GBP/AUD', name: 'British Pound / Australian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'GBP/CAD', name: 'British Pound / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'GBP/CHF', name: 'British Pound / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'GBP/NZD', name: 'British Pound / New Zealand Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'AUD/CAD', name: 'Australian Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'AUD/JPY', name: 'Australian Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
+  { symbol: 'CAD/JPY', name: 'Canadian Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
+  // ── Indices ──
+  { symbol: 'US30', name: 'Dow Jones Industrial', type: 'index', pipSize: 1.0, pointValue: 1, contractSize: 1 },
+  { symbol: 'NAS100', name: 'Nasdaq 100', type: 'index', pipSize: 0.25, pointValue: 1, contractSize: 1 },
+  { symbol: 'SPX500', name: 'S&P 500', type: 'index', pipSize: 0.25, pointValue: 1, contractSize: 1 },
+  // ── Commodities ──
+  { symbol: 'XAU/USD', name: 'Gold / US Dollar', type: 'commodity', pipSize: 0.01, pointValue: 1, contractSize: 100 },
+  { symbol: 'XAG/USD', name: 'Silver / US Dollar', type: 'commodity', pipSize: 0.001, pointValue: 1, contractSize: 5000 },
+  { symbol: 'US Oil', name: 'Crude Oil', type: 'commodity', pipSize: 0.01, pointValue: 1, contractSize: 1000 },
+  // ── Crypto ──
+  { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', type: 'crypto', pipSize: 0.01, pointValue: 1, contractSize: 1 },
+  { symbol: 'ETH/USD', name: 'Ethereum / US Dollar', type: 'crypto', pipSize: 0.01, pointValue: 1, contractSize: 1 },
 ];
+
+export const INSTRUMENT_TYPES = ['forex', 'index', 'commodity', 'crypto'] as const;
+
+export const INSTRUMENT_TYPE_LABELS: Record<string, string> = {
+  forex: 'Forex',
+  index: 'Indices',
+  commodity: 'Commodities',
+  crypto: 'Crypto',
+};
 
 export const FOREX_PAIRS = INSTRUMENTS.filter(i => i.type === 'forex').map(i => i.symbol);
 

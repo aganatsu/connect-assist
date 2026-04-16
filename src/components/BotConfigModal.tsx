@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { botConfigApi } from "@/lib/api";
-import { INSTRUMENTS } from "@/lib/marketData";
+import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge } from "lucide-react";
@@ -227,7 +227,7 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
 
                 {activeTab === "instruments" && (
                   <div className="space-y-5">
-                    <SectionHeader title="Instruments" description="Select which currency pairs and instruments to scan" />
+                    <SectionHeader title="Instruments" description="Select which instruments to scan" />
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs text-muted-foreground">{(config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol)).length} / {INSTRUMENTS.length} enabled</span>
                       <div className="flex gap-1">
@@ -235,24 +235,47 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                         <Button variant="ghost" size="sm" className="text-[10px] h-6" onClick={() => updateField('instruments', 'enabled', [])}>None</Button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      {INSTRUMENTS.map(inst => {
-                        const enabled = config.instruments?.enabled?.includes(inst.symbol) ?? true;
-                        return (
-                          <button
-                            key={inst.symbol}
-                            onClick={() => {
-                              const current = config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol);
-                              updateField('instruments', 'enabled', enabled ? current.filter((s: string) => s !== inst.symbol) : [...current, inst.symbol]);
-                            }}
-                            className={`flex items-center gap-2 px-3 py-2 border text-xs transition-colors ${enabled ? "border-primary/40 bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-border/80"}`}
-                          >
-                            <span className={`w-1.5 h-1.5 rounded-full ${enabled ? "bg-primary" : "bg-muted-foreground/30"}`} />
-                            {inst.symbol}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {INSTRUMENT_TYPES.map(type => {
+                      const typeInstruments = INSTRUMENTS.filter(i => i.type === type);
+                      const enabledInType = typeInstruments.filter(i => (config.instruments?.enabled || INSTRUMENTS.map(x => x.symbol)).includes(i.symbol)).length;
+                      return (
+                        <div key={type} className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{INSTRUMENT_TYPE_LABELS[type]} <span className="font-normal">({enabledInType}/{typeInstruments.length})</span></p>
+                            <div className="flex gap-1">
+                              <Button variant="ghost" size="sm" className="text-[9px] h-5 px-1.5" onClick={() => {
+                                const current = config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol);
+                                const typeSymbols = typeInstruments.map(i => i.symbol);
+                                updateField('instruments', 'enabled', [...new Set([...current, ...typeSymbols])]);
+                              }}>All</Button>
+                              <Button variant="ghost" size="sm" className="text-[9px] h-5 px-1.5" onClick={() => {
+                                const current = config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol);
+                                const typeSymbols = typeInstruments.map(i => i.symbol);
+                                updateField('instruments', 'enabled', current.filter((s: string) => !typeSymbols.includes(s)));
+                              }}>None</Button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            {typeInstruments.map(inst => {
+                              const enabled = config.instruments?.enabled?.includes(inst.symbol) ?? true;
+                              return (
+                                <button
+                                  key={inst.symbol}
+                                  onClick={() => {
+                                    const current = config.instruments?.enabled || INSTRUMENTS.map(i => i.symbol);
+                                    updateField('instruments', 'enabled', enabled ? current.filter((s: string) => s !== inst.symbol) : [...current, inst.symbol]);
+                                  }}
+                                  className={`flex items-center gap-2 px-3 py-2 border text-xs transition-colors ${enabled ? "border-primary/40 bg-primary/5 text-foreground" : "border-border text-muted-foreground hover:border-border/80"}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${enabled ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                                  {inst.symbol}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 

@@ -26,7 +26,8 @@ const DEFAULTS = {
   enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
   instruments: [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
+    "XAU/USD", "BTC/USD",
   ],
   openingRange: {
     enabled: false,
@@ -167,25 +168,76 @@ function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zon
 }
 
 const YAHOO_SYMBOLS: Record<string, string> = {
+  // Forex Majors
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
-  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
-  "EUR/JPY": "EURJPY=X", "XAU/USD": "GC=F",
+  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+  "USD/CHF": "USDCHF=X",
+  // Forex Crosses
+  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
+  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
+  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
+  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
+  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  // Indices
+  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  // Commodities
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  // Crypto
+  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
 };
 
-const SPECS: Record<string, { pipSize: number; lotUnits: number }> = {
-  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000 },
-  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000 },
-  "USD/JPY": { pipSize: 0.01, lotUnits: 100000 },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000 },
-  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000 },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000 },
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000 },
-  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000 },
-  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000 },
-  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000 },
-  "XAU/USD": { pipSize: 0.01, lotUnits: 100 },
+// ─── Instrument Specifications ──────────────────────────────────────
+const SPECS: Record<string, { pipSize: number; lotUnits: number; type: string }> = {
+  // Forex Majors
+  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
+  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  // Forex Crosses
+  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
+  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
+  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
+  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
+  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
+  // Indices
+  "US30": { pipSize: 1.0, lotUnits: 1, type: "index" },
+  "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index" },
+  "SPX500": { pipSize: 0.25, lotUnits: 1, type: "index" },
+  // Commodities
+  "XAU/USD": { pipSize: 0.01, lotUnits: 100, type: "commodity" },
+  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, type: "commodity" },
+  "US Oil": { pipSize: 0.01, lotUnits: 1000, type: "commodity" },
+  // Crypto
+  "BTC/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto" },
+  "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto" },
 };
+
+// ─── Asset-Class Trading Profiles ───────────────────────────────────
+// Applied BEFORE style overrides — adjusts parameters based on asset behavior
+const ASSET_PROFILES: Record<string, { slBufferMultiplier: number; proximityMultiplier: number; skipSessionGate: boolean; minConfluenceAdj: number }> = {
+  forex:     { slBufferMultiplier: 1.0, proximityMultiplier: 1.0, skipSessionGate: false, minConfluenceAdj: 0 },
+  index:     { slBufferMultiplier: 3.0, proximityMultiplier: 2.0, skipSessionGate: false, minConfluenceAdj: 0 },
+  commodity: { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: false, minConfluenceAdj: 0 },
+  crypto:    { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: true,  minConfluenceAdj: 0 },
+};
+
+function getAssetProfile(symbol: string) {
+  const spec = SPECS[symbol];
+  const type = spec?.type || "forex";
+  return ASSET_PROFILES[type] || ASSET_PROFILES.forex;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────
 interface Candle { datetime: string; open: number; high: number; low: number; close: number; volume?: number; }
@@ -896,9 +948,6 @@ async function runScanForUser(supabase: any, userId: string) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
-  if (!config.enabledSessions.some((s: string) => session.name.includes(s)) && session.name !== "Off-Hours") {
-    // Allow scanning even in off-hours but note it
-  }
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
@@ -956,9 +1005,13 @@ async function runScanForUser(supabase: any, userId: string) {
     if (isAutoStyle) {
       pairStyle = detectOptimalStyle(candles, dailyCandles);
       // Apply per-instrument overrides
-      const pairConfig = { ...config, ...STYLE_OVERRIDES[pairStyle] };
       Object.assign(config, STYLE_OVERRIDES[pairStyle]);
     }
+
+    // Apply asset-class profile adjustments
+    const assetProfile = getAssetProfile(pair);
+    const adjustedSlBuffer = config.slBufferPips * assetProfile.slBufferMultiplier;
+    const adjustedMinConfluence = Math.max(1, config.minConfluence + assetProfile.minConfluenceAdj);
 
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config, hourlyCandles);
 
@@ -979,7 +1032,7 @@ async function runScanForUser(supabase: any, userId: string) {
       tradingStyle: pairStyle,
     };
 
-    if (analysis.score >= config.minConfluence && analysis.direction && !isPaused) {
+    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -1000,14 +1053,14 @@ async function runScanForUser(supabase: any, userId: string) {
         if (analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
-            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - config.slBufferPips * spec.pipSize;
+            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
             const risk = analysis.lastPrice - sl;
             tp = analysis.lastPrice + risk * config.tpRatio;
           }
         } else {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
-            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + config.slBufferPips * spec.pipSize;
+            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
             const risk = sl - analysis.lastPrice;
             tp = analysis.lastPrice - risk * config.tpRatio;
           }
