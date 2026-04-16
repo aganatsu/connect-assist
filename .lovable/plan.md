@@ -1,33 +1,69 @@
 
 
-# Add Broker Symbol Suffix Support
+# Per-Broker Settings & Symbol Overrides
 
-## The Problem
-Your MT4/MT5 broker appends a suffix to symbol names (e.g., `EURUSDr` instead of `EURUSD`). The bot currently sends `EURUSD` which the broker rejects as an unknown symbol. This affects both live order execution and the broker-execute function.
+## What You Get
 
-## The Fix
-Add a **Symbol Suffix** field to the broker connection setup. When the bot sends orders to MetaAPI, it appends this suffix to the symbol name.
+Each broker connection gets its own independent configuration — different instruments, risk settings, SL/TP methods, sessions, and symbol overrides. Your "No Spread" demo account can trade EUR/USD with structure-based SL, while your "Try" account trades XAU/USD with ATR-based SL and suffix `r`.
 
-### 1. Database: Add `symbol_suffix` column to `broker_connections`
-- Add nullable `symbol_suffix` text column (default empty string)
-- No migration needed for existing rows — they'll just have no suffix
+## Architecture
 
-### 2. Backend: `supabase/functions/bot-scanner/index.ts`
-- Line 1587: Change `pair.replace("/", "")` → `pair.replace("/", "") + (conn.symbol_suffix || "")`
-- So `EUR/USD` becomes `EURUSDr` when suffix is `r`
+Currently there's **one global bot config** per user. We'll add an optional `connection_id` foreign key to `bot_configs` so each broker connection can have its own config. The global config remains as a fallback.
 
-### 3. Backend: `supabase/functions/broker-execute/index.ts`
-- Line 94: Same fix for MetaAPI `place_order` — append `conn.symbol_suffix`
-- Line 129 (paper-trading): Same fix if applicable
+```text
+┌──────────────────────┐
+│  Global Bot Config   │  ← connection_id = NULL (fallback)
+└──────────────────────┘
+┌──────────────────────┐
+│  "No Spread" Config  │  ← connection_id = abc-123
+└──────────────────────┘
+┌──────────────────────┐
+│  "Try" Config        │  ← connection_id = def-456
+└──────────────────────┘
+```
 
-### 4. Frontend: Broker connection UI
-- Add a **Symbol Suffix** input field in the broker connection form (where API key and account ID are entered)
-- Label: "Symbol Suffix (e.g., 'r', '.pro', '.raw')"
-- Optional field, defaults to empty
+## Changes
 
-### Files Changed
-- `supabase/functions/bot-scanner/index.ts` — append suffix on MT5 mirror orders
-- `supabase/functions/broker-execute/index.ts` — append suffix on all MetaAPI orders
-- `src/pages/BotView.tsx` or wherever broker connection form lives — add suffix input
-- Migration: add `symbol_suffix` column to `broker_connections`
+### 1. Database Migration
+- Add `symbol_overrides` (jsonb, default `'{}'`) to `broker_connections`
+- Add `connection_id` (uuid, nullable, FK to `broker_connections.id ON DELETE CASCADE`) to `bot_configs`
+- Add unique constraint on `(user_id, connection_id)` — one config per connection
+
+### 2. Backend: `bot-config/index.ts`
+- `get` action accepts optional `connectionId` — returns connection-specific config if it exists, else global
+- `update` action accepts optional `connectionId` — upserts per-connection config
+- `reset` action accepts optional `connectionId`
+
+### 3. Backend: `bot-scanner/index.ts`
+- `loadConfig()` updated: when executing for a specific broker connection, load that connection's config first, fall back to global
+- Add `resolveSymbol(pair, conn)` helper that checks `symbol_overrides` before default suffix
+
+### 4. Backend: `broker-connections/index.ts` & `broker-execute/index.ts`
+- CRUD includes `symbol_overrides` field
+- `resolveSymbol()` used for all order execution
+
+### 5. Frontend: `Settings.tsx` (Broker Connections)
+- Each broker connection card gets an **"Edit Settings"** button that opens `BotConfigModal` scoped to that connection
+- Add a **Symbol Overrides** key-value editor (e.g., `XAUUSD → m`) below the existing suffix field
+- Connection list shows whether it has custom config or uses global
+
+### 6. Frontend: `BotConfigModal.tsx`
+- Accepts optional `connectionId` prop
+- When set, loads/saves config for that specific connection
+- Shows a banner: "Configuring: [connection name]" vs "Global Configuration"
+- Add "Copy from Global" button to initialize a connection config from the global one
+
+### 7. Frontend: `api.ts`
+- `botConfigApi.get(connectionId?)` and `.update(config, connectionId?)`
+- `brokerApi.create/update` includes `symbol_overrides`
+
+## Files Changed
+- **Migration**: add `symbol_overrides` column + `connection_id` column + unique constraint
+- `supabase/functions/bot-config/index.ts`
+- `supabase/functions/bot-scanner/index.ts`
+- `supabase/functions/broker-connections/index.ts`
+- `supabase/functions/broker-execute/index.ts`
+- `src/pages/Settings.tsx`
+- `src/components/BotConfigModal.tsx`
+- `src/lib/api.ts`
 
