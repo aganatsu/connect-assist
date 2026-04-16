@@ -20,6 +20,7 @@ import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [orderFormOpen, setOrderFormOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
