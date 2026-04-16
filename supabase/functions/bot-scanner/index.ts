@@ -1332,6 +1332,8 @@ Deno.serve(async (req) => {
 
 async function runScanForUser(supabase: any, userId: string) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
+  const balanceCache: Record<string, number> = {};
+  const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
