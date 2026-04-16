@@ -3,11 +3,22 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 // ─── Yahoo Finance Symbol Mapping ───────────────────────────────────
 const YAHOO_SYMBOLS: Record<string, string> = {
+  // Forex Majors
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
-  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
-  "EUR/JPY": "EURJPY=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F",
+  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+  "USD/CHF": "USDCHF=X",
+  // Forex Crosses
+  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
+  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
+  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
+  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
+  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  // Indices
+  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  // Commodities
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  // Crypto
+  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
 };
 
 async function fetchLivePrice(symbol: string): Promise<number | null> {
@@ -42,20 +53,40 @@ async function updatePositionPrices(supabase: any, positions: any[]): Promise<vo
 
 // ─── Instrument Specs ───────────────────────────────────────────────
 const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: number }> = {
+  // Forex Majors
   "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "USD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1500 },
   "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
   "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
+  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
+  // Forex Crosses
+  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
   "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1200 },
-  "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
-  "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
+  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1500 },
+  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
+  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 800 },
+  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
+  // Indices
+  "US30": { pipSize: 1.0, lotUnits: 1, marginPerLot: 5000 },
+  "NAS100": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
+  "SPX500": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
+  // Commodities
   "XAU/USD": { pipSize: 0.01, lotUnits: 100, marginPerLot: 2000 },
   "XAG/USD": { pipSize: 0.001, lotUnits: 5000, marginPerLot: 1500 },
+  "US Oil": { pipSize: 0.01, lotUnits: 1000, marginPerLot: 2000 },
+  // Crypto
+  "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
+  "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
 function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string) {
