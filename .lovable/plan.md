@@ -1,77 +1,76 @@
 
 
-# Opening Range Module — Full Implementation (UI + Scanner Logic)
+# Fix Runtime Error + Add Trading Style System
 
-## Overview
-Add a complete "Opening Range" system: configurable via the Bot Config modal, stored in the database, and actively used by the bot-scanner during confluence analysis and safety gates.
+## Critical Bug Fix First
 
-## 1. Default Config — `supabase/functions/bot-config/index.ts`
-Add `openingRange` to `getDefaultConfig()`:
+The bot-scanner is crashing with `detectSession is not defined` because two essential functions were never added to `bot-scanner/index.ts`:
+
+- **`detectSession()`** — determines current trading session (Asian/London/NY) and kill zone status
+- **`calculatePremiumDiscount(candles)`** — calculates premium/discount zones from swing points
+
+Both exist in `smc-analysis/index.ts` but are missing from the scanner. These must be added before any new features.
+
+## Trading Style System
+
+### How It Works
+
+Add a `tradingStyle` config section with four modes. When a mode is active, the scanner applies parameter overrides **before** running its analysis — so the existing 9-factor scoring, safety gates, and trade execution all automatically adapt.
+
+### The Four Modes
+
+```text
+Parameter          │ Scalper        │ Day Trader     │ Swing Trader   │ Auto
+───────────────────┼────────────────┼────────────────┼────────────────┼──────────
+Entry TF           │ 5m             │ 15m            │ 1h             │ computed
+HTF Bias TF        │ 1h             │ 1D             │ 1W             │ computed
+TP Ratio           │ 1.5:1          │ 2:1            │ 3:1            │ computed
+SL Buffer (pips)   │ 1              │ 2              │ 5              │ computed
+Max Hold (hours)   │ 1              │ 8              │ 120            │ computed
+Min Confluence     │ 5              │ 6              │ 7              │ computed
 ```
-openingRange: {
-  enabled: false,
-  candleCount: 24,
-  useBias: true,
-  useJudasSwing: true,
-  useKeyLevels: true,
-  usePremiumDiscount: false,
-  waitForCompletion: true,
-}
-```
 
-## 2. Scanner Logic — `supabase/functions/bot-scanner/index.ts`
+**Auto mode** analyzes ATR and trend strength per instrument:
+- Low ATR + ranging → Scalper params
+- Medium ATR + trending → Day Trader params
+- High ATR + strong trend → Swing Trader params
 
-### New function: `computeOpeningRange(dailyCandles, hourlyCandles, config)`
-- Takes the first `config.openingRange.candleCount` hourly candles of the current trading day
-- Returns `{ high, low, midpoint, completed: boolean }`
+### Changes by File
 
-### Integration into `runFullConfluenceAnalysis` and `runScanForUser`:
+**1. `supabase/functions/bot-scanner/index.ts`**
+- Add missing `detectSession()` and `calculatePremiumDiscount()` functions (fixes the crash)
+- Add `getStyleOverrides(mode)` — returns parameter overrides for each style
+- Add `detectOptimalStyle(candles, dailyCandles)` — ATR + trend analysis for Auto mode
+- In `runScanForUser`: after loading config, resolve active style → apply overrides to config before analysis
+- Adjust `fetchCandles` interval based on style (5m for Scalper, 15m for Day Trader, 1h for Swing)
 
-**a) Daily Bias from OR** (`useBias`)
-- After computing OR, if price is above OR high → bullish bias boost (+0.5 to Market Structure factor)
-- If price is below OR low → bearish bias boost
-- This modifies Factor 1 (Market Structure) scoring
+**2. `supabase/functions/bot-config/index.ts`**
+- Add `tradingStyle` defaults to `getDefaultConfig()`:
+  ```
+  tradingStyle: {
+    mode: "day_trader",
+    autoDetectEnabled: false,
+  }
+  ```
 
-**b) Judas Swing from OR** (`useJudasSwing`)
-- Enhance Factor 6: if price swept OR high then reversed below, or swept OR low then reversed above → confirmed Judas Swing
-- This gives a stronger detection than the generic 20-candle version
+**3. `src/components/BotConfigModal.tsx`**
+- Add "Trading Style" tab (first position, before Strategy)
+- Four mode buttons: Scalper, Day Trader, Swing Trader, Auto
+- When manual mode selected: show summary card of what parameters it sets
+- When Auto selected: show explanation text
+- Note that style sets defaults; manual overrides in other tabs still apply
 
-**c) OR Key Levels** (`useKeyLevels`)
-- Add OR high, low, midpoint to the PD/PW Levels check (Factor 7)
-- If price is near OR high/low/mid → +0.5 points (same logic as PDH/PDL)
+**4. `src/pages/BotView.tsx`**
+- Add a colored badge in the header showing active style
+- In Auto mode, show per-instrument detected style in scan results
 
-**d) Premium/Discount from OR** (`usePremiumDiscount`)
-- Override Factor 4's equilibrium calculation to use OR high/low instead of swing-based range
-- Tighter zones for intraday decisions
+### How It Integrates With Existing Logic
 
-**e) Wait for Completion** (`waitForCompletion`)
-- New Safety Gate (Gate 11): if the current trading day has fewer than `candleCount` hourly candles elapsed, reject the trade
-- Added to `runSafetyGates` function
+The style system works as a **parameter preprocessor**. It modifies config values (entry TF, TP ratio, SL buffer, min confluence, max hold hours) before they're used by:
+- The 9-factor confluence scoring (uses entry TF for candle fetching, min confluence for threshold)
+- The 10 safety gates (uses max hold, min R:R which changes with TP ratio)
+- Position sizing (uses SL buffer)
+- Trade execution (uses TP ratio)
 
-### Data fetching
-- The scanner already fetches 15m and daily candles. Will add a third fetch for 1h candles (`fetchCandles(pair, "1h", "2d")`) when `openingRange.enabled` is true
-- Passed into `runFullConfluenceAnalysis` as an optional parameter
-
-## 3. Bot Config Modal UI — `src/components/BotConfigModal.tsx`
-- Add "Opening Range" tab (with `BarChart3` icon) after "Sessions"
-- Master toggle: "Enable Opening Range"
-- Numeric input: "Candle Count" (default 24)
-- Five sub-toggles with descriptions:
-  - Daily Bias from OR
-  - Judas Swing Detection
-  - OR Key Levels
-  - Premium/Discount from OR
-  - Wait for OR Completion
-- Sub-toggles disabled when master toggle is off
-
-## 4. Scanner Config Loading — `loadConfig` in bot-scanner
-- Merge `openingRange` defaults when the field is missing from saved config (same pattern as `instruments`)
-
-## Files Changed
-1. `supabase/functions/bot-config/index.ts` — add defaults
-2. `supabase/functions/bot-scanner/index.ts` — add `computeOpeningRange`, modify confluence scoring + safety gates, add 1h candle fetch
-3. `src/components/BotConfigModal.tsx` — add Opening Range tab with toggles
-
-## Deployment
-All three files updated and edge functions redeployed.
+No changes to the scoring or gate logic itself — just the parameters fed into them.
 
