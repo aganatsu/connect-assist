@@ -3,11 +3,22 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 // Yahoo Finance symbol mapping
 const YAHOO_SYMBOLS: Record<string, string> = {
+  // Forex Majors
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
-  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
-  "EUR/JPY": "EURJPY=X", "BTC/USD": "BTC-USD",
-  "ETH/USD": "ETH-USD", "XAU/USD": "GC=F", "XAG/USD": "SI=F",
+  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+  "USD/CHF": "USDCHF=X",
+  // Forex Crosses
+  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
+  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
+  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
+  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
+  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  // Indices
+  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  // Commodities
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  // Crypto
+  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
 };
 
 const YAHOO_INTERVALS: Record<string, string> = {
