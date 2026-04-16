@@ -1406,8 +1406,14 @@ async function runScanForUser(supabase: any, userId: string) {
               };
               if (sl) mt5Body.stopLoss = sl;
               if (tp) mt5Body.takeProfit = tp;
-              // Use undici fetch to bypass Deno SSL cert issues with MetaAPI
-              const mt5Res = await undiciFetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              // Try undici first, fall back to native fetch
+              let mt5Res: any;
+              try {
+                mt5Res = await undiciFetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              } catch (fetchErr: any) {
+                console.warn(`undici fetch failed (${fetchErr?.message}), trying native fetch`);
+                mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+              }
               if (mt5Res.ok) {
                 console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
                 detail.mt5Mirror = "success";
