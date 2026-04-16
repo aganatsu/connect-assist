@@ -1317,6 +1317,7 @@ Deno.serve(async (req) => {
 });
 
 async function runScanForUser(supabase: any, userId: string) {
+  const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
