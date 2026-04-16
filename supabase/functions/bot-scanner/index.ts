@@ -1204,6 +1204,34 @@ async function runScanForUser(supabase: any, userId: string) {
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
+        // Close on Reverse: close existing opposite-direction positions for this symbol
+        if (config.closeOnReverse) {
+          const oppositeDir = analysis.direction === "long" ? "short" : "long";
+          const oppositePositions = openPosArr.filter(p => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
+          for (const opp of oppositePositions) {
+            // Close via paper_positions update + history insert
+            await supabase.from("paper_positions").update({ position_status: "closed" }).eq("position_id", opp.position_id).eq("user_id", userId);
+            await supabase.from("paper_trade_history").insert({
+              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
+              symbol: pair, direction: opp.direction, size: opp.size,
+              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
+              open_time: opp.open_time || nowStr, closed_at: nowStr,
+              close_reason: "reverse_signal",
+              pnl: "0", pnl_pips: "0",
+              signal_score: opp.signal_score || "0",
+            });
+          }
+        }
+
+        // Build exit flags metadata to store on the position
+        const exitFlags = {
+          trailingStop: config.trailingStopEnabled,
+          breakEven: config.breakEvenEnabled,
+          breakEvenPips: config.breakEvenPips,
+          partialTP: config.partialTPEnabled,
+          maxHoldHours: config.maxHoldHours,
+        };
+
         // Place position
         await supabase.from("paper_positions").insert({
           user_id: userId,
@@ -1216,7 +1244,7 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: analysis.summary,
+          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -1232,7 +1260,7 @@ async function runScanForUser(supabase: any, userId: string) {
           summary: analysis.summary,
           bias: analysis.bias,
           session: analysis.session.name,
-          timeframe: "15m",
+          timeframe: config.entryTimeframe,
           factors_json: analysis.factors,
         });
 
@@ -1243,9 +1271,10 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.stopLoss = sl;
         detail.takeProfit = tp;
         detail.positionId = positionId;
+        detail.exitFlags = exitFlags;
 
         // Add to virtual open positions for subsequent gates
-        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString() });
+        openPosArr.push({ symbol: pair, size: size.toString(), entry_price: analysis.lastPrice.toString(), direction: analysis.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: analysis.score.toString() });
       } else {
         rejectedCount++;
         detail.status = "rejected";
