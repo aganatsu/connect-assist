@@ -17,10 +17,16 @@ const DEFAULTS = {
   maxPerSymbol: 2,
   portfolioHeat: 10,
   minRiskReward: 1.5,
-  tpMethod: "rr_ratio",
-  tpRatio: 2.0,
-  slMethod: "structure",
+  // ── SL/TP Method Defaults ──
+  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
+  fixedSLPips: 25,
+  slATRMultiple: 1.5,
+  slATRPeriod: 14,
   slBufferPips: 2,
+  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
+  fixedTPPips: 50,
+  tpRatio: 2.0,
+  tpATRMultiple: 2.0,
   breakEvenEnabled: true,
   breakEvenPips: 20,
   enabledSessions: ["London", "New York"],
@@ -84,6 +90,19 @@ function getYahooRange(entryTf: string): string {
     "30m": "5d", "1h": "1mo", "4h": "1mo",
   };
   return map[entryTf] || "5d";
+}
+
+// ─── Standalone ATR Calculation ─────────────────────────────────────
+function calculateATR(candles: Candle[], period = 14): number {
+  if (candles.length < period + 1) return 0;
+  let atrSum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const prev = candles[i - 1];
+    const curr = candles[i];
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    atrSum += tr;
+  }
+  return atrSum / period;
 }
 
 function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
@@ -460,7 +479,140 @@ function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): Open
   return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
-// ─── Full 9-Factor Confluence Scoring (+ Opening Range) ─────────────
+// ─── Full SL/TP Calculation Dispatch ────────────────────────────────
+interface SLTPInput {
+  direction: "long" | "short" | null;
+  lastPrice: number;
+  pipSize: number;
+  config: any;
+  swings: SwingPoint[];
+  orderBlocks: OrderBlock[];
+  liquidityPools: LiquidityPool[];
+  pdLevels: any;
+  atrValue: number;
+}
+
+function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
+  const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
+  if (!direction) return { stopLoss: null, takeProfit: null };
+
+  const buffer = (config.slBufferPips || 2) * pipSize;
+  let sl: number | null = null;
+  let tp: number | null = null;
+
+  // ── Stop Loss ──
+  const slMethod: string = config.slMethod || "structure";
+
+  if (slMethod === "fixed_pips") {
+    const dist = (config.fixedSLPips || 25) * pipSize;
+    sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+  } else if (slMethod === "atr_based") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.slATRMultiple || 1.5);
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    } else {
+      // Fallback to fixed_pips
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else if (slMethod === "below_ob") {
+    if (direction === "long") {
+      const bullishOBs = orderBlocks
+        .filter(ob => !ob.mitigated && ob.type === "bullish" && ob.low < lastPrice)
+        .sort((a, b) => b.low - a.low);
+      if (bullishOBs.length > 0) {
+        sl = bullishOBs[0].low - buffer;
+      }
+    } else {
+      const bearishOBs = orderBlocks
+        .filter(ob => !ob.mitigated && ob.type === "bearish" && ob.high > lastPrice)
+        .sort((a, b) => a.high - b.high);
+      if (bearishOBs.length > 0) {
+        sl = bearishOBs[0].high + buffer;
+      }
+    }
+    // Fallback to fixed_pips if no OB found
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else {
+    // Default: structure-based
+    if (direction === "long") {
+      const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
+      if (recentLows.length > 0) {
+        const nearestLow = Math.max(...recentLows.map(s => s.price));
+        sl = nearestLow - buffer;
+      }
+    } else {
+      const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
+      if (recentHighs.length > 0) {
+        const nearestHigh = Math.min(...recentHighs.map(s => s.price));
+        sl = nearestHigh + buffer;
+      }
+    }
+    // Fallback to fixed_pips if no swing found
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  }
+
+  // ── Take Profit ──
+  const tpMethod: string = config.tpMethod || "rr_ratio";
+  const slDistance = Math.abs(lastPrice - sl);
+
+  if (tpMethod === "fixed_pips") {
+    const dist = (config.fixedTPPips || 50) * pipSize;
+    tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+  } else if (tpMethod === "next_level") {
+    // Target nearest PD/PW level or liquidity pool
+    const targets: number[] = [];
+    if (direction === "long") {
+      if (pdLevels) {
+        if (pdLevels.pdh > lastPrice) targets.push(pdLevels.pdh);
+        if (pdLevels.pwh > lastPrice) targets.push(pdLevels.pwh);
+      }
+      liquidityPools
+        .filter(lp => lp.type === "buy-side" && lp.price > lastPrice && lp.strength >= 2)
+        .forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => a - b); // nearest first
+    } else {
+      if (pdLevels) {
+        if (pdLevels.pdl < lastPrice) targets.push(pdLevels.pdl);
+        if (pdLevels.pwl < lastPrice) targets.push(pdLevels.pwl);
+      }
+      liquidityPools
+        .filter(lp => lp.type === "sell-side" && lp.price < lastPrice && lp.strength >= 2)
+        .forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => b - a); // nearest first (descending)
+    }
+    if (targets.length > 0) {
+      tp = targets[0];
+    } else {
+      // Fallback to fixed_pips
+      const dist = (config.fixedTPPips || 50) * pipSize;
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    }
+  } else if (tpMethod === "atr_multiple") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.tpATRMultiple || 2.0);
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    } else {
+      // Fallback to rr_ratio
+      tp = direction === "long"
+        ? lastPrice + slDistance * (config.tpRatio || 2.0)
+        : lastPrice - slDistance * (config.tpRatio || 2.0);
+    }
+  } else {
+    // Default: rr_ratio
+    tp = direction === "long"
+      ? lastPrice + slDistance * (config.tpRatio || 2.0)
+      : lastPrice - slDistance * (config.tpRatio || 2.0);
+  }
+
+  return { stopLoss: sl, takeProfit: tp };
+}
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
@@ -677,35 +829,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     else if (pd.currentZone === "premium") direction = "short";
   }
 
-  // Calculate SL/TP (structure-based) — use per-symbol pip size
-  let stopLoss: number | null = null;
-  let takeProfit: number | null = null;
-  const swings = structure.swingPoints;
+  // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
   const specSL = SPECS[symbolForSL] || SPECS["EUR/USD"];
   const pipSize = specSL.pipSize;
+  const swings = structure.swingPoints;
 
-  if (direction === "long") {
-    const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
-    if (recentLows.length > 0) {
-      const nearestLow = Math.max(...recentLows.map(s => s.price));
-      stopLoss = nearestLow - config.slBufferPips * pipSize;
-    }
-    if (stopLoss) {
-      const risk = lastPrice - stopLoss;
-      takeProfit = lastPrice + risk * config.tpRatio;
-    }
-  } else if (direction === "short") {
-    const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
-    if (recentHighs.length > 0) {
-      const nearestHigh = Math.min(...recentHighs.map(s => s.price));
-      stopLoss = nearestHigh + config.slBufferPips * pipSize;
-    }
-    if (stopLoss) {
-      const risk = stopLoss - lastPrice;
-      takeProfit = lastPrice - risk * config.tpRatio;
-    }
-  }
+  // Compute ATR for ATR-based methods (use entry candles)
+  const atrValue = calculateATR(candles, config.slATRPeriod || 14);
+
+  const { stopLoss, takeProfit } = calculateSLTP({
+    direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue,
+  });
 
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
@@ -816,6 +951,16 @@ async function loadConfig(supabase: any, userId: string) {
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
     slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? DEFAULTS.slBufferPips,
+
+    // ── SL/TP Method mappings ──
+    slMethod: exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? DEFAULTS.slMethod,
+    fixedSLPips: exit.fixedSLPips ?? raw.fixedSLPips ?? DEFAULTS.fixedSLPips,
+    slATRMultiple: exit.slATRMultiple ?? raw.slATRMultiple ?? DEFAULTS.slATRMultiple,
+    slATRPeriod: exit.slATRPeriod ?? raw.slATRPeriod ?? DEFAULTS.slATRPeriod,
+    tpMethod: exit.takeProfitMethod ?? exit.tpMethod ?? raw.tpMethod ?? DEFAULTS.tpMethod,
+    fixedTPPips: exit.fixedTPPips ?? raw.fixedTPPips ?? DEFAULTS.fixedTPPips,
+    tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+    tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? DEFAULTS.tpATRMultiple,
 
     // ── Exit mappings ──
     trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,

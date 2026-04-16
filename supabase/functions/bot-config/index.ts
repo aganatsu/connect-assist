@@ -84,8 +84,8 @@ function getDefaultConfig() {
       pyramidingEnabled: false, maxPyramidAdds: 1, closeOnReverse: true, cooldownMinutes: 15,
     },
     exit: {
-      takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
       stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
+      takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
       trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
       partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
       breakEvenEnabled: true, breakEvenTriggerPips: 20,
