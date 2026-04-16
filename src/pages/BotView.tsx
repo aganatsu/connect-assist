@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { paperApi, scannerApi, brokerApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi, botConfigApi } from "@/lib/api";
+import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
@@ -48,6 +49,11 @@ export default function BotView() {
     queryKey: ["scan-logs"],
     queryFn: () => scannerApi.logs(),
     refetchInterval: 30000,
+  });
+
+  const { data: botConfig } = useQuery({
+    queryKey: ["bot-config"],
+    queryFn: () => botConfigApi.get(),
   });
 
   const { data: brokerConns } = useQuery({
@@ -151,6 +157,27 @@ export default function BotView() {
               <Monitor className="h-2.5 w-2.5" /> Connect MT5
             </button>
           )}
+
+          {/* Trading Style Badge */}
+          {(() => {
+            const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
+            if (styleMode === "auto") {
+              return (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 bg-accent/20 text-accent-foreground border border-accent/30 flex items-center gap-1">
+                  🤖 Auto
+                </span>
+              );
+            }
+            const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
+            if (meta) {
+              return (
+                <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}>
+                  {meta.icon} {meta.label}
+                </span>
+              );
+            }
+            return null;
+          })()}
 
           <div className="ml-auto flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>

@@ -7,8 +7,9 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS } from "@/lib/marketData";
+import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3 } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge } from "lucide-react";
 
 const PRESETS = {
   conservative: { confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, description: "Low risk, high confluence" },
@@ -49,6 +50,7 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
   if (!open) return null;
 
   const tabs = [
+    { id: "tradingStyle", label: "Trading Style", icon: Gauge },
     { id: "strategy", label: "Strategy", icon: TrendingUp },
     { id: "risk", label: "Risk", icon: Shield },
     { id: "entry_exit", label: "Entry / Exit", icon: LogIn },
@@ -112,6 +114,47 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
           <div className="flex-1 overflow-y-auto p-6">
             {config && (
               <>
+                {activeTab === "tradingStyle" && (
+                  <div className="space-y-5">
+                    <SectionHeader title="Trading Style" description="Choose how the bot trades — this overrides entry timeframe, TP/SL ratios, and hold duration" />
+                    <div className="grid grid-cols-2 gap-3">
+                      {(["scalper", "day_trader", "swing_trader", "auto"] as TradingStyleMode[]).map(mode => {
+                        const isActive = (config.tradingStyle?.mode || "day_trader") === mode;
+                        const meta = mode !== "auto" ? STYLE_META[mode] : null;
+                        const params = mode !== "auto" ? STYLE_PARAMS[mode] : null;
+                        return (
+                          <button
+                            key={mode}
+                            onClick={() => updateField("tradingStyle", "mode", mode)}
+                            className={`p-4 border text-left transition-colors ${isActive ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-lg">{meta?.icon || "🤖"}</span>
+                              <span className="text-xs font-bold">{meta?.label || "Auto-Detect"}</span>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground">
+                              {meta?.description || "Bot analyzes volatility and trend per instrument to pick the best style automatically."}
+                            </p>
+                            {params && (
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px] text-muted-foreground">
+                                <span>Entry TF: <strong className="text-foreground">{params.entryTimeframe}</strong></span>
+                                <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
+                                <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
+                                <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
+                                <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours}h</strong></span>
+                                <span>Min Score: <strong className="text-foreground">{params.minConfluence}</strong></span>
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground italic">
+                      Style sets default parameters. You can still fine-tune individual settings in the other tabs — manual overrides take precedence.
+                    </p>
+                  </div>
+                )}
+
                 {activeTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
