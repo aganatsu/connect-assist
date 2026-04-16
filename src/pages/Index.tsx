@@ -257,7 +257,7 @@ export default function Dashboard() {
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={equityData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" />
+                    <XAxis dataKey="date" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" interval={Math.max(0, Math.floor(equityData.length / 8))} angle={-30} textAnchor="end" height={50} />
                     <YAxis tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
                     <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0", fontSize: "11px" }} />
                     <ReferenceLine y={10000} stroke="hsl(220, 8%, 40%)" strokeDasharray="3 3" strokeOpacity={0.6} />
