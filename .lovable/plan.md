@@ -1,21 +1,57 @@
 
 
-## Diagnosis
+# Implement Full SL/TP Method System — Fully Functional
 
-Two issues are preventing MT5 trade mirroring:
+Yes, this will be **fully functional backend logic**, not just UI. The changes go into the `bot-scanner` edge function where trades are actually calculated and executed.
 
-### 1. MetaAPI "Place manual trades" is OFF
-Your MetaAPI account screenshot shows **"Place manual trades: Off"**. This setting must be **On** for trades placed via the MetaAPI REST API to execute. When it's Off, MetaAPI blocks any trade requests coming through the API (they only appear as "manual" trades from MetaAPI's perspective).
+## What Changes
 
-**Fix:** In your MetaAPI dashboard, change "Place manual trades" to **On**, then click **Update** and redeploy the account.
+### 1. Backend: `supabase/functions/bot-scanner/index.ts`
 
-### 2. SSL error may still be occurring
-The most recent log still shows the native Deno SSL error (`invalid peer certificate: UnknownIssuer`), suggesting the `undiciFetch` fix may not have been deployed or isn't being used in the MT5 mirror code path. I need to redeploy the `bot-scanner` function and verify the fix takes effect.
+**ATR calculation function** — standalone `calculateATR(candles, period)` extracted for reuse.
 
-## Plan
+**Config loading** — `loadConfig()` updated to read all exit method fields:
+- `slMethod` (fixed_pips | atr_based | structure | below_ob)
+- `fixedSLPips`, `slATRMultiple`, `slATRPeriod`
+- `tpMethod` (fixed_pips | rr_ratio | next_level | atr_multiple)  
+- `fixedTPPips`, `tpRRRatio`, `tpATRMultiple`
 
-1. **You (user action):** Go to MetaAPI dashboard → Edit your account → Change **"Place manual trades"** from **Off** to **On** → Click **Update** → Redeploy the account
-2. **I will:** Redeploy the `bot-scanner` edge function to ensure the `undiciFetch` SSL fix is active
-3. **I will:** Run a test call to verify MetaAPI connectivity from the scanner
-4. **Verify:** Trigger a manual scan to confirm the full flow works end-to-end
+**`calculateSLTP()` function** — replaces the current hardcoded structure-only block (lines 680-708) with a proper dispatch:
+
+| SL Method | Calculation | Fallback |
+|-----------|------------|----------|
+| fixed_pips | entry ± fixedSLPips × pipSize | — |
+| atr_based | entry ± ATR × slATRMultiple | fixed_pips |
+| structure | nearest swing ± buffer (current logic) | fixed_pips |
+| below_ob | nearest OB edge ± buffer | fixed_pips |
+
+| TP Method | Calculation | Fallback |
+|-----------|------------|----------|
+| fixed_pips | entry ± fixedTPPips × pipSize | — |
+| rr_ratio | entry ± slDistance × tpRRRatio | — |
+| next_level | nearest PDH/PDL/PWH/PWL/liquidity pool | fixed_pips |
+| atr_multiple | entry ± ATR × tpATRMultiple | rr_ratio |
+
+All methods pass through the existing R:R validation gate before trade execution.
+
+### 2. Frontend: `src/components/BotConfigModal.tsx`
+
+Update the Entry/Exit tab with:
+- **SL Method** dropdown (4 options) with conditional parameter fields
+- **TP Method** dropdown (4 options) with conditional parameter fields
+- Fields shown/hidden based on selected method (e.g., ATR Multiple only visible when ATR method selected)
+
+### 3. Config Edge Function: `supabase/functions/bot-config/index.ts`
+
+Ensure defaults include all new SL/TP fields so existing users get sensible fallbacks.
+
+## Files Changed
+- `supabase/functions/bot-scanner/index.ts` — ATR calc, config wiring, full `calculateSLTP()` dispatch
+- `supabase/functions/bot-config/index.ts` — default config fields for SL/TP methods
+- `src/components/BotConfigModal.tsx` — SL/TP method selectors and conditional fields
+
+## What Won't Change
+- Database schema (config is stored as JSON in `bot_configs.config_json` — no migration needed)
+- Position sizing logic (already correct, uses SL distance)
+- Safety gates and confluence scoring (untouched)
 
