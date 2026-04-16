@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor } from "lucide-react";
+import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench } from "lucide-react";
 import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -65,12 +65,17 @@ function BrokerSettings() {
   const [accountId, setAccountId] = useState("");
   const [isLive, setIsLive] = useState(false);
   const [symbolSuffix, setSymbolSuffix] = useState("");
+  const [symbolOverrides, setSymbolOverrides] = useState<Record<string, string>>({});
+  const [newOverrideSymbol, setNewOverrideSymbol] = useState("");
+  const [newOverrideSuffix, setNewOverrideSuffix] = useState("");
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [selectedConnection, setSelectedConnection] = useState<any>(null);
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
   const createMutation = useMutation({
-    mutationFn: () => brokerApi.create({ broker_type: brokerType, display_name: displayName || brokerType, api_key: apiKey, account_id: accountId, is_live: isLive, symbol_suffix: symbolSuffix }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection saved"); setApiKey(""); setAccountId(""); setDisplayName(""); setSymbolSuffix(""); },
+    mutationFn: () => brokerApi.create({ broker_type: brokerType, display_name: displayName || brokerType, api_key: apiKey, account_id: accountId, is_live: isLive, symbol_suffix: symbolSuffix, symbol_overrides: symbolOverrides }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection saved"); setApiKey(""); setAccountId(""); setDisplayName(""); setSymbolSuffix(""); setSymbolOverrides({}); },
     onError: (e: any) => toast.error(e.message),
   });
 
@@ -93,19 +98,39 @@ function BrokerSettings() {
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
 
+  const addOverride = () => {
+    if (!newOverrideSymbol.trim()) return;
+    setSymbolOverrides(prev => ({ ...prev, [newOverrideSymbol.trim().toUpperCase()]: newOverrideSuffix.trim() }));
+    setNewOverrideSymbol("");
+    setNewOverrideSuffix("");
+  };
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Broker Connections</h2>
       {(connections as any[]).map((c: any) => (
         <Card key={c.id}>
-          <CardContent className="pt-4 flex items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="font-medium text-sm truncate">{c.display_name}</p>
-              <p className="text-xs text-muted-foreground truncate">{c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}</p>
-            </div>
-            <div className="flex gap-2 shrink-0">
-              <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
-              <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
+          <CardContent className="pt-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-sm truncate">{c.display_name}</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}
+                  {c.symbol_suffix ? ` · Suffix: "${c.symbol_suffix}"` : ""}
+                </p>
+                {c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym}→"${sfx}"`).join(", ")}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <Button size="sm" variant="outline" onClick={() => { setSelectedConnection(c); setConfigModalOpen(true); }} title="Edit bot config for this connection">
+                  <Wrench className="h-3 w-3" />
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
+                <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -120,11 +145,45 @@ function BrokerSettings() {
           <div><Label className="text-xs">Display Name</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="My Account" className="mt-1" /></div>
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Auth Token (JWT)" : "API Key / Token"}</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={brokerType === "metaapi" ? "eyJhbGci..." : ""} className="mt-1" /></div>
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Account ID (UUID)" : "Account ID"}</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder={brokerType === "metaapi" ? "5e83d5a3-cbd9-..." : ""} className="mt-1" /></div>
-          <div><Label className="text-xs">Symbol Suffix (e.g. 'r', '.pro', '.raw')</Label><Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder="r" className="mt-1" /></div>
+          <div><Label className="text-xs">Default Symbol Suffix (e.g. 'r', '.pro', '.raw')</Label><Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder="r" className="mt-1" /></div>
+          
+          {/* Symbol Overrides */}
+          <div className="space-y-2">
+            <Label className="text-xs">Symbol Overrides (optional)</Label>
+            <p className="text-[10px] text-muted-foreground">Override the default suffix for specific symbols. E.g. XAUUSD → "m" while others use "r".</p>
+            {Object.entries(symbolOverrides).map(([sym, sfx]) => (
+              <div key={sym} className="flex items-center gap-2 text-xs">
+                <span className="font-mono">{sym}</span>
+                <span className="text-muted-foreground">→</span>
+                <span className="font-mono">"{sfx}"</span>
+                <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => {
+                  const next = { ...symbolOverrides };
+                  delete next[sym];
+                  setSymbolOverrides(next);
+                }}><Trash2 className="h-3 w-3" /></Button>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <Input value={newOverrideSymbol} onChange={e => setNewOverrideSymbol(e.target.value)} placeholder="XAUUSD" className="h-8 text-xs flex-1" />
+              <Input value={newOverrideSuffix} onChange={e => setNewOverrideSuffix(e.target.value)} placeholder="m" className="h-8 text-xs w-20" />
+              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={addOverride} disabled={!newOverrideSymbol.trim()}>Add</Button>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2"><Switch checked={isLive} onCheckedChange={setIsLive} /><Label className="text-sm">Live account</Label></div>
           <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId}>Save Connection</Button>
         </CardContent>
       </Card>
+
+      {/* Per-broker config modal */}
+      {selectedConnection && (
+        <BotConfigModal
+          open={configModalOpen}
+          onClose={() => { setConfigModalOpen(false); setSelectedConnection(null); }}
+          connectionId={selectedConnection.id}
+          connectionName={selectedConnection.display_name}
+        />
+      )}
     </div>
   );
 }
