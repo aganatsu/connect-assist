@@ -1594,32 +1594,40 @@ async function runScanForUser(supabase: any, userId: string) {
             const { data: connections } = await supabase.from("broker_connections")
               .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
             if (connections && connections.length > 0) {
-              const conn = connections[0];
-              let authToken = conn.api_key;
-              let metaAccountId = conn.account_id;
-              if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                authToken = conn.account_id;
-                metaAccountId = conn.api_key;
+              const mirrorResults: string[] = [];
+              for (const conn of connections) {
+                try {
+                  let authToken = conn.api_key;
+                  let metaAccountId = conn.account_id;
+                  if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                    authToken = conn.account_id;
+                    metaAccountId = conn.api_key;
+                  }
+                  const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+                  const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+                  const mt5Body: any = {
+                    actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                    symbol: resolveSymbol(pair, conn),
+                    volume: size,
+                    comment: `paper:${positionId}`,
+                  };
+                  if (sl) mt5Body.stopLoss = sl;
+                  if (tp) mt5Body.takeProfit = tp;
+                  const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+                  if (mt5Res.ok) {
+                    console.log(`Broker mirror [${conn.display_name}]: opened ${pair} ${analysis.direction} ${size} lots`);
+                    mirrorResults.push(`${conn.display_name}: success`);
+                  } else {
+                    const errText = await mt5Res.text();
+                    console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${errText}`);
+                    mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
+                  }
+                } catch (connErr: any) {
+                  console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
+                  mirrorResults.push(`${conn.display_name}: error`);
+                }
               }
-              const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-              const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
-              const mt5Body: any = {
-                actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                symbol: resolveSymbol(pair, conn),
-                volume: size,
-                comment: `paper:${positionId}`,
-              };
-              if (sl) mt5Body.stopLoss = sl;
-              if (tp) mt5Body.takeProfit = tp;
-              const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
-              if (mt5Res.ok) {
-                console.log(`MT5 mirror: opened ${pair} ${analysis.direction} ${size} lots`);
-                detail.mt5Mirror = "success";
-              } else {
-                const errText = await mt5Res.text();
-                console.warn(`MT5 mirror failed [${mt5Res.status}]: ${errText}`);
-                detail.mt5Mirror = `failed: ${mt5Res.status}`;
-              }
+              detail.mt5Mirror = mirrorResults.join("; ");
             } else {
               detail.mt5Mirror = "skipped_no_connection";
             }
