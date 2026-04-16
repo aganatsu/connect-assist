@@ -775,30 +775,46 @@ async function loadConfig(supabase: any, userId: string) {
   const merged = {
     ...DEFAULTS,
     // ── Strategy mappings ──
-    minConfluence: strategy.confluenceThreshold ?? raw.minConfluence ?? DEFAULTS.minConfluence,
-    htfBiasRequired: strategy.requireHTFBias ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
-    enableOB: strategy.useOrderBlocks ?? true,
-    enableFVG: strategy.useFVG ?? true,
-    enableLiquiditySweep: strategy.useLiquiditySweep ?? true,
-    enableStructureBreak: strategy.useStructureBreak ?? true,
+    // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
+    minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
+    // UI writes: requireHTFBias; legacy DB: htfBiasRequired
+    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
+    // UI writes: useOrderBlocks; legacy DB: enableOB
+    enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
+    // UI writes: useFVG; legacy DB: enableFVG
+    enableFVG: strategy.useFVG ?? strategy.enableFVG ?? true,
+    // UI writes: useLiquiditySweep; legacy DB: enableLiquiditySweep
+    enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
+    // UI writes: useStructureBreak; legacy DB: enableBOS + enableCHoCH
+    enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
+    // Premium/Discount filters (legacy DB keys)
+    onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
+    onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
 
     // ── Risk mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
-    maxDailyLoss: risk.maxDailyDrawdown ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
-    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
-    minRiskReward: risk.minRR ?? risk.defaultRR ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
+    // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
+    maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
+    // UI writes: maxConcurrentTrades; legacy DB: maxOpenPositions
+    maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
+    // UI writes: minRR; legacy DB: minRiskReward
+    minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
     maxDrawdown: risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
-    tpRatio: risk.defaultRR ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+    // UI writes: defaultRR; legacy DB: minRiskReward (reuse for TP ratio)
+    tpRatio: risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+    // Legacy DB keys
+    maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
+    portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
 
     // ── Entry mappings ──
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
 
     // ── Exit mappings ──
-    trailingStopEnabled: exit.trailingStop ?? raw.trailingStopEnabled ?? false,
-    breakEvenEnabled: exit.breakEven ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
-    partialTPEnabled: exit.partialTP ?? false,
-    maxHoldHours: exit.timeExitHours ?? 0,
+    trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
+    breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
+    partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
+    maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
 
     // ── Instruments ──
     // Priority: 1) instruments.enabled array (current UI), 2) allowedInstruments map (legacy), 3) defaults
@@ -836,8 +852,9 @@ async function loadConfig(supabase: any, userId: string) {
 
     // ── Protection ──
     maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
-    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? 0,
-    // Map circuit breaker to maxDrawdown if set and lower (Fix #10)
+    // UI writes: maxDailyLoss (dollar); legacy DB: dailyLossLimit
+    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? protection.dailyLossLimit ?? 0,
+    // UI writes: circuitBreakerPct; legacy DB may not exist
     maxDrawdown: Math.min(
       risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
       protection.circuitBreakerPct ?? 100,
