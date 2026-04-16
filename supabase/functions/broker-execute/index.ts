@@ -47,14 +47,14 @@ Deno.serve(async (req) => {
         const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
           headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
         });
-        if (!res.ok) throw new Error(`OANDA error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
         const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
           headers: { "auth-token": conn.api_key },
         });
-        if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
         return respond(await res.json());
       }
     }
