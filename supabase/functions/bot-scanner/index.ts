@@ -932,6 +932,71 @@ async function runSafetyGates(
     }
   }
 
+  // Gate 12: Kill Zone Only
+  if (config.killZoneOnly) {
+    const assetProfile = getAssetProfile(symbol);
+    if (!assetProfile.skipSessionGate) {
+      const sess = detectSession();
+      if (!sess.isKillZone) {
+        gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
+      } else {
+        gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
+      }
+    } else {
+      gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+    }
+  }
+
+  // Gate 13: Cooldown
+  if (config.cooldownMinutes > 0) {
+    const { data: recentTrades } = await supabase.from("paper_trade_history").select("closed_at")
+      .eq("user_id", userId).eq("symbol", symbol).order("closed_at", { ascending: false }).limit(1);
+    if (recentTrades && recentTrades.length > 0) {
+      const lastClose = new Date(recentTrades[0].closed_at).getTime();
+      const elapsed = (Date.now() - lastClose) / 60000;
+      if (elapsed < config.cooldownMinutes) {
+        gates.push({ passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
+      } else {
+        gates.push({ passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
+      }
+    } else {
+      gates.push({ passed: true, reason: "No recent trades — cooldown OK" });
+    }
+  }
+
+  // Gate 14: Max Consecutive Losses
+  if (config.maxConsecutiveLosses > 0) {
+    const { data: recentHistory } = await supabase.from("paper_trade_history").select("pnl")
+      .eq("user_id", userId).order("closed_at", { ascending: false }).limit(config.maxConsecutiveLosses + 1);
+    if (recentHistory && recentHistory.length > 0) {
+      let consecutiveLosses = 0;
+      for (const t of recentHistory) {
+        if (parseFloat(t.pnl) < 0) consecutiveLosses++;
+        else break;
+      }
+      if (consecutiveLosses >= config.maxConsecutiveLosses) {
+        gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit` });
+      } else {
+        gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
+      }
+    } else {
+      gates.push({ passed: true, reason: "No trade history for consecutive loss check" });
+    }
+  }
+
+  // Gate 15: Dollar-based daily loss
+  if (config.protectionMaxDailyLossDollar > 0) {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const { data: todayTrades } = await supabase.from("paper_trade_history").select("pnl")
+      .eq("user_id", userId).gte("closed_at", todayStr);
+    const dollarLoss = (todayTrades || []).reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
+    if (Math.abs(dollarLoss) >= config.protectionMaxDailyLossDollar) {
+      gates.push({ passed: false, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit` });
+    } else {
+      gates.push({ passed: true, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)}` });
+    }
+  }
+
   return gates;
 }
 
