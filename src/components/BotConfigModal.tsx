@@ -88,7 +88,10 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                 });
                 toast.info(`Applied ${key} preset → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
               }} className="p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
-                <p className="text-xs font-bold capitalize">{key}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold capitalize">{key}</p>
+                  <span className="text-[10px] text-muted-foreground">{STYLE_META[preset.tradingStyle].icon} {STYLE_META[preset.tradingStyle].label}</span>
+                </div>
                 <p className="text-[10px] text-muted-foreground mt-0.5">{preset.description}</p>
               </button>
             ))}
