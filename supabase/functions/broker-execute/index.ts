@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { fetch as undiciFetch } from "npm:undici@5.28.4";
+
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
+        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
           headers: { "auth-token": conn.api_key },
         });
         if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
+        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
           headers: { "auth-token": conn.api_key },
         });
         if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
         if (stopLoss) body.stopLoss = stopLoss;
         if (takeProfit) body.takeProfit = takeProfit;
 
-        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
+        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -125,7 +125,7 @@ Deno.serve(async (req) => {
           authToken = conn.account_id;
           metaAccountId = conn.api_key;
         }
-        const res = await undiciFetch(
+        const res = await fetch(
           `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(symbol)}/specification`,
           { headers: { "auth-token": authToken } },
         );
@@ -174,7 +174,7 @@ Deno.serve(async (req) => {
         return respond(await res.json());
       }
       if (conn.broker_type === "metaapi") {
-        const res = await undiciFetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
+        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
         });
