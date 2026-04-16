@@ -185,14 +185,15 @@ Deno.serve(async (req) => {
 
     return respond({ error: "Unknown action" });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    console.error("broker-execute error:", error?.message || error);
+    return new Response(JSON.stringify({ error: error.message, fallback: true }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    status, headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
