@@ -801,10 +801,11 @@ async function loadConfig(supabase: any, userId: string) {
     maxHoldHours: exit.timeExitHours ?? 0,
 
     // ── Instruments ──
-    instruments: enabledInstrumentList && enabledInstrumentList.length > 0
-      ? enabledInstrumentList
-      : Array.isArray(instruments.enabled) && instruments.enabled.length > 0
-        ? instruments.enabled
+    // Priority: 1) instruments.enabled array (current UI), 2) allowedInstruments map (legacy), 3) defaults
+    instruments: Array.isArray(instruments.enabled) && instruments.enabled.length > 0
+      ? instruments.enabled
+      : enabledInstrumentList && enabledInstrumentList.length > 0
+        ? enabledInstrumentList
         : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
 
     // ── Sessions ──
