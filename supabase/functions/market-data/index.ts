@@ -64,8 +64,18 @@ Deno.serve(async (req) => {
     if (action === "quote") {
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=5d`;
       const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
+      if (!res.ok) {
+        console.error(`Yahoo quote error: ${res.status}`);
+        return new Response(JSON.stringify({ error: "SERVICE_UNAVAILABLE", fallback: true }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const data = await res.json();
-      if (!data?.chart?.result?.[0]) throw new Error("No data from Yahoo Finance");
+      if (!data?.chart?.result?.[0]) {
+        return new Response(JSON.stringify({ error: "NO_DATA", fallback: true }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const meta = data.chart.result[0].meta;
       const previousClose = meta.chartPreviousClose || meta.previousClose || 0;
@@ -87,14 +97,28 @@ Deno.serve(async (req) => {
     const yahooRange = YAHOO_RANGES[interval] || "1y";
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${yahooInterval}&range=${yahooRange}&includeAdjustedClose=true`;
     const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
+    if (!res.ok) {
+      console.error(`Yahoo candles error: ${res.status}`);
+      return new Response(JSON.stringify({ error: "SERVICE_UNAVAILABLE", fallback: true }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     const data = await res.json();
 
-    if (!data?.chart?.result?.[0]) throw new Error("No data from Yahoo Finance");
+    if (!data?.chart?.result?.[0]) {
+      return new Response(JSON.stringify({ error: "NO_DATA", fallback: true }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const chartResult = data.chart.result[0];
     const timestamps: number[] = chartResult.timestamp || [];
     const quotes = chartResult.indicators?.quote?.[0];
-    if (!quotes || timestamps.length === 0) throw new Error("No price data");
+    if (!quotes || timestamps.length === 0) {
+      return new Response(JSON.stringify({ error: "NO_DATA", fallback: true }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     let candles: any[] = [];
     for (let i = 0; i < timestamps.length; i++) {
@@ -111,8 +135,9 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    console.error("market-data unexpected error:", error?.message);
+    return new Response(JSON.stringify({ error: "SERVICE_FAILED", fallback: true }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
