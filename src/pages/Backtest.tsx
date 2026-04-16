@@ -342,7 +342,10 @@ function generateFallbackResults(strategy: string, months: number, riskPercent: 
   let equity = 10000;
   let peak = 10000;
   let maxDD = 0;
-  const totalTrades = Math.floor(months * 15 + Math.random() * 20);
+  // Deterministic trade count based on strategy hash
+  let sHash = 0;
+  for (let i = 0; i < strategy.length; i++) sHash = ((sHash << 5) - sHash + strategy.charCodeAt(i)) | 0;
+  const totalTrades = Math.floor(months * 15 + (Math.abs(sHash) % 20));
   const riskAmount = equity * (riskPercent / 100);
 
   for (let i = 0; i < totalTrades; i++) {
