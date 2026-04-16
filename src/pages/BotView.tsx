@@ -62,21 +62,22 @@ export default function BotView() {
     refetchInterval: 30000,
   });
   const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
-  const primaryConnection = activeConnections[0];
+  const [selectedConnIdx, setSelectedConnIdx] = useState(0);
+  const selectedConnection = activeConnections[selectedConnIdx] || activeConnections[0];
 
   // Live broker account data (only when in live mode with an active connection)
   const isLiveMode = status?.executionMode === "live";
   const { data: brokerAccount } = useQuery({
-    queryKey: ["broker-account", primaryConnection?.id],
-    queryFn: () => brokerExecApi.accountSummary(primaryConnection.id),
-    enabled: !!primaryConnection && isLiveMode,
+    queryKey: ["broker-account", selectedConnection?.id],
+    queryFn: () => brokerExecApi.accountSummary(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
 
   const { data: brokerOpenTrades } = useQuery({
-    queryKey: ["broker-open-trades", primaryConnection?.id],
-    queryFn: () => brokerExecApi.openTrades(primaryConnection.id),
-    enabled: !!primaryConnection && isLiveMode,
+    queryKey: ["broker-open-trades", selectedConnection?.id],
+    queryFn: () => brokerExecApi.openTrades(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
 
@@ -427,10 +428,21 @@ export default function BotView() {
             </Card>
 
             {/* Live Broker Account (only in live mode) */}
-            {isLiveMode && primaryConnection && (
+            {isLiveMode && activeConnections.length > 0 && (
               <Card>
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {primaryConnection.display_name}</p>
+                  {activeConnections.length > 1 && (
+                    <select
+                      value={selectedConnIdx}
+                      onChange={e => setSelectedConnIdx(Number(e.target.value))}
+                      className="w-full bg-card border border-border px-1.5 py-1 text-[10px] mb-1"
+                    >
+                      {activeConnections.map((c: any, i: number) => (
+                        <option key={c.id} value={i}>{c.display_name} ({c.broker_type})</option>
+                      ))}
+                    </select>
+                  )}
+                  <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Live Broker — {selectedConnection?.display_name}</p>
                   {brokerAccount ? (
                     <>
                       <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{brokerAccount.balance ?? brokerAccount.equity ?? "—"} {brokerAccount.currency || ""}</span></div>
@@ -448,7 +460,7 @@ export default function BotView() {
             )}
 
             {/* Live Broker Open Trades */}
-            {isLiveMode && primaryConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
+            {isLiveMode && selectedConnection && brokerOpenTrades && Array.isArray(brokerOpenTrades) && brokerOpenTrades.length > 0 && (
               <Card>
                 <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
                   <p className="text-[10px] text-destructive uppercase tracking-wider mb-1 font-bold">Broker Positions ({brokerOpenTrades.length})</p>
