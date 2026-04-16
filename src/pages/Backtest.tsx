@@ -106,10 +106,25 @@ export default function Backtest() {
         }
       }
 
-      // Simulate each signal
+      // Simulate each signal deterministically based on score and confluence
+      // Score-based win probability: score 7+ = ~75% win, score 5-6 = ~55%, score <5 = ~35%
+      // Use a deterministic hash of signal properties instead of random
       signals.forEach((sig, idx) => {
-        const isWin = sig.score >= 5 ? Math.random() > 0.35 : Math.random() > 0.55;
-        const rr = isWin ? 1 + Math.random() * 3 : -(0.5 + Math.random() * 0.5);
+        // Deterministic hash from signal properties
+        const hashInput = `${sig.type}-${sig.direction}-${sig.price.toFixed(5)}-${idx}`;
+        let hash = 0;
+        for (let i = 0; i < hashInput.length; i++) {
+          hash = ((hash << 5) - hash + hashInput.charCodeAt(i)) | 0;
+        }
+        const hashNorm = Math.abs(hash % 1000) / 1000; // 0-1 deterministic value
+
+        const winThreshold = sig.score >= 7 ? 0.25 : sig.score >= 5 ? 0.45 : 0.65;
+        const isWin = hashNorm > winThreshold;
+
+        // RR determined by score: higher score = better RR on wins, tighter losses
+        const winRR = sig.score >= 7 ? 1.5 + (hashNorm * 2.5) : sig.score >= 5 ? 1 + (hashNorm * 2) : 0.8 + (hashNorm * 1.2);
+        const lossRR = sig.score >= 7 ? -(0.3 + hashNorm * 0.4) : sig.score >= 5 ? -(0.5 + hashNorm * 0.3) : -(0.7 + hashNorm * 0.3);
+        const rr = isWin ? winRR : lossRR;
         const pnl = rr * riskAmount;
         equity += pnl;
         peak = Math.max(peak, equity);
@@ -327,19 +342,29 @@ function generateFallbackResults(strategy: string, months: number, riskPercent: 
   let equity = 10000;
   let peak = 10000;
   let maxDD = 0;
-  const totalTrades = Math.floor(months * 15 + Math.random() * 20);
+  // Deterministic trade count based on strategy hash
+  let sHash = 0;
+  for (let i = 0; i < strategy.length; i++) sHash = ((sHash << 5) - sHash + strategy.charCodeAt(i)) | 0;
+  const totalTrades = Math.floor(months * 15 + (Math.abs(sHash) % 20));
   const riskAmount = equity * (riskPercent / 100);
 
   for (let i = 0; i < totalTrades; i++) {
-    const isWin = Math.random() > 0.38;
-    const rr = isWin ? 1 + Math.random() * 4 : -(0.5 + Math.random() * 0.5);
+    // Deterministic hash
+    const hashInput = `${strategy}-${i}-fallback`;
+    let hash = 0;
+    for (let j = 0; j < hashInput.length; j++) {
+      hash = ((hash << 5) - hash + hashInput.charCodeAt(j)) | 0;
+    }
+    const hashNorm = Math.abs(hash % 1000) / 1000;
+    const isWin = hashNorm > 0.38;
+    const rr = isWin ? 1 + hashNorm * 4 : -(0.5 + hashNorm * 0.5);
     const pnl = rr * riskAmount;
     equity += pnl;
     peak = Math.max(peak, equity);
     const dd = ((equity - peak) / peak) * 100;
     maxDD = Math.min(maxDD, dd);
     const date = new Date(Date.now() - (totalTrades - i) * 86400000 * (months * 30 / totalTrades));
-    trades.push({ id: i + 1, date: date.toISOString().split('T')[0], direction: Math.random() > 0.5 ? 'long' : 'short', pnl: parseFloat(pnl.toFixed(2)), rr: parseFloat(rr.toFixed(2)), equity: parseFloat(equity.toFixed(2)), drawdown: parseFloat(dd.toFixed(2)), setup: strategy.split(' + ')[0] });
+    trades.push({ id: i + 1, date: date.toISOString().split('T')[0], direction: hashNorm > 0.5 ? 'long' : 'short', pnl: parseFloat(pnl.toFixed(2)), rr: parseFloat(rr.toFixed(2)), equity: parseFloat(equity.toFixed(2)), drawdown: parseFloat(dd.toFixed(2)), setup: strategy.split(' + ')[0] });
   }
 
   const wins = trades.filter(t => t.pnl > 0);
