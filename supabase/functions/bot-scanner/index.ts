@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { fetch as undiciFetch } from "npm:undici";
+import { fetch as undiciFetch } from "npm:undici@5.28.4";
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 const DEFAULTS = {
