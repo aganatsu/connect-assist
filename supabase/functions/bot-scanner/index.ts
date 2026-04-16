@@ -1229,12 +1229,18 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization");
     let userId: string | null = null;
 
-    if (authHeader && authHeader !== `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}`) {
-      const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-        global: { headers: { Authorization: authHeader } },
-      });
-      const { data: { user } } = await userClient.auth.getUser();
-      if (user) userId = user.id;
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.replace("Bearer ", "");
+      // Skip if it's just the anon key (no user session)
+      if (token !== Deno.env.get("SUPABASE_ANON_KEY")) {
+        const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data, error } = await userClient.auth.getClaims(token);
+        if (!error && data?.claims?.sub) {
+          userId = data.claims.sub as string;
+        }
+      }
     }
 
     const body = await req.json().catch(() => ({}));
