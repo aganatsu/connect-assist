@@ -55,7 +55,8 @@ const DEFAULTS = {
 function resolveSymbol(pair: string, conn: any): string {
   const base = pair.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  if (overrides[base]) return base + overrides[base];
+  // Full remap: override value IS the exact broker symbol
+  if (overrides[base]) return overrides[base];
   return base + (conn.symbol_suffix || "");
 }
 
