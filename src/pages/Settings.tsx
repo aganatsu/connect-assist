@@ -283,3 +283,29 @@ function AboutSettings() {
     </div>
   );
 }
+
+function TestNotificationButton({ chatId }: { chatId: string }) {
+  const [isSending, setIsSending] = useState(false);
+
+  const sendTestNotification = async () => {
+    setIsSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-notify', {
+        body: { chat_id: chatId, message: '🔔 <b>Test Notification</b>\n\nYour Telegram notifications are working! You will receive alerts here when trades are placed.' }
+      });
+
+      if (error) throw error;
+      toast.success('Test notification sent! Check Telegram.');
+    } catch (e: any) {
+      toast.error(`Failed to send: ${e.message}`);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <Button variant="outline" size="sm" onClick={sendTestNotification} disabled={isSending} className="w-full">
+      {isSending ? 'Sending...' : '🔔 Send Test Notification'}
+    </Button>
+  );
+}
