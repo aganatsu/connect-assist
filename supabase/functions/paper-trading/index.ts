@@ -170,6 +170,62 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     return { success: false, error: msg };
   }
 }
+// ─── Close All Broker Positions for a paper position ────────────────
+async function closeBrokerPositions(supabase: any, userId: string, positionId: string, symbol: string): Promise<string[]> {
+  const results: string[] = [];
+  try {
+    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
+    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
+
+    const { data: connections } = await supabase.from("broker_connections")
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+    if (!connections || connections.length === 0) return ["no_connection"];
+
+    for (const conn of connections) {
+      try {
+        let authToken = conn.api_key;
+        let metaAccountId = conn.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          authToken = conn.account_id;
+          metaAccountId = conn.api_key;
+        }
+        const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+        const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+
+        // Find broker position by comment tag
+        const posRes = await fetch(`${baseUrl}/positions`, { headers });
+        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
+        const brokerPositions: any[] = await posRes.json();
+        const brokerPos = brokerPositions.find((p: any) => p.comment?.includes(`paper:${positionId}`));
+        if (!brokerPos) {
+          // Fallback: match by symbol
+          const resolvedSymbol = symbol.replace("/", "") + (conn.symbol_suffix || "");
+          const overrides = conn.symbol_overrides || {};
+          const base = symbol.replace("/", "");
+          const brokerSymbol = overrides[base] || resolvedSymbol;
+          const symMatch = brokerPositions.find((p: any) => p.symbol === brokerSymbol || p.symbol === base);
+          if (!symMatch) { results.push(`${conn.display_name}: position not found`); continue; }
+          const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: symMatch.id };
+          const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
+          results.push(`${conn.display_name}: ${res.ok ? "closed (symbol match)" : "close failed " + res.status}`);
+          continue;
+        }
+        const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id };
+        const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
+        results.push(`${conn.display_name}: ${res.ok ? "closed" : "close failed " + res.status}`);
+        if (res.ok) console.log(`Broker close [${conn.display_name}]: closed position for paper:${positionId}`);
+        else console.warn(`Broker close [${conn.display_name}]: failed ${res.status}`);
+      } catch (e: any) {
+        console.warn(`Broker close [${conn.display_name}] error: ${e?.message}`);
+        results.push(`${conn.display_name}: error`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`closeBrokerPositions error: ${e?.message}`);
+    results.push("error");
+  }
+  return results;
+}
 
 // ─── Post-Mortem Generation ─────────────────────────────────────────
 function generatePostMortem(
