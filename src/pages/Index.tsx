@@ -113,10 +113,13 @@ export default function Dashboard() {
     if (!currencyStrength) return [];
     // API returns array: [{ currency, strength, rank }]
     const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
-    return arr.map((item: any) => ({
-      currency: item.currency || '?',
-      score: item.strength ?? item.score ?? 0,
-    })).filter((d: any) => d.currency !== '?').sort((a: any, b: any) => b.score - a.score);
+    return arr
+      .filter((item: any) => item.currency && typeof item.currency === 'string' && item.currency.length <= 4)
+      .map((item: any) => ({
+        currency: item.currency,
+        score: Math.round(((item.strength ?? item.score ?? 0) + Number.EPSILON) * 100) / 100,
+      }))
+      .sort((a: any, b: any) => b.score - a.score);
   }, [currencyStrength]);
 
   // Latest scan signals
@@ -289,20 +292,29 @@ export default function Dashboard() {
                   <p className="text-[10px] mt-1 text-muted-foreground/70">Requires live price data with change %</p>
                 </div>
               ) : (
-                <div className="h-[180px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={strengthData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                      <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" />
-                      <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(220, 8%, 75%)" }} stroke="hsl(220, 8%, 40%)" width={40} />
-                      <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0", fontSize: "11px" }} />
-                      <Bar dataKey="score">
-                        {strengthData.map((entry, i) => (
-                          <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+              <div>
+                  <div className="h-[180px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={strengthData} layout="vertical" margin={{ left: 5, right: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(var(--muted-foreground))" }} stroke="hsl(var(--border))" />
+                        <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(var(--foreground))" }} stroke="hsl(var(--border))" width={40} />
+                        <Tooltip
+                          contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "4px", fontSize: "12px", color: "hsl(var(--foreground))" }}
+                          labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
+                          formatter={(value: number) => [`${value.toFixed(2)}%`, "Strength"]}
+                        />
+                        <Bar dataKey="score" barSize={16}>
+                          {strengthData.map((entry, i) => (
+                            <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1 text-center">
+                    Based on % change across major pairs · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
+                  </p>
                 </div>
               )}
             </CardContent>
