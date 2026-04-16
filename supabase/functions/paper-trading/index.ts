@@ -484,7 +484,7 @@ Deno.serve(async (req) => {
       // Mirror to MT5 if connected
       let mt5Mirror: any = null;
       const { data: acctForMode } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", user.id).maybeSingle();
-      if (acctForMode) {
+      if (acctForMode?.execution_mode === "live") {
         mt5Mirror = await mirrorToMT5(supabase, user.id, {
           action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
         });
