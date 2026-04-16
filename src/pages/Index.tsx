@@ -73,10 +73,36 @@ export default function Dashboard() {
     if (!curve || curve.length === 0) {
       return [{ date: "Now", equity: balance, drawdown: 0 }];
     }
-    return curve.map((p: any) => ({
-      date: p.date?.split("T")[0] ?? "", equity: p.equity, drawdown: 0,
-    }));
-  }, [botStatus?.equityCurve, balance]);
+
+    // Filter by selected time range
+    const now = new Date();
+    const cutoff = new Date();
+    switch (timeRange) {
+      case "1W": cutoff.setDate(now.getDate() - 7); break;
+      case "1M": cutoff.setMonth(now.getMonth() - 1); break;
+      case "3M": cutoff.setMonth(now.getMonth() - 3); break;
+      case "6M": cutoff.setMonth(now.getMonth() - 6); break;
+      case "ALL": cutoff.setFullYear(2000); break;
+    }
+
+    const filtered = curve.filter((p: any) => {
+      const d = new Date(p.date);
+      return d >= cutoff;
+    });
+
+    if (filtered.length === 0) {
+      return [{ date: "Now", equity: balance, drawdown: 0 }];
+    }
+
+    return filtered.map((p: any, i: number) => {
+      const d = new Date(p.date);
+      // Show time for 1W, date for longer ranges
+      const label = timeRange === "1W"
+        ? d.toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+        : d.toLocaleDateString([], { month: "short", day: "numeric" });
+      return { date: label, equity: p.equity, drawdown: 0 };
+    });
+  }, [botStatus?.equityCurve, balance, timeRange]);
 
   const strengthData = useMemo(() => {
     if (!currencyStrength) return [];
