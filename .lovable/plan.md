@@ -1,69 +1,34 @@
 
 
-# Per-Broker Settings & Symbol Overrides
+# Show All Active Broker Connections (MT4 + MT5)
 
-## What You Get
+## Problem
+The bot view only looks for **one** MetaAPI connection (`broker_type === "metaapi"`) and displays a hardcoded "MT5 Connected" badge. If you have both MT4 and MT5 accounts connected (both use MetaAPI under the hood), only one shows up and the label is always "MT5".
 
-Each broker connection gets its own independent configuration — different instruments, risk settings, SL/TP methods, sessions, and symbol overrides. Your "No Spread" demo account can trade EUR/USD with structure-based SL, while your "Try" account trades XAU/USD with ATR-based SL and suffix `r`.
-
-## Architecture
-
-Currently there's **one global bot config** per user. We'll add an optional `connection_id` foreign key to `bot_configs` so each broker connection can have its own config. The global config remains as a fallback.
-
-```text
-┌──────────────────────┐
-│  Global Bot Config   │  ← connection_id = NULL (fallback)
-└──────────────────────┘
-┌──────────────────────┐
-│  "No Spread" Config  │  ← connection_id = abc-123
-└──────────────────────┘
-┌──────────────────────┐
-│  "Try" Config        │  ← connection_id = def-456
-└──────────────────────┘
-```
+## Solution
+Show **all active broker connections** as individual badges using each connection's `display_name`, and update the text references from "MT5" to "Broker" for generality.
 
 ## Changes
 
-### 1. Database Migration
-- Add `symbol_overrides` (jsonb, default `'{}'`) to `broker_connections`
-- Add `connection_id` (uuid, nullable, FK to `broker_connections.id ON DELETE CASCADE`) to `bot_configs`
-- Add unique constraint on `(user_id, connection_id)` — one config per connection
+### `src/pages/BotView.tsx`
 
-### 2. Backend: `bot-config/index.ts`
-- `get` action accepts optional `connectionId` — returns connection-specific config if it exists, else global
-- `update` action accepts optional `connectionId` — upserts per-connection config
-- `reset` action accepts optional `connectionId`
+1. **Replace single `mt5Connection`** variable with a filtered array of all active connections:
+   ```typescript
+   const activeConnections = Array.isArray(brokerConns) 
+     ? brokerConns.filter((c: any) => c.is_active) 
+     : [];
+   ```
 
-### 3. Backend: `bot-scanner/index.ts`
-- `loadConfig()` updated: when executing for a specific broker connection, load that connection's config first, fall back to global
-- Add `resolveSymbol(pair, conn)` helper that checks `symbol_overrides` before default suffix
+2. **Replace the single badge** (lines 163-171) with a loop that renders one badge per active connection, showing the `display_name`:
+   ```text
+   Before:  [MT5 Connected]
+   After:   [Try ✓] [No Spread ✓]   (or "Connect Broker" if none)
+   ```
 
-### 4. Backend: `broker-connections/index.ts` & `broker-execute/index.ts`
-- CRUD includes `symbol_overrides` field
-- `resolveSymbol()` used for all order execution
+3. **Update mode-switch banners** (lines 117, 119): Change "MT5 mirroring" text to "broker mirroring" since it could be MT4 or MT5.
 
-### 5. Frontend: `Settings.tsx` (Broker Connections)
-- Each broker connection card gets an **"Edit Settings"** button that opens `BotConfigModal` scoped to that connection
-- Add a **Symbol Overrides** key-value editor (e.g., `XAUUSD → m`) below the existing suffix field
-- Connection list shows whether it has custom config or uses global
+4. **Update "Connect MT5" fallback** button text to "Connect Broker".
 
-### 6. Frontend: `BotConfigModal.tsx`
-- Accepts optional `connectionId` prop
-- When set, loads/saves config for that specific connection
-- Shows a banner: "Configuring: [connection name]" vs "Global Configuration"
-- Add "Copy from Global" button to initialize a connection config from the global one
-
-### 7. Frontend: `api.ts`
-- `botConfigApi.get(connectionId?)` and `.update(config, connectionId?)`
-- `brokerApi.create/update` includes `symbol_overrides`
-
-## Files Changed
-- **Migration**: add `symbol_overrides` column + `connection_id` column + unique constraint
-- `supabase/functions/bot-config/index.ts`
-- `supabase/functions/bot-scanner/index.ts`
-- `supabase/functions/broker-connections/index.ts`
-- `supabase/functions/broker-execute/index.ts`
-- `src/pages/Settings.tsx`
-- `src/components/BotConfigModal.tsx`
-- `src/lib/api.ts`
+### Files Changed
+- `src/pages/BotView.tsx` — show all active connections by name, generalize MT5 references
 
