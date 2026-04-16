@@ -1648,7 +1648,8 @@ async function runScanForUser(supabase: any, userId: string) {
           }
         }
 
-        // Mirror to MT5 only when the account is explicitly in live mode
+        // Mirror to brokers only when the account is explicitly in live mode
+        console.log(`Mirror check for ${pair}: execution_mode=${account.execution_mode}, positionId=${positionId}`);
         try {
           if (account.execution_mode === "live") {
             const { data: connections } = await supabase.from("broker_connections")
@@ -1711,9 +1712,9 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
                      try {
                        const parsed = JSON.parse(resBody);
-                       if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE") {
-                         console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
-                         mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                        if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
+                          console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
+                          mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
                        } else {
                          mirrorResults.push(`${conn.display_name}: success`);
                        }
