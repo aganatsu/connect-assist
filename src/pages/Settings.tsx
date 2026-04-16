@@ -12,6 +12,7 @@ import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { supabase } from "@/integrations/supabase/client";
 
 type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
 
