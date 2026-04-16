@@ -71,10 +71,18 @@ Deno.serve(async (req) => {
       }
 
       if (conn.broker_type === "metaapi") {
+        // Auto-detect swapped fields: JWT tokens start with "eyJ", account IDs are UUIDs
+        let authToken = conn.api_key;
+        let metaAccountId = conn.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          // Fields are swapped — correct them
+          authToken = conn.account_id;
+          metaAccountId = conn.api_key;
+        }
+
         try {
-          // Use provisioning API to verify account exists (reliable SSL)
-          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`, {
-            headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
+          const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
+            headers: { "auth-token": authToken, "Content-Type": "application/json" },
           });
           if (!provRes.ok) {
             const errText = await provRes.text();
@@ -90,7 +98,6 @@ Deno.serve(async (req) => {
             connectionStatus: acct.connectionStatus,
           });
         } catch (e: any) {
-          // Graceful fallback for SSL/network errors
           const msg = e?.message || String(e);
           if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
             return respond({ success: false, error: "SSL certificate issue connecting to MetaApi. The credentials are saved and will work for trade execution." });
