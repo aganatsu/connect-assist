@@ -425,6 +425,10 @@ Deno.serve(async (req) => {
 
             await supabase.from("paper_positions").delete().eq("id", pos.id);
             closedIds.push(pos.id);
+
+            // Mirror close to all broker connections
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            console.log(`Auto-close broker mirror [${pos.position_id}] ${closeReason}: ${brokerCloseResults.join("; ")}`);
           }
         }
 
