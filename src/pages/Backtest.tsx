@@ -346,15 +346,22 @@ function generateFallbackResults(strategy: string, months: number, riskPercent: 
   const riskAmount = equity * (riskPercent / 100);
 
   for (let i = 0; i < totalTrades; i++) {
-    const isWin = Math.random() > 0.38;
-    const rr = isWin ? 1 + Math.random() * 4 : -(0.5 + Math.random() * 0.5);
+    // Deterministic hash
+    const hashInput = `${strategy}-${i}-fallback`;
+    let hash = 0;
+    for (let j = 0; j < hashInput.length; j++) {
+      hash = ((hash << 5) - hash + hashInput.charCodeAt(j)) | 0;
+    }
+    const hashNorm = Math.abs(hash % 1000) / 1000;
+    const isWin = hashNorm > 0.38;
+    const rr = isWin ? 1 + hashNorm * 4 : -(0.5 + hashNorm * 0.5);
     const pnl = rr * riskAmount;
     equity += pnl;
     peak = Math.max(peak, equity);
     const dd = ((equity - peak) / peak) * 100;
     maxDD = Math.min(maxDD, dd);
     const date = new Date(Date.now() - (totalTrades - i) * 86400000 * (months * 30 / totalTrades));
-    trades.push({ id: i + 1, date: date.toISOString().split('T')[0], direction: Math.random() > 0.5 ? 'long' : 'short', pnl: parseFloat(pnl.toFixed(2)), rr: parseFloat(rr.toFixed(2)), equity: parseFloat(equity.toFixed(2)), drawdown: parseFloat(dd.toFixed(2)), setup: strategy.split(' + ')[0] });
+    trades.push({ id: i + 1, date: date.toISOString().split('T')[0], direction: hashNorm > 0.5 ? 'long' : 'short', pnl: parseFloat(pnl.toFixed(2)), rr: parseFloat(rr.toFixed(2)), equity: parseFloat(equity.toFixed(2)), drawdown: parseFloat(dd.toFixed(2)), setup: strategy.split(' + ')[0] });
   }
 
   const wins = trades.filter(t => t.pnl > 0);
