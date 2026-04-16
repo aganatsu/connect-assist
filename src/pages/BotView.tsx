@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { paperApi, scannerApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
