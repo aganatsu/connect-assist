@@ -1,0 +1,1 @@
+ALTER TABLE public.broker_connections ADD COLUMN symbol_suffix text NOT NULL DEFAULT '';
