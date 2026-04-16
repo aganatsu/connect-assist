@@ -682,6 +682,7 @@ async function loadConfig(supabase: any, userId: string) {
   }
   // Ensure openingRange defaults are merged
   merged.openingRange = { ...DEFAULTS.openingRange, ...(merged.openingRange || {}) };
+  merged.tradingStyle = { ...DEFAULTS.tradingStyle, ...(merged.tradingStyle || {}) };
   return merged;
 }
 
@@ -975,6 +976,7 @@ async function runScanForUser(supabase: any, userId: string) {
       factorCount: analysis.factors.filter(f => f.present).length,
       factors: analysis.factors,
       status: "analyzed",
+      tradingStyle: pairStyle,
     };
 
     if (analysis.score >= config.minConfluence && analysis.direction && !isPaused) {
@@ -1087,7 +1089,7 @@ async function runScanForUser(supabase: any, userId: string) {
     details_json: scanDetails,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle };
 }
 
 function respond(data: any, status = 200) {
