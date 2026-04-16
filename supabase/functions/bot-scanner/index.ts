@@ -1317,6 +1317,7 @@ Deno.serve(async (req) => {
 });
 
 async function runScanForUser(supabase: any, userId: string) {
+  const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
@@ -1616,20 +1617,49 @@ async function runScanForUser(supabase: any, userId: string) {
                   const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
                   const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
                    const brokerSymbol = resolveSymbol(pair, conn);
+
+                   // ── Fetch live symbol specs from broker to clamp lot size ──
+                   let brokerVolume = size;
+                   const specCacheKey = `${conn.id}:${brokerSymbol}`;
+                   if (!specCache[specCacheKey]) {
+                     try {
+                       const specRes = await fetch(
+                         `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/specification`,
+                         { headers: { "auth-token": authToken } },
+                       );
+                       if (specRes.ok) {
+                         const specData: any = await specRes.json();
+                         specCache[specCacheKey] = {
+                           minVolume: specData.minVolume ?? 0.01,
+                           maxVolume: specData.maxVolume ?? 100,
+                           volumeStep: specData.volumeStep ?? 0.01,
+                         };
+                       }
+                     } catch (e: any) {
+                       console.warn(`Spec fetch failed for ${brokerSymbol} on [${conn.display_name}]: ${e?.message}`);
+                     }
+                   }
+                   const brokerSpec = specCache[specCacheKey];
+                   if (brokerSpec) {
+                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, size));
+                     brokerVolume = Math.round(brokerVolume / brokerSpec.volumeStep) * brokerSpec.volumeStep;
+                     brokerVolume = parseFloat(brokerVolume.toFixed(6)); // avoid floating-point artifacts
+                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${size} → ${brokerVolume}`);
+                   }
+
                    const mt5Body: any = {
                      actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
                      symbol: brokerSymbol,
-                     volume: size,
+                     volume: brokerVolume,
                      comment: `paper:${positionId}`,
                    };
                    if (sl) mt5Body.stopLoss = sl;
                    if (tp) mt5Body.takeProfit = tp;
-                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${size} lots, SL=${sl}, TP=${tp}`);
+                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${sl}, TP=${tp}`);
                    const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
                    const resBody = await mt5Res.text();
                    if (mt5Res.ok) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
-                     // Check for stringCode errors in response (MetaAPI can return 200 with error)
                      try {
                        const parsed = JSON.parse(resBody);
                        if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE") {
