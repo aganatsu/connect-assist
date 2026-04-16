@@ -53,6 +53,60 @@ Deno.serve(async (req) => {
       return respond({ success: true });
     }
 
+    if (action === "import_from_paper") {
+      // Get all paper_trade_history for this user
+      const { data: paperTrades, error: ptErr } = await supabase
+        .from("paper_trade_history")
+        .select("*")
+        .eq("user_id", user.id);
+      if (ptErr) throw ptErr;
+      if (!paperTrades || paperTrades.length === 0) return respond({ imported: 0 });
+
+      // Get existing trades to find already-imported position_ids (stored in notes or reasoning_json)
+      const { data: existingTrades, error: etErr } = await supabase
+        .from("trades")
+        .select("reasoning_json")
+        .eq("user_id", user.id);
+      if (etErr) throw etErr;
+
+      const existingPositionIds = new Set(
+        (existingTrades || [])
+          .map((t: any) => t.reasoning_json?.paper_position_id)
+          .filter(Boolean)
+      );
+
+      const toInsert = paperTrades
+        .filter((pt: any) => !existingPositionIds.has(pt.position_id))
+        .map((pt: any) => ({
+          user_id: user.id,
+          symbol: pt.symbol,
+          direction: pt.direction,
+          entry_price: pt.entry_price,
+          exit_price: pt.exit_price,
+          entry_time: pt.open_time ? new Date(pt.open_time).toISOString() : new Date().toISOString(),
+          exit_time: pt.closed_at ? new Date(pt.closed_at).toISOString() : null,
+          status: "closed",
+          pnl_amount: pt.pnl,
+          pnl_pips: pt.pnl_pips,
+          setup_type: "Bot Signal",
+          notes: `Auto-imported from bot. Reason: ${pt.signal_reason || "N/A"}. Close: ${pt.close_reason}`,
+          reasoning_json: {
+            paper_position_id: pt.position_id,
+            signal_score: pt.signal_score,
+            signal_reason: pt.signal_reason,
+            close_reason: pt.close_reason,
+            order_id: pt.order_id,
+          },
+        }));
+
+      if (toInsert.length === 0) return respond({ imported: 0 });
+
+      const { error: insertErr } = await supabase.from("trades").insert(toInsert);
+      if (insertErr) throw insertErr;
+
+      return respond({ imported: toInsert.length });
+    }
+
     if (action === "stats") {
       const { data, error } = await supabase.from("trades").select("*").eq("user_id", user.id).eq("status", "closed");
       if (error) throw error;

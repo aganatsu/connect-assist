@@ -37,6 +37,7 @@ export const tradesApi = {
   delete: (id: string) => invokeFunction("trades", { action: "delete", id }),
   stats: () => invokeFunction("trades", { action: "stats" }),
   equityCurve: () => invokeFunction("trades", { action: "equity_curve" }),
+  importFromPaper: () => invokeFunction("trades", { action: "import_from_paper" }),
 };
 
 // ── User Settings ──

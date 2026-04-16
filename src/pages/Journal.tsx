@@ -15,13 +15,17 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, Cell, CartesianGrid,
 } from "recharts";
-import { Filter, Calculator, Plus, X, BookOpen } from "lucide-react";
+import { Filter, Calculator, Plus, X, BookOpen, Download, Import } from "lucide-react";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getChartTheme } from "@/lib/chartTheme";
 
 const ALL_SYMBOLS = ["all", ...INSTRUMENTS.map(i => i.symbol)];
 const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep + OB", "Premium/Discount + BOS", "FVG Fill + Confluence", "Manual"];
 
 export default function JournalView() {
   const queryClient = useQueryClient();
+  const { resolvedTheme } = useTheme();
+  const ct = getChartTheme(resolvedTheme);
   const [filterSymbol, setFilterSymbol] = useState("all");
   const [filterDirection, setFilterDirection] = useState<"all" | "long" | "short">("all");
   const [addOpen, setAddOpen] = useState(false);
@@ -46,6 +50,12 @@ export default function JournalView() {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const importMutation = useMutation({
+    mutationFn: () => tradesApi.importFromPaper(),
+    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["trades"] }); toast.success(`Imported ${data?.imported ?? 0} bot trades`); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const handleAddTrade = () => {
     createMutation.mutate({
       symbol: formSymbol, direction: formDirection, entry_price: formEntry, entry_time: new Date().toISOString(),
@@ -53,6 +63,21 @@ export default function JournalView() {
       setup_type: formSetup, timeframe: formTimeframe, notes: formNotes,
       risk_percent: formRisk || null, risk_reward: formRR || null, pnl_amount: formPnl || null,
     });
+  };
+
+  const handleExportCSV = () => {
+    const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Notes"];
+    const rows = filteredTrades.map((t: any) => [
+      t.entry_time?.split("T")[0] ?? "", t.symbol, t.direction, t.setup_type || "",
+      t.entry_price, t.exit_price || "", t.pnl_amount || "", t.risk_reward || "",
+      t.risk_percent || "", (t.notes || "").replace(/"/g, '""'),
+    ]);
+    const csv = [headers.join(","), ...rows.map(r => r.map((v: string) => `"${v}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `trades_${new Date().toISOString().split("T")[0]}.csv`; a.click();
+    URL.revokeObjectURL(url);
+    toast.success("CSV downloaded");
   };
 
   const filteredTrades = useMemo(() => {
@@ -103,6 +128,12 @@ export default function JournalView() {
             <div className="flex items-center gap-2">
               <Dialog open={addOpen} onOpenChange={setAddOpen}>
                 <DialogTrigger asChild><Button size="sm" className="h-7 text-[11px]"><Plus className="h-3 w-3 mr-1" /> Add Trade</Button></DialogTrigger>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
+                <Import className="h-3 w-3 mr-1" /> {importMutation.isPending ? "Importing…" : "Import Bot Trades"}
+              </Button>
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleExportCSV} disabled={filteredTrades.length === 0}>
+                <Download className="h-3 w-3 mr-1" /> CSV
+              </Button>
                 <DialogContent className="max-w-md">
                   <DialogHeader><DialogTitle>Add Manual Trade</DialogTitle></DialogHeader>
                   <div className="space-y-3">
@@ -203,10 +234,10 @@ export default function JournalView() {
                     <div className="h-[200px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={equityCurveData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
-                          <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
+                          <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
+                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} />
                           <Area type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.1} strokeWidth={2} />
                         </AreaChart>
                       </ResponsiveContainer>
@@ -219,10 +250,10 @@ export default function JournalView() {
                     <div className="h-[200px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={dailyPnlData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                          <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
+                          <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+                          <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
+                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} />
                           <Bar dataKey="pnl">{dailyPnlData.map((e, i) => <Cell key={i} fill={e.pnl >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
                         </BarChart>
                       </ResponsiveContainer>
