@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
       if (conn.broker_type === "metaapi") {
         const body: any = {
           actionType: direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-          symbol: symbol.replace("/", ""), volume: size,
+          symbol: symbol.replace("/", "") + (conn.symbol_suffix || ""), volume: size,
         };
         if (stopLoss) body.stopLoss = stopLoss;
         if (takeProfit) body.takeProfit = takeProfit;

@@ -1584,7 +1584,7 @@ async function runScanForUser(supabase: any, userId: string) {
               const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
               const mt5Body: any = {
                 actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                symbol: pair.replace("/", ""),
+                symbol: pair.replace("/", "") + (conn.symbol_suffix || ""),
                 volume: size,
                 comment: `paper:${positionId}`,
               };
