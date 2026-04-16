@@ -94,12 +94,16 @@ export default function Dashboard() {
       return [{ date: "Now", equity: balance, drawdown: 0 }];
     }
 
-    return filtered.map((p: any, i: number) => {
+    return filtered.map((p: any) => {
       const d = new Date(p.date);
-      // Show time for 1W, date for longer ranges
-      const label = timeRange === "1W"
-        ? d.toLocaleDateString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
-        : d.toLocaleDateString([], { month: "short", day: "numeric" });
+      let label: string;
+      if (timeRange === "1W") {
+        label = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      } else if (timeRange === "1M") {
+        label = `${d.getMonth() + 1}/${d.getDate()}`;
+      } else {
+        label = d.toLocaleDateString([], { month: "short", day: "numeric" });
+      }
       return { date: label, equity: p.equity, drawdown: 0 };
     });
   }, [botStatus?.equityCurve, balance, timeRange]);
