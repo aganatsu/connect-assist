@@ -126,5 +126,9 @@ function getDefaultConfig() {
       usePremiumDiscount: false,
       waitForCompletion: true,
     },
+    tradingStyle: {
+      mode: "day_trader",
+      autoDetectEnabled: false,
+    },
   };
 }

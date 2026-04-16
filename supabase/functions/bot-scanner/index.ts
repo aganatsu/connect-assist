@@ -37,7 +37,134 @@ const DEFAULTS = {
     usePremiumDiscount: false,
     waitForCompletion: true,
   },
+  tradingStyle: {
+    mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" | "auto",
+    autoDetectEnabled: false,
+  },
 };
+
+// ─── Trading Style Overrides ────────────────────────────────────────
+const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
+  scalper: {
+    entryTimeframe: "5m",
+    htfTimeframe: "1h",
+    tpRatio: 1.5,
+    slBufferPips: 1,
+    minConfluence: 5,
+  },
+  day_trader: {
+    entryTimeframe: "15min",
+    htfTimeframe: "1day",
+    tpRatio: 2.0,
+    slBufferPips: 2,
+    minConfluence: 6,
+  },
+  swing_trader: {
+    entryTimeframe: "1h",
+    htfTimeframe: "1w",
+    tpRatio: 3.0,
+    slBufferPips: 5,
+    minConfluence: 7,
+  },
+};
+
+function getYahooInterval(entryTf: string): string {
+  const map: Record<string, string> = {
+    "1m": "1m", "5m": "5m", "15m": "15m", "15min": "15m",
+    "30m": "30m", "1h": "1h", "4h": "1h", "1d": "1d", "1day": "1d",
+  };
+  return map[entryTf] || "15m";
+}
+
+function getYahooRange(entryTf: string): string {
+  const map: Record<string, string> = {
+    "1m": "1d", "5m": "5d", "15m": "5d", "15min": "5d",
+    "30m": "5d", "1h": "1mo", "4h": "1mo",
+  };
+  return map[entryTf] || "5d";
+}
+
+function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
+  if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
+
+  // Calculate ATR from daily candles (14-period)
+  const atrPeriod = Math.min(14, dailyCandles.length - 1);
+  let atrSum = 0;
+  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
+    const prev = dailyCandles[i - 1];
+    const curr = dailyCandles[i];
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    atrSum += tr;
+  }
+  const atr = atrSum / atrPeriod;
+  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
+  const atrPercent = avgPrice > 0 ? (atr / avgPrice) * 100 : 0;
+
+  // Trend strength: compare recent 5-day move vs ATR
+  const recentClose = dailyCandles[dailyCandles.length - 1].close;
+  const fiveDaysAgo = dailyCandles[Math.max(0, dailyCandles.length - 6)].close;
+  const trendMove = Math.abs(recentClose - fiveDaysAgo);
+  const trendStrength = atr > 0 ? trendMove / (atr * 5) : 0; // normalized
+
+  // Low volatility + ranging → scalper
+  if (atrPercent < 0.5 && trendStrength < 0.3) return "scalper";
+  // High volatility + strong trend → swing
+  if (atrPercent > 1.0 && trendStrength > 0.5) return "swing_trader";
+  // Default
+  return "day_trader";
+}
+
+// ─── Session Detection ──────────────────────────────────────────────
+function detectSession(): { name: string; isKillZone: boolean } {
+  const now = new Date();
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const t = h + m / 60;
+
+  // Kill zones are the high-volume windows within each session
+  if (t >= 0 && t < 9) {
+    const isKZ = t >= 0 && t < 4; // Asian kill zone: 00:00-04:00 UTC
+    return { name: "Asian", isKillZone: isKZ };
+  }
+  if (t >= 7 && t < 16) {
+    const isKZ = (t >= 7 && t < 10) || (t >= 14 && t < 16); // London open/close KZ
+    return { name: "London", isKillZone: isKZ };
+  }
+  if (t >= 12 && t < 21) {
+    const isKZ = (t >= 12 && t < 15) || (t >= 19 && t < 21); // NY open/close KZ
+    return { name: "New York", isKillZone: isKZ };
+  }
+  return { name: "Off-Hours", isKillZone: false };
+}
+
+// ─── Premium/Discount Zone Calculation ──────────────────────────────
+function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
+  if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+
+  const swings = detectSwingPoints(candles);
+  const recentHighs = swings.filter(s => s.type === "high").slice(-5);
+  const recentLows = swings.filter(s => s.type === "low").slice(-5);
+
+  if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+
+  const swingHigh = Math.max(...recentHighs.map(s => s.price));
+  const swingLow = Math.min(...recentLows.map(s => s.price));
+  const range = swingHigh - swingLow;
+
+  if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+
+  const lastPrice = candles[candles.length - 1].close;
+  const zonePercent = ((lastPrice - swingLow) / range) * 100;
+
+  let currentZone = "equilibrium";
+  if (zonePercent > 55) currentZone = "premium";
+  else if (zonePercent < 45) currentZone = "discount";
+
+  // OTE (Optimal Trade Entry) zone: 62-79% retracement
+  const oteZone = zonePercent >= 62 && zonePercent <= 79;
+
+  return { currentZone, zonePercent, oteZone };
+}
 
 const YAHOO_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
@@ -751,17 +878,26 @@ Deno.serve(async (req) => {
 async function runScanForUser(supabase: any, userId: string) {
   const config = await loadConfig(supabase, userId);
 
+  // ── Resolve Trading Style ──
+  const styleMode = config.tradingStyle?.mode || "day_trader";
+  let resolvedStyle = styleMode === "auto" ? "day_trader" : styleMode; // default, may be overridden per-instrument in auto mode
+  const isAutoStyle = styleMode === "auto" || config.tradingStyle?.autoDetectEnabled;
+
+  // Apply style overrides to config (non-auto mode applies globally)
+  if (!isAutoStyle && STYLE_OVERRIDES[resolvedStyle]) {
+    Object.assign(config, STYLE_OVERRIDES[resolvedStyle]);
+  }
+
   // Session + day check
   const now = new Date();
   const dayOfWeek = now.getUTCDay(); // 0=Sun
   if (!config.enabledDays.includes(dayOfWeek)) {
-    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled" };
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
   if (!config.enabledSessions.some((s: string) => session.name.includes(s)) && session.name !== "Off-Hours") {
     // Allow scanning even in off-hours but note it
   }
-
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
@@ -795,9 +931,13 @@ async function runScanForUser(supabase: any, userId: string) {
     // Delay between instruments to avoid rate limiting
     if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 500));
 
-    // Fetch 15m, daily, and optionally 1h candles
+    // Determine entry TF based on style
+    const entryInterval = getYahooInterval(config.entryTimeframe);
+    const entryRange = getYahooRange(config.entryTimeframe);
+
+    // Fetch entry TF, daily, and optionally 1h candles
     const fetchPromises: Promise<Candle[]>[] = [
-      fetchCandles(pair, "15m", "5d"),
+      fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
     if (config.openingRange?.enabled) {
@@ -808,6 +948,15 @@ async function runScanForUser(supabase: any, userId: string) {
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
       continue;
+    }
+
+    // Auto-detect style per instrument if in auto mode
+    let pairStyle = resolvedStyle;
+    if (isAutoStyle) {
+      pairStyle = detectOptimalStyle(candles, dailyCandles);
+      // Apply per-instrument overrides
+      const pairConfig = { ...config, ...STYLE_OVERRIDES[pairStyle] };
+      Object.assign(config, STYLE_OVERRIDES[pairStyle]);
     }
 
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config, hourlyCandles);
