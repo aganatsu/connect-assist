@@ -120,7 +120,7 @@ function BrokerSettings() {
                 </p>
                 {c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym}→"${sfx}"`).join(", ")}
+                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym} → ${(sfx as string) || '(no suffix)'}`).join(", ")}
                   </p>
                 )}
               </div>
