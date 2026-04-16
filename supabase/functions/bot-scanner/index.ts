@@ -491,7 +491,12 @@ function calculatePositionSize(balance: number, riskPercent: number, entryPrice:
 async function loadConfig(supabase: any, userId: string) {
   const { data } = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).maybeSingle();
   if (!data?.config_json) return { ...DEFAULTS };
-  return { ...DEFAULTS, ...(data.config_json as any) };
+  const merged = { ...DEFAULTS, ...(data.config_json as any) };
+  // Ensure instruments is always a valid array
+  if (!Array.isArray(merged.instruments) || merged.instruments.length === 0) {
+    merged.instruments = DEFAULTS.instruments;
+  }
+  return merged;
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
