@@ -808,6 +808,11 @@ async function loadConfig(supabase: any, userId: string) {
     // ── Protection ──
     maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
     protectionMaxDailyLossDollar: protection.maxDailyLoss ?? 0,
+    // Map circuit breaker to maxDrawdown if set and lower (Fix #10)
+    maxDrawdown: Math.min(
+      risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
+      protection.circuitBreakerPct ?? 100,
+    ),
 
     // ── Opening Range & Trading Style (already nested, keep as-is) ──
     openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
