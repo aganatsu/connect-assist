@@ -23,9 +23,9 @@ export const marketApi = {
 
 // ── Bot Config ──
 export const botConfigApi = {
-  get: () => invokeFunction("bot-config", { action: "get" }),
-  update: (config: any) => invokeFunction("bot-config", { action: "update", config }),
-  reset: () => invokeFunction("bot-config", { action: "reset" }),
+  get: (connectionId?: string) => invokeFunction("bot-config", { action: "get", connectionId }),
+  update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
+  reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
 };
 
 // ── Trades (Journal) ──
@@ -50,7 +50,7 @@ export const settingsApi = {
 // ── Broker Connections ──
 export const brokerApi = {
   list: () => invokeFunction("broker-connections", { action: "list" }),
-  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string }) =>
+  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string> }) =>
     invokeFunction("broker-connections", { action: "create", ...data }),
   update: (data: any) => invokeFunction("broker-connections", { action: "update", ...data }),
   delete: (id: string) => invokeFunction("broker-connections", { action: "delete", id }),
