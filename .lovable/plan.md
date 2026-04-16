@@ -1,76 +1,86 @@
 
 
-# Fix Runtime Error + Add Trading Style System
+# Add More Instruments: Forex Pairs + Indices + Commodities + Crypto
 
-## Critical Bug Fix First
+## New Instruments to Add
 
-The bot-scanner is crashing with `detectSession is not defined` because two essential functions were never added to `bot-scanner/index.ts`:
+### Additional Forex (11 new pairs)
+| Symbol | Name | Pip Size | Yahoo |
+|--------|------|----------|-------|
+| EUR/AUD | Euro / Australian Dollar | 0.0001 | EURAUD=X |
+| EUR/CAD | Euro / Canadian Dollar | 0.0001 | EURCAD=X |
+| EUR/CHF | Euro / Swiss Franc | 0.0001 | EURCHF=X |
+| EUR/NZD | Euro / New Zealand Dollar | 0.0001 | EURNZD=X |
+| GBP/AUD | British Pound / Australian Dollar | 0.0001 | GBPAUD=X |
+| GBP/CAD | British Pound / Canadian Dollar | 0.0001 | GBPCAD=X |
+| GBP/CHF | British Pound / Swiss Franc | 0.0001 | GBPCHF=X |
+| GBP/NZD | British Pound / New Zealand Dollar | 0.0001 | GBPNZD=X |
+| AUD/CAD | Australian Dollar / Canadian Dollar | 0.0001 | AUDCAD=X |
+| AUD/JPY | Australian Dollar / Japanese Yen | 0.01 | AUDJPY=X |
+| CAD/JPY | Canadian Dollar / Japanese Yen | 0.01 | CADJPY=X |
 
-- **`detectSession()`** — determines current trading session (Asian/London/NY) and kill zone status
-- **`calculatePremiumDiscount(candles)`** — calculates premium/discount zones from swing points
+### Indices (3 new)
+| Symbol | Name | Point Size | Yahoo |
+|--------|------|-----------|-------|
+| US30 | Dow Jones Industrial | 1.0 | YM=F |
+| NAS100 | Nasdaq 100 | 0.25 | NQ=F |
+| SPX500 | S&P 500 | 0.25 | ES=F |
 
-Both exist in `smc-analysis/index.ts` but are missing from the scanner. These must be added before any new features.
+### Additional Commodities & Crypto (3 new)
+| Symbol | Name | Point Size | Yahoo |
+|--------|------|-----------|-------|
+| XAG/USD | Silver / US Dollar | 0.001 | SI=F |
+| US Oil | Crude Oil | 0.01 | CL=F |
+| ETH/USD | Ethereum / US Dollar | 0.01 | ETH-USD |
 
-## Trading Style System
+## Asset-Class Profiles (Bot Scanner)
 
-### How It Works
+Each asset class gets parameter adjustments applied **before** style overrides:
 
-Add a `tradingStyle` config section with four modes. When a mode is active, the scanner applies parameter overrides **before** running its analysis — so the existing 9-factor scoring, safety gates, and trade execution all automatically adapt.
-
-### The Four Modes
+- **Indices** — wider SL buffer (×3), higher ATR threshold, weight NY session heavily
+- **Commodities** — wider SL buffer (×2), adjusted proximity thresholds
+- **Crypto** — skip session/kill-zone safety gates (24/7 market), wider SL buffer (×2)
+- **Forex** — no adjustment (baseline)
 
 ```text
-Parameter          │ Scalper        │ Day Trader     │ Swing Trader   │ Auto
-───────────────────┼────────────────┼────────────────┼────────────────┼──────────
-Entry TF           │ 5m             │ 15m            │ 1h             │ computed
-HTF Bias TF        │ 1h             │ 1D             │ 1W             │ computed
-TP Ratio           │ 1.5:1          │ 2:1            │ 3:1            │ computed
-SL Buffer (pips)   │ 1              │ 2              │ 5              │ computed
-Max Hold (hours)   │ 1              │ 8              │ 120            │ computed
-Min Confluence     │ 5              │ 6              │ 7              │ computed
+Flow:  Instrument Type → Asset Profile → Style Override → Scanner Analysis
 ```
 
-**Auto mode** analyzes ATR and trend strength per instrument:
-- Low ATR + ranging → Scalper params
-- Medium ATR + trending → Day Trader params
-- High ATR + strong trend → Swing Trader params
+## Interface Changes
 
-### Changes by File
+Add `'index'` to the Instrument type union, plus `pointValue` and `contractSize` fields:
+```typescript
+type: 'forex' | 'crypto' | 'commodity' | 'index';
+pointValue?: number;   // default 1
+contractSize?: number; // default 100000 for forex
+```
 
-**1. `supabase/functions/bot-scanner/index.ts`**
-- Add missing `detectSession()` and `calculatePremiumDiscount()` functions (fixes the crash)
-- Add `getStyleOverrides(mode)` — returns parameter overrides for each style
-- Add `detectOptimalStyle(candles, dailyCandles)` — ATR + trend analysis for Auto mode
-- In `runScanForUser`: after loading config, resolve active style → apply overrides to config before analysis
-- Adjust `fetchCandles` interval based on style (5m for Scalper, 15m for Day Trader, 1h for Swing)
+## Files to Modify
 
-**2. `supabase/functions/bot-config/index.ts`**
-- Add `tradingStyle` defaults to `getDefaultConfig()`:
-  ```
-  tradingStyle: {
-    mode: "day_trader",
-    autoDetectEnabled: false,
-  }
-  ```
+### `src/lib/marketData.ts`
+- Expand `Instrument` interface with `'index'` type, `pointValue`, `contractSize`
+- Add all 17 new instruments
+- Keep `FOREX_PAIRS` filter working
 
-**3. `src/components/BotConfigModal.tsx`**
-- Add "Trading Style" tab (first position, before Strategy)
-- Four mode buttons: Scalper, Day Trader, Swing Trader, Auto
-- When manual mode selected: show summary card of what parameters it sets
-- When Auto selected: show explanation text
-- Note that style sets defaults; manual overrides in other tabs still apply
+### `supabase/functions/market-data/index.ts`
+- Add Yahoo symbol mappings for all new instruments
 
-**4. `src/pages/BotView.tsx`**
-- Add a colored badge in the header showing active style
-- In Auto mode, show per-instrument detected style in scan results
+### `supabase/functions/bot-scanner/index.ts`
+- Add Yahoo symbol mappings + SPECS for new instruments
+- Add `ASSET_PROFILES` object with per-type parameter multipliers
+- Apply asset profile adjustments in scan loop before style overrides
+- Skip session/kill-zone gate for crypto instruments
 
-### How It Integrates With Existing Logic
+### `src/components/BotConfigModal.tsx`
+- Group instrument selection by type (Forex / Indices / Commodities / Crypto)
+- Show type badges next to instruments
 
-The style system works as a **parameter preprocessor**. It modifies config values (entry TF, TP ratio, SL buffer, min confluence, max hold hours) before they're used by:
-- The 9-factor confluence scoring (uses entry TF for candle fetching, min confluence for threshold)
-- The 10 safety gates (uses max hold, min R:R which changes with TP ratio)
-- Position sizing (uses SL buffer)
-- Trade execution (uses TP ratio)
+### `src/components/InstrumentSearch.tsx`
+- Group search results by instrument type with section headers
 
-No changes to the scoring or gate logic itself — just the parameters fed into them.
+## What Does NOT Change
+- 9-factor confluence scoring logic
+- 10 safety gates logic
+- Trading style system (layers on top as before)
+- No new database tables
 
