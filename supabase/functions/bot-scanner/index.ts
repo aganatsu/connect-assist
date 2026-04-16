@@ -1642,7 +1642,8 @@ async function runScanForUser(supabase: any, userId: string) {
                    } else {
                      console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
-                } catch (connErr: any) {
+                   }
+                 } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
                 }
