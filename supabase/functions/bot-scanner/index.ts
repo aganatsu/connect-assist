@@ -51,6 +51,14 @@ const DEFAULTS = {
   },
 };
 
+// ─── Resolve symbol name with per-symbol overrides or default suffix ──
+function resolveSymbol(pair: string, conn: any): string {
+  const base = pair.replace("/", "");
+  const overrides = conn.symbol_overrides || {};
+  if (overrides[base]) return base + overrides[base];
+  return base + (conn.symbol_suffix || "");
+}
+
 // ─── Trading Style Overrides ────────────────────────────────────────
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
