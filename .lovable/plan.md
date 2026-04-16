@@ -1,57 +1,33 @@
 
 
-# Implement Full SL/TP Method System — Fully Functional
+# Add Broker Symbol Suffix Support
 
-Yes, this will be **fully functional backend logic**, not just UI. The changes go into the `bot-scanner` edge function where trades are actually calculated and executed.
+## The Problem
+Your MT4/MT5 broker appends a suffix to symbol names (e.g., `EURUSDr` instead of `EURUSD`). The bot currently sends `EURUSD` which the broker rejects as an unknown symbol. This affects both live order execution and the broker-execute function.
 
-## What Changes
+## The Fix
+Add a **Symbol Suffix** field to the broker connection setup. When the bot sends orders to MetaAPI, it appends this suffix to the symbol name.
 
-### 1. Backend: `supabase/functions/bot-scanner/index.ts`
+### 1. Database: Add `symbol_suffix` column to `broker_connections`
+- Add nullable `symbol_suffix` text column (default empty string)
+- No migration needed for existing rows — they'll just have no suffix
 
-**ATR calculation function** — standalone `calculateATR(candles, period)` extracted for reuse.
+### 2. Backend: `supabase/functions/bot-scanner/index.ts`
+- Line 1587: Change `pair.replace("/", "")` → `pair.replace("/", "") + (conn.symbol_suffix || "")`
+- So `EUR/USD` becomes `EURUSDr` when suffix is `r`
 
-**Config loading** — `loadConfig()` updated to read all exit method fields:
-- `slMethod` (fixed_pips | atr_based | structure | below_ob)
-- `fixedSLPips`, `slATRMultiple`, `slATRPeriod`
-- `tpMethod` (fixed_pips | rr_ratio | next_level | atr_multiple)  
-- `fixedTPPips`, `tpRRRatio`, `tpATRMultiple`
+### 3. Backend: `supabase/functions/broker-execute/index.ts`
+- Line 94: Same fix for MetaAPI `place_order` — append `conn.symbol_suffix`
+- Line 129 (paper-trading): Same fix if applicable
 
-**`calculateSLTP()` function** — replaces the current hardcoded structure-only block (lines 680-708) with a proper dispatch:
+### 4. Frontend: Broker connection UI
+- Add a **Symbol Suffix** input field in the broker connection form (where API key and account ID are entered)
+- Label: "Symbol Suffix (e.g., 'r', '.pro', '.raw')"
+- Optional field, defaults to empty
 
-| SL Method | Calculation | Fallback |
-|-----------|------------|----------|
-| fixed_pips | entry ± fixedSLPips × pipSize | — |
-| atr_based | entry ± ATR × slATRMultiple | fixed_pips |
-| structure | nearest swing ± buffer (current logic) | fixed_pips |
-| below_ob | nearest OB edge ± buffer | fixed_pips |
-
-| TP Method | Calculation | Fallback |
-|-----------|------------|----------|
-| fixed_pips | entry ± fixedTPPips × pipSize | — |
-| rr_ratio | entry ± slDistance × tpRRRatio | — |
-| next_level | nearest PDH/PDL/PWH/PWL/liquidity pool | fixed_pips |
-| atr_multiple | entry ± ATR × tpATRMultiple | rr_ratio |
-
-All methods pass through the existing R:R validation gate before trade execution.
-
-### 2. Frontend: `src/components/BotConfigModal.tsx`
-
-Update the Entry/Exit tab with:
-- **SL Method** dropdown (4 options) with conditional parameter fields
-- **TP Method** dropdown (4 options) with conditional parameter fields
-- Fields shown/hidden based on selected method (e.g., ATR Multiple only visible when ATR method selected)
-
-### 3. Config Edge Function: `supabase/functions/bot-config/index.ts`
-
-Ensure defaults include all new SL/TP fields so existing users get sensible fallbacks.
-
-## Files Changed
-- `supabase/functions/bot-scanner/index.ts` — ATR calc, config wiring, full `calculateSLTP()` dispatch
-- `supabase/functions/bot-config/index.ts` — default config fields for SL/TP methods
-- `src/components/BotConfigModal.tsx` — SL/TP method selectors and conditional fields
-
-## What Won't Change
-- Database schema (config is stored as JSON in `bot_configs.config_json` — no migration needed)
-- Position sizing logic (already correct, uses SL distance)
-- Safety gates and confluence scoring (untouched)
+### Files Changed
+- `supabase/functions/bot-scanner/index.ts` — append suffix on MT5 mirror orders
+- `supabase/functions/broker-execute/index.ts` — append suffix on all MetaAPI orders
+- `src/pages/BotView.tsx` or wherever broker connection form lives — add suffix input
+- Migration: add `symbol_suffix` column to `broker_connections`
 
