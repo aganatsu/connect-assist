@@ -158,6 +158,27 @@ export default function BotView() {
             </button>
           )}
 
+          {/* Trading Style Badge */}
+          {(() => {
+            const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
+            if (styleMode === "auto") {
+              return (
+                <span className="text-[10px] font-medium px-1.5 py-0.5 bg-accent/20 text-accent-foreground border border-accent/30 flex items-center gap-1">
+                  🤖 Auto
+                </span>
+              );
+            }
+            const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
+            if (meta) {
+              return (
+                <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}>
+                  {meta.icon} {meta.label}
+                </span>
+              );
+            }
+            return null;
+          })()}
+
           <div className="ml-auto flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
               {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
