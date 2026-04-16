@@ -469,6 +469,9 @@ export default function BotView() {
               </Card>
             )}
 
+          </div>
+        </div>
+
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className="h-56 border-t border-border mt-2 pt-2 shrink-0 flex gap-0 min-h-0">
           {/* Left: Latest Scan Pairs (60%) */}
