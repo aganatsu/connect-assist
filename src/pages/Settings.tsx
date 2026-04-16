@@ -89,6 +89,13 @@ function BrokerSettings() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection removed"); },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: (data: { id: string; symbol_suffix: string; symbol_overrides: Record<string, string> }) =>
+      brokerApi.update(data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection updated"); setEditingId(null); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const testMutation = useMutation({
     mutationFn: (id: string) => brokerApi.test(id),
     onSuccess: (data: any) => {
