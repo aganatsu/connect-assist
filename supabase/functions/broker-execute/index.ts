@@ -114,6 +114,55 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (action === "symbol_specs") {
+      const { symbol } = payload;
+      if (!symbol) throw new Error("Missing symbol parameter");
+
+      if (conn.broker_type === "metaapi") {
+        let authToken = conn.api_key;
+        let metaAccountId = conn.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          authToken = conn.account_id;
+          metaAccountId = conn.api_key;
+        }
+        const res = await undiciFetch(
+          `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(symbol)}/specification`,
+          { headers: { "auth-token": authToken } },
+        );
+        if (!res.ok) throw new Error(`MetaAPI symbol_specs error: ${res.status}`);
+        const spec: any = await res.json();
+        return respond({
+          contractSize: spec.contractSize ?? 1,
+          minVolume: spec.minVolume ?? 0.01,
+          maxVolume: spec.maxVolume ?? 100,
+          volumeStep: spec.volumeStep ?? 0.01,
+          digits: spec.digits ?? 5,
+          stopsLevel: spec.stopsLevel ?? 0,
+        });
+      }
+
+      if (conn.broker_type === "oanda") {
+        const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(symbol)}`, {
+          headers: { Authorization: `Bearer ${conn.api_key}` },
+        });
+        if (!res.ok) throw new Error(`OANDA symbol_specs error: ${res.status}`);
+        const data: any = await res.json();
+        const inst = data.instruments?.[0];
+        if (!inst) throw new Error(`OANDA instrument not found: ${symbol}`);
+        return respond({
+          contractSize: 1,
+          minVolume: parseFloat(inst.minimumTradeSize || "0.01"),
+          maxVolume: parseFloat(inst.maximumOrderUnits || "100000000"),
+          volumeStep: parseFloat(inst.minimumTradeSize || "0.01"),
+          digits: inst.displayPrecision ?? 5,
+          stopsLevel: 0,
+        });
+      }
+
+      throw new Error(`symbol_specs not supported for broker type: ${conn.broker_type}`);
+    }
+
     if (action === "close_trade") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
