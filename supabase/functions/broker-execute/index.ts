@@ -8,7 +8,7 @@ import { fetch as undiciFetch } from "npm:undici@5.28.4";
 function resolveSymbol(symbol: string, conn: any): string {
   const base = symbol.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  // Full remap: override value IS the exact broker symbol
+  // Override = exact broker symbol (no suffix appended)
   if (overrides[base]) return overrides[base];
   return base + (conn.symbol_suffix || "");
 }
