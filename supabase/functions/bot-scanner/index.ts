@@ -1743,10 +1743,11 @@ async function runScanForUser(supabase: any, userId: string) {
                    }
                    const brokerSpec = specCache[specCacheKey];
                    if (brokerSpec) {
-                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, size));
+                     const preClamp = brokerVolume;
+                     brokerVolume = Math.max(brokerSpec.minVolume, Math.min(brokerSpec.maxVolume, brokerVolume));
                      brokerVolume = Math.round(brokerVolume / brokerSpec.volumeStep) * brokerSpec.volumeStep;
                      brokerVolume = parseFloat(brokerVolume.toFixed(6)); // avoid floating-point artifacts
-                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${size} → ${brokerVolume}`);
+                     console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
                    }
 
                    const mt5Body: any = {
