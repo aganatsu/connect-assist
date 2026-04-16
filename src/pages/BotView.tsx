@@ -13,9 +13,10 @@ import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
   TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
-  ChevronDown, ChevronUp, Plus, Settings, Activity,
+  ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
   const queryClient = useQueryClient();
