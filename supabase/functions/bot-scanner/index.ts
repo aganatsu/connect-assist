@@ -1403,11 +1403,14 @@ async function runScanForUser(supabase: any, userId: string) {
               `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
               `<b>Session:</b> ${analysis.session.name}\n` +
               `<b>Summary:</b> ${analysis.summary || "—"}`;
-            await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+            const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
               method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY")}` },
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
               body: JSON.stringify({ chat_id: telegramChatId, message: msg }),
             });
+            const notifyBody = await notifyResp.text();
+            if (!notifyResp.ok) console.warn("Telegram notify HTTP error:", notifyResp.status, notifyBody);
+            else console.log("Telegram notify sent OK:", notifyBody);
           } catch (e: any) {
             console.warn("Telegram notify failed:", e?.message);
           }
