@@ -58,9 +58,14 @@ export default function IctAnalysis() {
     enabled: !!liveQuotes, staleTime: 30000,
   });
 
-  const strengthData = currencyStrength
-    ? Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({ currency, score: typeof score === 'number' ? score : 0 })).sort((a, b) => a.score - b.score)
-    : [];
+  const strengthData = useMemo(() => {
+    if (!currencyStrength) return [];
+    const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
+    return arr
+      .filter((item: any) => item.currency && typeof item.currency === 'string' && item.currency.length <= 4)
+      .map((item: any) => ({ currency: item.currency, score: Math.round(((item.strength ?? item.score ?? 0) + Number.EPSILON) * 100) / 100 }))
+      .sort((a: any, b: any) => b.score - a.score);
+  }, [currencyStrength]);
 
   // Correlation matrix (simplified from quote changes)
   const correlationMatrix = useMemo(() => {
