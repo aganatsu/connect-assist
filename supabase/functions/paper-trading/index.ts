@@ -335,7 +335,21 @@ Deno.serve(async (req) => {
         order_id: orderId, position_status: "open",
       });
 
-      return respond({ success: true, positionId, orderId });
+      // Mirror to MT5 if connected
+      let mt5Mirror: any = null;
+      const { data: acctForMode } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", user.id).maybeSingle();
+      if (acctForMode) {
+        mt5Mirror = await mirrorToMT5(supabase, user.id, {
+          action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
+        });
+        if (mt5Mirror.success) {
+          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots`);
+        } else if (mt5Mirror.error !== "no_connection") {
+          console.warn(`MT5 mirror failed: ${mt5Mirror.error}`);
+        }
+      }
+
+      return respond({ success: true, positionId, orderId, mt5Mirror });
     }
 
     // ── Close position ──
