@@ -813,7 +813,14 @@ async function loadConfig(supabase: any, userId: string) {
     // ── Sessions ──
     enabledSessions: Array.isArray(sessions.filter) && sessions.filter.length > 0
       ? sessions.filter
-      : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
+      : sessions.asianEnabled !== undefined
+        ? [
+            ...(sessions.asianEnabled ? ["asian"] : []),
+            ...(sessions.londonEnabled ? ["london"] : []),
+            ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
+            ...(sessions.sydneyEnabled ? ["sydney"] : []),
+          ]
+        : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
     killZoneOnly: sessions.killZoneOnly ?? false,
 
     // ── Protection ──
