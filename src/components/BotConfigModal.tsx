@@ -12,9 +12,9 @@ import { toast } from "sonner";
 import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge } from "lucide-react";
 
 const PRESETS = {
-  conservative: { confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, description: "Low risk, high confluence" },
-  moderate: { confluenceThreshold: 5, riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 4, description: "Balanced risk/reward" },
-  aggressive: { confluenceThreshold: 3, riskPerTrade: 2, maxDailyDrawdown: 5, maxConcurrentTrades: 6, description: "Higher risk, more trades" },
+  conservative: { confluenceThreshold: 7, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, tradingStyle: "swing_trader" as const, description: "Low risk, swing trading" },
+  moderate: { confluenceThreshold: 5, riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 4, tradingStyle: "day_trader" as const, description: "Balanced day trading" },
+  aggressive: { confluenceThreshold: 3, riskPerTrade: 2, maxDailyDrawdown: 5, maxConcurrentTrades: 6, tradingStyle: "scalper" as const, description: "High frequency scalping" },
 };
 
 interface BotConfigModalProps {
@@ -84,10 +84,14 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                   ...config,
                   strategy: { ...(config.strategy || {}), confluenceThreshold: preset.confluenceThreshold },
                   risk: { ...(config.risk || {}), riskPerTrade: preset.riskPerTrade, maxDailyDrawdown: preset.maxDailyDrawdown, maxConcurrentTrades: preset.maxConcurrentTrades },
+                  tradingStyle: { ...(config.tradingStyle || {}), mode: preset.tradingStyle },
                 });
-                toast.info(`Applied ${key} preset`);
+                toast.info(`Applied ${key} preset → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
               }} className="p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
-                <p className="text-xs font-bold capitalize">{key}</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold capitalize">{key}</p>
+                  <span className="text-[10px] text-muted-foreground">{STYLE_META[preset.tradingStyle].icon} {STYLE_META[preset.tradingStyle].label}</span>
+                </div>
                 <p className="text-[10px] text-muted-foreground mt-0.5">{preset.description}</p>
               </button>
             ))}
