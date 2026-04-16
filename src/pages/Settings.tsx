@@ -102,12 +102,12 @@ function BrokerSettings() {
       <h2 className="text-xl font-bold">Broker Connections</h2>
       {(connections as any[]).map((c: any) => (
         <Card key={c.id}>
-          <CardContent className="pt-4 flex items-center justify-between">
-            <div>
-              <p className="font-medium text-sm">{c.display_name}</p>
-              <p className="text-xs text-muted-foreground">{c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}</p>
+          <CardContent className="pt-4 flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium text-sm truncate">{c.display_name}</p>
+              <p className="text-xs text-muted-foreground truncate">{c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}</p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 shrink-0">
               <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
               <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
             </div>
