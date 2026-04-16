@@ -820,7 +820,7 @@ async function loadConfig(supabase: any, userId: string) {
     // Priority: 1) instruments.enabled array (current UI, including explicit empty array), 2) allowedInstruments map (legacy), 3) defaults
     instruments: Array.isArray(instruments.enabled)
       ? instruments.enabled
-      : enabledInstrumentList && enabledInstrumentList.length > 0
+      : enabledInstrumentList
         ? enabledInstrumentList
         : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
 
