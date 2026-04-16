@@ -111,9 +111,12 @@ export default function Dashboard() {
 
   const strengthData = useMemo(() => {
     if (!currencyStrength) return [];
-    return Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({
-      currency, score: typeof score === 'number' ? score : 0,
-    })).sort((a, b) => b.score - a.score);
+    // API returns array: [{ currency, strength, rank }]
+    const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
+    return arr.map((item: any) => ({
+      currency: item.currency || '?',
+      score: item.strength ?? item.score ?? 0,
+    })).filter((d: any) => d.currency !== '?').sort((a: any, b: any) => b.score - a.score);
   }, [currencyStrength]);
 
   // Latest scan signals
