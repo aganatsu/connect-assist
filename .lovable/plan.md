@@ -1,54 +1,53 @@
 
 
-# Auto-Fetch Broker Symbol Specs for Lot Sizing
+## Problem Analysis
 
-## Problem
-The bot uses a hardcoded `SPECS` table for position sizing — same values for every broker. But brokers differ: one might require min 0.1 lots for NAS100, another accepts 0.01. The current code silently gets rejected when it sends invalid volumes.
+**Yes, this is a critical issue.** Currently the bot:
+
+1. Calculates position size using the **paper account balance** (line 1377, 1509)
+2. Sends the **same lot size** to ALL connected broker accounts (lines 1676-1678)
+
+**Your scenario:**
+- $100 account + $10,000 account both connected
+- Bot calculates size for $10,000 risk (say 0.5 lots)
+- **Both accounts get 0.5 lots** — the $100 account is severely over-leveraged
 
 ## Solution
-Before placing a trade on each broker, fetch the symbol specification from MetaAPI (contract size, min/max volume, volume step) and use it to clamp and round the lot size correctly.
 
-## Implementation
-
-### 1. Add `symbol_specs` action to `broker-execute` edge function
-- **MetaAPI**: Call `GET /users/current/accounts/{id}/symbols/{symbol}/specification`
-- **OANDA**: Call `GET /v3/accounts/{id}/instruments/{symbol}` (returns minimumTradeSize, maximumTradeSize)
-- Return: `{ contractSize, minVolume, maxVolume, volumeStep, digits, stopsLevel }`
-
-### 2. Update `bot-scanner` to fetch specs before sizing
-In the broker mirror section (where trades are sent to each broker):
-1. Call `symbol_specs` for the resolved symbol on that broker
-2. Replace the hardcoded `SPECS` values with the broker's actual values for that trade
-3. Clamp lot size to `[minVolume, maxVolume]` and round to `volumeStep`
-4. Log the broker specs used so you can see exactly why a size was chosen
-
-### 3. Cache specs to avoid repeated calls
-- Store fetched specs in a local map during each scan run
-- Key: `{connectionId}:{brokerSymbol}`
-- Specs don't change mid-scan, so one fetch per symbol per broker per run is enough
-
-### Technical Details
+Fetch **per-broker account balance** and calculate **custom lot size for each broker**:
 
 ```text
 Current flow:
-  calculatePositionSize() → hardcoded SPECS → same lot for all brokers → send
+  calculatePositionSize(paperBalance) → size → send same size to all brokers
 
 New flow:
-  calculatePositionSize() → base lot estimate
-  Per broker:
-    fetchSymbolSpec(conn, resolvedSymbol) → { minVolume, maxVolume, volumeStep }
-    clampedLot = clamp(baseLot, minVolume, maxVolume)
-    roundedLot = round(clampedLot / volumeStep) * volumeStep
-    send with roundedLot
+  For each broker:
+    fetchBrokerBalance(conn) → brokerBalance
+    calculatePositionSize(brokerBalance) → brokerSpecificSize
+    send trade with brokerSpecificSize
 ```
 
-### Files Changed
-- `supabase/functions/broker-execute/index.ts` — add `symbol_specs` action
-- `supabase/functions/bot-scanner/index.ts` — fetch specs per broker before placing, clamp/round lot size
+## Implementation
 
-### What This Fixes
-- No more `ERR_INVALID_TRADE_VOLUME` rejections
-- Each broker gets a lot size it actually accepts
-- Different contract sizes (1 for BTC vs 100000 for forex) are handled automatically
-- No need to manually maintain the hardcoded SPECS table for broker-specific values
+### 1. Add `account_balance` action to `broker-execute` edge function
+- MetaAPI: `GET /users/current/accounts/{id}/account-information` → return `balance`, `equity`
+- OANDA: `GET /v3/accounts/{id}/summary` → return `balance`, `NAV`
+
+### 2. Update `bot-scanner` broker mirror loop
+- Before placing trade on each broker, fetch its account balance
+- Recalculate `brokerVolume` using `calculatePositionSize(brokerBalance, ...)`
+- Log: `"[BrokerA $100] size=0.01, [BrokerB $10k] size=0.5"`
+
+### 3. Add safety cap
+- Max 5% account risk per trade per broker (configurable)
+- If broker balance fetch fails, skip that broker (don't default to paper balance)
+
+## Files Changed
+- `supabase/functions/broker-execute/index.ts` — add `account_balance` action
+- `supabase/functions/bot-scanner/index.ts` — fetch per-broker balance, recalculate size per broker
+
+## What This Fixes
+- $100 account gets 0.01 lots, $10k account gets 0.5 lots — proportional sizing
+- No more over-leverage on small accounts
+- Each broker independently managed
 
