@@ -70,6 +70,11 @@ function BrokerSettings() {
   const [newOverrideSuffix, setNewOverrideSuffix] = useState("");
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<any>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSuffix, setEditSuffix] = useState("");
+  const [editOverrides, setEditOverrides] = useState<Record<string, string>>({});
+  const [editNewSymbol, setEditNewSymbol] = useState("");
+  const [editNewSuffix, setEditNewSuffix] = useState("");
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
@@ -82,6 +87,13 @@ function BrokerSettings() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => brokerApi.delete(id),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection removed"); },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (data: { id: string; symbol_suffix: string; symbol_overrides: Record<string, string> }) =>
+      brokerApi.update(data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection updated"); setEditingId(null); },
+    onError: (e: any) => toast.error(e.message),
   });
 
   const testMutation = useMutation({
@@ -108,9 +120,11 @@ function BrokerSettings() {
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-bold">Broker Connections</h2>
-      {(connections as any[]).map((c: any) => (
+      {(connections as any[]).map((c: any) => {
+        const isEditing = editingId === c.id;
+        return (
         <Card key={c.id}>
-          <CardContent className="pt-4">
+          <CardContent className="pt-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-sm truncate">{c.display_name}</p>
@@ -118,13 +132,18 @@ function BrokerSettings() {
                   {c.broker_type.toUpperCase()} · {c.account_id} · {c.is_live ? "Live" : "Demo"}
                   {c.symbol_suffix ? ` · Suffix: "${c.symbol_suffix}"` : ""}
                 </p>
-                {c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
+                {!isEditing && c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
                   <p className="text-[10px] text-muted-foreground mt-0.5">
                     Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym} → ${(sfx as string) || '(no suffix)'}`).join(", ")}
                   </p>
                 )}
               </div>
               <div className="flex gap-2 shrink-0">
+                {!isEditing && (
+                  <Button size="sm" variant="outline" onClick={() => { setEditingId(c.id); setEditSuffix(c.symbol_suffix || ""); setEditOverrides(c.symbol_overrides || {}); }} title="Edit symbol suffix">
+                    Edit
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" onClick={() => { setSelectedConnection(c); setConfigModalOpen(true); }} title="Edit bot config for this connection">
                   <Wrench className="h-3 w-3" />
                 </Button>
@@ -132,9 +151,50 @@ function BrokerSettings() {
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>
             </div>
+
+            {isEditing && (
+              <div className="space-y-3 border-t border-border pt-3">
+                <div>
+                  <Label className="text-xs">Default Symbol Suffix</Label>
+                  <Input value={editSuffix} onChange={e => setEditSuffix(e.target.value)} placeholder="e.g. b" className="mt-1 h-8 text-sm" />
+                  <p className="text-[10px] text-muted-foreground mt-1">E.g. EURUSD → EURUSD{editSuffix || 'b'}</p>
+                </div>
+
+                {/* Overrides */}
+                <div className="space-y-2">
+                  <Label className="text-xs">Symbol Overrides</Label>
+                  {Object.keys(editOverrides).length > 0 && (
+                    <div className="border border-border rounded overflow-hidden">
+                      {Object.entries(editOverrides).map(([sym, sfx]) => (
+                        <div key={sym} className="flex items-center justify-between px-3 py-1.5 text-xs border-b border-border last:border-0">
+                          <span className="font-mono">{sym} → {(sfx as string) || '(no suffix)'} <span className="text-primary">= {sym}{sfx as string}</span></span>
+                          <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => { const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); }}><Trash2 className="h-3 w-3" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <Input value={editNewSymbol} onChange={e => setEditNewSymbol(e.target.value)} placeholder="e.g. XAUUSD" className="h-7 text-xs flex-1" />
+                    <Input value={editNewSuffix} onChange={e => setEditNewSuffix(e.target.value)} placeholder="e.g. m" className="h-7 text-xs w-20" />
+                    <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!editNewSymbol.trim()} onClick={() => {
+                      setEditOverrides(prev => ({ ...prev, [editNewSymbol.trim().toUpperCase()]: editNewSuffix.trim() }));
+                      setEditNewSymbol(""); setEditNewSuffix("");
+                    }}>Add</Button>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => updateMutation.mutate({ id: c.id, symbol_suffix: editSuffix, symbol_overrides: editOverrides })}>
+                    Save Changes
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><Plus className="h-4 w-4" /> Add Connection</CardTitle></CardHeader>
         <CardContent className="space-y-3">
