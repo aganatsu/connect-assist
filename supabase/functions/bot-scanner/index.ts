@@ -257,33 +257,24 @@ function calculatePDLevels(dailyCandles: Candle[]) {
   };
 }
 
-function calculatePremiumDiscount(candles: Candle[]) {
-  const swings = detectSwingPoints(candles);
-  const highs = swings.filter(s => s.type === "high");
-  const lows = swings.filter(s => s.type === "low");
-  const sh = highs.length > 0 ? Math.max(...highs.map(h => h.price)) : candles[candles.length - 1].high;
-  const sl = lows.length > 0 ? Math.min(...lows.map(l => l.price)) : candles[candles.length - 1].low;
-  const eq = (sh + sl) / 2;
-  const range = sh - sl;
-  const cp = candles[candles.length - 1].close;
-  const zp = range > 0 ? ((cp - sl) / range) * 100 : 50;
-  const zone = zp > 55 ? "premium" : zp < 45 ? "discount" : "equilibrium";
-  const oteZone = zp >= 62 && zp <= 79;
-  return { swingHigh: sh, swingLow: sl, equilibrium: eq, currentZone: zone, zonePercent: zp, oteZone };
-}
+// ─── Opening Range ──────────────────────────────────────────────────
+interface OpeningRangeResult { high: number; low: number; midpoint: number; completed: boolean; }
 
-function detectSession() {
+function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
+  if (!hourlyCandles || hourlyCandles.length === 0) return null;
+  // Get the start of the current UTC trading day
   const now = new Date();
-  const utcH = now.getUTCHours();
-  let name = "Off-Hours", active = false, isKillZone = false;
-  if (utcH >= 0 && utcH < 8) { name = "Asian"; active = true; isKillZone = utcH >= 0 && utcH < 4; }
-  else if (utcH >= 7 && utcH < 16) { name = "London"; active = true; isKillZone = utcH >= 7 && utcH < 10; }
-  else if (utcH >= 12 && utcH < 21) { name = "New York"; active = true; isKillZone = utcH >= 12 && utcH < 15; }
-  return { name, active, isKillZone };
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const todayCandles = hourlyCandles.filter(c => c.datetime >= todayStart);
+  if (todayCandles.length === 0) return null;
+  const orCandles = todayCandles.slice(0, candleCount);
+  const high = Math.max(...orCandles.map(c => c.high));
+  const low = Math.min(...orCandles.map(c => c.low));
+  return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
 }
 
-// ─── Full 9-Factor Confluence Scoring ───────────────────────────────
-function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS) {
+// ─── Full 9-Factor Confluence Scoring (+ Opening Range) ─────────────
+function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: typeof DEFAULTS, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
   const fvgs = detectFVGs(candles);
