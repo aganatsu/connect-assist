@@ -22,6 +22,15 @@ Deno.serve(async (req) => {
       .select("*").eq("id", connectionId).eq("user_id", user.id).single();
     if (connErr || !conn) throw new Error("Broker connection not found");
 
+    // Auto-detect swapped fields for MetaAPI: JWT tokens start with "eyJ", account IDs are UUIDs
+    if (conn.broker_type === "metaapi") {
+      if (conn.account_id.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(conn.api_key)) {
+        const tmp = conn.api_key;
+        conn.api_key = conn.account_id;
+        conn.account_id = tmp;
+      }
+    }
+
     if (action === "account_summary") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
