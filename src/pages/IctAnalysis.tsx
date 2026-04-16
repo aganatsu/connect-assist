@@ -128,9 +128,9 @@ export default function IctAnalysis() {
                       const start = s.start < s.end ? s.start : 0;
                       const end = s.start < s.end ? s.end : s.end;
                       return (
-                        <div key={s.name} className="absolute opacity-40"
-                          style={{ left: `${(start / 24) * 100}%`, width: `${((end - start) / 24) * 100}%`, top: `${i * 18}px`, height: "14px", backgroundColor: s.color }}>
-                          <span className="text-[7px] font-medium px-1 leading-[14px] text-foreground">{s.name}</span>
+                        <div key={s.name} className="absolute opacity-70"
+                          style={{ left: `${(start / 24) * 100}%`, width: `${((end - start) / 24) * 100}%`, top: `${i * 18}px`, height: "16px", backgroundColor: s.color }}>
+                          <span className="text-[9px] font-semibold px-1 leading-[16px] text-foreground drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{s.name}</span>
                         </div>
                       );
                     })}
@@ -139,7 +139,7 @@ export default function IctAnalysis() {
                     {KILL_ZONES.map(kz => {
                       const isActive = currentHour >= kz.start && currentHour < kz.end;
                       return (
-                        <span key={kz.name} className={`px-2 py-0.5 text-[9px] font-medium border ${isActive ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground"}`}>
+                        <span key={kz.name} className={`px-2 py-1 text-[10px] font-semibold border ${isActive ? "border-primary bg-primary/10 text-primary" : "border-border text-foreground/70"}`}>
                           {kz.name} ({kz.start}:00-{kz.end}:00)
                           {isActive && <span className="ml-1 text-success">● Active</span>}
                         </span>
@@ -199,12 +199,12 @@ export default function IctAnalysis() {
               <AccordionContent>
                 <div className="bg-secondary/30 border border-border p-3">
                   {strengthData.length > 0 ? (
-                    <div className="h-[180px]">
+                    <div className="h-[220px]">
                       <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={strengthData} layout="vertical">
+                        <BarChart data={strengthData} layout="vertical" barSize={16}>
                           <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                          <XAxis type="number" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" />
-                          <YAxis dataKey="currency" type="category" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke="hsl(220, 8%, 50%)" width={35} />
+                          <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" />
+                          <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(220, 8%, 75%)" }} stroke="hsl(220, 8%, 40%)" width={40} />
                           <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
                           <Bar dataKey="score">{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
                         </BarChart>
@@ -222,18 +222,18 @@ export default function IctAnalysis() {
                 <div className="bg-secondary/30 border border-border p-3">
                   {correlationMatrix ? (
                     <div className="overflow-x-auto">
-                      <table className="text-[9px] font-mono">
+                      <table className="text-[11px] font-mono">
                         <thead>
-                          <tr><th className="px-1 py-0.5"></th>{correlationMatrix.pairs.map(p => <th key={p} className="px-1 py-0.5 text-muted-foreground whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
+                          <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map(p => <th key={p} className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
                         </thead>
                         <tbody>
                           {correlationMatrix.pairs.map(p1 => (
                             <tr key={p1}>
-                              <td className="px-1 py-0.5 text-muted-foreground whitespace-nowrap">{p1.replace("/", "")}</td>
+                              <td className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p1.replace("/", "")}</td>
                               {correlationMatrix.pairs.map(p2 => {
                                 const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
-                                const bg = p1 === p2 ? "bg-primary/20" : val > 0.5 ? "bg-destructive/30" : val < -0.5 ? "bg-primary/30" : "bg-muted/20";
-                                return <td key={p2} className={`px-1 py-0.5 text-center ${bg}`}>{val.toFixed(2)}</td>;
+                                const bg = p1 === p2 ? "bg-primary/25" : val > 0.5 ? "bg-destructive/40" : val < -0.5 ? "bg-primary/40" : val > 0.3 ? "bg-destructive/20" : val < -0.3 ? "bg-primary/20" : "bg-muted/15";
+                                return <td key={p2} className={`px-2 py-1.5 text-center font-bold text-foreground ${bg}`}>{val.toFixed(2)}</td>;
                               })}
                             </tr>
                           ))}
