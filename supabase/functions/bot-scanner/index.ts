@@ -1142,8 +1142,11 @@ async function runScanForUser(supabase: any, userId: string) {
   const isAutoStyle = styleMode === "auto" || config.tradingStyle?.autoDetectEnabled;
 
   // Apply style overrides to config (non-auto mode applies globally)
+  // Preserve user-set minConfluence — style overrides should not overwrite it
   if (!isAutoStyle && STYLE_OVERRIDES[resolvedStyle]) {
+    const userMinConfluence = config.minConfluence;
     Object.assign(config, STYLE_OVERRIDES[resolvedStyle]);
+    config.minConfluence = userMinConfluence;
   }
 
   // Day-of-week check — skip for crypto-only instrument lists
