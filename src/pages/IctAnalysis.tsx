@@ -67,24 +67,60 @@ export default function IctAnalysis() {
       .sort((a: any, b: any) => b.score - a.score);
   }, [currencyStrength]);
 
-  // Correlation matrix (simplified from quote changes)
+  // Correlation matrix from real candle close % changes
+  const { data: correlationCandles } = useQuery({
+    queryKey: ["correlation-candles"],
+    queryFn: async () => {
+      const pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"];
+      const results: Record<string, number[]> = {};
+      await Promise.all(pairs.map(async (pair) => {
+        try {
+          const candles = await marketApi.candles(pair, "1day", 60);
+          if (candles && candles.length > 1) {
+            // Compute daily returns
+            results[pair] = candles.slice(1).map((c: any, i: number) => {
+              const prev = candles[i];
+              return prev.close > 0 ? ((c.close - prev.close) / prev.close) * 100 : 0;
+            });
+          }
+        } catch { /* skip pair */ }
+      }));
+      return results;
+    },
+    staleTime: 300000,
+  });
+
   const correlationMatrix = useMemo(() => {
-    if (!liveQuotes) return null;
-    const pairs = Object.keys(liveQuotes).filter(p => liveQuotes[p]?.change != null);
+    if (!correlationCandles) return null;
+    const pairs = Object.keys(correlationCandles).filter(p => correlationCandles[p]?.length > 5);
     if (pairs.length < 3) return null;
+
+    // Pearson correlation
+    function pearson(a: number[], b: number[]): number {
+      const n = Math.min(a.length, b.length);
+      if (n < 5) return 0;
+      const x = a.slice(0, n), y = b.slice(0, n);
+      const mx = x.reduce((s, v) => s + v, 0) / n;
+      const my = y.reduce((s, v) => s + v, 0) / n;
+      let num = 0, dx = 0, dy = 0;
+      for (let i = 0; i < n; i++) {
+        const xi = x[i] - mx, yi = y[i] - my;
+        num += xi * yi; dx += xi * xi; dy += yi * yi;
+      }
+      const denom = Math.sqrt(dx * dy);
+      return denom > 0 ? num / denom : 0;
+    }
+
     const matrix: Record<string, Record<string, number>> = {};
     pairs.forEach(p1 => {
       matrix[p1] = {};
       pairs.forEach(p2 => {
         if (p1 === p2) { matrix[p1][p2] = 1; return; }
-        const c1 = liveQuotes[p1]?.change || 0;
-        const c2 = liveQuotes[p2]?.change || 0;
-        // Simplified correlation based on direction agreement
-        matrix[p1][p2] = c1 * c2 > 0 ? 0.3 + Math.random() * 0.5 : -(0.3 + Math.random() * 0.5);
+        matrix[p1][p2] = pearson(correlationCandles[p1], correlationCandles[p2]);
       });
     });
     return { pairs, matrix };
-  }, [liveQuotes]);
+  }, [correlationCandles]);
 
   return (
     <AppShell>
