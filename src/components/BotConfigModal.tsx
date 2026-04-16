@@ -289,13 +289,23 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                         { id: "newyork", label: "New York", time: "12:00 – 21:00 UTC" },
                         { id: "sydney", label: "Sydney", time: "21:00 – 06:00 UTC" },
                       ].map(session => {
-                        const enabled = config.sessions?.filter?.includes(session.id) ?? true;
+                        const filterArr = config.sessions?.filter;
+                        const boolKey = `${session.id}Enabled` as string;
+                        const enabled = Array.isArray(filterArr) ? filterArr.includes(session.id) : (config.sessions?.[boolKey] ?? true);
                         return (
                           <button
                             key={session.id}
                             onClick={() => {
-                              const current = config.sessions?.filter || ["asian", "london", "newyork", "sydney"];
-                              updateField('sessions', 'filter', enabled ? current.filter((s: string) => s !== session.id) : [...current, session.id]);
+                              // Build current filter array from either format
+                              const sessions_cfg = config.sessions || {};
+                              const current = Array.isArray(sessions_cfg.filter) ? [...sessions_cfg.filter] : [
+                                ...(sessions_cfg.asianEnabled !== false ? ["asian"] : []),
+                                ...(sessions_cfg.londonEnabled !== false ? ["london"] : []),
+                                ...(sessions_cfg.newYorkEnabled !== false || sessions_cfg.newyorkEnabled !== false ? ["newyork"] : []),
+                                ...(sessions_cfg.sydneyEnabled !== false ? ["sydney"] : []),
+                              ];
+                              const updated = enabled ? current.filter((s: string) => s !== session.id) : [...current, session.id];
+                              updateField('sessions', 'filter', updated);
                             }}
                             className={`flex items-center justify-between px-4 py-3 border text-left transition-colors ${enabled ? "border-primary/40 bg-primary/5" : "border-border text-muted-foreground"}`}
                           >
