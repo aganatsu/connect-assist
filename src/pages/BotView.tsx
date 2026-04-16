@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { paperApi, scannerApi, brokerApi, botConfigApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
 import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
