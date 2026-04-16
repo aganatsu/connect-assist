@@ -77,8 +77,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
       <div className="bg-card border border-border w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-base font-bold">Bot Configuration</h2>
+          <div>
+            <h2 className="text-base font-bold">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
+            {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
+          </div>
           <div className="flex items-center gap-2">
+            {connectionId && (
+              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
+            )}
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
             <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()}>Save Config</Button>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2"><X className="h-4 w-4" /></button>
