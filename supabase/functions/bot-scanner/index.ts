@@ -815,6 +815,7 @@ async function loadConfig(supabase: any, userId: string) {
     // ── Entry mappings ──
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
+    slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? DEFAULTS.slBufferPips,
 
     // ── Exit mappings ──
     trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,

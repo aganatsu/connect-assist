@@ -175,6 +175,13 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                       <ToggleField label="Structure Breaks" description="BOS / CHoCH detection" checked={config.strategy?.useStructureBreak ?? true} onChange={v => updateField('strategy', 'useStructureBreak', v)} />
                     </div>
                     <ToggleField label="Require HTF Bias Alignment" description="Only trade in the direction of higher timeframe bias" checked={config.strategy?.requireHTFBias ?? true} onChange={v => updateField('strategy', 'requireHTFBias', v)} />
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Premium / Discount Filters</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <ToggleField label="Only Buy in Discount" description="Only enter longs when price is in discount zone" checked={config.strategy?.onlyBuyInDiscount ?? true} onChange={v => updateField('strategy', 'onlyBuyInDiscount', v)} />
+                        <ToggleField label="Only Sell in Premium" description="Only enter shorts when price is in premium zone" checked={config.strategy?.onlySellInPremium ?? true} onChange={v => updateField('strategy', 'onlySellInPremium', v)} />
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -195,6 +202,14 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                         <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
                       </FieldGroup>
                     </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <FieldGroup label="Portfolio Heat (%)" description="Max total risk exposure across all open positions">
+                        <Input type="number" value={config.risk?.maxPortfolioHeat ?? 10} onChange={e => updateField('risk', 'maxPortfolioHeat', parseFloat(e.target.value) || 0)} step={1} min={1} max={100} className="h-9 text-sm" />
+                      </FieldGroup>
+                      <FieldGroup label="Max Per Symbol" description="Max open positions allowed on the same instrument">
+                        <Input type="number" value={config.risk?.maxPositionsPerSymbol ?? 2} onChange={e => updateField('risk', 'maxPositionsPerSymbol', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
+                      </FieldGroup>
+                    </div>
                     <FieldGroup label="Max Total Drawdown (%)" description="Kill switch if total drawdown exceeds this">
                       <Input type="number" value={config.risk?.maxDrawdown ?? 15} onChange={e => updateField('risk', 'maxDrawdown', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
                     </FieldGroup>
@@ -208,6 +223,9 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Entry</p>
                       <FieldGroup label="Cooldown Between Trades (minutes)" description="Minimum wait time between consecutive trades">
                         <Input type="number" value={config.entry?.cooldownMinutes ?? 30} onChange={e => updateField('entry', 'cooldownMinutes', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
+                      </FieldGroup>
+                      <FieldGroup label="SL Buffer (pips)" description="Extra pips added beyond structure for stop loss placement">
+                        <Input type="number" value={config.entry?.slBufferPips ?? 2} onChange={e => updateField('entry', 'slBufferPips', parseFloat(e.target.value) || 0)} step={0.5} min={0} max={20} className="h-9 text-sm" />
                       </FieldGroup>
                       <ToggleField label="Close on Reverse Signal" description="Auto-close position when an opposite signal appears" checked={config.entry?.closeOnReverse ?? false} onChange={v => updateField('entry', 'closeOnReverse', v)} />
                     </div>
