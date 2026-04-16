@@ -3,11 +3,22 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 // ─── Yahoo Finance Symbol Mapping ───────────────────────────────────
 const YAHOO_SYMBOLS: Record<string, string> = {
+  // Forex Majors
   "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "GBP/JPY": "GBPJPY=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
-  "EUR/GBP": "EURGBP=X", "NZD/USD": "NZDUSD=X", "USD/CHF": "USDCHF=X",
-  "EUR/JPY": "EURJPY=X", "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F",
+  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+  "USD/CHF": "USDCHF=X",
+  // Forex Crosses
+  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
+  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
+  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
+  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
+  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  // Indices
+  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  // Commodities
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  // Crypto
+  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
 };
 
 async function fetchLivePrice(symbol: string): Promise<number | null> {
@@ -42,20 +53,40 @@ async function updatePositionPrices(supabase: any, positions: any[]): Promise<vo
 
 // ─── Instrument Specs ───────────────────────────────────────────────
 const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: number }> = {
+  // Forex Majors
   "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "USD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1500 },
   "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
   "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
+  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
   "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
+  // Forex Crosses
+  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
   "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1200 },
-  "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
-  "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
+  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1500 },
+  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1200 },
+  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1500 },
+  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
+  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 800 },
+  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
+  // Indices
+  "US30": { pipSize: 1.0, lotUnits: 1, marginPerLot: 5000 },
+  "NAS100": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
+  "SPX500": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
+  // Commodities
   "XAU/USD": { pipSize: 0.01, lotUnits: 100, marginPerLot: 2000 },
   "XAG/USD": { pipSize: 0.001, lotUnits: 5000, marginPerLot: 1500 },
+  "US Oil": { pipSize: 0.01, lotUnits: 1000, marginPerLot: 2000 },
+  // Crypto
+  "BTC/USD": { pipSize: 1, lotUnits: 1, marginPerLot: 5000 },
+  "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
 function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string) {
@@ -247,6 +278,108 @@ Deno.serve(async (req) => {
         // Re-fetch with updated prices
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
         positions = refreshed || positions;
+
+        // ── SL/TP Hit Detection + Exit Flag Logic (Fix #9, #13) ──
+        const closedIds: string[] = [];
+        for (const pos of (positions || [])) {
+          const currentPrice = parseFloat(pos.current_price);
+          const entryPrice = parseFloat(pos.entry_price);
+          const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
+          const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
+          const size = parseFloat(pos.size);
+          let closeReason: string | null = null;
+          let exitPrice = currentPrice;
+
+          // Parse exit flags from signal_reason
+          let exitFlags: any = {};
+          try {
+            const parsed = JSON.parse(pos.signal_reason || "{}");
+            exitFlags = parsed.exitFlags || {};
+          } catch {}
+
+          // Check SL hit
+          if (sl !== null) {
+            if (pos.direction === "long" && currentPrice <= sl) {
+              closeReason = "sl_hit"; exitPrice = sl;
+            } else if (pos.direction === "short" && currentPrice >= sl) {
+              closeReason = "sl_hit"; exitPrice = sl;
+            }
+          }
+
+          // Check TP hit
+          if (!closeReason && tp !== null) {
+            if (pos.direction === "long" && currentPrice >= tp) {
+              closeReason = "tp_hit"; exitPrice = tp;
+            } else if (pos.direction === "short" && currentPrice <= tp) {
+              closeReason = "tp_hit"; exitPrice = tp;
+            }
+          }
+
+          // Check max hold hours
+          if (!closeReason && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0) {
+            const openMs = new Date(pos.open_time).getTime();
+            const elapsedHours = (Date.now() - openMs) / 3600000;
+            if (elapsedHours >= exitFlags.maxHoldHours) {
+              closeReason = "time_exit";
+            }
+          }
+
+          // Break even: move SL to entry if price moved enough in profit
+          if (!closeReason && exitFlags.breakEven && exitFlags.breakEvenPips > 0 && sl !== null) {
+            const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const profitPips = pos.direction === "long"
+              ? (currentPrice - entryPrice) / spec.pipSize
+              : (entryPrice - currentPrice) / spec.pipSize;
+            if (profitPips >= exitFlags.breakEvenPips) {
+              // Move SL to entry (break even)
+              const newSL = entryPrice;
+              if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+              }
+            }
+          }
+
+          // Close position if SL/TP/time triggered
+          if (closeReason) {
+            const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
+            await supabase.from("paper_trade_history").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+              exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+              open_time: pos.open_time, closed_at: new Date().toISOString(),
+              close_reason: closeReason, signal_reason: pos.signal_reason || "",
+              signal_score: pos.signal_score, order_id: pos.order_id,
+            });
+            // Update balance
+            const curBal = parseFloat(account?.balance || "10000");
+            const newBal = curBal + pnl;
+            const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
+            await supabase.from("paper_accounts").update({
+              balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
+            }).eq("user_id", user.id);
+
+            // Generate post-mortem
+            const postMortem = generatePostMortem(pos, exitPrice, pnl, pnlPips, closeReason);
+            await supabase.from("trade_post_mortems").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              exit_reason: closeReason, exit_price: exitPrice.toString(), pnl: pnl.toFixed(2),
+              what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
+              lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
+            });
+
+            await supabase.from("paper_positions").delete().eq("id", pos.id);
+            closedIds.push(pos.id);
+          }
+        }
+
+        // Re-fetch positions after auto-closes
+        if (closedIds.length > 0) {
+          const { data: remaining } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
+          positions = remaining || [];
+          // Re-fetch account for updated balance
+          const { data: updatedAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+          if (updatedAccount) Object.assign(account, updatedAccount);
+        }
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
       const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);

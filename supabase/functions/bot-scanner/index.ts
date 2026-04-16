@@ -122,15 +122,22 @@ function detectSession(): { name: string; isKillZone: boolean } {
   const m = now.getUTCMinutes();
   const t = h + m / 60;
 
-  // Kill zones are the high-volume windows within each session
+  // Sydney: 21:00-06:00 UTC (wraps midnight)
+  if (t >= 21 || t < 6) {
+    const isKZ = t >= 21 || t < 0; // Sydney open KZ
+    return { name: "Sydney", isKillZone: isKZ };
+  }
+  // Asian: 00:00-09:00 UTC
   if (t >= 0 && t < 9) {
     const isKZ = t >= 0 && t < 4; // Asian kill zone: 00:00-04:00 UTC
     return { name: "Asian", isKillZone: isKZ };
   }
+  // London: 07:00-16:00 UTC
   if (t >= 7 && t < 16) {
     const isKZ = (t >= 7 && t < 10) || (t >= 14 && t < 16); // London open/close KZ
     return { name: "London", isKillZone: isKZ };
   }
+  // New York: 12:00-21:00 UTC
   if (t >= 12 && t < 21) {
     const isKZ = (t >= 12 && t < 15) || (t >= 19 && t < 21); // NY open/close KZ
     return { name: "New York", isKillZone: isKZ };
@@ -664,17 +671,19 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
   else if (structure.trend === "bearish" && pd.currentZone !== "discount") direction = "short";
 
-  // Calculate SL/TP (structure-based)
+  // Calculate SL/TP (structure-based) — use per-symbol pip size
   let stopLoss: number | null = null;
   let takeProfit: number | null = null;
   const swings = structure.swingPoints;
-  const spec = SPECS[candles[0]?.datetime ? "EUR/USD" : "EUR/USD"]; // will be overridden per-symbol
+  const symbolForSL = config._currentSymbol || "EUR/USD";
+  const specSL = SPECS[symbolForSL] || SPECS["EUR/USD"];
+  const pipSize = specSL.pipSize;
 
   if (direction === "long") {
     const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
     if (recentLows.length > 0) {
-      const nearestLow = Math.max(...recentLows.map(s => s.price)); // nearest below
-      stopLoss = nearestLow - config.slBufferPips * 0.0001; // will adjust for JPY pairs
+      const nearestLow = Math.max(...recentLows.map(s => s.price));
+      stopLoss = nearestLow - config.slBufferPips * pipSize;
     }
     if (stopLoss) {
       const risk = lastPrice - stopLoss;
@@ -684,7 +693,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
     if (recentHighs.length > 0) {
       const nearestHigh = Math.min(...recentHighs.map(s => s.price));
-      stopLoss = nearestHigh + config.slBufferPips * 0.0001;
+      stopLoss = nearestHigh + config.slBufferPips * pipSize;
     }
     if (stopLoss) {
       const risk = stopLoss - lastPrice;
@@ -738,7 +747,9 @@ function calculatePositionSize(balance: number, riskPercent: number, entryPrice:
   const slPips = slDistance / spec.pipSize;
   const size = riskAmount / (slPips * (pipValue / spec.lotUnits * spec.lotUnits / 1)); // simplified: riskAmount / (slDistance * lotUnits)
   const lots = riskAmount / (slDistance * spec.lotUnits);
-  return Math.max(0.01, Math.min(1, Math.round(lots * 100) / 100));
+  // Scale max lot by asset type
+  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
 // ─── Load user config ───────────────────────────────────────────────
@@ -797,6 +808,11 @@ async function loadConfig(supabase: any, userId: string) {
     // ── Protection ──
     maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
     protectionMaxDailyLossDollar: protection.maxDailyLoss ?? 0,
+    // Map circuit breaker to maxDrawdown if set and lower (Fix #10)
+    maxDrawdown: Math.min(
+      risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
+      protection.circuitBreakerPct ?? 100,
+    ),
 
     // ── Opening Range & Trading Style (already nested, keep as-is) ──
     openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
@@ -920,15 +936,19 @@ async function runSafetyGates(
     gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
   }
 
-  // Gate 11: Opening Range — wait for completion
+  // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
     const now = new Date();
     const hoursSinceMidnight = now.getUTCHours() + now.getUTCMinutes() / 60;
     const candleCount = config.openingRange.candleCount || 24;
-    if (hoursSinceMidnight < candleCount) {
-      gates.push({ passed: false, reason: `OR not complete: ${Math.floor(hoursSinceMidnight)}/${candleCount}h elapsed` });
+    // Convert candle count to hours based on entry timeframe
+    const tfHours: Record<string, number> = { "1m": 1/60, "5m": 5/60, "15m": 0.25, "15min": 0.25, "30m": 0.5, "1h": 1, "4h": 4, "1d": 24 };
+    const hoursPerCandle = tfHours[config.entryTimeframe] || 1;
+    const requiredHours = candleCount * hoursPerCandle;
+    if (hoursSinceMidnight < requiredHours) {
+      gates.push({ passed: false, reason: `OR not complete: ${hoursSinceMidnight.toFixed(1)}/${requiredHours.toFixed(1)}h elapsed` });
     } else {
-      gates.push({ passed: true, reason: `OR complete: ${candleCount}h elapsed` });
+      gates.push({ passed: true, reason: `OR complete: ${requiredHours}h elapsed` });
     }
   }
 
@@ -1074,20 +1094,20 @@ async function runScanForUser(supabase: any, userId: string) {
     Object.assign(config, STYLE_OVERRIDES[resolvedStyle]);
   }
 
-  // Session + day check
+  // Day-of-week check — skip for crypto-only instrument lists
   const now = new Date();
   const dayOfWeek = now.getUTCDay(); // 0=Sun
-  if (!config.enabledDays.includes(dayOfWeek)) {
+  const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
+  const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
+  // Only block weekends if there are non-crypto instruments (crypto trades 24/7)
+  if (!config.enabledDays.includes(dayOfWeek) && !hasCrypto) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
   const session = detectSession();
   // Session filter: normalize names for comparison
-  const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
+  const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
   const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
-  const assetProfile = getAssetProfile(config.instruments[0] || "EUR/USD");
-  if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) {
-    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `${session.name} session not enabled`, activeStyle: resolvedStyle };
-  }
+  // Session gate is now checked per-instrument inside the loop, not globally
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
@@ -1118,19 +1138,35 @@ async function runScanForUser(supabase: any, userId: string) {
       continue;
     }
 
+    // Per-instrument session gate check (Fix #7)
+    const pairAssetProfile = getAssetProfile(pair);
+    if (!pairAssetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) {
+      scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
+      continue;
+    }
+
+    // Skip non-crypto instruments on weekends (Fix #2)
+    if (!config.enabledDays.includes(dayOfWeek) && SPECS[pair]?.type !== "crypto") {
+      scanDetails.push({ pair, status: "skipped", reason: "Weekend — non-crypto skipped" });
+      continue;
+    }
+
     // Delay between instruments to avoid rate limiting
     if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 500));
 
+    // Clone config per-instrument to prevent style mutation (Fix #6)
+    let pairConfig = { ...config };
+
     // Determine entry TF based on style
-    const entryInterval = getYahooInterval(config.entryTimeframe);
-    const entryRange = getYahooRange(config.entryTimeframe);
+    const entryInterval = getYahooInterval(pairConfig.entryTimeframe);
+    const entryRange = getYahooRange(pairConfig.entryTimeframe);
 
     // Fetch entry TF, daily, and optionally 1h candles
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
-    if (config.openingRange?.enabled) {
+    if (pairConfig.openingRange?.enabled) {
       fetchPromises.push(fetchCandles(pair, "1h", "2d"));
     }
     const [candles, dailyCandles, hourlyCandles] = await Promise.all(fetchPromises);
@@ -1140,20 +1176,21 @@ async function runScanForUser(supabase: any, userId: string) {
       continue;
     }
 
-    // Auto-detect style per instrument if in auto mode
+    // Auto-detect style per instrument if in auto mode (Fix #6 — clone, don't mutate)
     let pairStyle = resolvedStyle;
     if (isAutoStyle) {
       pairStyle = detectOptimalStyle(candles, dailyCandles);
-      // Apply per-instrument overrides
-      Object.assign(config, STYLE_OVERRIDES[pairStyle]);
+      pairConfig = { ...pairConfig, ...STYLE_OVERRIDES[pairStyle] };
     }
 
     // Apply asset-class profile adjustments
-    const assetProfile = getAssetProfile(pair);
-    const adjustedSlBuffer = config.slBufferPips * assetProfile.slBufferMultiplier;
-    const adjustedMinConfluence = Math.max(1, config.minConfluence + assetProfile.minConfluenceAdj);
+    const pairAssetProfileInner = getAssetProfile(pair);
+    const adjustedSlBuffer = pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
+    const adjustedMinConfluence = Math.max(1, pairConfig.minConfluence + pairAssetProfileInner.minConfluenceAdj);
 
-    const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, config, hourlyCandles);
+    // Pass current symbol so SL calc uses correct pip size (Fix #3)
+    pairConfig._currentSymbol = pair;
+    const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
     const detail: any = {
       pair,
@@ -1178,7 +1215,7 @@ async function runScanForUser(supabase: any, userId: string) {
       // Run safety gates
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
-        analysis, config, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
+        analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
       );
       const allPassed = gates.every(g => g.passed);
       detail.gates = gates;
@@ -1206,37 +1243,48 @@ async function runScanForUser(supabase: any, userId: string) {
           }
         }
 
-        const size = calculatePositionSize(balance, config.riskPerTrade, analysis.lastPrice, sl, pair);
+        const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair);
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
-        // Close on Reverse: close existing opposite-direction positions for this symbol
-        if (config.closeOnReverse) {
+        // Close on Reverse: close existing opposite-direction positions for this symbol (Fix #8 — calc real PnL)
+        if (pairConfig.closeOnReverse) {
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const oppositePositions = openPosArr.filter(p => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
           for (const opp of oppositePositions) {
-            // Close via paper_positions update + history insert
-            await supabase.from("paper_positions").update({ position_status: "closed" }).eq("position_id", opp.position_id).eq("user_id", userId);
+            const oppEntry = parseFloat(opp.entry_price);
+            const oppSize = parseFloat(opp.size);
+            const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
+            const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
+            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize;
+            const oppPnlPips = oppDiff / oppSpec.pipSize;
+
+            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
             await supabase.from("paper_trade_history").insert({
               user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
               symbol: pair, direction: opp.direction, size: opp.size,
               entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
               open_time: opp.open_time || nowStr, closed_at: nowStr,
               close_reason: "reverse_signal",
-              pnl: "0", pnl_pips: "0",
+              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
               signal_score: opp.signal_score || "0",
             });
+
+            // Update balance with actual PnL
+            const curBal = parseFloat((await supabase.from("paper_accounts").select("balance").eq("user_id", userId).single()).data?.balance || "10000");
+            const newBal = curBal + oppPnl;
+            await supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
           }
         }
 
         // Build exit flags metadata to store on the position
         const exitFlags = {
-          trailingStop: config.trailingStopEnabled,
-          breakEven: config.breakEvenEnabled,
-          breakEvenPips: config.breakEvenPips,
-          partialTP: config.partialTPEnabled,
-          maxHoldHours: config.maxHoldHours,
+          trailingStop: pairConfig.trailingStopEnabled,
+          breakEven: pairConfig.breakEvenEnabled,
+          breakEvenPips: pairConfig.breakEvenPips,
+          partialTP: pairConfig.partialTPEnabled,
+          maxHoldHours: pairConfig.maxHoldHours,
         };
 
         // Place position
@@ -1267,7 +1315,7 @@ async function runScanForUser(supabase: any, userId: string) {
           summary: analysis.summary,
           bias: analysis.bias,
           session: analysis.session.name,
-          timeframe: config.entryTimeframe,
+          timeframe: pairConfig.entryTimeframe,
           factors_json: analysis.factors,
         });
 
