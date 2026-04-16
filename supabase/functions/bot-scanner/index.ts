@@ -1220,16 +1220,19 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 15: Dollar-based daily loss
+  // Gate 15: Dollar-based daily loss (net P&L)
   if (config.protectionMaxDailyLossDollar > 0) {
     const todayStr = new Date().toISOString().slice(0, 10);
     const { data: todayTrades } = await supabase.from("paper_trade_history").select("pnl")
       .eq("user_id", userId).gte("closed_at", todayStr);
-    const dollarLoss = (todayTrades || []).reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
-    if (Math.abs(dollarLoss) >= config.protectionMaxDailyLossDollar) {
-      gates.push({ passed: false, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit` });
+    const trades = todayTrades || [];
+    const netPnl = trades.reduce((sum: number, t: any) => sum + parseFloat(t.pnl || "0"), 0);
+    const grossLoss = trades.reduce((sum: number, t: any) => sum + Math.min(0, parseFloat(t.pnl || "0")), 0);
+    const netLoss = Math.min(0, netPnl); // only trigger if net negative
+    if (Math.abs(netLoss) >= config.protectionMaxDailyLossDollar) {
+      gates.push({ passed: false, reason: `Daily net P&L -$${Math.abs(netLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
     } else {
-      gates.push({ passed: true, reason: `Daily $ loss $${Math.abs(dollarLoss).toFixed(2)}` });
+      gates.push({ passed: true, reason: `Daily net P&L $${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
     }
   }
 
