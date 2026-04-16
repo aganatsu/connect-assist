@@ -112,6 +112,18 @@ export default function BotView() {
             </Button>
           </div>
         )}
+        {d.executionMode !== "live" && (
+          <div className="bg-muted border border-border px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
+            <span>📝 Paper Mode — trades are simulated, MT5 mirroring is OFF</span>
+            <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => {
+              if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected MT5 account.")) {
+                paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+              }
+            }}>
+              Switch to Live
+            </Button>
+          </div>
+        )}
 
         {/* Top Control Bar */}
         <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap">
