@@ -70,6 +70,11 @@ function BrokerSettings() {
   const [newOverrideSuffix, setNewOverrideSuffix] = useState("");
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState<any>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSuffix, setEditSuffix] = useState("");
+  const [editOverrides, setEditOverrides] = useState<Record<string, string>>({});
+  const [editNewSymbol, setEditNewSymbol] = useState("");
+  const [editNewSuffix, setEditNewSuffix] = useState("");
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
