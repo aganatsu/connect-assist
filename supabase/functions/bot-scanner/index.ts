@@ -51,6 +51,14 @@ const DEFAULTS = {
   },
 };
 
+// ─── Resolve symbol name with per-symbol overrides or default suffix ──
+function resolveSymbol(pair: string, conn: any): string {
+  const base = pair.replace("/", "");
+  const overrides = conn.symbol_overrides || {};
+  if (overrides[base]) return base + overrides[base];
+  return base + (conn.symbol_suffix || "");
+}
+
 // ─── Trading Style Overrides ────────────────────────────────────────
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
@@ -891,8 +899,18 @@ function calculatePositionSize(balance: number, riskPercent: number, entryPrice:
 }
 
 // ─── Load user config ───────────────────────────────────────────────
-async function loadConfig(supabase: any, userId: string) {
-  const { data } = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).maybeSingle();
+async function loadConfig(supabase: any, userId: string, connectionId?: string) {
+  let data: any = null;
+  // Try connection-specific config first
+  if (connectionId) {
+    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
+    data = res.data;
+  }
+  // Fall back to global config
+  if (!data) {
+    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
+    data = res.data;
+  }
   if (!data?.config_json) return { ...DEFAULTS, enableOB: true, enableFVG: true, enableLiquiditySweep: true, enableStructureBreak: true, cooldownMinutes: 0, closeOnReverse: false, trailingStopEnabled: false, partialTPEnabled: false, maxHoldHours: 0, killZoneOnly: false, maxConsecutiveLosses: 0, protectionMaxDailyLossDollar: 0 };
 
   const raw = data.config_json as any;
@@ -1584,7 +1602,7 @@ async function runScanForUser(supabase: any, userId: string) {
               const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
               const mt5Body: any = {
                 actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-                symbol: pair.replace("/", "") + (conn.symbol_suffix || ""),
+                symbol: resolveSymbol(pair, conn),
                 volume: size,
                 comment: `paper:${positionId}`,
               };

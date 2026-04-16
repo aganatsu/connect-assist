@@ -16,22 +16,43 @@ Deno.serve(async (req) => {
     if (authError || !user) throw new Error("Unauthorized");
 
     const { action, ...payload } = await req.json();
+    const connectionId = payload.connectionId || null;
+
+    // Helper to build the query filter for connection-specific or global config
+    function configQuery(q: any) {
+      q = q.eq("user_id", user.id);
+      if (connectionId) {
+        q = q.eq("connection_id", connectionId);
+      } else {
+        q = q.is("connection_id", null);
+      }
+      return q;
+    }
 
     if (action === "get") {
-      const { data, error } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).maybeSingle();
+      let { data, error } = await configQuery(supabase.from("bot_configs").select("config_json")).maybeSingle();
       if (error) throw error;
+      // If no connection-specific config, fall back to global
+      if (!data && connectionId) {
+        const { data: globalData } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        return new Response(JSON.stringify(globalData?.config_json || getDefaultConfig()), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify(data?.config_json || getDefaultConfig()), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (action === "update") {
-      const { data: existing } = await supabase.from("bot_configs").select("id").eq("user_id", user.id).maybeSingle();
+      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
       if (existing) {
-        const { error } = await supabase.from("bot_configs").update({ config_json: payload.config }).eq("user_id", user.id);
+        const { error } = await supabase.from("bot_configs").update({ config_json: payload.config }).eq("id", existing.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("bot_configs").insert({ user_id: user.id, config_json: payload.config });
+        const insertData: any = { user_id: user.id, config_json: payload.config };
+        if (connectionId) insertData.connection_id = connectionId;
+        const { error } = await supabase.from("bot_configs").insert(insertData);
         if (error) throw error;
       }
       return new Response(JSON.stringify({ success: true }), {
@@ -41,11 +62,13 @@ Deno.serve(async (req) => {
 
     if (action === "reset") {
       const defaultConfig = getDefaultConfig();
-      const { data: existing } = await supabase.from("bot_configs").select("id").eq("user_id", user.id).maybeSingle();
+      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
       if (existing) {
-        await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("user_id", user.id);
+        await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("id", existing.id);
       } else {
-        await supabase.from("bot_configs").insert({ user_id: user.id, config_json: defaultConfig });
+        const insertData: any = { user_id: user.id, config_json: defaultConfig };
+        if (connectionId) insertData.connection_id = connectionId;
+        await supabase.from("bot_configs").insert(insertData);
       }
       return new Response(JSON.stringify(defaultConfig), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

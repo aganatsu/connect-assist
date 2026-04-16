@@ -17,6 +17,7 @@ export type Database = {
       bot_configs: {
         Row: {
           config_json: Json
+          connection_id: string | null
           created_at: string
           id: string
           updated_at: string
@@ -24,6 +25,7 @@ export type Database = {
         }
         Insert: {
           config_json?: Json
+          connection_id?: string | null
           created_at?: string
           id?: string
           updated_at?: string
@@ -31,12 +33,21 @@ export type Database = {
         }
         Update: {
           config_json?: Json
+          connection_id?: string | null
           created_at?: string
           id?: string
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "bot_configs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "broker_connections"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       broker_connections: {
         Row: {
@@ -48,6 +59,7 @@ export type Database = {
           id: string
           is_active: boolean
           is_live: boolean
+          symbol_overrides: Json
           symbol_suffix: string
           updated_at: string
           user_id: string
@@ -61,6 +73,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_live?: boolean
+          symbol_overrides?: Json
           symbol_suffix?: string
           updated_at?: string
           user_id: string
@@ -74,6 +87,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           is_live?: boolean
+          symbol_overrides?: Json
           symbol_suffix?: string
           updated_at?: string
           user_id?: string

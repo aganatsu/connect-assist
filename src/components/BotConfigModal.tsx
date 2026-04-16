@@ -21,11 +21,14 @@ const PRESETS = {
 interface BotConfigModalProps {
   open: boolean;
   onClose: () => void;
+  connectionId?: string;
+  connectionName?: string;
 }
 
-export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
+export function BotConfigModal({ open, onClose, connectionId, connectionName }: BotConfigModalProps) {
   const queryClient = useQueryClient();
-  const { data: rawConfig } = useQuery({ queryKey: ["bot-config"], queryFn: () => botConfigApi.get(), enabled: open });
+  const queryKey = connectionId ? ["bot-config", connectionId] : ["bot-config"];
+  const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
   const [config, setConfig] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("strategy");
 
@@ -34,14 +37,22 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
   }, [rawConfig, open]);
 
   const saveMut = useMutation({
-    mutationFn: () => botConfigApi.update(config),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["bot-config"] }); toast.success("Config saved"); onClose(); },
+    mutationFn: () => botConfigApi.update(config, connectionId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Config saved"); onClose(); },
     onError: (e: any) => toast.error(e.message),
   });
 
   const resetMut = useMutation({
-    mutationFn: () => botConfigApi.reset(),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["bot-config"] }); setConfig(null); toast.success("Config reset"); },
+    mutationFn: () => botConfigApi.reset(connectionId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey }); setConfig(null); toast.success("Config reset"); },
+  });
+
+  const copyFromGlobalMut = useMutation({
+    mutationFn: async () => {
+      const globalConfig = await botConfigApi.get();
+      return globalConfig;
+    },
+    onSuccess: (data: any) => { setConfig(JSON.parse(JSON.stringify(data))); toast.success("Copied from global config"); },
   });
 
   const updateField = (section: string, key: string, value: any) => {
@@ -66,8 +77,14 @@ export function BotConfigModal({ open, onClose }: BotConfigModalProps) {
       <div className="bg-card border border-border w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-base font-bold">Bot Configuration</h2>
+          <div>
+            <h2 className="text-base font-bold">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
+            {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
+          </div>
           <div className="flex items-center gap-2">
+            {connectionId && (
+              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
+            )}
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
             <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()}>Save Config</Button>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2"><X className="h-4 w-4" /></button>

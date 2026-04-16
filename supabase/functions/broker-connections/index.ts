@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     const { action, ...payload } = await req.json();
 
     if (action === "list") {
-      const { data, error } = await supabase.from("broker_connections").select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, created_at")
+      const { data, error } = await supabase.from("broker_connections").select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides, created_at")
         .eq("user_id", user.id).order("created_at", { ascending: false });
       if (error) throw error;
       return respond(data);
@@ -32,7 +32,8 @@ Deno.serve(async (req) => {
         user_id: user.id, broker_type: payload.broker_type, display_name: payload.display_name,
         api_key: payload.api_key, account_id: payload.account_id, is_live: payload.is_live || false,
         symbol_suffix: payload.symbol_suffix || "",
-      }).select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix").single();
+        symbol_overrides: payload.symbol_overrides || {},
+      }).select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides").single();
       if (error) throw error;
       return respond(data);
     }
@@ -45,10 +46,11 @@ Deno.serve(async (req) => {
       if (payload.is_live !== undefined) updates.is_live = payload.is_live;
       if (payload.is_active !== undefined) updates.is_active = payload.is_active;
       if (payload.symbol_suffix !== undefined) updates.symbol_suffix = payload.symbol_suffix;
+      if (payload.symbol_overrides !== undefined) updates.symbol_overrides = payload.symbol_overrides;
 
       const { data, error } = await supabase.from("broker_connections").update(updates)
         .eq("id", payload.id).eq("user_id", user.id)
-        .select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix").single();
+        .select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides").single();
       if (error) throw error;
       return respond(data);
     }
