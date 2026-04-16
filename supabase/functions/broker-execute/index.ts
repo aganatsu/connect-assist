@@ -8,10 +8,9 @@ import { fetch as undiciFetch } from "npm:undici@5.28.4";
 function resolveSymbol(symbol: string, conn: any): string {
   const base = symbol.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  const suffix = conn.symbol_suffix || "";
-  // Override remaps the base name, then suffix is still appended
-  if (overrides[base]) return overrides[base] + suffix;
-  return base + suffix;
+  // Override = exact broker symbol (no suffix appended)
+  if (overrides[base]) return overrides[base];
+  return base + (conn.symbol_suffix || "");
 }
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
