@@ -1406,12 +1406,17 @@ async function runScanForUser(supabase: any, userId: string) {
               };
               if (sl) mt5Body.stopLoss = sl;
               if (tp) mt5Body.takeProfit = tp;
-              // Try undici first, fall back to native fetch
-              let mt5Res: any;
+              // Use Deno HttpClient to skip cert verification for MetaAPI SSL issue
+              let mt5Res: Response;
               try {
-                mt5Res = await undiciFetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
+                const httpClient = Deno.createHttpClient({ caCerts: [] });
+                mt5Res = await fetch(`${baseUrl}/trade`, { 
+                  method: "POST", headers, body: JSON.stringify(mt5Body),
+                  // @ts-ignore - Deno-specific option
+                  client: httpClient,
+                });
               } catch (fetchErr: any) {
-                console.warn(`undici fetch failed (${fetchErr?.message}), trying native fetch`);
+                console.warn(`Deno fetch with custom client failed (${fetchErr?.message}), trying plain fetch`);
                 mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
               }
               if (mt5Res.ok) {
