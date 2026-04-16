@@ -1,43 +1,21 @@
 
 
-# Fix: Strategy toggles ignored by bot scanner
+## Diagnosis
 
-## Problem
-The Bot Configuration UI has 5 strategy toggles:
-1. Order Blocks
-2. Fair Value Gaps
-3. Liquidity Sweeps
-4. Structure Breaks (BOS/CHoCH)
-5. Require HTF Bias Alignment
+Two issues are preventing MT5 trade mirroring:
 
-These are saved to `bot_configs.config_json.strategy` but the `bot-scanner` edge function never reads them. All 9 confluence factors are always scored, and HTF bias gate is always enforced, regardless of toggle state.
+### 1. MetaAPI "Place manual trades" is OFF
+Your MetaAPI account screenshot shows **"Place manual trades: Off"**. This setting must be **On** for trades placed via the MetaAPI REST API to execute. When it's Off, MetaAPI blocks any trade requests coming through the API (they only appear as "manual" trades from MetaAPI's perspective).
 
-## Fix
+**Fix:** In your MetaAPI dashboard, change "Place manual trades" to **On**, then click **Update** and redeploy the account.
 
-**File: `supabase/functions/bot-scanner/index.ts`**
+### 2. SSL error may still be occurring
+The most recent log still shows the native Deno SSL error (`invalid peer certificate: UnknownIssuer`), suggesting the `undiciFetch` fix may not have been deployed or isn't being used in the MT5 mirror code path. I need to redeploy the `bot-scanner` function and verify the fix takes effect.
 
-1. In `loadConfig`, read the strategy toggles from `config_json.strategy`:
-   - `useOrderBlocks` (default true)
-   - `useFVG` (default true)
-   - `useLiquiditySweep` (default true)
-   - `useStructureBreak` (default true)
-   - `requireHTFBias` (default true)
+## Plan
 
-2. In the confluence scoring function, skip (score = 0) for disabled factors:
-   - If `useOrderBlocks` is false → skip Order Block factor (2.0 pts)
-   - If `useFVG` is false → skip FVG factor (1.5 pts)
-   - If `useLiquiditySweep` is false → skip Liquidity Sweep factor (0.5 pts)
-   - If `useStructureBreak` is false → skip Market Structure factor (2.0 pts)
-
-3. In the safety gates, make HTF Bias gate conditional:
-   - If `requireHTFBias` is false → skip gate #1 (HTF bias alignment check)
-
-4. Adjust the max possible score dynamically so the threshold still makes sense when factors are disabled.
-
-5. Redeploy the `bot-scanner` edge function.
-
-## Technical detail
-- No database changes needed — config is already stored correctly
-- No UI changes needed — toggles already save properly
-- Only the scanner's scoring and gating logic needs to respect the flags
+1. **You (user action):** Go to MetaAPI dashboard → Edit your account → Change **"Place manual trades"** from **Off** to **On** → Click **Update** → Redeploy the account
+2. **I will:** Redeploy the `bot-scanner` edge function to ensure the `undiciFetch` SSL fix is active
+3. **I will:** Run a test call to verify MetaAPI connectivity from the scanner
+4. **Verify:** Trigger a manual scan to confirm the full flow works end-to-end
 
