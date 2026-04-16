@@ -1,6 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
+// Create a custom HTTP client to bypass MetaAPI SSL cert issues in Deno
+const metaHttpClient = Deno.createHttpClient({ caCerts: [] });
+
 // Broker execution — routes orders to OANDA or MetaAPI
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -43,7 +46,8 @@ Deno.serve(async (req) => {
       if (conn.broker_type === "metaapi") {
         const res = await fetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
           headers: { "auth-token": conn.api_key },
-        });
+          client: metaHttpClient,
+        } as any);
         if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
         return respond(await res.json());
       }
@@ -61,7 +65,8 @@ Deno.serve(async (req) => {
       if (conn.broker_type === "metaapi") {
         const res = await fetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
           headers: { "auth-token": conn.api_key },
-        });
+          client: metaHttpClient,
+        } as any);
         if (!res.ok) throw new Error(`MetaAPI error: ${res.status}`);
         return respond(await res.json());
       }
@@ -98,7 +103,8 @@ Deno.serve(async (req) => {
         const res = await fetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify(body),
-        });
+          client: metaHttpClient,
+        } as any);
         if (!res.ok) throw new Error(`MetaAPI order failed: ${res.status}`);
         return respond(await res.json());
       }
@@ -118,7 +124,8 @@ Deno.serve(async (req) => {
         const res = await fetch(`https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
           method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
           body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
-        });
+          client: metaHttpClient,
+        } as any);
         if (!res.ok) throw new Error(`MetaAPI close failed: ${res.status}`);
         return respond(await res.json());
       }
