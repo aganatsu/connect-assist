@@ -120,7 +120,7 @@ function BrokerSettings() {
                 </p>
                 {c.symbol_overrides && Object.keys(c.symbol_overrides).length > 0 && (
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym}→"${sfx}"`).join(", ")}
+                    Overrides: {Object.entries(c.symbol_overrides).map(([sym, sfx]) => `${sym} → ${(sfx as string) || '(no suffix)'}`).join(", ")}
                   </p>
                 )}
               </div>
@@ -145,27 +145,40 @@ function BrokerSettings() {
           <div><Label className="text-xs">Display Name</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="My Account" className="mt-1" /></div>
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Auth Token (JWT)" : "API Key / Token"}</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={brokerType === "metaapi" ? "eyJhbGci..." : ""} className="mt-1" /></div>
           <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Account ID (UUID)" : "Account ID"}</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder={brokerType === "metaapi" ? "5e83d5a3-cbd9-..." : ""} className="mt-1" /></div>
-          <div><Label className="text-xs">Default Symbol Suffix (e.g. 'r', '.pro', '.raw')</Label><Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder="r" className="mt-1" /></div>
+          <div>
+            <Label className="text-xs">Default Symbol Suffix (e.g. 'r', '.pro', '.raw')</Label>
+            <Input value={symbolSuffix} onChange={e => setSymbolSuffix(e.target.value)} placeholder="r" className="mt-1" />
+            <p className="text-[10px] text-muted-foreground mt-1">This suffix is appended to all symbols unless overridden below. E.g. EURUSD → EURUSD{symbolSuffix || 'r'}</p>
+          </div>
           
           {/* Symbol Overrides */}
           <div className="space-y-2">
-            <Label className="text-xs">Symbol Overrides (optional)</Label>
-            <p className="text-[10px] text-muted-foreground">Override the default suffix for specific symbols. E.g. XAUUSD → "m" while others use "r".</p>
-            {Object.entries(symbolOverrides).map(([sym, sfx]) => (
-              <div key={sym} className="flex items-center gap-2 text-xs">
-                <span className="font-mono">{sym}</span>
-                <span className="text-muted-foreground">→</span>
-                <span className="font-mono">"{sfx}"</span>
-                <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => {
-                  const next = { ...symbolOverrides };
-                  delete next[sym];
-                  setSymbolOverrides(next);
-                }}><Trash2 className="h-3 w-3" /></Button>
+            <Label className="text-xs">Symbol Overrides</Label>
+            <p className="text-[10px] text-muted-foreground">Override the default suffix for specific symbols. Add symbols that need a different suffix than "{symbolSuffix || '(default)'}".</p>
+            
+            {Object.keys(symbolOverrides).length > 0 && (
+              <div className="border border-border rounded overflow-hidden">
+                <div className="grid grid-cols-[1fr_80px_auto_40px] gap-2 px-3 py-1.5 bg-secondary/50 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  <span>Symbol</span><span>Suffix</span><span>Resolves to</span><span></span>
+                </div>
+                {Object.entries(symbolOverrides).map(([sym, sfx]) => (
+                  <div key={sym} className="grid grid-cols-[1fr_80px_auto_40px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
+                    <span className="font-mono font-medium">{sym}</span>
+                    <span className="font-mono text-muted-foreground">{(sfx as string) || '(no suffix)'}</span>
+                    <span className="font-mono text-primary text-[11px]">{sym}{sfx as string}</span>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                      const next = { ...symbolOverrides };
+                      delete next[sym];
+                      setSymbolOverrides(next);
+                    }}><Trash2 className="h-3 w-3" /></Button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
+            
             <div className="flex gap-2">
-              <Input value={newOverrideSymbol} onChange={e => setNewOverrideSymbol(e.target.value)} placeholder="XAUUSD" className="h-8 text-xs flex-1" />
-              <Input value={newOverrideSuffix} onChange={e => setNewOverrideSuffix(e.target.value)} placeholder="m" className="h-8 text-xs w-20" />
+              <Input value={newOverrideSymbol} onChange={e => setNewOverrideSymbol(e.target.value)} placeholder="e.g. XAUUSD" className="h-8 text-xs flex-1" />
+              <Input value={newOverrideSuffix} onChange={e => setNewOverrideSuffix(e.target.value)} placeholder="e.g. m" className="h-8 text-xs w-20" />
               <Button variant="outline" size="sm" className="h-8 text-xs" onClick={addOverride} disabled={!newOverrideSymbol.trim()}>Add</Button>
             </div>
           </div>
