@@ -62,21 +62,22 @@ export default function BotView() {
     refetchInterval: 30000,
   });
   const activeConnections = Array.isArray(brokerConns) ? brokerConns.filter((c: any) => c.is_active) : [];
-  const primaryConnection = activeConnections[0];
+  const [selectedConnIdx, setSelectedConnIdx] = useState(0);
+  const selectedConnection = activeConnections[selectedConnIdx] || activeConnections[0];
 
   // Live broker account data (only when in live mode with an active connection)
   const isLiveMode = status?.executionMode === "live";
   const { data: brokerAccount } = useQuery({
-    queryKey: ["broker-account", primaryConnection?.id],
-    queryFn: () => brokerExecApi.accountSummary(primaryConnection.id),
-    enabled: !!primaryConnection && isLiveMode,
+    queryKey: ["broker-account", selectedConnection?.id],
+    queryFn: () => brokerExecApi.accountSummary(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
 
   const { data: brokerOpenTrades } = useQuery({
-    queryKey: ["broker-open-trades", primaryConnection?.id],
-    queryFn: () => brokerExecApi.openTrades(primaryConnection.id),
-    enabled: !!primaryConnection && isLiveMode,
+    queryKey: ["broker-open-trades", selectedConnection?.id],
+    queryFn: () => brokerExecApi.openTrades(selectedConnection.id),
+    enabled: !!selectedConnection && isLiveMode,
     refetchInterval: 10000,
   });
 
