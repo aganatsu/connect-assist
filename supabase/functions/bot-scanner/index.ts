@@ -1396,7 +1396,7 @@ async function runScanForUser(supabase: any, userId: string) {
                 authToken = conn.account_id;
                 metaAccountId = conn.api_key;
               }
-              const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+              const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
               const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
               const mt5Body: any = {
                 actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
