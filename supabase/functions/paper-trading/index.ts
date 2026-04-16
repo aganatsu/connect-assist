@@ -64,6 +64,69 @@ function calcPnl(dir: string, entry: number, current: number, size: number, symb
   return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
 }
 
+// ─── MT5 Mirror Helper ──────────────────────────────────────────────
+async function mirrorToMT5(supabase: any, userId: string, params: {
+  action: "open" | "close";
+  symbol: string;
+  direction?: string;
+  size?: number;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  positionId?: string;
+}): Promise<{ success: boolean; mt5Result?: any; error?: string }> {
+  try {
+    // Find active metaapi broker connection
+    const { data: connections } = await supabase.from("broker_connections")
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+    if (!connections || connections.length === 0) return { success: false, error: "no_connection" };
+    const conn = connections[0];
+
+    const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`;
+    const headers: Record<string, string> = { "auth-token": conn.api_key, "Content-Type": "application/json" };
+
+    if (params.action === "open") {
+      const body: any = {
+        actionType: params.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+        symbol: params.symbol.replace("/", ""),
+        volume: params.size,
+      };
+      if (params.stopLoss) body.stopLoss = params.stopLoss;
+      if (params.takeProfit) body.takeProfit = params.takeProfit;
+      if (params.positionId) body.comment = `paper:${params.positionId}`;
+
+      const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(body) });
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`MT5 mirror open failed [${res.status}]: ${errText}`);
+        return { success: false, error: `MT5 order failed: ${res.status}` };
+      }
+      return { success: true, mt5Result: await res.json() };
+    }
+
+    if (params.action === "close") {
+      // Find MT5 position by comment matching paper position ID
+      const posRes = await fetch(`${baseUrl}/positions`, { headers });
+      if (!posRes.ok) return { success: false, error: `MT5 positions fetch failed: ${posRes.status}` };
+      const mt5Positions = await posRes.json();
+      const mt5Pos = mt5Positions.find((p: any) =>
+        p.comment?.includes(`paper:${params.positionId}`) ||
+        p.symbol === params.symbol?.replace("/", "")
+      );
+      if (!mt5Pos) return { success: false, error: "MT5 position not found" };
+
+      const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: mt5Pos.id };
+      const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
+      if (!res.ok) return { success: false, error: `MT5 close failed: ${res.status}` };
+      return { success: true, mt5Result: await res.json() };
+    }
+
+    return { success: false, error: "unknown action" };
+  } catch (e: any) {
+    console.error("MT5 mirror error:", e.message);
+    return { success: false, error: e.message };
+  }
+}
+
 // ─── Post-Mortem Generation ─────────────────────────────────────────
 function generatePostMortem(
   position: any, exitPrice: number, pnl: number, pnlPips: number, closeReason: string,
