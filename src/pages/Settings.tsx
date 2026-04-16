@@ -93,7 +93,15 @@ function BrokerSettings() {
 
   const testMutation = useMutation({
     mutationFn: (id: string) => brokerApi.test(id),
-    onSuccess: (data: any) => toast.success(`Connected! Balance: ${data.balance} ${data.currency || ""}`),
+    onSuccess: (data: any) => {
+      if (data.balance !== undefined) {
+        toast.success(`Connected! Balance: ${data.balance} ${data.currency || ""}`);
+      } else if (data.name || data.connectionStatus) {
+        toast.success(`Connected! ${data.name || ""} — ${data.connectionStatus || data.state || "OK"}`);
+      } else {
+        toast.success("Connection verified!");
+      }
+    },
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
 
