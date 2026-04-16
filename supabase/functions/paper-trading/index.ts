@@ -278,6 +278,108 @@ Deno.serve(async (req) => {
         // Re-fetch with updated prices
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
         positions = refreshed || positions;
+
+        // ── SL/TP Hit Detection + Exit Flag Logic (Fix #9, #13) ──
+        const closedIds: string[] = [];
+        for (const pos of (positions || [])) {
+          const currentPrice = parseFloat(pos.current_price);
+          const entryPrice = parseFloat(pos.entry_price);
+          const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
+          const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
+          const size = parseFloat(pos.size);
+          let closeReason: string | null = null;
+          let exitPrice = currentPrice;
+
+          // Parse exit flags from signal_reason
+          let exitFlags: any = {};
+          try {
+            const parsed = JSON.parse(pos.signal_reason || "{}");
+            exitFlags = parsed.exitFlags || {};
+          } catch {}
+
+          // Check SL hit
+          if (sl !== null) {
+            if (pos.direction === "long" && currentPrice <= sl) {
+              closeReason = "sl_hit"; exitPrice = sl;
+            } else if (pos.direction === "short" && currentPrice >= sl) {
+              closeReason = "sl_hit"; exitPrice = sl;
+            }
+          }
+
+          // Check TP hit
+          if (!closeReason && tp !== null) {
+            if (pos.direction === "long" && currentPrice >= tp) {
+              closeReason = "tp_hit"; exitPrice = tp;
+            } else if (pos.direction === "short" && currentPrice <= tp) {
+              closeReason = "tp_hit"; exitPrice = tp;
+            }
+          }
+
+          // Check max hold hours
+          if (!closeReason && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0) {
+            const openMs = new Date(pos.open_time).getTime();
+            const elapsedHours = (Date.now() - openMs) / 3600000;
+            if (elapsedHours >= exitFlags.maxHoldHours) {
+              closeReason = "time_exit";
+            }
+          }
+
+          // Break even: move SL to entry if price moved enough in profit
+          if (!closeReason && exitFlags.breakEven && exitFlags.breakEvenPips > 0 && sl !== null) {
+            const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const profitPips = pos.direction === "long"
+              ? (currentPrice - entryPrice) / spec.pipSize
+              : (entryPrice - currentPrice) / spec.pipSize;
+            if (profitPips >= exitFlags.breakEvenPips) {
+              // Move SL to entry (break even)
+              const newSL = entryPrice;
+              if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+              }
+            }
+          }
+
+          // Close position if SL/TP/time triggered
+          if (closeReason) {
+            const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
+            await supabase.from("paper_trade_history").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+              exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+              open_time: pos.open_time, closed_at: new Date().toISOString(),
+              close_reason: closeReason, signal_reason: pos.signal_reason || "",
+              signal_score: pos.signal_score, order_id: pos.order_id,
+            });
+            // Update balance
+            const curBal = parseFloat(account?.balance || "10000");
+            const newBal = curBal + pnl;
+            const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
+            await supabase.from("paper_accounts").update({
+              balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
+            }).eq("user_id", user.id);
+
+            // Generate post-mortem
+            const postMortem = generatePostMortem(pos, exitPrice, pnl, pnlPips, closeReason);
+            await supabase.from("trade_post_mortems").insert({
+              user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
+              exit_reason: closeReason, exit_price: exitPrice.toString(), pnl: pnl.toFixed(2),
+              what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
+              lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
+            });
+
+            await supabase.from("paper_positions").delete().eq("id", pos.id);
+            closedIds.push(pos.id);
+          }
+        }
+
+        // Re-fetch positions after auto-closes
+        if (closedIds.length > 0) {
+          const { data: remaining } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
+          positions = remaining || [];
+          // Re-fetch account for updated balance
+          const { data: updatedAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+          if (updatedAccount) Object.assign(account, updatedAccount);
+        }
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
       const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
