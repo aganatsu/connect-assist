@@ -1,25 +1,77 @@
 
 
-# Fix Two Issues: MT5 Mirroring + Position Table Stability
+# Opening Range Module — Full Implementation (UI + Scanner Logic)
 
-## Issue 1: MT5 mirror trades fail silently
-The `mirrorToMT5` function in `paper-trading/index.ts` (line 84-85) uses `conn.account_id` and `conn.api_key` directly without the swapped-fields auto-detection that was added to `broker-connections`. Since your credentials are stored with the JWT in `account_id` and UUID in `api_key`, the mirror function sends the JWT as the MetaApi account ID in the URL — which fails.
+## Overview
+Add a complete "Opening Range" system: configurable via the Bot Config modal, stored in the database, and actively used by the bot-scanner during confluence analysis and safety gates.
 
-**Fix**: Add the same swap-detection logic from `broker-connections/index.ts` into the `mirrorToMT5` helper:
-- If `conn.account_id` starts with `eyJ` and `conn.api_key` matches a UUID pattern, swap them before making the API call.
-- Also wrap the fetch in a try/catch for SSL certificate errors (same issue seen during testing).
+## 1. Default Config — `supabase/functions/bot-config/index.ts`
+Add `openingRange` to `getDefaultConfig()`:
+```
+openingRange: {
+  enabled: false,
+  candleCount: 24,
+  useBias: true,
+  useJudasSwing: true,
+  useKeyLevels: true,
+  usePremiumDiscount: false,
+  waitForCompletion: true,
+}
+```
 
-**File**: `supabase/functions/paper-trading/index.ts` (lines 82-85)
+## 2. Scanner Logic — `supabase/functions/bot-scanner/index.ts`
 
-## Issue 2: Open positions table keeps reordering on every price update
-The `status` action fetches positions from the database without a sort order (line 230, 235). Each time prices update and positions are re-fetched, the database returns them in arbitrary order, causing the table rows to jump around.
+### New function: `computeOpeningRange(dailyCandles, hourlyCandles, config)`
+- Takes the first `config.openingRange.candleCount` hourly candles of the current trading day
+- Returns `{ high, low, midpoint, completed: boolean }`
 
-**Fix**: Add `.order("open_time", { ascending: true })` to both position queries (lines 230 and 235) so rows stay in a consistent order.
+### Integration into `runFullConfluenceAnalysis` and `runScanForUser`:
 
-**File**: `supabase/functions/paper-trading/index.ts` (lines 230, 235)
+**a) Daily Bias from OR** (`useBias`)
+- After computing OR, if price is above OR high → bullish bias boost (+0.5 to Market Structure factor)
+- If price is below OR low → bearish bias boost
+- This modifies Factor 1 (Market Structure) scoring
 
-## Summary of Changes
-1. **paper-trading/index.ts** — Add swapped-field detection in `mirrorToMT5` + SSL error handling
-2. **paper-trading/index.ts** — Add `.order("open_time")` to position queries for stable table order
-3. Redeploy the `paper-trading` edge function
+**b) Judas Swing from OR** (`useJudasSwing`)
+- Enhance Factor 6: if price swept OR high then reversed below, or swept OR low then reversed above → confirmed Judas Swing
+- This gives a stronger detection than the generic 20-candle version
+
+**c) OR Key Levels** (`useKeyLevels`)
+- Add OR high, low, midpoint to the PD/PW Levels check (Factor 7)
+- If price is near OR high/low/mid → +0.5 points (same logic as PDH/PDL)
+
+**d) Premium/Discount from OR** (`usePremiumDiscount`)
+- Override Factor 4's equilibrium calculation to use OR high/low instead of swing-based range
+- Tighter zones for intraday decisions
+
+**e) Wait for Completion** (`waitForCompletion`)
+- New Safety Gate (Gate 11): if the current trading day has fewer than `candleCount` hourly candles elapsed, reject the trade
+- Added to `runSafetyGates` function
+
+### Data fetching
+- The scanner already fetches 15m and daily candles. Will add a third fetch for 1h candles (`fetchCandles(pair, "1h", "2d")`) when `openingRange.enabled` is true
+- Passed into `runFullConfluenceAnalysis` as an optional parameter
+
+## 3. Bot Config Modal UI — `src/components/BotConfigModal.tsx`
+- Add "Opening Range" tab (with `BarChart3` icon) after "Sessions"
+- Master toggle: "Enable Opening Range"
+- Numeric input: "Candle Count" (default 24)
+- Five sub-toggles with descriptions:
+  - Daily Bias from OR
+  - Judas Swing Detection
+  - OR Key Levels
+  - Premium/Discount from OR
+  - Wait for OR Completion
+- Sub-toggles disabled when master toggle is off
+
+## 4. Scanner Config Loading — `loadConfig` in bot-scanner
+- Merge `openingRange` defaults when the field is missing from saved config (same pattern as `instruments`)
+
+## Files Changed
+1. `supabase/functions/bot-config/index.ts` — add defaults
+2. `supabase/functions/bot-scanner/index.ts` — add `computeOpeningRange`, modify confluence scoring + safety gates, add 1h candle fetch
+3. `src/components/BotConfigModal.tsx` — add Opening Range tab with toggles
+
+## Deployment
+All three files updated and edge functions redeployed.
 
