@@ -696,35 +696,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     else if (pd.currentZone === "premium") direction = "short";
   }
 
-  // Calculate SL/TP (structure-based) — use per-symbol pip size
-  let stopLoss: number | null = null;
-  let takeProfit: number | null = null;
-  const swings = structure.swingPoints;
+  // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
   const specSL = SPECS[symbolForSL] || SPECS["EUR/USD"];
   const pipSize = specSL.pipSize;
+  const swings = structure.swingPoints;
 
-  if (direction === "long") {
-    const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
-    if (recentLows.length > 0) {
-      const nearestLow = Math.max(...recentLows.map(s => s.price));
-      stopLoss = nearestLow - config.slBufferPips * pipSize;
-    }
-    if (stopLoss) {
-      const risk = lastPrice - stopLoss;
-      takeProfit = lastPrice + risk * config.tpRatio;
-    }
-  } else if (direction === "short") {
-    const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
-    if (recentHighs.length > 0) {
-      const nearestHigh = Math.min(...recentHighs.map(s => s.price));
-      stopLoss = nearestHigh + config.slBufferPips * pipSize;
-    }
-    if (stopLoss) {
-      const risk = stopLoss - lastPrice;
-      takeProfit = lastPrice - risk * config.tpRatio;
-    }
-  }
+  // Compute ATR for ATR-based methods (use entry candles)
+  const atrValue = calculateATR(candles, config.slATRPeriod || 14);
+
+  const { stopLoss, takeProfit } = calculateSLTP({
+    direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue,
+  });
 
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
