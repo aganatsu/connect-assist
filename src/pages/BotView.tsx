@@ -142,6 +142,16 @@ export default function BotView() {
             {d.executionMode === "live" ? "LIVE" : "PAPER"}
           </span>
 
+          {mt5Connection ? (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
+              <Monitor className="h-2.5 w-2.5" /> MT5 Connected
+            </span>
+          ) : (
+            <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+              <Monitor className="h-2.5 w-2.5" /> Connect MT5
+            </button>
+          )}
+
           <div className="ml-auto flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
               {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
