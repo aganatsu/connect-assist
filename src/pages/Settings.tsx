@@ -122,8 +122,8 @@ function BrokerSettings() {
               <option value="metaapi">MetaAPI (MT4/MT5)</option><option value="oanda">OANDA</option>
             </select></div>
           <div><Label className="text-xs">Display Name</Label><Input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="My Account" className="mt-1" /></div>
-          <div><Label className="text-xs">API Key / Token</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="mt-1" /></div>
-          <div><Label className="text-xs">Account ID</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} className="mt-1" /></div>
+          <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Auth Token (JWT)" : "API Key / Token"}</Label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder={brokerType === "metaapi" ? "eyJhbGci..." : ""} className="mt-1" /></div>
+          <div><Label className="text-xs">{brokerType === "metaapi" ? "MetaApi Account ID (UUID)" : "Account ID"}</Label><Input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder={brokerType === "metaapi" ? "5e83d5a3-cbd9-..." : ""} className="mt-1" /></div>
           <div className="flex items-center gap-2"><Switch checked={isLive} onCheckedChange={setIsLive} /><Label className="text-sm">Live account</Label></div>
           <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId}>Save Connection</Button>
         </CardContent>
