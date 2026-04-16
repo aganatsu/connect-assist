@@ -8,17 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { paperApi, scannerApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi } from "@/lib/api";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
   TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
-  ChevronDown, ChevronUp, Plus, Settings, Activity,
+  ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [orderFormOpen, setOrderFormOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
@@ -47,6 +49,13 @@ export default function BotView() {
     queryFn: () => scannerApi.logs(),
     refetchInterval: 30000,
   });
+
+  const { data: brokerConns } = useQuery({
+    queryKey: ["broker-connections"],
+    queryFn: () => brokerApi.list(),
+    refetchInterval: 30000,
+  });
+  const mt5Connection = Array.isArray(brokerConns) ? brokerConns.find((c: any) => c.broker_type === "metaapi" && c.is_active) : null;
 
   const startMut = useMutation({ mutationFn: () => paperApi.startEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine started"); } });
   const pauseMut = useMutation({ mutationFn: () => paperApi.pauseEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine paused"); } });
@@ -132,6 +141,16 @@ export default function BotView() {
           <span className={`text-[10px] font-medium px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
             {d.executionMode === "live" ? "LIVE" : "PAPER"}
           </span>
+
+          {mt5Connection ? (
+            <span className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
+              <Monitor className="h-2.5 w-2.5" /> MT5 Connected
+            </span>
+          ) : (
+            <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+              <Monitor className="h-2.5 w-2.5" /> Connect MT5
+            </button>
+          )}
 
           <div className="ml-auto flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
