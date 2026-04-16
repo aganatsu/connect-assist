@@ -52,15 +52,20 @@ export default function IctAnalysis() {
     queryFn: () => {
       if (!liveQuotes) return null;
       const pairData: Record<string, { change: number }> = {};
-      Object.entries(liveQuotes).forEach(([pair, q]: [string, any]) => { if (q?.change != null) pairData[pair] = { change: q.change }; });
+      Object.entries(liveQuotes).forEach(([pair, q]: [string, any]) => { const pct = q?.percentChange ?? q?.change; if (pct != null) pairData[pair] = { change: pct }; });
       return Object.keys(pairData).length > 0 ? smcApi.currencyStrength(pairData) : null;
     },
     enabled: !!liveQuotes, staleTime: 30000,
   });
 
-  const strengthData = currencyStrength
-    ? Object.entries(currencyStrength).map(([currency, score]: [string, any]) => ({ currency, score: typeof score === 'number' ? score : 0 })).sort((a, b) => a.score - b.score)
-    : [];
+  const strengthData = useMemo(() => {
+    if (!currencyStrength) return [];
+    const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
+    return arr
+      .filter((item: any) => item.currency && typeof item.currency === 'string' && item.currency.length <= 4)
+      .map((item: any) => ({ currency: item.currency, score: Math.round(((item.strength ?? item.score ?? 0) + Number.EPSILON) * 100) / 100 }))
+      .sort((a: any, b: any) => b.score - a.score);
+  }, [currencyStrength]);
 
   // Correlation matrix (simplified from quote changes)
   const correlationMatrix = useMemo(() => {
@@ -199,16 +204,25 @@ export default function IctAnalysis() {
               <AccordionContent>
                 <div className="bg-secondary/30 border border-border p-3">
                   {strengthData.length > 0 ? (
-                    <div className="h-[220px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={strengthData} layout="vertical" barSize={16}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(240, 6%, 20%)" />
-                          <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(220, 8%, 65%)" }} stroke="hsl(220, 8%, 40%)" />
-                          <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(220, 8%, 75%)" }} stroke="hsl(220, 8%, 40%)" width={40} />
-                          <Tooltip contentStyle={{ backgroundColor: "hsl(240, 8%, 9%)", border: "1px solid hsl(240, 6%, 20%)", borderRadius: "0" }} />
-                          <Bar dataKey="score">{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
+                    <div>
+                      <div className="h-[220px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={strengthData} layout="vertical" barSize={16}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                            <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(var(--muted-foreground))" }} stroke="hsl(var(--border))" />
+                            <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(var(--foreground))" }} stroke="hsl(var(--border))" width={40} />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "4px", fontSize: "12px", color: "hsl(var(--foreground))" }}
+                              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
+                              formatter={(value: number) => [`${value.toFixed(2)}%`, "Strength"]}
+                            />
+                            <Bar dataKey="score">{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1 text-center">
+                        Based on % change across major pairs · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
+                      </p>
                     </div>
                   ) : <p className="text-xs text-muted-foreground">Loading...</p>}
                 </div>
