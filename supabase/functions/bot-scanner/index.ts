@@ -1167,6 +1167,10 @@ async function runScanForUser(supabase: any, userId: string) {
   const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
   if (!account) return { error: "No paper account" };
 
+  // Fetch Telegram chat ID for notifications
+  const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
+  const telegramChatId = (userSettings?.preferences_json as any)?.telegramChatId || null;
+
   const balance = parseFloat(account.balance || "10000");
   const isPaused = account.is_paused;
 
