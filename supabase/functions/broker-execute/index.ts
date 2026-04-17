@@ -146,19 +146,17 @@ Deno.serve(async (req) => {
       }
 
       if (conn.broker_type === "metaapi") {
-        const body: any = {
+        const tradeBody: any = {
           actionType: direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
           symbol: resolveSymbol(symbol, conn), volume: size,
         };
-        if (stopLoss) body.stopLoss = stopLoss;
-        if (takeProfit) body.takeProfit = takeProfit;
-
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
-          method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+        if (stopLoss) tradeBody.stopLoss = stopLoss;
+        if (takeProfit) tradeBody.takeProfit = takeProfit;
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
         });
-        if (!res.ok) throw new Error(`MetaAPI order failed: ${res.status}`);
-        return respond(await res.json());
+        if (!res.ok) return respond({ error: `MetaAPI order failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
