@@ -139,7 +139,7 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
         console.error(`MT5 mirror open failed [${res.status}]: ${errText}`);
         return { success: false, error: `MT5 order failed: ${res.status}` };
       }
-      return { success: true, mt5Result: await res.json() };
+      return { success: true, mt5Result: await res.json(), connectionId: conn.id };
     }
 
     if (params.action === "close") {
@@ -631,7 +631,14 @@ Deno.serve(async (req) => {
           action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
         });
         if (mt5Mirror.success) {
-          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots`);
+          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots on connection ${mt5Mirror.connectionId}`);
+          // Record which broker connection this position was mirrored to so close
+          // is restricted to ONLY this connection (no cross-broker fan-out).
+          if (mt5Mirror.connectionId) {
+            await supabase.from("paper_positions")
+              .update({ mirrored_connection_ids: [mt5Mirror.connectionId] })
+              .eq("position_id", positionId).eq("user_id", user.id);
+          }
         } else if (mt5Mirror.error !== "no_connection") {
           console.warn(`MT5 mirror failed: ${mt5Mirror.error}`);
         }
