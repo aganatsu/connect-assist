@@ -288,7 +288,7 @@ export default function BotView() {
                 ) : (
                   <table className="w-full text-[11px] font-mono">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
-                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
+                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Dir</th>
                       <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
                       <th className="text-right py-1 px-1">P&L</th><th className="text-right py-1 px-1">Size</th>
                       <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
