@@ -1707,12 +1707,15 @@ async function runScanForUser(supabase: any, userId: string) {
                       }),
                     });
                     const exBody = await exRes.text();
-                    if (exRes.ok) {
+                    let parsedEx: any = null;
+                    try { parsedEx = JSON.parse(exBody); } catch {}
+                    if (exRes.ok && !(parsedEx?.error)) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                     } else {
-                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${exBody.slice(0, 300)}`);
-                      mirrorResults.push(`${conn.display_name}: failed`);
+                      const reason = parsedEx?.error || exBody.slice(0, 200);
+                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
+                      mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
                     }
                     continue;
                   }
