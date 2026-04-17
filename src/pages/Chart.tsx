@@ -396,3 +396,59 @@ export default function Chart() {
     </AppShell>
   );
 }
+
+function FactorRow({ label, pass, detail }: { label: string; pass: boolean; detail?: string }) {
+  return (
+    <div className="flex items-start gap-1.5 text-[10px]">
+      {pass ? <CheckCircle className="h-3 w-3 text-success shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-muted-foreground/40 shrink-0 mt-0.5" />}
+      <div className="flex-1">
+        <span className={pass ? 'text-foreground font-medium' : 'text-muted-foreground'}>{label}</span>
+        {detail && <span className="text-muted-foreground ml-1">— {detail}</span>}
+      </div>
+    </div>
+  );
+}
+
+function BotScanInline({ signal: d, scannedAt }: { signal: any; scannedAt?: string }) {
+  const status = d.status === 'trade_placed' ? 'PLACED' : d.status === 'rejected' ? 'REJECTED' : d.status === 'below_threshold' ? 'SKIP' : (d.status?.toUpperCase() || '—');
+  const statusColor = d.status === 'trade_placed' ? 'text-success' : d.status === 'rejected' ? 'text-destructive' : 'text-muted-foreground';
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        {d.direction === 'long' ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === 'short' ? <TrendingDown className="h-3 w-3 text-destructive" /> : null}
+        <span className="text-[10px] font-bold">{d.pair}</span>
+        <span className={`text-[9px] font-bold ${statusColor}`}>{status}</span>
+        {scannedAt && <span className="text-[9px] text-muted-foreground ml-auto">{new Date(scannedAt).toLocaleTimeString()}</span>}
+      </div>
+      {d.reason && (
+        <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why</p>
+          <p className="mt-0.5 text-[10px]">{d.reason}</p>
+        </div>
+      )}
+      {d.factors && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Factors ({d.factorCount || d.factors.length})</p>
+          {d.factors.map((f: any, i: number) => (
+            <div key={i} className="flex items-start gap-1 text-[9px]">
+              <span className={f.present ? 'text-success' : 'text-muted-foreground/50'}>{f.present ? '✓' : '✗'}</span>
+              <div>
+                <span className={f.present ? 'text-foreground' : 'text-muted-foreground/60'}>{f.name}</span>
+                {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {d.rejectionReasons?.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejected</p>
+          {d.rejectionReasons.map((r: string, i: number) => (
+            <p key={i} className="text-[9px] text-destructive">⚠ {r}</p>
+          ))}
+        </div>
+      )}
+      {d.summary && <p className="text-[9px] text-muted-foreground italic">{d.summary}</p>}
+    </div>
+  );
+}
