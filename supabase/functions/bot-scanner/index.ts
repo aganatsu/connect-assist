@@ -1369,6 +1369,31 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "VWAP", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 17: AMD Phase (max 1.0; 0.5 if bias aligned, +0.5 if in distribution phase) ──
+  const amd = detectAMDPhase(candles);
+  {
+    let pts = 0;
+    let detail = `AMD: ${amd.detail}`;
+    if (config.useAMD === false) {
+      detail = "AMD Phase disabled";
+    } else if (direction && amd.bias) {
+      const aligned = (direction === "long" && amd.bias === "bullish") || (direction === "short" && amd.bias === "bearish");
+      if (aligned) {
+        pts = 0.5;
+        if (amd.phase === "distribution") {
+          pts += 0.5;
+          detail = `AMD distribution + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        } else {
+          detail = `AMD ${amd.phase} + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        }
+      } else {
+        detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
