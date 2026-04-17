@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { CheckCircle2, SkipForward, XCircle, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { formatBrokerTime } from "@/lib/formatTime";
 
 type BrokerLogRow = {
   id: string;
@@ -11,9 +12,109 @@ type BrokerLogRow = {
   positionId: string;
   size: number | null;
   entryPrice: number | null;
-  mirrorResult: string;
+  mirrorResult: string;       // raw result from mt5Mirror
+  displayResult: string;      // human-readable version
   status: "success" | "skipped" | "failed" | "unknown";
 };
+
+// Human-readable translations for broker error codes
+const ERROR_TRANSLATIONS: Record<string, string> = {
+  // MetaTrader retcodes
+  "TRADE_RETCODE_INVALID_STOPS": "Invalid stop loss or take profit levels — broker rejected the SL/TP values",
+  "TRADE_RETCODE_NO_MONEY": "Insufficient funds — broker account balance too low to open this trade",
+  "TRADE_RETCODE_MARKET_CLOSED": "Market is closed — trading hours ended for this instrument",
+  "TRADE_RETCODE_INVALID_VOLUME": "Invalid lot size — volume is outside broker's allowed range",
+  "TRADE_RETCODE_INVALID_PRICE": "Invalid price — the requested price is no longer available",
+  "TRADE_RETCODE_TOO_MANY_REQUESTS": "Too many requests — broker rate limit hit, try again later",
+  "TRADE_RETCODE_CONNECTION": "Connection lost — could not reach broker server",
+  "TRADE_RETCODE_TIMEOUT": "Request timed out — broker did not respond in time",
+  "TRADE_RETCODE_INVALID_EXPIRATION": "Invalid order expiration — check pending order settings",
+  "TRADE_RETCODE_ORDER_CHANGED": "Order was modified by broker during execution",
+  "TRADE_RETCODE_PRICE_CHANGED": "Price changed during execution — requote",
+  "TRADE_RETCODE_PRICE_OFF": "Price is off — no quotes available for this symbol",
+  "TRADE_RETCODE_LIMIT_ORDERS": "Maximum number of pending orders reached",
+  "TRADE_RETCODE_LIMIT_VOLUME": "Maximum total volume reached on broker account",
+  "TRADE_RETCODE_REJECT": "Trade rejected by broker — general rejection",
+  "TRADE_RETCODE_CANCEL": "Trade cancelled by broker",
+  "TRADE_RETCODE_LOCKED": "Trade is locked — position modification not allowed",
+  "TRADE_RETCODE_FROZEN": "Order is frozen — cannot modify or cancel",
+  "TRADE_RETCODE_INVALID_FILL": "Invalid fill policy — order fill type not supported",
+  "TRADE_RETCODE_POSITION_CLOSED": "Position already closed",
+  "TRADE_RETCODE_CLOSE_ONLY": "Close-only mode — broker only allows closing positions, not opening new ones",
+  // ERR_ codes
+  "ERR_INVALID_STOPS": "Invalid stop levels — SL/TP too close to current price or outside allowed range",
+  "ERR_MARKET_UNKNOWN_SYMBOL": "Unknown symbol — this pair is not available on your broker account",
+  "ERR_TRADE_DISABLED": "Trading disabled — broker has disabled trading on this account",
+  "ERR_NOT_ENOUGH_MONEY": "Not enough margin — insufficient free margin to open this position",
+  "ERR_TRADE_TOO_MANY_ORDERS": "Too many open orders — broker limit reached",
+  "ERR_TRADE_HEDGE_PROHIBITED": "Hedging not allowed — broker does not permit opposite positions",
+  "ERR_TRADE_CLOSE_ONLY": "Close-only mode — new positions are not allowed",
+};
+
+function translateBrokerResult(raw: string): string {
+  // Try to extract the error code from patterns like "BrokerName: rejected CODE" or "BrokerName: failed CODE"
+  const rejectedMatch = raw.match(/:\s*rejected\s+(.+)$/i);
+  const failedMatch = raw.match(/:\s*failed\s+(.+)$/i);
+
+  const code = rejectedMatch?.[1]?.trim() || failedMatch?.[1]?.trim();
+  if (code) {
+    // Check if it's a known error code
+    const translation = ERROR_TRANSLATIONS[code];
+    if (translation) {
+      // Extract broker name
+      const brokerName = raw.split(":")[0]?.trim() || "Broker";
+      return `${brokerName}: ${translation}`;
+    }
+    // If it's an HTTP status code like "401", "403", "500"
+    if (/^\d{3}$/.test(code)) {
+      const brokerName = raw.split(":")[0]?.trim() || "Broker";
+      const httpMeanings: Record<string, string> = {
+        "401": "Authentication failed — broker token expired or invalid",
+        "403": "Access denied — broker account permissions issue",
+        "404": "Endpoint not found — broker API configuration error",
+        "429": "Rate limited — too many requests to broker",
+        "500": "Broker server error — try again later",
+        "502": "Broker gateway error — server temporarily unavailable",
+        "503": "Broker service unavailable — server overloaded or in maintenance",
+      };
+      return `${brokerName}: ${httpMeanings[code] || `HTTP ${code} error from broker`}`;
+    }
+  }
+
+  // For spread skips, make them more readable
+  const spreadMatch = raw.match(/:\s*skipped\s*\(spread\s+([\d.]+)\s*>\s*([\d.]+)\s*(?:max)?\)/i);
+  if (spreadMatch) {
+    const brokerName = raw.split(":")[0]?.trim() || "Broker";
+    return `${brokerName}: Spread too wide (${spreadMatch[1]} pips > ${spreadMatch[2]} max) — trade not sent`;
+  }
+
+  // For zero balance
+  if (raw.toLowerCase().includes("skipped (zero balance)")) {
+    const brokerName = raw.split(":")[0]?.trim() || "Broker";
+    return `${brokerName}: Broker account has zero balance — cannot open trade`;
+  }
+
+  // For symbol not found
+  const symbolMatch = raw.match(/:\s*skipped\s*—\s*symbol\s+(\S+)\s+not found/i);
+  if (symbolMatch) {
+    const brokerName = raw.split(":")[0]?.trim() || "Broker";
+    return `${brokerName}: Symbol ${symbolMatch[1]} not found on this broker — check symbol mapping`;
+  }
+
+  // For balance error
+  if (raw.toLowerCase().includes("skipped (balance error)")) {
+    const brokerName = raw.split(":")[0]?.trim() || "Broker";
+    return `${brokerName}: Could not read broker balance — connection issue`;
+  }
+
+  // Success stays as-is but make it cleaner
+  if (raw.toLowerCase().includes("success")) {
+    const brokerName = raw.split(":")[0]?.trim() || "Broker";
+    return `${brokerName}: Trade mirrored successfully`;
+  }
+
+  return raw;
+}
 
 function classifyResult(result: string): BrokerLogRow["status"] {
   const lower = result.toLowerCase();
@@ -55,7 +156,8 @@ export function BrokerLog() {
               positionId: d.positionId || "—",
               size: d.size ?? null,
               entryPrice: d.entryPrice ?? null,
-              mirrorResult: "Paper mode — not sent to broker",
+              mirrorResult: mt5,
+              displayResult: "Paper mode — trades are simulated, not sent to broker",
               status: "skipped",
             });
             continue;
@@ -69,7 +171,8 @@ export function BrokerLog() {
               positionId: d.positionId || "—",
               size: d.size ?? null,
               entryPrice: d.entryPrice ?? null,
-              mirrorResult: "No active broker connection",
+              mirrorResult: mt5,
+              displayResult: "No active broker connection — add a broker in Settings to mirror trades",
               status: "skipped",
             });
             continue;
@@ -83,7 +186,8 @@ export function BrokerLog() {
               positionId: d.positionId || "—",
               size: d.size ?? null,
               entryPrice: d.entryPrice ?? null,
-              mirrorResult: "Broker mirror error",
+              mirrorResult: mt5,
+              displayResult: "Unexpected broker mirror error — check broker connection status",
               status: "failed",
             });
             continue;
@@ -101,6 +205,7 @@ export function BrokerLog() {
               size: d.size ?? null,
               entryPrice: d.entryPrice ?? null,
               mirrorResult: result,
+              displayResult: translateBrokerResult(result),
               status: classifyResult(result),
             });
           }
@@ -190,19 +295,12 @@ export function BrokerLog() {
             </thead>
             <tbody>
               {filtered.map((r, idx) => {
-                const time = new Date(r.time).toLocaleString([], {
-                  month: "2-digit",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                });
                 return (
                   <tr
                     key={r.id}
                     className={`border-b border-border/30 hover:bg-secondary/30 ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                   >
-                    <td className="py-1 px-1 text-muted-foreground">{time}</td>
+                    <td className="py-1 px-1 text-muted-foreground whitespace-nowrap">{formatBrokerTime(r.time)}</td>
                     <td className="py-1 px-1 font-medium">{r.symbol}</td>
                     <td className="py-1 px-1">
                       <span className={`flex items-center gap-0.5 ${r.direction === "long" ? "text-success" : r.direction === "short" ? "text-destructive" : "text-muted-foreground"}`}>
@@ -215,8 +313,8 @@ export function BrokerLog() {
                     <td className="py-1 px-1 text-center">
                       <StatusIcon status={r.status} />
                     </td>
-                    <td className={`py-1 px-1 text-[10px] ${statusTextColor(r.status)}`}>
-                      {r.mirrorResult}
+                    <td className={`py-1 px-1 text-[10px] ${statusTextColor(r.status)}`} title={r.mirrorResult}>
+                      {r.displayResult}
                     </td>
                     <td className="py-1 px-1 text-[9px] text-muted-foreground truncate max-w-[100px]" title={r.positionId}>
                       {r.positionId}

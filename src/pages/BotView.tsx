@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
+import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
 import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
@@ -327,7 +328,7 @@ export default function BotView() {
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
                                     <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{p.orderId}</span></div>
-                                    <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{new Date(p.openTime).toLocaleString()}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(p.openTime)}</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
                                   </div>
                                 </div>
@@ -504,7 +505,7 @@ export default function BotView() {
                 Latest Scan
                 {logs.length > 0 && logs[0]?.scanned_at && (
                   <span className="ml-2 text-foreground font-mono">
-                    — {new Date(logs[0].scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                    — {formatTimeOnly(logs[0].scanned_at)}
                   </span>
                 )}
               </p>
@@ -622,7 +623,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 }
 
 function ScanLogLine({ log }: { log: any }) {
-  const time = new Date(log.scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const time = formatTimeOnly(log.scanned_at);
   return (
     <div className="flex items-center gap-2 text-[10px] py-0.5">
       <span className="font-mono text-muted-foreground w-16 shrink-0">{time}</span>

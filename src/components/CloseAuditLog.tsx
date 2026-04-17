@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { formatMoney } from "@/lib/marketData";
+import { formatBrokerTime } from "@/lib/formatTime";
 
 type CloseRow = {
   id: string;
@@ -116,13 +117,7 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
             <tbody>
               {filtered.map((r, idx) => {
                 const pnl = r.pnl != null ? parseFloat(r.pnl) : null;
-                const time = new Date(r.created_at).toLocaleString([], {
-                  month: "2-digit",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                });
+                const time = formatBrokerTime(r.created_at);
                 const reasonClass = REASON_COLORS[r.close_reason] || "text-muted-foreground bg-muted/20 border-border";
                 return (
                   <tr
