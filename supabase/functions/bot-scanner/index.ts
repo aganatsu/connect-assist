@@ -1570,13 +1570,12 @@ async function runScanForUser(supabase: any, userId: string) {
                       p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
                     );
                     if (!brokerPos) {
-                      // Fallback: match by symbol
-                      const base = opp.symbol.replace("/", "");
-                      const overrides = conn.symbol_overrides || {};
-                      const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+                      // Fallback: match by symbol (uses normalized override lookup)
+                      const brokerSymbol = resolveSymbol(opp.symbol, conn);
+                      const normTarget = brokerSymbol.replace(/[._\-\s]/g, "").toUpperCase();
                       const symFallback = brokerPositions.find((p: any) =>
-                        p.symbol === brokerSymbol || p.symbol === base ||
-                        p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+                        p.symbol === brokerSymbol ||
+                        p.symbol?.replace(/[._\-\s]/g, "").toUpperCase() === normTarget
                       );
                       if (symFallback) {
                         const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: symFallback.id }) });
