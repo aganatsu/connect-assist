@@ -36,6 +36,33 @@ function resolveOandaSymbol(symbol: string, conn: any): string {
   if (cleaned.length === 6 && !cleaned.includes("_")) return `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
   return cleaned;
 }
+
+// MetaAPI regions — try in order until one returns a non-region-mismatch response. Cached per account.
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+// Try each region until one succeeds (or until the error is clearly not a region mismatch).
+async function metaFetch(accountId: string, authToken: string, pathBuilder: (base: string) => string, init?: RequestInit): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const res = await fetch(url, { ...init, headers });
+    const body = await res.text();
+    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+    lastBody = body; lastStatus = res.status;
+    if (!/region|not connected to broker/i.test(body)) {
+      return { res: new Response(body, { status: res.status }), body };
+    }
+    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -75,11 +102,9 @@ Deno.serve(async (req) => {
         return respond((await res.json()).account);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
-          headers: { "auth-token": conn.api_key },
-        });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
-        return respond(await res.json());
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
@@ -93,11 +118,9 @@ Deno.serve(async (req) => {
         return respond((await res.json()).trades);
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/positions`, {
-          headers: { "auth-token": conn.api_key },
-        });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
-        return respond(await res.json());
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/positions`);
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
@@ -123,19 +146,17 @@ Deno.serve(async (req) => {
       }
 
       if (conn.broker_type === "metaapi") {
-        const body: any = {
+        const tradeBody: any = {
           actionType: direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
           symbol: resolveSymbol(symbol, conn), volume: size,
         };
-        if (stopLoss) body.stopLoss = stopLoss;
-        if (takeProfit) body.takeProfit = takeProfit;
-
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
-          method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+        if (stopLoss) tradeBody.stopLoss = stopLoss;
+        if (takeProfit) tradeBody.takeProfit = takeProfit;
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
         });
-        if (!res.ok) throw new Error(`MetaAPI order failed: ${res.status}`);
-        return respond(await res.json());
+        if (!res.ok) return respond({ error: `MetaAPI order failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
@@ -154,11 +175,9 @@ Deno.serve(async (req) => {
         });
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
-          headers: { "auth-token": conn.api_key },
-        });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
-        const info: any = await res.json();
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        const info: any = JSON.parse(body);
         return respond({
           balance: parseFloat(info.balance ?? "0"),
           equity: parseFloat(info.equity ?? info.balance ?? "0"),
@@ -180,18 +199,14 @@ Deno.serve(async (req) => {
           metaAccountId = conn.api_key;
         }
         const brokerSym = resolveSymbol(symbol, conn);
-        const res = await fetch(
-          `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSym)}/specification`,
-          { headers: { "auth-token": authToken } },
-        );
+        const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
-          const errText = await res.text();
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: errText.slice(0, 300) });
+            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: body.slice(0, 300) });
           }
-          throw new Error(`MetaAPI symbol_specs error: ${res.status}`);
+          return respond({ error: `MetaAPI symbol_specs error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         }
-        const spec: any = await res.json();
+        const spec: any = JSON.parse(body);
         if (action === "validate_symbol") {
           return respond({ ok: true, brokerSymbol: brokerSym, digits: spec.digits, minVolume: spec.minVolume, maxVolume: spec.maxVolume });
         }
@@ -253,12 +268,12 @@ Deno.serve(async (req) => {
         return respond(await res.json());
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
-          method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
         });
-        if (!res.ok) throw new Error(`MetaAPI close failed: ${res.status}`);
-        return respond(await res.json());
+        if (!res.ok) return respond({ error: `MetaAPI close failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
