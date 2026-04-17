@@ -1025,6 +1025,54 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 11: Breaker Block (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No active breaker block aligned with signal";
+    if (config.useBreakerBlocks !== false && direction && breakerBlocks.length > 0) {
+      const wantType = direction === "long" ? "bullish_breaker" : "bearish_breaker";
+      const aligned = breakerBlocks.find(b => b.type === wantType);
+      if (aligned) {
+        const mid = (aligned.high + aligned.low) / 2;
+        const distPct = Math.abs(lastPrice - mid) / lastPrice;
+        if (distPct <= 0.01) {
+          pts = 1.0;
+          detail = `Price near ${aligned.type.replace("_", " ")} at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)}`;
+        } else {
+          detail = `${aligned.type.replace("_", " ")} exists at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)} but price too far (${(distPct * 100).toFixed(2)}%)`;
+        }
+      }
+    } else if (config.useBreakerBlocks === false) {
+      detail = "Breaker Blocks disabled";
+    }
+    score += pts;
+    factors.push({ name: "Breaker Block", present: pts > 0, weight: 1.0, detail });
+  }
+
+  // ── Factor 12: Unicorn Model (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "No unicorn (Breaker + FVG overlap) aligned with signal";
+    if (config.useUnicornModel !== false && direction && unicornSetups.length > 0) {
+      const wantType = direction === "long" ? "bullish_unicorn" : "bearish_unicorn";
+      const aligned = unicornSetups.find(u => u.type === wantType
+        && lastPrice >= u.overlapLow && lastPrice <= u.overlapHigh);
+      if (aligned) {
+        pts = 1.5;
+        detail = `Unicorn: Breaker + FVG overlap at ${aligned.overlapLow.toFixed(5)}-${aligned.overlapHigh.toFixed(5)}`;
+      } else {
+        const anyAligned = unicornSetups.find(u => u.type === wantType);
+        if (anyAligned) {
+          detail = `Unicorn zone exists at ${anyAligned.overlapLow.toFixed(5)}-${anyAligned.overlapHigh.toFixed(5)} but price outside overlap`;
+        }
+      }
+    } else if (config.useUnicornModel === false) {
+      detail = "Unicorn Model disabled";
+    }
+    score += pts;
+    factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
