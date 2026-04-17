@@ -95,6 +95,8 @@ export default function Chart() {
   const activeFVGs = fvgs.filter((f: any) => !f.mitigated);
   const pdLevels = analysis?.pdLevels;
   const confluenceScore = analysis?.confluenceScore ?? 0;
+  const extScore = analysis?.extendedConfluenceScore ?? 0;
+  const ext = analysis?.extendedFactors;
 
   // Entry checklist
   const checklist = useMemo(() => {
