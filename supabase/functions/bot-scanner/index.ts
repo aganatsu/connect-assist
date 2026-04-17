@@ -180,6 +180,30 @@ function detectSession(): { name: string; isKillZone: boolean } {
   return { name: "Off-Hours", isKillZone: false };
 }
 
+// ─── Silver Bullet Windows (ICT macro windows, 1h each) ────────────
+// Times in UTC, derived from NY time (EST = UTC-5). DST not modeled (matches existing session logic).
+//   London Open SB: 03:00-04:00 EST → 08:00-09:00 UTC
+//   AM SB:          10:00-11:00 EST → 15:00-16:00 UTC
+//   PM SB:          14:00-15:00 EST → 19:00-20:00 UTC
+interface SilverBulletResult { active: boolean; window: string | null; minutesRemaining: number; }
+function detectSilverBullet(): SilverBulletResult {
+  const now = new Date();
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const t = h + m / 60;
+  const windows: { name: string; start: number; end: number }[] = [
+    { name: "London Open SB", start: 8,  end: 9  },
+    { name: "AM SB",          start: 15, end: 16 },
+    { name: "PM SB",          start: 19, end: 20 },
+  ];
+  for (const w of windows) {
+    if (t >= w.start && t < w.end) {
+      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
 function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
