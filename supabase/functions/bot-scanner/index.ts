@@ -4,9 +4,9 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 // Confluence is normalized to 0-10 (raw max ~23.0 across 17 factors, clamped).
-// Recommended: 5.0-5.5 for balanced, 6.5+ for A+ only, <4.0 looser/scalp.
+// Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only, <5.0 looser/scalp.
 const DEFAULTS = {
-  minConfluence: 5.5,
+  minConfluence: 6.0,
   htfBiasRequired: true,
   htfBiasHardVeto: false, // when true: ranging HTF blocks both sides; mismatch always blocks
   entryTimeframe: "15min",
@@ -143,14 +143,14 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1day",
     tpRatio: 2.0,
     slBufferPips: 2,
-    minConfluence: 5.5,
+    minConfluence: 6,
   },
   swing_trader: {
     entryTimeframe: "1h",
     htfTimeframe: "1w",
     tpRatio: 3.0,
     slBufferPips: 5,
-    minConfluence: 6.5,
+    minConfluence: 7,
   },
 };
 

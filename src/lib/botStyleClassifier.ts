@@ -26,7 +26,7 @@ export const STYLE_PARAMS: Record<Exclude<TradingStyleMode, "auto">, StyleOverri
     tpRatio: 2.0,
     slBufferPips: 2,
     maxHoldHours: 8,
-    minConfluence: 5.5,
+    minConfluence: 6,
   },
   swing_trader: {
     entryTimeframe: "1h",
@@ -34,7 +34,7 @@ export const STYLE_PARAMS: Record<Exclude<TradingStyleMode, "auto">, StyleOverri
     tpRatio: 3.0,
     slBufferPips: 5,
     maxHoldHours: 120,
-    minConfluence: 6.5,
+    minConfluence: 7,
   },
 };
 
