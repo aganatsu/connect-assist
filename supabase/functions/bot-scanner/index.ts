@@ -1728,18 +1728,23 @@ async function runScanForUser(supabase: any, userId: string) {
 
                    // ── Fetch per-broker account balance and recalc lot size ──
                    let brokerVolume = size;
-                   try {
-                     if (balanceCache[conn.id] === undefined) {
-                       const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
-                       if (balRes.ok) {
-                         const balData: any = await balRes.json();
-                         balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
-                       } else {
-                         console.warn(`Broker balance fetch failed [${conn.display_name}] ${balRes.status} — skipping mirror`);
-                         mirrorResults.push(`${conn.display_name}: skipped (no balance)`);
-                         continue;
+                     try {
+                       if (balanceCache[conn.id] === undefined) {
+                         const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
+                         if (balRes.ok) {
+                           const balData: any = await balRes.json();
+                           balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
+                         } else {
+                           const balErrText = await balRes.text();
+                           const notConnected = /not connected to broker|region/i.test(balErrText);
+                           const reason = notConnected
+                             ? "MetaAPI account not deployed/connected to broker"
+                             : `balance fetch ${balRes.status}`;
+                           console.warn(`Broker balance fetch failed [${conn.display_name}] ${balRes.status} — ${reason}`);
+                           mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
+                           continue;
+                         }
                        }
-                     }
                      const brokerBalance = balanceCache[conn.id];
                      if (!brokerBalance || brokerBalance <= 0) {
                        console.warn(`Broker [${conn.display_name}] balance is 0 — skipping mirror`);
