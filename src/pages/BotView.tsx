@@ -300,6 +300,7 @@ export default function BotView() {
                           <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
                             <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(p.openTime)}</td>
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                             <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
                             <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
