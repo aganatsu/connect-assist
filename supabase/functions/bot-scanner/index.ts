@@ -204,6 +204,31 @@ function detectSilverBullet(): SilverBulletResult {
   return { active: false, window: null, minutesRemaining: 0 };
 }
 
+// ─── ICT Macro Windows (institutional reprice, ~20min each) ────────
+// Times in UTC, derived from NY time (EST = UTC-5). DST not modeled.
+interface MacroWindowResult { active: boolean; window: string | null; minutesRemaining: number; }
+function detectMacroWindow(): MacroWindowResult {
+  const now = new Date();
+  const tMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+  // start/end in minutes since 00:00 UTC
+  const windows: { name: string; start: number; end: number }[] = [
+    { name: "London Macro 1",   start:  7 * 60 + 33, end:  7 * 60 + 50 }, // 02:33-02:50 EST
+    { name: "London Macro 2",   start:  9 * 60 +  3, end:  9 * 60 + 20 }, // 04:03-04:20 EST
+    { name: "NY Pre-Open Macro",start: 13 * 60 + 50, end: 14 * 60 + 10 }, // 08:50-09:10 EST
+    { name: "NY AM Macro",      start: 14 * 60 + 50, end: 15 * 60 + 10 }, // 09:50-10:10 EST
+    { name: "London Close Macro",start: 15 * 60 + 50, end: 16 * 60 + 10 }, // 10:50-11:10 EST
+    { name: "NY Lunch Macro",   start: 16 * 60 + 50, end: 17 * 60 + 10 }, // 11:50-12:10 EST
+    { name: "Last Hour Macro",  start: 18 * 60 + 10, end: 18 * 60 + 40 }, // 13:10-13:40 EST
+    { name: "PM Macro",         start: 20 * 60 + 15, end: 20 * 60 + 45 }, // 15:15-15:45 EST
+  ];
+  for (const w of windows) {
+    if (tMin >= w.start && tMin < w.end) {
+      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
 function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
@@ -1116,6 +1141,25 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
+  const macroWindow = detectMacroWindow();
+  {
+    let pts = 0;
+    let detail = "Outside ICT macro reprice window";
+    if (config.useMacroWindows === false) {
+      detail = "Macro Windows disabled";
+    } else if (macroWindow.active) {
+      pts = 0.5;
+      detail = `${macroWindow.window} active — ${macroWindow.minutesRemaining}min remaining`;
+      if (silverBullet.active && config.useSilverBullet !== false) {
+        pts += 0.5;
+        detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1135,14 +1179,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
   const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
   const sbSummary = silverBullet.active ? ` | ${silverBullet.window}` : "";
+  const mwSummary = macroWindow.active ? ` | ${macroWindow.window}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow,
   };
 }
 
@@ -1238,6 +1283,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useUnicornModel: strategy.useUnicornModel ?? true,
     // Silver Bullet macro windows (defaults true)
     useSilverBullet: strategy.useSilverBullet ?? true,
+    // ICT Macro Windows (defaults true)
+    useMacroWindows: strategy.useMacroWindows ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
