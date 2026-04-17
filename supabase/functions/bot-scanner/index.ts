@@ -2127,7 +2127,10 @@ async function runScanForUser(supabase: any, userId: string) {
       tradingStyle: pairStyle,
     };
 
-    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
+    const minFactorGate = (pairConfig.minFactorCount ?? 0) > 0;
+    const factorCountOk = !minFactorGate || (detail.factorCount >= (pairConfig.minFactorCount ?? 0));
+
+    if (analysis.score >= adjustedMinConfluence && factorCountOk && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
