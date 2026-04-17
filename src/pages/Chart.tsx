@@ -98,6 +98,10 @@ export default function Chart() {
   const confluenceScore = analysis?.confluenceScore ?? 0;
   const extScore = analysis?.extendedConfluenceScore ?? 0;
   const ext = analysis?.extendedFactors;
+  const unified = useMemo(
+    () => unifyConfluence({ ...analysis, killZone: kz }),
+    [analysis, kz]
+  );
 
   // Entry checklist
   const checklist = useMemo(() => {
