@@ -229,6 +229,56 @@ function detectMacroWindow(): MacroWindowResult {
   return { active: false, window: null, minutesRemaining: 0 };
 }
 
+// ─── SMT Divergence (Smart Money Tool) ─────────────────────────────
+// Compares this pair's recent swing high/low against a positively-correlated pair.
+// Bullish SMT: this pair makes a LOWER low while correlated pair does NOT (failure to confirm sell-side liquidity grab).
+// Bearish SMT: this pair makes a HIGHER high while correlated pair does NOT (failure to confirm buy-side liquidity grab).
+const SMT_PAIRS: Record<string, string> = {
+  "EUR/USD": "GBP/USD", "GBP/USD": "EUR/USD",
+  "USD/JPY": "USD/CHF", "USD/CHF": "USD/JPY",
+  "AUD/USD": "NZD/USD", "NZD/USD": "AUD/USD",
+  "XAU/USD": "XAG/USD", "XAG/USD": "XAU/USD",
+  "BTC/USD": "ETH/USD", "ETH/USD": "BTC/USD",
+};
+interface SMTResult { detected: boolean; type: "bullish" | "bearish" | null; correlatedPair: string | null; detail: string; }
+function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
+  const corrPair = SMT_PAIRS[symbol] || null;
+  if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
+  if (candles.length < 25 || correlatedCandles.length < 25) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
+  }
+  // Compare last N candles' extremes vs prior N candles' extremes on both pairs
+  const N = 20;
+  const recent = candles.slice(-N);
+  const prior = candles.slice(-2 * N, -N);
+  const corrRecent = correlatedCandles.slice(-N);
+  const corrPrior = correlatedCandles.slice(-2 * N, -N);
+  if (prior.length < 5 || corrPrior.length < 5) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough history" };
+  }
+  const high = (cs: Candle[]) => Math.max(...cs.map(c => c.high));
+  const low  = (cs: Candle[]) => Math.min(...cs.map(c => c.low));
+  const thisRecentHigh = high(recent), thisPriorHigh = high(prior);
+  const thisRecentLow  = low(recent),  thisPriorLow  = low(prior);
+  const corrRecentHigh = high(corrRecent), corrPriorHigh = high(corrPrior);
+  const corrRecentLow  = low(corrRecent),  corrPriorLow  = low(corrPrior);
+  // Bullish SMT: this pair takes prior low, correlated does not (buy-side opportunity)
+  if (thisRecentLow < thisPriorLow && corrRecentLow >= corrPriorLow) {
+    return {
+      detected: true, type: "bullish", correlatedPair: corrPair,
+      detail: `${symbol} swept prior low (${thisRecentLow.toFixed(5)}) but ${corrPair} held — bullish SMT`,
+    };
+  }
+  // Bearish SMT: this pair takes prior high, correlated does not
+  if (thisRecentHigh > thisPriorHigh && corrRecentHigh <= corrPriorHigh) {
+    return {
+      detected: true, type: "bearish", correlatedPair: corrPair,
+      detail: `${symbol} broke prior high (${thisRecentHigh.toFixed(5)}) but ${corrPair} held — bearish SMT`,
+    };
+  }
+  return { detected: false, type: null, correlatedPair: corrPair, detail: `No SMT divergence vs ${corrPair}` };
+}
+
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
 function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
@@ -1160,6 +1210,30 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 15: SMT Divergence (max 1.0) ──
+  // Reads precomputed SMT result injected by scan loop via config._smtResult.
+  const smtResult: SMTResult | null = config._smtResult ?? null;
+  {
+    let pts = 0;
+    let detail = smtResult ? smtResult.detail : "SMT not computed (no correlated pair fetched)";
+    if (config.useSMT === false) {
+      detail = "SMT Divergence disabled";
+    } else if (smtResult && smtResult.detected && direction) {
+      const aligned = (direction === "long" && smtResult.type === "bullish")
+        || (direction === "short" && smtResult.type === "bearish");
+      if (aligned) {
+        pts = 1.0;
+        detail = `SMT aligned: ${smtResult.detail}`;
+      } else {
+        detail = `SMT detected (${smtResult.type}) but opposite to signal direction`;
+      }
+    } else if (smtResult && smtResult.detected) {
+      detail = `SMT (${smtResult.type}) detected but no signal direction yet`;
+    }
+    score += pts;
+    factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1180,14 +1254,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
   const sbSummary = silverBullet.active ? ` | ${silverBullet.window}` : "";
   const mwSummary = macroWindow.active ? ` | ${macroWindow.window}` : "";
+  const smtSummary = smtResult?.detected ? ` | SMT ${smtResult.type} vs ${smtResult.correlatedPair}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult,
   };
 }
 
@@ -1285,6 +1360,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSilverBullet: strategy.useSilverBullet ?? true,
     // ICT Macro Windows (defaults true)
     useMacroWindows: strategy.useMacroWindows ?? true,
+    // SMT Divergence (defaults true)
+    useSMT: strategy.useSMT ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
@@ -1761,15 +1838,21 @@ async function runScanForUser(supabase: any, userId: string) {
     const entryInterval = getYahooInterval(pairConfig.entryTimeframe);
     const entryRange = getYahooRange(pairConfig.entryTimeframe);
 
-    // Fetch entry TF, daily, and optionally 1h candles
+    // Fetch entry TF, daily, optionally 1h, and SMT correlated pair candles in parallel
+    const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
+    const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
+    const smtFlag = smtPair && YAHOO_SYMBOLS[smtPair] ? 1 : 0;
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
-    if (pairConfig.openingRange?.enabled) {
-      fetchPromises.push(fetchCandles(pair, "1h", "2d"));
-    }
-    const [candles, dailyCandles, hourlyCandles] = await Promise.all(fetchPromises);
+    if (orFlag) fetchPromises.push(fetchCandles(pair, "1h", "2d"));
+    if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
+    const fetched = await Promise.all(fetchPromises);
+    const candles = fetched[0];
+    const dailyCandles = fetched[1];
+    const hourlyCandles = orFlag ? fetched[2] : undefined;
+    const smtCandles = smtFlag ? fetched[2 + orFlag] : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -1790,6 +1873,8 @@ async function runScanForUser(supabase: any, userId: string) {
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
+    // Compute SMT divergence vs correlated pair (if available) and inject into config
+    pairConfig._smtResult = smtCandles ? detectSMTDivergence(pair, candles, smtCandles) : null;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
     const detail: any = {
