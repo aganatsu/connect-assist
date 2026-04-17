@@ -2485,7 +2485,14 @@ async function runScanForUser(supabase: any, userId: string) {
                 }
               }
               detail.mt5Mirror = mirrorResults.join("; ");
-            } else {
+              detail.mirroredConnectionIds = mirroredConnIds;
+              // Persist which broker connections this paper position was actually mirrored to.
+              // Close paths use this list to fan out — never iterate ALL active connections.
+              if (mirroredConnIds.length > 0) {
+                await supabase.from("paper_positions")
+                  .update({ mirrored_connection_ids: mirroredConnIds })
+                  .eq("position_id", positionId).eq("user_id", userId);
+              }
               detail.mt5Mirror = "skipped_no_connection";
             }
           } else {
