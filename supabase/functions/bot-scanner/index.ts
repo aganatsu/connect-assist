@@ -1047,6 +1047,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
     // UI writes: useStructureBreak; legacy DB: enableBOS + enableCHoCH
     enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
+    // Displacement scoring (defaults true)
+    useDisplacement: strategy.useDisplacement ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
