@@ -735,7 +735,36 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
   }
 
-  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  // Displacement detection (used by OB/FVG bonus + Factor 10)
+  const displacement = detectDisplacement(candles);
+  tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
+
+  // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.enableOB !== false) {
+      const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
+      const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
+      if (insideOB) {
+        pts = 2.0;
+        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+        if (config.useDisplacement !== false && (insideOB as any).hasDisplacement) {
+          pts += 0.5;
+          detail += " — formed with displacement";
+        }
+      } else if (activeOBs.length > 0) {
+        pts = 0.5;
+        detail = `${activeOBs.length} active OBs nearby`;
+      }
+    } else {
+      detail = "Order Blocks disabled";
+    }
+    score += pts;
+    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
+  }
+
+  // ── Factor 3: Fair Value Gap (max 1.5, +0.5 displacement bonus) ──
   {
     let pts = 0;
     let detail = "";
@@ -745,6 +774,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideFVG) {
         pts = 1.5;
         detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
+        if (config.useDisplacement !== false && (insideFVG as any).hasDisplacement) {
+          pts += 0.5;
+          detail += " — created by displacement";
+        }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
         detail = `${activeFVGs.length} unfilled FVGs in range`;
