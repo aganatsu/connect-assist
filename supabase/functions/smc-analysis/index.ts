@@ -11,10 +11,8 @@ interface PDLevels { pdh: number; pdl: number; pdo: number; pdc: number; pwh: nu
 interface JudasSwing { detected: boolean; type: "bullish" | "bearish" | null; midnightOpen: number; sweepLow: number | null; sweepHigh: number | null; reversalConfirmed: boolean; description: string; }
 interface SessionInfo { name: string; active: boolean; isKillZone: boolean; sessionHigh: number; sessionLow: number; sessionOpen: number; }
 interface PremiumDiscount { swingHigh: number; swingLow: number; equilibrium: number; currentZone: "premium" | "discount" | "equilibrium"; zonePercent: number; oteZone: boolean; }
-interface CurrencyStrength { currency: string; strength: number; rank: number; }
-interface CorrelationPair { pair1: string; pair2: string; coefficient: number; }
 
-// ─── Analysis Functions ─────────────────────────────────────────────
+// ─── Core Analysis (unchanged) ─────────────────────────────────────
 function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[] {
   const swings: SwingPoint[] = [];
   for (let i = lookback; i < candles.length - lookback; i++) {
@@ -179,7 +177,7 @@ function calculatePremiumDiscount(candles: Candle[]): PremiumDiscount {
   return { swingHigh: sh, swingLow: sl, equilibrium: eq, currentZone: zone, zonePercent: zp, oteZone: ote };
 }
 
-function calculateCurrencyStrength(pairData: Record<string, { change: number }>): CurrencyStrength[] {
+function calculateCurrencyStrength(pairData: Record<string, { change: number }>): any[] {
   const currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
   const scores: Record<string, number> = {};
   currencies.forEach(c => scores[c] = 0);
@@ -215,6 +213,158 @@ function calculateCorrelation(data1: number[], data2: number[]): number {
   return den > 0 ? num / den : 0;
 }
 
+// ─── Extended ICT Factors (NEW) ─────────────────────────────────────
+
+// Displacement: large-bodied candles vs avg true range
+function detectDisplacement(candles: Candle[], lookback = 20, multiplier = 1.8) {
+  if (candles.length < lookback + 1) {
+    return { detected: false, count: 0, lastDirection: null as "bullish" | "bearish" | null, avgBody: 0, threshold: 0 };
+  }
+  const recent = candles.slice(-lookback);
+  const bodies = recent.map(c => Math.abs(c.close - c.open));
+  const avgBody = bodies.reduce((a, b) => a + b, 0) / bodies.length;
+  const threshold = avgBody * multiplier;
+  let count = 0;
+  let lastDirection: "bullish" | "bearish" | null = null;
+  for (let i = candles.length - lookback; i < candles.length; i++) {
+    const c = candles[i];
+    const body = Math.abs(c.close - c.open);
+    if (body >= threshold) {
+      count++;
+      lastDirection = c.close > c.open ? "bullish" : "bearish";
+    }
+  }
+  return { detected: count > 0, count, lastDirection, avgBody, threshold };
+}
+
+// Breaker Blocks: order blocks that were mitigated then price flipped polarity
+function detectBreakerBlocks(candles: Candle[], obs: OrderBlock[]) {
+  const breakers: any[] = [];
+  const lastClose = candles[candles.length - 1].close;
+  for (const ob of obs) {
+    if (!ob.mitigated) continue;
+    // Bullish OB that got broken below → now acts as bearish breaker (resistance)
+    if (ob.type === "bullish" && lastClose < ob.low) {
+      breakers.push({ ...ob, originalType: "bullish", flippedTo: "bearish", role: "resistance" });
+    }
+    // Bearish OB that got broken above → now acts as bullish breaker (support)
+    if (ob.type === "bearish" && lastClose > ob.high) {
+      breakers.push({ ...ob, originalType: "bearish", flippedTo: "bullish", role: "support" });
+    }
+  }
+  return breakers;
+}
+
+// Unicorn Setup: breaker block + overlapping FVG
+function detectUnicornSetups(breakers: any[], fvgs: FairValueGap[]) {
+  const unicorns: any[] = [];
+  for (const br of breakers) {
+    for (const fvg of fvgs) {
+      if (fvg.mitigated) continue;
+      // Direction must match
+      if (br.flippedTo !== fvg.type) continue;
+      // Price ranges must overlap
+      const overlapHigh = Math.min(br.high, fvg.high);
+      const overlapLow = Math.max(br.low, fvg.low);
+      if (overlapHigh > overlapLow) {
+        unicorns.push({
+          type: fvg.type,
+          breakerHigh: br.high, breakerLow: br.low,
+          fvgHigh: fvg.high, fvgLow: fvg.low,
+          overlapHigh, overlapLow,
+          datetime: fvg.datetime,
+        });
+      }
+    }
+  }
+  return unicorns;
+}
+
+// Silver Bullet: 10:00–11:00 and 14:00–15:00 New York time (UTC: 14-15 winter / 13-14 summer; using 14-15 UTC am, 18-19 UTC pm as approximation in EST/EDT terms)
+// We keep it simple: 10-11 AM NY = ~15 UTC (EST) / 14 UTC (EDT). 14-15 PM NY = ~19 UTC (EST) / 18 UTC (EDT).
+function detectSilverBullet() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  // Cover both DST variants
+  const morningWindow = (utcH === 14 || utcH === 15);
+  const afternoonWindow = (utcH === 18 || utcH === 19);
+  const active = morningWindow || afternoonWindow;
+  const window = morningWindow ? "AM (10:00–11:00 NY)" : afternoonWindow ? "PM (14:00–15:00 NY)" : null;
+  return { active, window, utcHour: utcH, utcMinute: utcM };
+}
+
+// Macro Times: xx:50 → xx:10 windows (09:50, 10:50, 11:50, 13:10, 14:10, 15:10 NY)
+function detectMacroTime() {
+  const now = new Date();
+  const utcH = now.getUTCHours();
+  const utcM = now.getUTCMinutes();
+  // Standard ICT macro windows in UTC (covering EDT/EST): 50-59 of any hour, or 0-10 of next
+  const inMacro = (utcM >= 50) || (utcM <= 10);
+  // Active during NY session-relevant hours (13-20 UTC)
+  const inSessionHours = utcH >= 13 && utcH <= 20;
+  const active = inMacro && inSessionHours;
+  return { active, utcHour: utcH, utcMinute: utcM };
+}
+
+// Session-anchored VWAP (resets daily)
+function calculateVWAP(candles: Candle[]) {
+  if (candles.length === 0) return { vwap: null as number | null, position: null as "above" | "below" | null, distance: 0 };
+  // Find candles in current UTC day
+  const today = new Date().toISOString().slice(0, 10);
+  const dayCandles = candles.filter(c => c.datetime.startsWith(today));
+  const useCandles = dayCandles.length > 3 ? dayCandles : candles.slice(-24);
+  let cumPV = 0, cumV = 0;
+  for (const c of useCandles) {
+    const typical = (c.high + c.low + c.close) / 3;
+    const v = c.volume && c.volume > 0 ? c.volume : 1;
+    cumPV += typical * v;
+    cumV += v;
+  }
+  if (cumV === 0) return { vwap: null, position: null, distance: 0 };
+  const vwap = cumPV / cumV;
+  const lastClose = candles[candles.length - 1].close;
+  const position: "above" | "below" = lastClose > vwap ? "above" : "below";
+  const distance = ((lastClose - vwap) / vwap) * 100;
+  return { vwap, position, distance };
+}
+
+// Power of 3 (AMD): Accumulation (Asia) → Manipulation (London) → Distribution (NY)
+// Uses hourly-ish data; checks today's candles by UTC hour
+function detectPowerOf3(candles: Candle[]) {
+  const empty = { phase: "unknown" as const, asianHigh: 0, asianLow: 0, manipulation: null as "swept-low" | "swept-high" | null, expansion: null as "bullish" | "bearish" | null, complete: false };
+  if (candles.length < 10) return empty;
+  const today = new Date().toISOString().slice(0, 10);
+  const todays = candles.filter(c => c.datetime.startsWith(today));
+  if (todays.length < 3) return empty;
+  // Asia: 0-7 UTC, London: 7-13 UTC, NY: 13-21 UTC
+  const asia = todays.filter(c => { const h = new Date(c.datetime).getUTCHours(); return h >= 0 && h < 7; });
+  const london = todays.filter(c => { const h = new Date(c.datetime).getUTCHours(); return h >= 7 && h < 13; });
+  const ny = todays.filter(c => { const h = new Date(c.datetime).getUTCHours(); return h >= 13 && h < 21; });
+  if (asia.length === 0) return empty;
+  const asianHigh = Math.max(...asia.map(c => c.high));
+  const asianLow = Math.min(...asia.map(c => c.low));
+  let manipulation: "swept-low" | "swept-high" | null = null;
+  if (london.length > 0) {
+    const lLow = Math.min(...london.map(c => c.low));
+    const lHigh = Math.max(...london.map(c => c.high));
+    if (lLow < asianLow) manipulation = "swept-low";
+    else if (lHigh > asianHigh) manipulation = "swept-high";
+  }
+  let expansion: "bullish" | "bearish" | null = null;
+  if (ny.length > 0 && manipulation) {
+    const lastNY = ny[ny.length - 1];
+    if (manipulation === "swept-low" && lastNY.close > asianLow) expansion = "bullish";
+    else if (manipulation === "swept-high" && lastNY.close < asianHigh) expansion = "bearish";
+  }
+  let phase: "accumulation" | "manipulation" | "distribution" | "complete" | "unknown" = "accumulation";
+  if (london.length > 0) phase = "manipulation";
+  if (ny.length > 0 && manipulation) phase = "distribution";
+  if (expansion) phase = "complete";
+  return { phase, asianHigh, asianLow, manipulation, expansion, complete: !!expansion };
+}
+
+// ─── Full Analysis ──────────────────────────────────────────────────
 function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
@@ -225,7 +375,16 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   const session = detectSession();
   const premiumDiscount = calculatePremiumDiscount(candles);
 
-  // Confluence scoring
+  // Extended factors
+  const displacement = detectDisplacement(candles);
+  const breakers = detectBreakerBlocks(candles, orderBlocks);
+  const unicorns = detectUnicornSetups(breakers, fvgs);
+  const silverBullet = detectSilverBullet();
+  const macroTime = detectMacroTime();
+  const vwap = calculateVWAP(candles);
+  const powerOf3 = detectPowerOf3(candles);
+
+  // Confluence scoring (legacy)
   let score = 0;
   const reasoning: string[] = [];
   if (structure.trend !== "ranging") { score += 2; reasoning.push(`${structure.trend} trend confirmed`); }
@@ -241,11 +400,29 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   if (sweptPool) { score += 0.5; reasoning.push(`${sweptPool.type} liquidity swept`); }
   score = Math.min(10, Math.round(score * 10) / 10);
 
+  // Extended confluence (matches bot-scanner weighting roughly)
+  let extScore = 0;
+  const extReasoning: string[] = [];
+  if (displacement.detected) { extScore += 2; extReasoning.push(`Displacement: ${displacement.count} large-body candle(s), last ${displacement.lastDirection}`); }
+  if (breakers.length > 0) { extScore += 1.5; extReasoning.push(`${breakers.length} breaker block(s) detected`); }
+  if (unicorns.length > 0) { extScore += 2; extReasoning.push(`${unicorns.length} Unicorn setup(s) (breaker + FVG)`); }
+  if (silverBullet.active) { extScore += 1.5; extReasoning.push(`Silver Bullet ${silverBullet.window} active`); }
+  if (macroTime.active) { extScore += 1; extReasoning.push(`Macro time window active`); }
+  if (vwap.vwap !== null) { extScore += 0.5; extReasoning.push(`Price ${vwap.position} VWAP`); }
+  if (powerOf3.complete) { extScore += 1.5; extReasoning.push(`Power of 3 complete: ${powerOf3.expansion}`); }
+  else if (powerOf3.manipulation) { extScore += 0.5; extReasoning.push(`Power of 3: ${powerOf3.manipulation}`); }
+  extScore = Math.min(10, Math.round(extScore * 10) / 10);
+
   const bias = structure.trend === "bullish" ? "bullish" : structure.trend === "bearish" ? "bearish" : "neutral";
 
   return {
     structure, orderBlocks, fvgs, liquidityPools, pdLevels, judasSwing,
-    session, premiumDiscount, confluenceScore: score, bias, reasoning,
+    session, premiumDiscount,
+    confluenceScore: score, bias, reasoning,
+    // NEW
+    extendedFactors: { displacement, breakers, unicorns, silverBullet, macroTime, vwap, powerOf3 },
+    extendedConfluenceScore: extScore,
+    extendedReasoning: extReasoning,
   };
 }
 
@@ -256,19 +433,9 @@ Deno.serve(async (req) => {
   try {
     const { action, candles, dailyCandles, pairData, data1, data2 } = await req.json();
 
-    if (action === "full_analysis") {
-      const result = runFullAnalysis(candles, dailyCandles);
-      return respond(result);
-    }
-
-    if (action === "currency_strength") {
-      return respond(calculateCurrencyStrength(pairData || {}));
-    }
-
-    if (action === "correlation") {
-      return respond({ coefficient: calculateCorrelation(data1 || [], data2 || []) });
-    }
-
+    if (action === "full_analysis") return respond(runFullAnalysis(candles, dailyCandles));
+    if (action === "currency_strength") return respond(calculateCurrencyStrength(pairData || {}));
+    if (action === "correlation") return respond({ coefficient: calculateCorrelation(data1 || [], data2 || []) });
     if (action === "structure") return respond(analyzeMarketStructure(candles));
     if (action === "order_blocks") return respond(detectOrderBlocks(candles));
     if (action === "fvgs") return respond(detectFVGs(candles));
