@@ -63,7 +63,11 @@ const DEFAULTS = {
   closeOnReverse: false,
   // ── Exit toggles ──
   trailingStopEnabled: false,
+  trailingStopPips: 15,
+  trailingStopActivation: "after_1r",
   partialTPEnabled: false,
+  partialTPPercent: 50,
+  partialTPLevel: 1.0,
   maxHoldHours: 0,
   // ── Sessions ──
   killZoneOnly: false,
@@ -2290,7 +2294,7 @@ async function runScanForUser(supabase: any, userId: string) {
         // Close on Reverse: close existing opposite-direction positions for this symbol (Fix #8 — calc real PnL)
         if (pairConfig.closeOnReverse) {
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
-          const oppositePositions = openPosArr.filter(p => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
+          const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
           for (const opp of oppositePositions) {
             const oppEntry = parseFloat(opp.entry_price);
             const oppSize = parseFloat(opp.size);
