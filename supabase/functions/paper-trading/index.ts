@@ -104,7 +104,7 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
   stopLoss?: number | null;
   takeProfit?: number | null;
   positionId?: string;
-}): Promise<{ success: boolean; mt5Result?: any; error?: string }> {
+}): Promise<{ success: boolean; mt5Result?: any; error?: string; connectionId?: string }> {
   try {
     // Find active metaapi broker connection
     const { data: connections } = await supabase.from("broker_connections")
@@ -139,7 +139,7 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
         console.error(`MT5 mirror open failed [${res.status}]: ${errText}`);
         return { success: false, error: `MT5 order failed: ${res.status}` };
       }
-      return { success: true, mt5Result: await res.json() };
+      return { success: true, mt5Result: await res.json(), connectionId: conn.id };
     }
 
     if (params.action === "close") {
@@ -170,15 +170,29 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     return { success: false, error: msg };
   }
 }
-// ─── Close All Broker Positions for a paper position ────────────────
-async function closeBrokerPositions(supabase: any, userId: string, positionId: string, symbol: string): Promise<string[]> {
+// ─── Close ONLY the broker connections this paper position was actually mirrored to ──
+// Critical fix: never iterate ALL active connections — only the ones recorded at open time.
+// If `mirroredConnectionIds` is empty, we close nothing on broker side (paper-only or pre-tracking position).
+async function closeBrokerPositions(
+  supabase: any,
+  userId: string,
+  positionId: string,
+  symbol: string,
+  mirroredConnectionIds: string[] | null | undefined,
+): Promise<string[]> {
   const results: string[] = [];
   try {
     const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
     if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
 
+    const ids = (mirroredConnectionIds || []).filter(Boolean);
+    if (ids.length === 0) {
+      console.log(`[broker-close] no mirrored connections for paper:${positionId} — skipping broker fan-out`);
+      return ["no_mirrored_connections"];
+    }
+
     const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
     if (!connections || connections.length === 0) return ["no_connection"];
 
     for (const conn of connections) {
@@ -234,7 +248,57 @@ async function closeBrokerPositions(supabase: any, userId: string, positionId: s
   return results;
 }
 
-// ─── Post-Mortem Generation ─────────────────────────────────────────
+// ─── Structured close logging + audit row ───────────────────────────
+async function logClose(
+  supabase: any,
+  userId: string,
+  pos: any,
+  args: {
+    closeReason: string;
+    closeSource: "scanner" | "broker_callback" | "user" | "sync" | "kill_switch" | "auto_engine";
+    pnl: number;
+    exitPrice: number;
+    scanCycleId?: string | null;
+    extra?: Record<string, any>;
+  },
+): Promise<void> {
+  const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+  const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
+  const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
+  const lastPrice = pos.current_price ? parseFloat(pos.current_price) : null;
+  console.log("[close]", JSON.stringify({
+    position_id: pos.position_id,
+    symbol: pos.symbol,
+    direction: pos.direction,
+    broker_connection_ids: mirroredIds,
+    pnl: args.pnl,
+    exit_price: args.exitPrice,
+    sl, tp, last_price: lastPrice,
+    close_reason: args.closeReason,
+    close_source: args.closeSource,
+    scan_cycle_id: args.scanCycleId ?? null,
+  }));
+  try {
+    // One audit row per broker (or one with null connection if paper-only)
+    const rows = (mirroredIds.length > 0 ? mirroredIds : [null]).map((cid: string | null) => ({
+      user_id: userId,
+      position_id: pos.position_id,
+      symbol: pos.symbol,
+      broker_connection_id: cid,
+      close_reason: args.closeReason,
+      close_source: args.closeSource,
+      pnl: args.pnl.toFixed(2),
+      exit_price: args.exitPrice.toString(),
+      scan_cycle_id: args.scanCycleId ?? null,
+      detail_json: { sl, tp, last_price: lastPrice, direction: pos.direction, ...(args.extra || {}) },
+    }));
+    await supabase.from("close_audit_log").insert(rows);
+  } catch (e: any) {
+    console.warn(`[close] audit insert failed for ${pos.position_id}: ${e?.message}`);
+  }
+}
+
+
 function generatePostMortem(
   position: any, exitPrice: number, pnl: number, pnlPips: number, closeReason: string,
 ): any {
@@ -441,8 +505,11 @@ Deno.serve(async (req) => {
             await supabase.from("paper_positions").delete().eq("id", pos.id);
             closedIds.push(pos.id);
 
-            // Mirror close to all broker connections
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            await logClose(supabase, user.id, pos, {
+              closeReason, closeSource: "auto_engine", pnl, exitPrice,
+            });
+            // Mirror close to ONLY the brokers this position was mirrored to at open time
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Auto-close broker mirror [${pos.position_id}] ${closeReason}: ${brokerCloseResults.join("; ")}`);
           }
         }
@@ -564,7 +631,14 @@ Deno.serve(async (req) => {
           action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
         });
         if (mt5Mirror.success) {
-          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots`);
+          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots on connection ${mt5Mirror.connectionId}`);
+          // Record which broker connection this position was mirrored to so close
+          // is restricted to ONLY this connection (no cross-broker fan-out).
+          if (mt5Mirror.connectionId) {
+            await supabase.from("paper_positions")
+              .update({ mirrored_connection_ids: [mt5Mirror.connectionId] })
+              .eq("position_id", positionId).eq("user_id", user.id);
+          }
         } else if (mt5Mirror.error !== "no_connection") {
           console.warn(`MT5 mirror failed: ${mt5Mirror.error}`);
         }
@@ -621,8 +695,11 @@ Deno.serve(async (req) => {
       // Remove position
       await supabase.from("paper_positions").delete().eq("id", pos.id);
 
-      // Mirror close to all broker connections
-      const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+      await logClose(supabase, user.id, pos, {
+        closeReason, closeSource: "user", pnl, exitPrice: ep,
+      });
+      // Mirror close ONLY to brokers this position was mirrored to at open time
+      const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
       console.log(`Manual close broker mirror [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
 
       return respond({ success: true, pnl, pnlPips, postMortem, brokerClose: brokerCloseResults });
@@ -673,8 +750,11 @@ Deno.serve(async (req) => {
               what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
-            // Mirror close to brokers
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            await logClose(supabase, user.id, pos, {
+              closeReason: "kill_switch", closeSource: "kill_switch", pnl, exitPrice: ep,
+            });
+            // Mirror close ONLY to brokers this position was mirrored to at open time
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
           }
 

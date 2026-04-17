@@ -1945,6 +1945,26 @@ async function runScanForUser(supabase: any, userId: string) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
+  const scanCycleId = crypto.randomUUID();
+
+  // ── Scan overlap lock (90s lease) ──
+  // Prevents two cron invocations from racing — second cycle would otherwise see the first's
+  // in-flight trades as orphans or double-process the same signals.
+  const lockHorizon = new Date(Date.now() + 90_000).toISOString();
+  const nowIso = new Date().toISOString();
+  const { data: lockRows, error: lockErr } = await supabase
+    .from("paper_accounts")
+    .update({ scan_lock_until: lockHorizon })
+    .eq("user_id", userId)
+    .or(`scan_lock_until.is.null,scan_lock_until.lt.${nowIso}`)
+    .select("user_id");
+  if (lockErr) console.warn(`[scan-lock] update error for ${userId}: ${lockErr.message}`);
+  if (!lockRows || lockRows.length === 0) {
+    console.log(`[scan-lock] skipped — overlap detected for user ${userId}`);
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
+  }
+
+  try {
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
@@ -2172,11 +2192,33 @@ async function runScanForUser(supabase: any, userId: string) {
             const newBal = curBal + oppPnl;
             await supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
 
-            // Mirror close to all broker connections
-            if (account.execution_mode === "live") {
+            // Audit log entry for the reverse-signal close
+            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
+            console.log("[close]", JSON.stringify({
+              position_id: opp.position_id, symbol: pair, direction: opp.direction,
+              broker_connection_ids: oppMirroredIds, pnl: oppPnl, exit_price: analysis.lastPrice,
+              close_reason: "reverse_signal", close_source: "scanner", scan_cycle_id: scanCycleId,
+            }));
+            try {
+              const auditRows = (oppMirroredIds.length > 0 ? oppMirroredIds : [null]).map((cid: string | null) => ({
+                user_id: userId, position_id: opp.position_id, symbol: pair,
+                broker_connection_id: cid, close_reason: "reverse_signal", close_source: "scanner",
+                pnl: oppPnl.toFixed(2), exit_price: analysis.lastPrice.toString(),
+                scan_cycle_id: scanCycleId,
+                detail_json: { triggered_by_new_signal: positionId, new_direction: analysis.direction, opp_direction: opp.direction },
+              }));
+              await supabase.from("close_audit_log").insert(auditRows);
+            } catch (e: any) {
+              console.warn(`[close] audit insert failed for reverse ${opp.position_id}: ${e?.message}`);
+            }
+
+            // Mirror close ONLY to the broker connections this position was actually mirrored to.
+            // Critical fix: never iterate ALL active broker_connections — that would close trades
+            // on brokers that never received this paper position in the first place.
+            if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
               const { data: closeConns } = await supabase.from("broker_connections")
-                .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
-              // NOTE: OANDA close mirroring is handled separately via broker-execute close_trade
+                .select("*").eq("user_id", userId).eq("broker_type", "metaapi")
+                .eq("is_active", true).in("id", oppMirroredIds);
               if (closeConns && closeConns.length > 0) {
                 for (const conn of closeConns) {
                   try {
@@ -2197,28 +2239,18 @@ async function runScanForUser(supabase: any, userId: string) {
                       p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
                     );
                     if (!brokerPos) {
-                      // Fallback: match by symbol (uses normalized override lookup)
-                      const brokerSymbol = resolveSymbol(opp.symbol, conn);
-                      const normTarget = brokerSymbol.replace(/[._\-\s]/g, "").toUpperCase();
-                      const symFallback = brokerPositions.find((p: any) =>
-                        p.symbol === brokerSymbol ||
-                        p.symbol?.replace(/[._\-\s]/g, "").toUpperCase() === normTarget
-                      );
-                      if (symFallback) {
-                        const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: symFallback.id }) });
-                        console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed (symbol match)" : "failed " + closeRes.status} paper:${opp.position_id}`);
-                      } else {
-                        console.log(`Reverse close [${conn.display_name}]: no matching position for paper:${opp.position_id}`);
-                      }
-                    } else {
-                      const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
-                      console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                      console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
+                      continue;
                     }
+                    const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                    console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
                   } catch (e: any) {
                     console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
                   }
                 }
               }
+            } else if (account.execution_mode === "live") {
+              console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
             }
           }
         }
@@ -2311,6 +2343,7 @@ async function runScanForUser(supabase: any, userId: string) {
               .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
+              const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               for (const conn of connections) {
                 try {
                   if (conn.broker_type !== "metaapi") {
@@ -2338,6 +2371,7 @@ async function runScanForUser(supabase: any, userId: string) {
                     if (exRes.ok && !(parsedEx?.error)) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
+                      mirroredConnIds.push(conn.id);
                     } else {
                       const reason = parsedEx?.error || exBody.slice(0, 200);
                       console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
@@ -2433,13 +2467,14 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
                      try {
                        const parsed = JSON.parse(resBody);
-                        if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
-                          console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
-                          mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
-                       } else {
-                         mirrorResults.push(`${conn.display_name}: success`);
-                       }
-                     } catch { mirrorResults.push(`${conn.display_name}: success`); }
+                         if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
+                           console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
+                           mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                        } else {
+                          mirrorResults.push(`${conn.display_name}: success`);
+                          mirroredConnIds.push(conn.id);
+                        }
+                      } catch { mirrorResults.push(`${conn.display_name}: success`); mirroredConnIds.push(conn.id); }
                    } else {
                      console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
@@ -2450,6 +2485,14 @@ async function runScanForUser(supabase: any, userId: string) {
                 }
               }
               detail.mt5Mirror = mirrorResults.join("; ");
+              detail.mirroredConnectionIds = mirroredConnIds;
+              // Persist which broker connections this paper position was actually mirrored to.
+              // Close paths use this list to fan out — never iterate ALL active connections.
+              if (mirroredConnIds.length > 0) {
+                await supabase.from("paper_positions")
+                  .update({ mirrored_connection_ids: mirroredConnIds })
+                  .eq("position_id", positionId).eq("user_id", userId);
+              }
             } else {
               detail.mt5Mirror = "skipped_no_connection";
             }
@@ -2492,7 +2535,15 @@ async function runScanForUser(supabase: any, userId: string) {
     details_json: scanDetails,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId };
+  } finally {
+    // Always release the scan lock, even on error
+    try {
+      await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+    } catch (e: any) {
+      console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
+    }
+  }
 }
 
 function respond(data: any, status = 200) {
