@@ -170,15 +170,29 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     return { success: false, error: msg };
   }
 }
-// ─── Close All Broker Positions for a paper position ────────────────
-async function closeBrokerPositions(supabase: any, userId: string, positionId: string, symbol: string): Promise<string[]> {
+// ─── Close ONLY the broker connections this paper position was actually mirrored to ──
+// Critical fix: never iterate ALL active connections — only the ones recorded at open time.
+// If `mirroredConnectionIds` is empty, we close nothing on broker side (paper-only or pre-tracking position).
+async function closeBrokerPositions(
+  supabase: any,
+  userId: string,
+  positionId: string,
+  symbol: string,
+  mirroredConnectionIds: string[] | null | undefined,
+): Promise<string[]> {
   const results: string[] = [];
   try {
     const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
     if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
 
+    const ids = (mirroredConnectionIds || []).filter(Boolean);
+    if (ids.length === 0) {
+      console.log(`[broker-close] no mirrored connections for paper:${positionId} — skipping broker fan-out`);
+      return ["no_mirrored_connections"];
+    }
+
     const { data: connections } = await supabase.from("broker_connections")
-      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
     if (!connections || connections.length === 0) return ["no_connection"];
 
     for (const conn of connections) {
