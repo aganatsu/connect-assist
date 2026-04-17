@@ -1189,6 +1189,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
     // Displacement scoring (defaults true)
     useDisplacement: strategy.useDisplacement ?? true,
+    // Breaker Blocks + Unicorn Model (defaults true)
+    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
+    useUnicornModel: strategy.useUnicornModel ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
