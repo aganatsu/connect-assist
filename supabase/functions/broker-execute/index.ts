@@ -175,11 +175,9 @@ Deno.serve(async (req) => {
         });
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/account-information`, {
-          headers: { "auth-token": conn.api_key },
-        });
-        if (!res.ok) { const errText = await res.text(); return respond({ error: `MetaAPI error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
-        const info: any = await res.json();
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/account-information`);
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        const info: any = JSON.parse(body);
         return respond({
           balance: parseFloat(info.balance ?? "0"),
           equity: parseFloat(info.equity ?? info.balance ?? "0"),
