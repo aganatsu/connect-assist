@@ -3,8 +3,10 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
+// Confluence is normalized to 0-10 (raw max ~21.5 across 17 factors, clamped).
+// Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only, <5.0 looser/scalp.
 const DEFAULTS = {
-  minConfluence: 6,
+  minConfluence: 6.0,
   htfBiasRequired: true,
   htfBiasHardVeto: false, // when true: ranging HTF blocks both sides; mismatch always blocks
   entryTimeframe: "15min",
