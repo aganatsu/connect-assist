@@ -248,7 +248,57 @@ async function closeBrokerPositions(
   return results;
 }
 
-// ─── Post-Mortem Generation ─────────────────────────────────────────
+// ─── Structured close logging + audit row ───────────────────────────
+async function logClose(
+  supabase: any,
+  userId: string,
+  pos: any,
+  args: {
+    closeReason: string;
+    closeSource: "scanner" | "broker_callback" | "user" | "sync" | "kill_switch" | "auto_engine";
+    pnl: number;
+    exitPrice: number;
+    scanCycleId?: string | null;
+    extra?: Record<string, any>;
+  },
+): Promise<void> {
+  const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+  const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
+  const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
+  const lastPrice = pos.current_price ? parseFloat(pos.current_price) : null;
+  console.log("[close]", JSON.stringify({
+    position_id: pos.position_id,
+    symbol: pos.symbol,
+    direction: pos.direction,
+    broker_connection_ids: mirroredIds,
+    pnl: args.pnl,
+    exit_price: args.exitPrice,
+    sl, tp, last_price: lastPrice,
+    close_reason: args.closeReason,
+    close_source: args.closeSource,
+    scan_cycle_id: args.scanCycleId ?? null,
+  }));
+  try {
+    // One audit row per broker (or one with null connection if paper-only)
+    const rows = (mirroredIds.length > 0 ? mirroredIds : [null]).map((cid: string | null) => ({
+      user_id: userId,
+      position_id: pos.position_id,
+      symbol: pos.symbol,
+      broker_connection_id: cid,
+      close_reason: args.closeReason,
+      close_source: args.closeSource,
+      pnl: args.pnl.toFixed(2),
+      exit_price: args.exitPrice.toString(),
+      scan_cycle_id: args.scanCycleId ?? null,
+      detail_json: { sl, tp, last_price: lastPrice, direction: pos.direction, ...(args.extra || {}) },
+    }));
+    await supabase.from("close_audit_log").insert(rows);
+  } catch (e: any) {
+    console.warn(`[close] audit insert failed for ${pos.position_id}: ${e?.message}`);
+  }
+}
+
+
 function generatePostMortem(
   position: any, exitPrice: number, pnl: number, pnlPips: number, closeReason: string,
 ): any {
