@@ -219,27 +219,78 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
           </div>
         </div>
 
+        {/* Search Bar */}
+        <div className="px-6 py-2.5 border-b border-border bg-background/40">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              ref={searchRef}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Escape") {
+                  if (search) {
+                    e.stopPropagation();
+                    setSearch("");
+                  } else {
+                    onClose();
+                  }
+                }
+              }}
+              placeholder="Search settings… (e.g. trailing stop, spread, news, drawdown)"
+              className="h-8 pl-8 text-xs bg-secondary/40 border-border"
+            />
+            {query && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {query && (
+            <p className="text-[10px] text-muted-foreground mt-1.5">
+              {matches.length === 0
+                ? `No settings match "${search}"`
+                : `${matches.length} setting${matches.length === 1 ? "" : "s"} across ${filteredTabs.length} tab${filteredTabs.length === 1 ? "" : "s"}`}
+            </p>
+          )}
+        </div>
+
         {/* Body: Tab nav + content */}
         <div className="flex flex-1 min-h-0">
           {/* Vertical Tab Nav */}
-          <div className="w-44 border-r border-border py-2 shrink-0">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${activeTab === tab.id ? "bg-primary/10 text-primary border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-l-2 border-transparent"}`}
-              >
-                <tab.icon className="h-3.5 w-3.5 shrink-0" />
-                {tab.label}
-              </button>
-            ))}
+          <div className="w-44 border-r border-border py-2 shrink-0 overflow-y-auto">
+            {filteredTabs.length === 0 && (
+              <p className="px-4 py-3 text-[10px] text-muted-foreground italic">No matching tabs</p>
+            )}
+            {filteredTabs.map(tab => {
+              const isActive = effectiveActiveTab === tab.id;
+              const matchCount = query ? matches.filter(m => m.tab === tab.id).length : 0;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${isActive ? "bg-primary/10 text-primary border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-l-2 border-transparent"}`}
+                >
+                  <tab.icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 text-left">{tab.label}</span>
+                  {matchCount > 0 && (
+                    <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-mono">{matchCount}</Badge>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto p-6">
-            {config && (
+            <HighlightContext.Provider value={matchedLabels}>
+            {config && filteredTabs.length > 0 && (
               <>
-                {activeTab === "tradingStyle" && (
+                {effectiveActiveTab === "tradingStyle" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Style" description="Choose how the bot trades — this overrides entry timeframe, TP/SL ratios, and hold duration" />
                     <div className="grid grid-cols-2 gap-3">
