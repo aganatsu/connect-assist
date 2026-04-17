@@ -641,7 +641,18 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
           {/* Factors */}
           {d.factors && (
             <div className="space-y-0.5">
-              <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Factors ({d.factorCount || 0}/9)</p>
+              <p
+                className={`text-[8px] uppercase tracking-wider ${
+                  d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.6
+                    ? "text-success"
+                    : d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.4
+                      ? "text-warning"
+                      : "text-muted-foreground"
+                }`}
+                title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–1.5 pts), capped at 10.`}
+              >
+                Factors ({d.factorCount || 0}/{d.factors.length})
+              </p>
               {d.factors.map((f: any, fi: number) => (
                 <div key={fi} className="flex items-start gap-1 text-[9px]">
                   <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
@@ -706,7 +717,18 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Factors */}
       {d.factors && (
         <div className="space-y-0.5">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Factors ({d.factorCount || 0}/9)</p>
+          <p
+            className={`text-[8px] uppercase tracking-wider font-bold ${
+              d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.6
+                ? "text-success"
+                : d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.4
+                  ? "text-warning"
+                  : "text-muted-foreground"
+            }`}
+            title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–1.5 pts), capped at 10.`}
+          >
+            Factors ({d.factorCount || 0}/{d.factors.length})
+          </p>
           {d.factors.map((f: any, fi: number) => (
             <div key={fi} className="flex items-start gap-1 text-[9px]">
               <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
