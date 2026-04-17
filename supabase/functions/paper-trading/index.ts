@@ -476,7 +476,7 @@ Deno.serve(async (req) => {
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
           const entryPrice = parseFloat(pos.entry_price);
-          const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
+          let sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
           const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
           const size = parseFloat(pos.size);
           let closeReason: string | null = null;

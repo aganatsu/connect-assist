@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
       const exposure: Record<string, { high: number; medium: number; low: number }> = {};
       for (const e of thisWeekEvents) {
         if (!exposure[e.currency]) exposure[e.currency] = { high: 0, medium: 0, low: 0 };
-        exposure[e.currency][e.impact]++;
+        exposure[e.currency][e.impact as "high" | "medium" | "low"]++;
       }
 
       return respond({
