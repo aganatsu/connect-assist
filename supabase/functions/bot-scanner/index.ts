@@ -1945,6 +1945,26 @@ async function runScanForUser(supabase: any, userId: string) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
+  const scanCycleId = crypto.randomUUID();
+
+  // ── Scan overlap lock (90s lease) ──
+  // Prevents two cron invocations from racing — second cycle would otherwise see the first's
+  // in-flight trades as orphans or double-process the same signals.
+  const lockHorizon = new Date(Date.now() + 90_000).toISOString();
+  const nowIso = new Date().toISOString();
+  const { data: lockRows, error: lockErr } = await supabase
+    .from("paper_accounts")
+    .update({ scan_lock_until: lockHorizon })
+    .eq("user_id", userId)
+    .or(`scan_lock_until.is.null,scan_lock_until.lt.${nowIso}`)
+    .select("user_id");
+  if (lockErr) console.warn(`[scan-lock] update error for ${userId}: ${lockErr.message}`);
+  if (!lockRows || lockRows.length === 0) {
+    console.log(`[scan-lock] skipped — overlap detected for user ${userId}`);
+    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
+  }
+
+  try {
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
