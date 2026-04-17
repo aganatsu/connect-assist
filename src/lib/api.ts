@@ -9,7 +9,9 @@ export async function invokeFunction<T = any>(
     body,
   });
   if (error) throw new Error(error.message || `${functionName} failed`);
-  if (data?.error) throw new Error(data.error);
+  // Graceful fallback: edge function returned a structured error with fallback flag.
+  // Don't throw — return the payload so callers can decide how to handle it.
+  if (data?.error && !data?.fallback) throw new Error(data.error);
   return data as T;
 }
 
