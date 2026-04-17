@@ -17,6 +17,7 @@ import {
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
