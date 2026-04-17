@@ -141,16 +141,16 @@ function BrokerSettings() {
   // VALUES (broker symbol) are kept exactly as the user typed them.
   const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
 
-  const validateBrokerSymbol = async (connectionId: string, appSymbol: string) => {
-    const t = toast.loading(`Validating ${appSymbol}...`);
+  const validateBrokerSymbol = async (connectionId: string, appSymbol: string, brokerSymbol?: string) => {
+    const t = toast.loading(`Validating ${brokerSymbol || appSymbol}...`);
     try {
       const { data, error } = await supabase.functions.invoke("broker-execute", {
-        body: { action: "validate_symbol", connectionId, symbol: appSymbol },
+        body: { action: "validate_symbol", connectionId, symbol: appSymbol, brokerSymbol },
       });
       if (error) throw error;
       toast.dismiss(t);
       if (data?.ok) toast.success(`✓ ${appSymbol} → ${data.brokerSymbol}`);
-      else toast.error(`✗ ${data?.brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);
+      else toast.error(`✗ ${data?.brokerSymbol || brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);
     } catch (e: any) {
       toast.dismiss(t);
       toast.error(`Validation failed: ${e.message}`);
