@@ -366,10 +366,12 @@ function generatePostMortem(
   // Determine outcome
   const outcome = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "Breakeven";
 
-  // Parse factors from signal reason
+  // Parse factors from signal reason (all 17 ICT factors)
   const factorNames = [
     "Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount",
     "Session/Kill Zone", "Judas Swing", "PD/PW Levels", "Reversal Candle", "Liquidity Sweep",
+    "Displacement", "Breaker Block", "Unicorn Model", "Silver Bullet",
+    "Macro Window", "SMT Divergence", "VWAP", "AMD Phase",
   ];
   const presentFactors = factorNames.filter(f => signalReason.includes(f));
   const absentFactors = factorNames.filter(f => !signalReason.includes(f));
@@ -529,6 +531,66 @@ Deno.serve(async (req) => {
             }
           }
 
+          // Trailing stop: move SL to lock in profit as price moves favorably
+          if (!closeReason && exitFlags.trailingStop && exitFlags.trailingStopPips > 0 && sl !== null) {
+            const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const profitPips = pos.direction === "long"
+              ? (currentPrice - entryPrice) / spec.pipSize
+              : (entryPrice - currentPrice) / spec.pipSize;
+            // Determine activation threshold
+            const activationPips = exitFlags.trailingStopActivation === "after_1r" && exitFlags.tpRatio
+              ? Math.abs(entryPrice - sl) / spec.pipSize  // 1R in pips
+              : exitFlags.trailingStopPips * 2;           // default: activate after 2x trailing distance
+            if (profitPips >= activationPips) {
+              // Trail SL behind current price by trailingStopPips
+              const trailDistance = exitFlags.trailingStopPips * spec.pipSize;
+              const newSL = pos.direction === "long"
+                ? currentPrice - trailDistance
+                : currentPrice + trailDistance;
+              // Only move SL in favorable direction (never widen it)
+              if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                sl = newSL; // Update local reference for SL check above
+              }
+            }
+          }
+
+          // Partial take profit: close a portion of the position at first TP level
+          if (!closeReason && exitFlags.partialTP && exitFlags.partialTPPercent > 0 && exitFlags.partialTPLevel > 0 && tp !== null && sl !== null) {
+            const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const profitPips = pos.direction === "long"
+              ? (currentPrice - entryPrice) / spec.pipSize
+              : (entryPrice - currentPrice) / spec.pipSize;
+            const slDistancePips = Math.abs(entryPrice - sl) / spec.pipSize;
+            const partialTriggerPips = slDistancePips * exitFlags.partialTPLevel; // e.g., 1.0R
+            // Check if partial TP was already taken (size would have been reduced)
+            const originalSize = parseFloat(pos.original_size || pos.size);
+            if (profitPips >= partialTriggerPips && size >= originalSize * 0.99) {
+              // Close partialTPPercent of the position
+              const closeSize = size * (exitFlags.partialTPPercent / 100);
+              const remainSize = size - closeSize;
+              const { pnl: partialPnl, pnlPips: partialPnlPips } = calcPnl(pos.direction, entryPrice, currentPrice, closeSize, pos.symbol);
+              // Record partial close in history
+              await supabase.from("paper_trade_history").insert({
+                user_id: user.id, position_id: `${pos.position_id}_partial`, symbol: pos.symbol,
+                direction: pos.direction, size: closeSize.toString(), entry_price: pos.entry_price,
+                exit_price: currentPrice.toString(), pnl: partialPnl.toFixed(2), pnl_pips: partialPnlPips.toFixed(1),
+                open_time: pos.open_time, closed_at: new Date().toISOString(),
+                close_reason: "partial_tp", signal_reason: pos.signal_reason || "",
+                signal_score: pos.signal_score, order_id: pos.order_id,
+              });
+              // Update position size and balance
+              await supabase.from("paper_positions").update({ size: remainSize.toString() }).eq("id", pos.id);
+              const curBal = parseFloat(account?.balance || "10000");
+              const newBal = curBal + partialPnl;
+              const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
+              await supabase.from("paper_accounts").update({
+                balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
+              }).eq("user_id", user.id);
+              console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)}`);
+            }
+          }
+
           // Close position if SL/TP/time triggered
           if (closeReason) {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
@@ -617,7 +679,9 @@ Deno.serve(async (req) => {
       const equityCurve: { date: string; equity: number }[] = [];
       if (histArr.length > 0) {
         const sorted = [...histArr].sort((a: any, b: any) => (a.closedAt || "").localeCompare(b.closedAt || ""));
-        let runningBalance = 10000;
+        // Use actual starting balance: current balance minus sum of all closed PnL
+        const totalClosedPnl = sorted.reduce((s: number, t: any) => s + t.pnl, 0);
+        let runningBalance = balance - totalClosedPnl;
         for (const t of sorted) {
           runningBalance += t.pnl;
           equityCurve.push({ date: t.closedAt, equity: runningBalance });

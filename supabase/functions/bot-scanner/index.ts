@@ -1634,7 +1634,6 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
     // maxDrawdown is set later (combined with circuitBreakerPct)
     // tpRatio is set later (in SL/TP method block)
-
     // Legacy DB keys
     maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
@@ -1656,8 +1655,13 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
 
     // ── Exit mappings ──
     trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
+    trailingStopPips: exit.trailingStopPips ?? raw.trailingStopPips ?? 15,
+    trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
+    breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
+    partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
+    partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
     maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
 
     // ── Instruments ──
@@ -1778,29 +1782,39 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `${openPositions.length}/${config.maxOpenPositions} positions` });
   }
 
-  // Gate 5: Max per symbol
+  // Gate 5: Max per symbol + same-direction duplicate check
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
-  if (symbolPositions >= config.maxPerSymbol) {
+  const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
+  if (sameDirectionExists) {
+    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate` });
+  } else if (symbolPositions >= config.maxPerSymbol) {
     gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
   } else {
     gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}` });
   }
 
-  // Gate 6: Portfolio heat
+  // Gate 6: Portfolio heat (actual risk per position)
   const balance = parseFloat(account.balance || "10000");
-  const totalExposure = openPositions.reduce((sum: number, p: any) => {
-    const size = parseFloat(p.size || "0");
+  let totalRiskDollars = 0;
+  for (const p of openPositions) {
+    const pEntry = parseFloat(p.entry_price || "0");
+    const pSL = parseFloat(p.stop_loss || "0");
+    const pSize = parseFloat(p.size || "0");
     const spec = SPECS[p.symbol] || SPECS["EUR/USD"];
-    return sum + (size * spec.lotUnits * parseFloat(p.entry_price || "0"));
-  }, 0);
-  const heatPercent = balance > 0 ? (totalExposure / balance / 100) * 100 : 0; // simplified
-  // For forex with leverage, heat = sum of (risk per position) / balance
-  // Simplified: just count risk% per position
-  const totalRiskPercent = openPositions.length * config.riskPerTrade;
+    if (pSL > 0 && pEntry > 0) {
+      // Actual risk = |entry - SL| * lotUnits * size
+      const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize;
+      totalRiskDollars += riskPerUnit;
+    } else {
+      // Fallback: assume configured risk% if SL is missing
+      totalRiskDollars += balance * (config.riskPerTrade / 100);
+    }
+  }
+  const totalRiskPercent = balance > 0 ? (totalRiskDollars / balance) * 100 : 0;
   if (totalRiskPercent >= config.portfolioHeat) {
-    gates.push({ passed: false, reason: `Portfolio heat ${totalRiskPercent}% >= ${config.portfolioHeat}% limit` });
+    gates.push({ passed: false, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}% >= ${config.portfolioHeat}% limit` });
   } else {
-    gates.push({ passed: true, reason: `Portfolio heat ${totalRiskPercent}%` });
+    gates.push({ passed: true, reason: `Portfolio heat ${totalRiskPercent.toFixed(1)}%` });
   }
 
   // Gate 7: Daily loss limit
@@ -2366,10 +2380,15 @@ async function runScanForUser(supabase: any, userId: string) {
         // Build exit flags metadata to store on the position
         const exitFlags = {
           trailingStop: pairConfig.trailingStopEnabled,
+          trailingStopPips: pairConfig.trailingStopPips,
+          trailingStopActivation: pairConfig.trailingStopActivation,
           breakEven: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
           partialTP: pairConfig.partialTPEnabled,
+          partialTPPercent: pairConfig.partialTPPercent,
+          partialTPLevel: pairConfig.partialTPLevel,
           maxHoldHours: pairConfig.maxHoldHours,
+          tpRatio: pairConfig.tpRatio,
         };
 
         // Place position
