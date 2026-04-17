@@ -1681,11 +1681,40 @@ async function runScanForUser(supabase: any, userId: string) {
         try {
           if (account.execution_mode === "live") {
             const { data: connections } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
               for (const conn of connections) {
                 try {
+                  if (conn.broker_type !== "metaapi") {
+                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
+                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                      },
+                      body: JSON.stringify({
+                        action: "place_order",
+                        connectionId: conn.id,
+                        symbol: pair,
+                        direction: analysis.direction,
+                        size,
+                        stopLoss: sl,
+                        takeProfit: tp,
+                        userId,
+                      }),
+                    });
+                    const exBody = await exRes.text();
+                    if (exRes.ok) {
+                      console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
+                      mirrorResults.push(`${conn.display_name}: success`);
+                    } else {
+                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${exBody.slice(0, 300)}`);
+                      mirrorResults.push(`${conn.display_name}: failed`);
+                    }
+                    continue;
+                  }
                   let authToken = conn.api_key;
                   let metaAccountId = conn.account_id;
                   if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
