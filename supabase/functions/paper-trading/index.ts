@@ -104,7 +104,7 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
   stopLoss?: number | null;
   takeProfit?: number | null;
   positionId?: string;
-}): Promise<{ success: boolean; mt5Result?: any; error?: string }> {
+}): Promise<{ success: boolean; mt5Result?: any; error?: string; connectionId?: string }> {
   try {
     // Find active metaapi broker connection
     const { data: connections } = await supabase.from("broker_connections")
