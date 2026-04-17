@@ -1041,7 +1041,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles) : [];
   const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
 
-  // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
+  // ── Factor 2: Order Block (max 2.0) ──
+  // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   {
     let pts = 0;
     let detail = "";
@@ -1051,9 +1052,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideOB) {
         pts = 2.0;
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-        if (config.useDisplacement !== false && (insideOB as any).hasDisplacement) {
-          pts += 0.5;
-          detail += " — formed with displacement";
+        if ((insideOB as any).hasDisplacement) {
+          detail += " — formed with displacement (scored via Factor 10)";
         }
       } else if (activeOBs.length > 0) {
         pts = 0.5;
@@ -1066,7 +1066,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
   }
 
-  // ── Factor 3: Fair Value Gap (max 1.5, +0.5 displacement bonus) ──
+  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   {
     let pts = 0;
     let detail = "";
@@ -1076,9 +1077,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideFVG) {
         pts = 1.5;
         detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
-        if (config.useDisplacement !== false && (insideFVG as any).hasDisplacement) {
-          pts += 0.5;
-          detail += " — created by displacement";
+        if ((insideFVG as any).hasDisplacement) {
+          detail += " — created by displacement (scored via Factor 10)";
         }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
