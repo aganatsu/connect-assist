@@ -58,6 +58,24 @@ const DEFAULTS = {
   // ── News Event Filter ──
   newsFilterEnabled: true,
   newsFilterPauseMinutes: 30,
+  // ── Entry behaviour ──
+  cooldownMinutes: 0,
+  closeOnReverse: false,
+  // ── Exit toggles ──
+  trailingStopEnabled: false,
+  partialTPEnabled: false,
+  maxHoldHours: 0,
+  // ── Sessions ──
+  killZoneOnly: false,
+  // ── Protection ──
+  maxConsecutiveLosses: 0,
+  protectionMaxDailyLossDollar: 0,
+  // ── Strategy gates ──
+  minFactorCount: 0,
+  useSMT: true,
+  // ── Per-pair scratch (set during scan) ──
+  _currentSymbol: "" as string,
+  _smtResult: null as any,
 };
 
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
