@@ -1527,6 +1527,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // VWAP confluence (defaults true)
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
+    // AMD Phase (defaults true)
+    useAMD: strategy.useAMD ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
