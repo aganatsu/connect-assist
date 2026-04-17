@@ -94,12 +94,58 @@ export type Database = {
         }
         Relationships: []
       }
+      close_audit_log: {
+        Row: {
+          broker_connection_id: string | null
+          close_reason: string
+          close_source: string
+          created_at: string
+          detail_json: Json | null
+          exit_price: string | null
+          id: string
+          pnl: string | null
+          position_id: string
+          scan_cycle_id: string | null
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          broker_connection_id?: string | null
+          close_reason: string
+          close_source: string
+          created_at?: string
+          detail_json?: Json | null
+          exit_price?: string | null
+          id?: string
+          pnl?: string | null
+          position_id: string
+          scan_cycle_id?: string | null
+          symbol: string
+          user_id: string
+        }
+        Update: {
+          broker_connection_id?: string | null
+          close_reason?: string
+          close_source?: string
+          created_at?: string
+          detail_json?: Json | null
+          exit_price?: string | null
+          id?: string
+          pnl?: string | null
+          position_id?: string
+          scan_cycle_id?: string | null
+          symbol?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       paper_accounts: {
         Row: {
           balance: string
           created_at: string
           daily_pnl_base: string
           daily_pnl_date: string
+          enable_orphan_close: boolean
           execution_mode: string
           id: string
           is_paused: boolean
@@ -108,6 +154,7 @@ export type Database = {
           peak_balance: string
           rejected_count: number
           scan_count: number
+          scan_lock_until: string | null
           signal_count: number
           started_at: string | null
           updated_at: string
@@ -118,6 +165,7 @@ export type Database = {
           created_at?: string
           daily_pnl_base?: string
           daily_pnl_date?: string
+          enable_orphan_close?: boolean
           execution_mode?: string
           id?: string
           is_paused?: boolean
@@ -126,6 +174,7 @@ export type Database = {
           peak_balance?: string
           rejected_count?: number
           scan_count?: number
+          scan_lock_until?: string | null
           signal_count?: number
           started_at?: string | null
           updated_at?: string
@@ -136,6 +185,7 @@ export type Database = {
           created_at?: string
           daily_pnl_base?: string
           daily_pnl_date?: string
+          enable_orphan_close?: boolean
           execution_mode?: string
           id?: string
           is_paused?: boolean
@@ -144,6 +194,7 @@ export type Database = {
           peak_balance?: string
           rejected_count?: number
           scan_count?: number
+          scan_lock_until?: string | null
           signal_count?: number
           started_at?: string | null
           updated_at?: string
@@ -153,11 +204,13 @@ export type Database = {
       }
       paper_positions: {
         Row: {
+          close_reason: string | null
           created_at: string
           current_price: string
           direction: string
           entry_price: string
           id: string
+          mirrored_connection_ids: string[]
           open_time: string
           order_id: string
           order_type: string | null
@@ -173,11 +226,13 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          close_reason?: string | null
           created_at?: string
           current_price: string
           direction: string
           entry_price: string
           id?: string
+          mirrored_connection_ids?: string[]
           open_time: string
           order_id: string
           order_type?: string | null
@@ -193,11 +248,13 @@ export type Database = {
           user_id: string
         }
         Update: {
+          close_reason?: string | null
           created_at?: string
           current_price?: string
           direction?: string
           entry_price?: string
           id?: string
+          mirrored_connection_ids?: string[]
           open_time?: string
           order_id?: string
           order_type?: string | null
