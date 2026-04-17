@@ -263,6 +263,74 @@ function detectMacroWindow(): MacroWindowResult {
   return { active: false, window: null, minutesRemaining: 0 };
 }
 
+// ─── ICT AMD Phase Detection ───────────────────────────────────────
+// Splits today's UTC candles into Asian (00-07), London (07-13), NY (13-21).
+//   Accumulation = Asian range built (consolidation).
+//   Manipulation = London sweeps Asian high or low (liquidity grab).
+//   Distribution = NY expands opposite the manipulation sweep.
+interface AMDResult {
+  phase: "accumulation" | "manipulation" | "distribution" | "unknown";
+  bias: "bullish" | "bearish" | null;
+  asianHigh: number | null;
+  asianLow: number | null;
+  sweptSide: "high" | "low" | null;
+  detail: string;
+}
+function detectAMDPhase(candles: Candle[]): AMDResult {
+  if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
+  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
+  const today = candles.filter(c => c.datetime.slice(0, 10) === lastDate);
+  if (today.length === 0) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "No today candles" };
+  const hourOf = (c: Candle) => parseInt(c.datetime.slice(11, 13), 10);
+  const asian  = today.filter(c => { const h = hourOf(c); return h >= 0 && h < 7; });
+  const london = today.filter(c => { const h = hourOf(c); return h >= 7 && h < 13; });
+  const ny     = today.filter(c => { const h = hourOf(c); return h >= 13 && h < 21; });
+  const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
+  const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
+  // Determine sweep from London candles
+  let sweptSide: "high" | "low" | null = null;
+  let bias: "bullish" | "bearish" | null = null;
+  if (asianHigh != null && asianLow != null && london.length > 0) {
+    const lHigh = Math.max(...london.map(c => c.high));
+    const lLow  = Math.min(...london.map(c => c.low));
+    const lClose = london[london.length - 1].close;
+    const tookHigh = lHigh > asianHigh;
+    const tookLow  = lLow  < asianLow;
+    if (tookHigh && !tookLow && lClose < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+    else if (tookLow && !tookHigh && lClose > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    else if (tookHigh && tookLow) {
+      // Both swept — use later sweep direction by looking at last 1/3 of London
+      const tail = london.slice(-Math.max(1, Math.floor(london.length / 3)));
+      const tailHigh = Math.max(...tail.map(c => c.high));
+      const tailLow  = Math.min(...tail.map(c => c.low));
+      if (tailHigh > asianHigh && tail[tail.length - 1].close < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+      else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    }
+  }
+  // Determine current phase from clock + structure
+  const now = new Date();
+  const h = now.getUTCHours();
+  let phase: AMDResult["phase"] = "unknown";
+  if (h >= 0 && h < 7) phase = "accumulation";
+  else if (h >= 7 && h < 13) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
+  else if (h >= 13 && h < 21) {
+    // Distribution if NY has expanded opposite the sweep
+    if (sweptSide && ny.length > 0 && asianHigh != null && asianLow != null) {
+      const nyHigh = Math.max(...ny.map(c => c.high));
+      const nyLow  = Math.min(...ny.map(c => c.low));
+      const expandedDown = sweptSide === "high" && nyLow < asianLow;
+      const expandedUp   = sweptSide === "low"  && nyHigh > asianHigh;
+      phase = (expandedDown || expandedUp) ? "distribution" : "manipulation";
+    } else {
+      phase = "distribution";
+    }
+  }
+  const detail = sweptSide
+    ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
+    : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
+  return { phase, bias, asianHigh, asianLow, sweptSide, detail };
+}
+
 // ─── SMT Divergence (Smart Money Tool) ─────────────────────────────
 // Compares this pair's recent swing high/low against a positively-correlated pair.
 // Bullish SMT: this pair makes a LOWER low while correlated pair does NOT (failure to confirm sell-side liquidity grab).
@@ -1301,6 +1369,31 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "VWAP", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 17: AMD Phase (max 1.0; 0.5 if bias aligned, +0.5 if in distribution phase) ──
+  const amd = detectAMDPhase(candles);
+  {
+    let pts = 0;
+    let detail = `AMD: ${amd.detail}`;
+    if (config.useAMD === false) {
+      detail = "AMD Phase disabled";
+    } else if (direction && amd.bias) {
+      const aligned = (direction === "long" && amd.bias === "bullish") || (direction === "short" && amd.bias === "bearish");
+      if (aligned) {
+        pts = 0.5;
+        if (amd.phase === "distribution") {
+          pts += 0.5;
+          detail = `AMD distribution + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        } else {
+          detail = `AMD ${amd.phase} + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        }
+      } else {
+        detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1323,14 +1416,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const mwSummary = macroWindow.active ? ` | ${macroWindow.window}` : "";
   const smtSummary = smtResult?.detected ? ` | SMT ${smtResult.type} vs ${smtResult.correlatedPair}` : "";
   const vwapSummary = vwap.value != null ? ` | VWAP ${vwap.value.toFixed(5)}` : "";
+  const amdSummary = amd.bias ? ` | AMD ${amd.phase}/${amd.bias}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
   };
 }
 
@@ -1433,6 +1527,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // VWAP confluence (defaults true)
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
+    // AMD Phase (defaults true)
+    useAMD: strategy.useAMD ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
