@@ -120,7 +120,41 @@ function calculateATR(candles: Candle[], period = 14): number {
   return atrSum / period;
 }
 
-function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
+// ─── Session-Anchored VWAP ─────────────────────────────────────────
+// Anchors at the start of the current UTC day. Returns current VWAP, distance in pips,
+// and whether the latest candle wicked through and rejected VWAP (for bonus).
+interface VWAPResult { value: number | null; distancePips: number | null; rejection: "bullish" | "bearish" | null; barsAnchored: number; }
+function calculateAnchoredVWAP(candles: Candle[], pipSize: number): VWAPResult {
+  if (candles.length === 0 || pipSize <= 0) {
+    return { value: null, distancePips: null, rejection: null, barsAnchored: 0 };
+  }
+  // Find anchor index = first candle whose UTC date matches the latest candle's UTC date
+  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
+  let anchorIdx = candles.length - 1;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].datetime.slice(0, 10) === lastDate) anchorIdx = i; else break;
+  }
+  let pvSum = 0, vSum = 0;
+  // Volume not available from Yahoo OHLC payload here; use range as proxy weight (high-low+epsilon).
+  for (let i = anchorIdx; i < candles.length; i++) {
+    const c = candles[i];
+    const typical = (c.high + c.low + c.close) / 3;
+    const w = Math.max(1e-9, c.high - c.low);
+    pvSum += typical * w;
+    vSum += w;
+  }
+  const value = vSum > 0 ? pvSum / vSum : null;
+  if (value == null) return { value: null, distancePips: null, rejection: null, barsAnchored: candles.length - anchorIdx };
+  const last = candles[candles.length - 1];
+  const distancePips = Math.abs(last.close - value) / pipSize;
+  // Rejection wick: candle traded through VWAP but closed back on one side
+  let rejection: "bullish" | "bearish" | null = null;
+  if (last.low < value && last.close > value && (last.close - last.open) > 0) rejection = "bullish";
+  else if (last.high > value && last.close < value && (last.open - last.close) > 0) rejection = "bearish";
+  return { value, distancePips, rejection, barsAnchored: candles.length - anchorIdx };
+}
+
+
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
 
   // Calculate ATR from daily candles (14-period)
