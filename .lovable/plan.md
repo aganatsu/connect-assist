@@ -1,30 +1,36 @@
 
 
-## Plan: Fix partial TP runaway loop
+## Plan: Add searchable filter to Bot Configuration modal
 
-### 1. DB migration — `supabase/migrations/20260417140000_add_partial_tp_fired.sql`
-```sql
-ALTER TABLE public.paper_positions
-  ADD COLUMN IF NOT EXISTS partial_tp_fired boolean NOT NULL DEFAULT false;
-```
+User wants a search input inside the Bot Config modal that filters fields/tabs as they type — similar to a command palette / settings search.
 
-### 2. Edit `supabase/functions/paper-trading/index.ts` (Partial TP block, ~L558–592)
-- Add comment: `// Guard: only fire once per position using partial_tp_fired flag (fixes runaway loop)`
-- Outer `if` gains `&& !pos.partial_tp_fired`
-- Drop `originalSize` var and the `size >= originalSize * 0.99` check → keep only `if (profitPips >= partialTriggerPips)`
-- Update query writes both fields:
-  ```ts
-  await supabase.from("paper_positions").update({
-    size: remainSize.toString(),
-    partial_tp_fired: true,
-  }).eq("id", pos.id);
-  ```
-- Log: `` `Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)} (flag set, won't re-fire)` ``
+Need to inspect `BotConfigModal.tsx` to see structure (tabs, fields) before finalizing.
 
-### 3. Redeploy `paper-trading` edge function
+### What I'll build
 
-### Notes
-- This is a server-side fix to a runaway DB-write loop, not bot trading-strategy logic — memory constraint (no bot logic) respected: no signal/scoring/entry/exit-strategy changes, only a duplicate-write guard.
-- Existing open positions default to `partial_tp_fired = false`, so they remain eligible for one legitimate partial TP going forward.
-- Frontend untouched.
+1. **Add a search input at the top of `BotConfigModal`** (sticky, just under the dialog header)
+   - Icon + input, placeholder "Search settings… (e.g. trailing stop, spread, news)"
+   - Uses existing `Input` + `Search` lucide icon, dark-theme tokens
+
+2. **Filtering behavior**
+   - Build a static index of every setting: `{ tab, label, keywords[], fieldId }` derived from the modal's existing tabs/fields
+   - As user types: case-insensitive match against label + keywords
+   - When query is non-empty:
+     - Hide the normal tab strip
+     - Render a flat **Results list** grouped by tab (e.g. "Risk › Max Daily Loss", "Exits › Trailing Stop Pips") — each row is the actual control (input/switch/select), not just a link, so they can edit inline
+     - Empty state: "No settings match 'xyz'"
+   - When query is empty: restore normal tabbed view, no behavior change
+
+3. **Click-to-jump fallback** (optional row affordance)
+   - Each result row also shows the tab name as a small badge; clicking the badge switches to that tab and clears the search, scrolling/highlighting the field
+
+4. **Keyboard**
+   - Auto-focus search on modal open
+   - `Esc` clears query first, then closes modal on second press
+   - `↑/↓` to move highlight, `Enter` to jump to that field's tab
+
+### Scope notes
+- Frontend-only, single file: `src/components/BotConfigModal.tsx`
+- No bot logic touched (memory constraint respected) — purely a UI filter over existing form fields
+- No new deps; uses existing shadcn `Input`, `Badge`, lucide `Search`
 
