@@ -1550,6 +1550,7 @@ async function runScanForUser(supabase: any, userId: string) {
             if (account.execution_mode === "live") {
               const { data: closeConns } = await supabase.from("broker_connections")
                 .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              // NOTE: OANDA close mirroring is handled separately via broker-execute close_trade
               if (closeConns && closeConns.length > 0) {
                 for (const conn of closeConns) {
                   try {
