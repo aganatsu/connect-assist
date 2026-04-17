@@ -3,7 +3,7 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
-// Confluence is normalized to 0-10 (raw max ~21.5 across 17 factors, clamped).
+// Confluence is normalized to 0-10 (raw max ~23.0 across 17 factors, clamped).
 // Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only, <5.0 looser/scalp.
 const DEFAULTS = {
   minConfluence: 6.0,
@@ -1159,30 +1159,30 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
 }
 /**
  * ─── CONFLUENCE FACTOR AUDIT (17 factors + OR enhancements) ──────────
- * Max raw points possible when every factor and bonus aligns = 21.5
+ * Max raw points possible when every factor and bonus aligns = 23.0
  * Final score is normalized via Math.min(10, score) → 0–10 scale.
  *
  *  #  | Factor                 | Base | Bonus(es)
  * ----+------------------------+------+-------------------------------------------
  *  1  | Market Structure       | 2.0  | +0.5 OR bias (when OR enabled)
- *  2  | Order Block            | 2.0  | (displacement bonus removed — see Factor 10)
- *  3  | Fair Value Gap         | 1.5  | (displacement bonus removed — see Factor 10)
+ *  2  | Order Block            | 2.0  | (quality-gated: structure break + body zone)
+ *  3  | Fair Value Gap         | 1.5  | CE level check (1.5 at CE, 1.0 inside FVG)
  *  4  | Premium/Discount       | 2.0  | (capped)
- *  5  | Session/Kill Zone      | 1.0  | +0.5 Silver Bullet combo
- *  6  | Judas Swing            | 1.0  | +0.5 OR judas (high or low swept-and-reversed)
- *  7  | PD/PW Levels           | 0.5  | +0.5 OR key-level proximity
- *  8  | Reversal Candle        | 0.5  | —
- *  9  | Liquidity Sweep        | 0.5  | —
- * 10  | Displacement           | 1.0  | (sole path — no bonuses on OB/FVG)
+ *  5  | Session/Kill Zone      | 1.5  | +0.5 Silver Bullet combo (increased from 1.0)
+ *  6  | Judas Swing            | 1.0  | +0.5 OR judas; kill-zone-gated
+ *  7  | PD/PW Levels           | 1.0  | +0.5 OR key-level; weekly > daily (was 0.5)
+ *  8  | Reversal Candle        | 0.5  | context-aware (full pts only at key level)
+ *  9  | Liquidity Sweep        | 1.0  | strength-tiered (was 0.5)
+ * 10  | Displacement           | 1.0  | FVG-creation-gated (1.0 with FVG, 0.5 without)
  * 11  | Breaker Block          | 1.0  | —
  * 12  | Unicorn Model          | 1.5  | —
  * 13  | Silver Bullet          | 1.0  | —
  * 14  | Macro Window           | 0.5  | +0.5 Silver Bullet overlap combo
- * 15  | SMT Divergence         | 1.0  | —
+ * 15  | SMT Divergence         | 1.0  | swing-point-based (not absolute extremes)
  * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
  * 17  | AMD Phase              | 0.5  | +0.5 distribution-phase bonus
  * ----+------------------------+------+-------------------------------------------
- *  TOTAL MAX RAW              = 21.5  (clamped to 10 for display via Math.min)
+ *  TOTAL MAX RAW              = 23.0  (clamped to 10 for display via Math.min)
  *
  * Recommended thresholds on the 0-10 scale (post-clamp):
  *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
@@ -1309,17 +1309,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
   }
 
-  // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
+  // ── Factor 5: Kill Zone (max 1.5, +0.5 combo bonus if Silver Bullet overlap) ──
+  // ICT: Kill zones are THE primary timing filter. Increased weight to reflect importance.
   const silverBullet = detectSilverBullet();
   {
-    let pts = session.isKillZone ? 1 : 0;
+    let pts = session.isKillZone ? 1.5 : 0;
     let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
     if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
       pts += 0.5;
       detail += ` + ${silverBullet.window} overlap (combo bonus)`;
     }
     score += pts;
-    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.5, detail });
   }
 
   // ── Factor 6: Judas Swing (max 1.0) ──
@@ -1343,25 +1344,28 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Judas Swing", present: pts > 0, weight: 1.0, detail });
   }
 
-  // ── Factor 7: PD/PW Levels (max 0.5) ──
+  // ── Factor 7: PD/PW Levels (max 1.0) ──
+  // ICT: PD/PW levels are primary draw-on-liquidity targets. Increased weight per audit.
   {
     let pts = 0;
     let detail = "No PD/PW levels";
     if (pdLevels) {
       const threshold = lastPrice * 0.002;
-      const nearLevel = [
+      const nearLevels = [
         { name: "PDH", price: pdLevels.pdh }, { name: "PDL", price: pdLevels.pdl },
         { name: "PWH", price: pdLevels.pwh }, { name: "PWL", price: pdLevels.pwl },
-      ].find(l => Math.abs(lastPrice - l.price) <= threshold);
-      if (nearLevel) {
-        pts = 0.5;
-        detail = `Price near ${nearLevel.name} (${nearLevel.price.toFixed(5)})`;
+      ].filter(l => Math.abs(lastPrice - l.price) <= threshold);
+      if (nearLevels.length > 0) {
+        // Weekly levels are more significant than daily
+        const nearWeekly = nearLevels.some(l => l.name.startsWith("PW"));
+        pts = nearWeekly ? 1.0 : 0.75;
+        detail = `Price near ${nearLevels.map(l => l.name).join(", ")} (${nearLevels[0].price.toFixed(5)})${nearWeekly ? " — weekly level (higher significance)" : ""}`;
       } else {
         detail = `PDH=${pdLevels.pdh.toFixed(5)}, PDL=${pdLevels.pdl.toFixed(5)}, PWH=${pdLevels.pwh.toFixed(5)}, PWL=${pdLevels.pwl.toFixed(5)}`;
       }
     }
     score += pts;
-    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 0.5, detail });
+    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 1.0, detail });
   }
 
   // ── Factor 8: Reversal Candle (max 0.5) ──
@@ -1398,19 +1402,25 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail });
   }
 
-  // ── Factor 9: Liquidity Sweep (max 0.5) ──
+  // ── Factor 9: Liquidity Sweep (max 1.0) ──
+  // ICT: Liquidity sweeps are a cornerstone entry trigger. Increased weight per audit.
   {
     let pts = 0;
     let detail = "";
     if (config.enableLiquiditySweep !== false) {
       const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
-      pts = sweptPool ? 0.5 : 0;
-      detail = sweptPool ? `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)` : "No recent liquidity sweep";
+      if (sweptPool) {
+        // Higher-strength pools (more touches) are more significant
+        pts = sweptPool.strength >= 4 ? 1.0 : 0.75;
+        detail = `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)${sweptPool.strength >= 4 ? " — strong pool" : ""}`;
+      } else {
+        detail = "No recent liquidity sweep";
+      }
     } else {
       detail = "Liquidity Sweeps disabled";
     }
     score += pts;
-    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 0.5, detail });
+    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 1.0, detail });
   }
 
   // ── Opening Range Enhancements ──
