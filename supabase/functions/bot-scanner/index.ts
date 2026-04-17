@@ -180,6 +180,30 @@ function detectSession(): { name: string; isKillZone: boolean } {
   return { name: "Off-Hours", isKillZone: false };
 }
 
+// ─── Silver Bullet Windows (ICT macro windows, 1h each) ────────────
+// Times in UTC, derived from NY time (EST = UTC-5). DST not modeled (matches existing session logic).
+//   London Open SB: 03:00-04:00 EST → 08:00-09:00 UTC
+//   AM SB:          10:00-11:00 EST → 15:00-16:00 UTC
+//   PM SB:          14:00-15:00 EST → 19:00-20:00 UTC
+interface SilverBulletResult { active: boolean; window: string | null; minutesRemaining: number; }
+function detectSilverBullet(): SilverBulletResult {
+  const now = new Date();
+  const h = now.getUTCHours();
+  const m = now.getUTCMinutes();
+  const t = h + m / 60;
+  const windows: { name: string; start: number; end: number }[] = [
+    { name: "London Open SB", start: 8,  end: 9  },
+    { name: "AM SB",          start: 15, end: 16 },
+    { name: "PM SB",          start: 19, end: 20 },
+  ];
+  for (const w of windows) {
+    if (t >= w.start && t < w.end) {
+      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
 function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
@@ -872,10 +896,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
   }
 
-  // ── Factor 5: Kill Zone (max 1.0) ──
+  // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
+  const silverBullet = detectSilverBullet();
   {
-    const pts = session.isKillZone ? 1 : 0;
-    const detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    let pts = session.isKillZone ? 1 : 0;
+    let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
+      pts += 0.5;
+      detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+    }
     score += pts;
     factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
   }
@@ -1073,6 +1102,20 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail });
   }
 
+  // ── Factor 13: Silver Bullet Window (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "Outside Silver Bullet macro window";
+    if (config.useSilverBullet === false) {
+      detail = "Silver Bullet disabled";
+    } else if (silverBullet.active) {
+      pts = 1.0;
+      detail = `${silverBullet.window} active — ${silverBullet.minutesRemaining}min remaining (ICT macro window)`;
+    }
+    score += pts;
+    factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1091,14 +1134,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
   const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
+  const sbSummary = silverBullet.active ? ` | ${silverBullet.window}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet,
   };
 }
 
@@ -1192,6 +1236,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // Breaker Blocks + Unicorn Model (defaults true)
     useBreakerBlocks: strategy.useBreakerBlocks ?? true,
     useUnicornModel: strategy.useUnicornModel ?? true,
+    // Silver Bullet macro windows (defaults true)
+    useSilverBullet: strategy.useSilverBullet ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
