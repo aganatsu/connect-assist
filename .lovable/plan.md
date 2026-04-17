@@ -1,32 +1,33 @@
 
-User confirmed to proceed with the symbol mapping audit fixes from the previous (cancelled) message.
+The MetaAPI account `5e83d5a3-...` is returning 504 TimeoutError across ALL three regions (london, new-york, singapore) with the message: *"account is not connected to broker yet or request URL does not match account region"*. The Singapore region even fails DNS lookup.
 
-## Plan: Fix Symbol Mapping
+This is NOT a code/symbol mapping issue — it's a MetaAPI account state issue. The account is **not deployed/connected** in the MetaAPI dashboard. Until the account shows status `DEPLOYED` and connection state `CONNECTED` at MetaAPI, no symbol (NAS100, EURUSD, anything) will trigger.
 
-### Issues
-1. `resolveSymbol` in `broker-execute` is case-sensitive — UI uppercases keys but lookup may miss
-2. OANDA `place_order` bypasses `symbol_overrides` (hardcodes `replace("/", "_")`)
-3. `bot-scanner` mirror loop only filters MetaAPI — OANDA connections ignored
-4. Symbols with spaces (e.g. "US Oil") not normalized
-5. No validation that overrides exist at broker
+However, I can improve the bot so this is **visible** instead of silently failing, and confirm symbol resolution is correct.
 
-### Changes
+## Plan
 
-**`supabase/functions/broker-execute/index.ts`**
-- Make `resolveSymbol` normalize: trim + uppercase both pair and override keys, strip spaces and `/`
-- Use `resolveSymbol` for OANDA `place_order` too (instead of hardcoded `.replace("/", "_")`)
-- Apply same normalization in `account_summary`, `open_trades`, `symbol_specs` where symbol is referenced
-- Add a new `validate_symbol` action that calls broker symbol_specs and returns ok/error so UI can verify an override before saving
+### 1. Surface MetaAPI connection state in `broker-execute`
+Add a new action `connection_status` that calls MetaAPI's `/users/current/accounts/{id}` endpoint (provisioning API, not client API) to return the account's `state` (DEPLOYED/UNDEPLOYED) and `connectionStatus` (CONNECTED/DISCONNECTED). This tells the user exactly why trades aren't firing.
 
-**`supabase/functions/bot-scanner/index.ts`**
-- Update mirror query to include both `metaapi` AND `oanda` connections
-- Ensure resolved symbol passed to `place_order` uses the override map
+### 2. Show connection state in Settings → Broker
+Add a "Check status" button per MetaAPI connection that calls `connection_status` and displays a clear toast/badge:
+- ✅ Deployed + Connected — ready to trade
+- ⚠️ Deployed but Disconnected — broker login issue
+- ❌ Undeployed — needs deployment in MetaAPI dashboard
 
-**`src/pages/Settings.tsx`**
-- Normalize override keys consistently (trim + uppercase, strip spaces/slashes) before saving
-- Add a "Validate" button per override row that calls `validate_symbol` to confirm broker accepts it
+### 3. Log skipped brokers in scan logs
+In `bot-scanner` mirror loop, when a broker returns `fallback: true`, append a clear entry to `scan_logs.details_json` like `{ broker: "...", skipped: true, reason: "MetaAPI not connected" }` so the user sees per-broker status in the scan history UI instead of silent skips.
 
-### Files
-- `supabase/functions/broker-execute/index.ts`
-- `supabase/functions/bot-scanner/index.ts`
-- `src/pages/Settings.tsx`
+### 4. Verify NAS100 symbol resolution
+Add an explicit test: when user clicks "Validate" on a NAS100 override, log the resolved broker symbol that was tried (e.g. `USA100`, `NAS100.cash`) so user can confirm the override is correct.
+
+## Files
+- `supabase/functions/broker-execute/index.ts` — add `connection_status` action
+- `supabase/functions/bot-scanner/index.ts` — log per-broker skip reasons in scan details
+- `src/pages/Settings.tsx` — add "Check status" button per MetaAPI connection
+
+## What this fixes
+- You'll immediately see WHY NAS100 (and everything else) isn't triggering on MetaAPI: the account isn't connected at the broker level
+- Once you deploy/connect the account in the MetaAPI dashboard, trades will fire with the existing symbol resolution
+- Future broker outages will be visible in scan logs instead of silently skipped
