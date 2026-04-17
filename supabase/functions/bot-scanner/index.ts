@@ -2343,6 +2343,7 @@ async function runScanForUser(supabase: any, userId: string) {
               .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
+              const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               for (const conn of connections) {
                 try {
                   if (conn.broker_type !== "metaapi") {
