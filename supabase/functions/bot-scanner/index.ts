@@ -413,6 +413,94 @@ function detectOrderBlocks(candles: Candle[]): OrderBlock[] {
   return obs;
 }
 
+interface BreakerBlock {
+  type: "bullish_breaker" | "bearish_breaker";
+  high: number;
+  low: number;
+  mitigatedAt: number;
+  originalOBType: "bullish" | "bearish";
+  isActive: boolean;
+}
+
+interface UnicornSetup {
+  type: "bullish_unicorn" | "bearish_unicorn";
+  breakerHigh: number;
+  breakerLow: number;
+  fvgHigh: number;
+  fvgLow: number;
+  overlapHigh: number;
+  overlapLow: number;
+}
+
+function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]): BreakerBlock[] {
+  const breakers: BreakerBlock[] = [];
+  for (const ob of orderBlocks) {
+    if (!ob.mitigated) continue;
+    // A bullish OB that broke = bearish breaker (former support is now resistance)
+    // A bearish OB that broke = bullish breaker (former resistance is now support)
+    const breakerType: "bullish_breaker" | "bearish_breaker" =
+      ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
+
+    // Find first candle index after the OB where the OB was clearly broken
+    // (close beyond OB body indicates mitigation/break)
+    let mitigatedAt = ob.index;
+    for (let j = ob.index + 1; j < candles.length; j++) {
+      if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
+      if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
+    }
+
+    // Check if the breaker zone has already been retested and rejected after mitigation
+    let isActive = true;
+    for (let j = mitigatedAt + 1; j < candles.length; j++) {
+      const c = candles[j];
+      const enteredZone = c.high >= ob.low && c.low <= ob.high;
+      if (!enteredZone) continue;
+      if (breakerType === "bearish_breaker") {
+        // expected to reject down — if a later candle closed back below ob.low, it was used
+        if (c.close < ob.low) { isActive = false; break; }
+      } else {
+        if (c.close > ob.high) { isActive = false; break; }
+      }
+    }
+
+    breakers.push({
+      type: breakerType,
+      high: ob.high,
+      low: ob.low,
+      mitigatedAt,
+      originalOBType: ob.type,
+      isActive,
+    });
+  }
+  return breakers.filter(b => b.isActive);
+}
+
+function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairValueGap[]): UnicornSetup[] {
+  const unicorns: UnicornSetup[] = [];
+  const activeFVGs = fvgs.filter(f => !f.mitigated);
+  for (const breaker of breakerBlocks) {
+    if (!breaker.isActive) continue;
+    const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
+    for (const fvg of activeFVGs) {
+      if (fvg.type !== wantFVGType) continue;
+      const overlapLow = Math.max(breaker.low, fvg.low);
+      const overlapHigh = Math.min(breaker.high, fvg.high);
+      if (overlapLow < overlapHigh) {
+        unicorns.push({
+          type: breaker.type === "bullish_breaker" ? "bullish_unicorn" : "bearish_unicorn",
+          breakerHigh: breaker.high,
+          breakerLow: breaker.low,
+          fvgHigh: fvg.high,
+          fvgLow: fvg.low,
+          overlapHigh,
+          overlapLow,
+        });
+      }
+    }
+  }
+  return unicorns;
+}
+
 function detectFVGs(candles: Candle[]): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
   for (let i = 2; i < candles.length; i++) {
@@ -718,6 +806,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const displacement = detectDisplacement(candles);
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
+  // Breaker Blocks + Unicorn Setups (computed early, scored after direction)
+  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles) : [];
+  const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
+
   // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
   {
     let pts = 0;
@@ -933,6 +1025,54 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 11: Breaker Block (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No active breaker block aligned with signal";
+    if (config.useBreakerBlocks !== false && direction && breakerBlocks.length > 0) {
+      const wantType = direction === "long" ? "bullish_breaker" : "bearish_breaker";
+      const aligned = breakerBlocks.find(b => b.type === wantType);
+      if (aligned) {
+        const mid = (aligned.high + aligned.low) / 2;
+        const distPct = Math.abs(lastPrice - mid) / lastPrice;
+        if (distPct <= 0.01) {
+          pts = 1.0;
+          detail = `Price near ${aligned.type.replace("_", " ")} at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)}`;
+        } else {
+          detail = `${aligned.type.replace("_", " ")} exists at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)} but price too far (${(distPct * 100).toFixed(2)}%)`;
+        }
+      }
+    } else if (config.useBreakerBlocks === false) {
+      detail = "Breaker Blocks disabled";
+    }
+    score += pts;
+    factors.push({ name: "Breaker Block", present: pts > 0, weight: 1.0, detail });
+  }
+
+  // ── Factor 12: Unicorn Model (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "No unicorn (Breaker + FVG overlap) aligned with signal";
+    if (config.useUnicornModel !== false && direction && unicornSetups.length > 0) {
+      const wantType = direction === "long" ? "bullish_unicorn" : "bearish_unicorn";
+      const aligned = unicornSetups.find(u => u.type === wantType
+        && lastPrice >= u.overlapLow && lastPrice <= u.overlapHigh);
+      if (aligned) {
+        pts = 1.5;
+        detail = `Unicorn: Breaker + FVG overlap at ${aligned.overlapLow.toFixed(5)}-${aligned.overlapHigh.toFixed(5)}`;
+      } else {
+        const anyAligned = unicornSetups.find(u => u.type === wantType);
+        if (anyAligned) {
+          detail = `Unicorn zone exists at ${anyAligned.overlapLow.toFixed(5)}-${anyAligned.overlapHigh.toFixed(5)} but price outside overlap`;
+        }
+      }
+    } else if (config.useUnicornModel === false) {
+      detail = "Unicorn Model disabled";
+    }
+    score += pts;
+    factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -958,7 +1098,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups,
   };
 }
 
@@ -1049,6 +1189,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
     // Displacement scoring (defaults true)
     useDisplacement: strategy.useDisplacement ?? true,
+    // Breaker Blocks + Unicorn Model (defaults true)
+    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
+    useUnicornModel: strategy.useUnicornModel ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
