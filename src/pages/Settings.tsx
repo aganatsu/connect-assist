@@ -110,9 +110,29 @@ function BrokerSettings() {
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
 
+  // Normalize override KEYS consistently (uppercase, strip slashes/spaces/dots/dashes/underscores).
+  // VALUES (broker symbol) are kept exactly as the user typed them.
+  const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
+
+  const validateBrokerSymbol = async (connectionId: string, appSymbol: string) => {
+    const t = toast.loading(`Validating ${appSymbol}...`);
+    try {
+      const { data, error } = await supabase.functions.invoke("broker-execute", {
+        body: { action: "validate_symbol", connectionId, symbol: appSymbol },
+      });
+      if (error) throw error;
+      toast.dismiss(t);
+      if (data?.ok) toast.success(`✓ ${appSymbol} → ${data.brokerSymbol}`);
+      else toast.error(`✗ ${data?.brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);
+    } catch (e: any) {
+      toast.dismiss(t);
+      toast.error(`Validation failed: ${e.message}`);
+    }
+  };
+
   const addOverride = () => {
     if (!newOverrideSymbol.trim() || !newOverrideSuffix.trim()) return;
-    setSymbolOverrides(prev => ({ ...prev, [newOverrideSymbol.trim().toUpperCase()]: newOverrideSuffix.trim() }));
+    setSymbolOverrides(prev => ({ ...prev, [normalizeOverrideKey(newOverrideSymbol)]: newOverrideSuffix.trim() }));
     setNewOverrideSymbol("");
     setNewOverrideSuffix("");
   };
