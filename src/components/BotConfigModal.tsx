@@ -682,6 +682,19 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 )}
               </>
             )}
+            {config && filteredTabs.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                <Search className="h-8 w-8 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No settings match "{search}"</p>
+                <button
+                  onClick={() => setSearch("")}
+                  className="text-xs text-primary hover:underline mt-2"
+                >
+                  Clear search
+                </button>
+              </div>
+            )}
+            </HighlightContext.Provider>
           </div>
         </div>
       </div>
