@@ -958,7 +958,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement,
   };
 }
 
