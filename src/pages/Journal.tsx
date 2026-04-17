@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { tradesApi } from "@/lib/api";
+import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { toast } from "sonner";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -304,7 +305,9 @@ export default function JournalView() {
               {selectedTrade.reasoning_json && (
                 <div>
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Signal Reasoning</p>
-                  <pre className="text-[10px] text-muted-foreground bg-secondary/30 border border-border p-2 whitespace-pre-wrap font-mono">{JSON.stringify(selectedTrade.reasoning_json, null, 2)}</pre>
+                  <div className="bg-secondary/30 border border-border p-2">
+                    <SignalReasoningCard signalReason={typeof selectedTrade.reasoning_json === "string" ? selectedTrade.reasoning_json : JSON.stringify(selectedTrade.reasoning_json)} />
+                  </div>
                 </div>
               )}
 

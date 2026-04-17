@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 import { CloseAuditLog } from "@/components/CloseAuditLog";
+import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
@@ -303,7 +304,7 @@ export default function BotView() {
                             <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
                             <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
                             <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
-                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground truncate max-w-[100px]">{p.signalReason || "—"}</td>
+                            <td className="py-1.5 px-1 text-[10px] truncate max-w-[140px]"><SignalReasoningCard signalReason={p.signalReason || ""} compact /></td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
                                 onClick={() => {
@@ -320,7 +321,7 @@ export default function BotView() {
                               <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
                                 <div className="space-y-1 text-[10px]">
                                   <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
-                                  <p className="text-foreground">{p.signalReason || "No reasoning recorded"}</p>
+                                  <SignalReasoningCard signalReason={p.signalReason || ""} />
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
                                     <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{p.orderId}</span></div>
