@@ -1102,6 +1102,20 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail });
   }
 
+  // ── Factor 13: Silver Bullet Window (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "Outside Silver Bullet macro window";
+    if (config.useSilverBullet === false) {
+      detail = "Silver Bullet disabled";
+    } else if (silverBullet.active) {
+      pts = 1.0;
+      detail = `${silverBullet.window} active — ${silverBullet.minutesRemaining}min remaining (ICT macro window)`;
+    }
+    score += pts;
+    factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
