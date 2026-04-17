@@ -157,6 +157,24 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
   ];
 
+  // Search filtering — compute once per render
+  const query = search.trim().toLowerCase();
+  const matches = query
+    ? SEARCH_INDEX.filter(item =>
+        item.label.toLowerCase().includes(query) ||
+        item.keywords.some(k => k.toLowerCase().includes(query))
+      )
+    : [];
+  const matchedTabIds = new Set(matches.map(m => m.tab));
+  const matchedLabels = new Set(matches.map(m => m.label.toLowerCase()));
+  const filteredTabs = query ? tabs.filter(t => matchedTabIds.has(t.id)) : tabs;
+  // Auto-select first matching tab when search yields results but current tab no longer matches
+  const effectiveActiveTab =
+    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab)
+      ? filteredTabs[0].id
+      : activeTab;
+
+
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-card border border-border w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
