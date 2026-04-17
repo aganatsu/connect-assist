@@ -1,36 +1,26 @@
 
 
-## Plan: Add searchable filter to Bot Configuration modal
+## Plan: Add timestamp columns to Open / Closed Today / All History tables
 
-User wants a search input inside the Bot Config modal that filters fields/tabs as they type — similar to a command palette / settings search.
+The previous plan for this was approved but the edits never landed in `BotView.tsx` (build failed on an unrelated R2 timeout, then a different file got edited). Re-presenting the same scoped change so it can actually be applied.
 
-Need to inspect `BotConfigModal.tsx` to see structure (tabs, fields) before finalizing.
+### Changes — `src/pages/BotView.tsx` only
 
-### What I'll build
+**A. Open Positions table**
+- Add `<th>Opened</th>` header between Symbol and Direction.
+- Add matching `<td>` rendering `formatBrokerTime(p.openTime)` in `text-[10px] font-mono text-muted-foreground`.
+- Bump the expanded-row `colSpan` by +1.
 
-1. **Add a search input at the top of `BotConfigModal`** (sticky, just under the dialog header)
-   - Icon + input, placeholder "Search settings… (e.g. trailing stop, spread, news)"
-   - Uses existing `Input` + `Search` lucide icon, dark-theme tokens
+**B. `TradeHistoryTable` (used by both Closed Today & All History)**
+- Add two leading columns: **Opened** and **Closed**.
+- Cells render `formatBrokerTime(t.openTime)` and `formatBrokerTime(t.closedAt)` in the same muted mono style.
 
-2. **Filtering behavior**
-   - Build a static index of every setting: `{ tab, label, keywords[], fieldId }` derived from the modal's existing tabs/fields
-   - As user types: case-insensitive match against label + keywords
-   - When query is non-empty:
-     - Hide the normal tab strip
-     - Render a flat **Results list** grouped by tab (e.g. "Risk › Max Daily Loss", "Exits › Trailing Stop Pips") — each row is the actual control (input/switch/select), not just a link, so they can edit inline
-     - Empty state: "No settings match 'xyz'"
-   - When query is empty: restore normal tabbed view, no behavior change
+**C. Import**
+- `import { formatBrokerTime } from "@/lib/formatTime";` if not already imported.
 
-3. **Click-to-jump fallback** (optional row affordance)
-   - Each result row also shows the tab name as a small badge; clicking the badge switches to that tab and clears the search, scrolling/highlighting the field
+### Format
+Uses the existing project-wide helper → `"04/17, 02:05:23 PM"`, matching `BrokerLog` and `CloseAuditLog`.
 
-4. **Keyboard**
-   - Auto-focus search on modal open
-   - `Esc` clears query first, then closes modal on second press
-   - `↑/↓` to move highlight, `Enter` to jump to that field's tab
-
-### Scope notes
-- Frontend-only, single file: `src/components/BotConfigModal.tsx`
-- No bot logic touched (memory constraint respected) — purely a UI filter over existing form fields
-- No new deps; uses existing shadcn `Input`, `Badge`, lucide `Search`
+### Scope
+Frontend-only, single file. No bot logic, no DB, no edge functions. Memory constraint respected.
 
