@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useContext, createContext } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,11 +6,88 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search } from "lucide-react";
+
+// Index of every searchable setting in the modal — used by the search bar to filter
+// tabs and to highlight matching fields. Keep keywords broad so users can find
+// settings by intuition (e.g. "trailing", "spread", "news", "drawdown").
+const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
+  // Trading Style
+  { tab: "tradingStyle", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "auto", "style", "mode"] },
+  // Strategy
+  { tab: "strategy", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
+  { tab: "strategy", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
+  { tab: "strategy", label: "Min Factor Count", keywords: ["factor", "factors", "count", "breadth"] },
+  { tab: "strategy", label: "Order Blocks", keywords: ["ob", "order block", "smc", "institutional"] },
+  { tab: "strategy", label: "Fair Value Gaps", keywords: ["fvg", "imbalance", "gap"] },
+  { tab: "strategy", label: "Liquidity Sweeps", keywords: ["liquidity", "sweep", "pool"] },
+  { tab: "strategy", label: "Structure Breaks", keywords: ["bos", "choch", "structure", "break"] },
+  { tab: "strategy", label: "Displacement Detection", keywords: ["displacement", "candle"] },
+  { tab: "strategy", label: "Breaker Blocks", keywords: ["breaker", "flip", "failed ob"] },
+  { tab: "strategy", label: "Unicorn Model", keywords: ["unicorn", "breaker", "fvg overlap"] },
+  { tab: "strategy", label: "Silver Bullet Windows", keywords: ["silver bullet", "ict", "window", "macro"] },
+  { tab: "strategy", label: "ICT Macro Windows", keywords: ["macro", "ict", "reprice"] },
+  { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
+  { tab: "strategy", label: "VWAP Confluence", keywords: ["vwap", "anchored", "session"] },
+  { tab: "strategy", label: "AMD Phase Detection", keywords: ["amd", "accumulation", "manipulation", "distribution", "phase"] },
+  { tab: "strategy", label: "Require HTF Bias Alignment", keywords: ["htf", "bias", "higher timeframe", "alignment"] },
+  { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
+  { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
+  { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
+  // Risk
+  { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
+  { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
+  { tab: "risk", label: "Max Concurrent Trades", keywords: ["concurrent", "open", "positions", "max"] },
+  { tab: "risk", label: "Min R:R Ratio", keywords: ["rr", "risk reward", "ratio", "minimum"] },
+  { tab: "risk", label: "Portfolio Heat (%)", keywords: ["portfolio", "heat", "exposure", "total"] },
+  { tab: "risk", label: "Max Per Symbol", keywords: ["per symbol", "instrument", "max", "duplicate"] },
+  { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
+  // Entry / Exit
+  { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
+  { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
+  { tab: "entry_exit", label: "Close on Reverse Signal", keywords: ["reverse", "close", "opposite"] },
+  { tab: "entry_exit", label: "SL Method", keywords: ["sl", "stop loss", "method", "structure", "atr", "fixed pips"] },
+  { tab: "entry_exit", label: "Fixed SL Pips", keywords: ["sl", "fixed", "pips"] },
+  { tab: "entry_exit", label: "ATR Multiple", keywords: ["atr", "multiple", "sl"] },
+  { tab: "entry_exit", label: "ATR Period", keywords: ["atr", "period", "candles"] },
+  { tab: "entry_exit", label: "TP Method", keywords: ["tp", "take profit", "method", "rr", "next level"] },
+  { tab: "entry_exit", label: "Fixed TP Pips", keywords: ["tp", "fixed", "pips"] },
+  { tab: "entry_exit", label: "R:R Ratio", keywords: ["rr", "risk reward", "ratio", "tp"] },
+  { tab: "entry_exit", label: "TP ATR Multiple", keywords: ["tp", "atr", "multiple"] },
+  { tab: "entry_exit", label: "Trailing Stop", keywords: ["trailing", "stop", "trail"] },
+  { tab: "entry_exit", label: "Break Even", keywords: ["break even", "breakeven", "be"] },
+  { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out"] },
+  { tab: "entry_exit", label: "Time-Based Exit (hours)", keywords: ["time", "exit", "hours", "auto close"] },
+  // Instruments
+  { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
+  { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
+  { tab: "instruments", label: "Max Spread (pips)", keywords: ["spread", "max", "pips"] },
+  // Sessions
+  { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "sydney"] },
+  { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
+  { tab: "sessions", label: "Enable News Filter", keywords: ["news", "nfp", "fomc", "cpi", "economic", "filter"] },
+  { tab: "sessions", label: "Pause Window (minutes)", keywords: ["news", "pause", "window", "minutes"] },
+  // Protection
+  { tab: "protection", label: "Max Daily Loss ($)", keywords: ["daily loss", "kill switch", "dollar", "limit"] },
+  { tab: "protection", label: "Max Consecutive Losses", keywords: ["consecutive", "losses", "streak", "pause"] },
+  { tab: "protection", label: "Equity Circuit Breaker (%)", keywords: ["circuit breaker", "equity", "emergency", "stop"] },
+  // Opening Range
+  { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
+  { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
+  { tab: "openingRange", label: "Daily Bias from OR", keywords: ["bias", "or", "daily"] },
+  { tab: "openingRange", label: "Judas Swing Detection", keywords: ["judas", "swing", "fake", "sweep"] },
+  { tab: "openingRange", label: "OR Key Levels", keywords: ["key levels", "or", "support", "resistance"] },
+  { tab: "openingRange", label: "Premium/Discount from OR", keywords: ["premium", "discount", "or"] },
+  { tab: "openingRange", label: "Wait for OR Completion", keywords: ["wait", "completion", "or"] },
+];
+
+const HighlightContext = createContext<Set<string>>(new Set());
+
 
 const PRESETS = {
   conservative: { confluenceThreshold: 6.5, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, tradingStyle: "swing_trader" as const, description: "Low risk, swing trading" },
@@ -31,10 +108,21 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
   const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
   const [config, setConfig] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("strategy");
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (rawConfig && open) setConfig(JSON.parse(JSON.stringify(rawConfig)));
   }, [rawConfig, open]);
+
+  // Reset search + autofocus when modal opens
+  useEffect(() => {
+    if (open) {
+      setSearch("");
+      // Defer to next tick so input is mounted
+      setTimeout(() => searchRef.current?.focus(), 50);
+    }
+  }, [open]);
 
   const saveMut = useMutation({
     mutationFn: () => botConfigApi.update(config, connectionId),
@@ -71,6 +159,24 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
     { id: "protection", label: "Protection", icon: ShieldAlert },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
   ];
+
+  // Search filtering — compute once per render
+  const query = search.trim().toLowerCase();
+  const matches = query
+    ? SEARCH_INDEX.filter(item =>
+        item.label.toLowerCase().includes(query) ||
+        item.keywords.some(k => k.toLowerCase().includes(query))
+      )
+    : [];
+  const matchedTabIds = new Set(matches.map(m => m.tab));
+  const matchedLabels = new Set(matches.map(m => m.label.toLowerCase()));
+  const filteredTabs = query ? tabs.filter(t => matchedTabIds.has(t.id)) : tabs;
+  // Auto-select first matching tab when search yields results but current tab no longer matches
+  const effectiveActiveTab =
+    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab)
+      ? filteredTabs[0].id
+      : activeTab;
+
 
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -116,27 +222,78 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
           </div>
         </div>
 
+        {/* Search Bar */}
+        <div className="px-6 py-2.5 border-b border-border bg-background/40">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              ref={searchRef}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Escape") {
+                  if (search) {
+                    e.stopPropagation();
+                    setSearch("");
+                  } else {
+                    onClose();
+                  }
+                }
+              }}
+              placeholder="Search settings… (e.g. trailing stop, spread, news, drawdown)"
+              className="h-8 pl-8 text-xs bg-secondary/40 border-border"
+            />
+            {query && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {query && (
+            <p className="text-[10px] text-muted-foreground mt-1.5">
+              {matches.length === 0
+                ? `No settings match "${search}"`
+                : `${matches.length} setting${matches.length === 1 ? "" : "s"} across ${filteredTabs.length} tab${filteredTabs.length === 1 ? "" : "s"}`}
+            </p>
+          )}
+        </div>
+
         {/* Body: Tab nav + content */}
         <div className="flex flex-1 min-h-0">
           {/* Vertical Tab Nav */}
-          <div className="w-44 border-r border-border py-2 shrink-0">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${activeTab === tab.id ? "bg-primary/10 text-primary border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-l-2 border-transparent"}`}
-              >
-                <tab.icon className="h-3.5 w-3.5 shrink-0" />
-                {tab.label}
-              </button>
-            ))}
+          <div className="w-44 border-r border-border py-2 shrink-0 overflow-y-auto">
+            {filteredTabs.length === 0 && (
+              <p className="px-4 py-3 text-[10px] text-muted-foreground italic">No matching tabs</p>
+            )}
+            {filteredTabs.map(tab => {
+              const isActive = effectiveActiveTab === tab.id;
+              const matchCount = query ? matches.filter(m => m.tab === tab.id).length : 0;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${isActive ? "bg-primary/10 text-primary border-l-2 border-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/30 border-l-2 border-transparent"}`}
+                >
+                  <tab.icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 text-left">{tab.label}</span>
+                  {matchCount > 0 && (
+                    <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-mono">{matchCount}</Badge>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto p-6">
-            {config && (
+            <HighlightContext.Provider value={matchedLabels}>
+            {config && filteredTabs.length > 0 && (
               <>
-                {activeTab === "tradingStyle" && (
+                {effectiveActiveTab === "tradingStyle" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Style" description="Choose how the bot trades — this overrides entry timeframe, TP/SL ratios, and hold duration" />
                     <div className="grid grid-cols-2 gap-3">
@@ -177,7 +334,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "strategy" && (
+                {effectiveActiveTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
                     <FieldGroup label="Auto Scan Interval" description="How often the bot scans for new trade setups (in seconds)">
@@ -237,7 +394,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "risk" && (
+                {effectiveActiveTab === "risk" && (
                   <div className="space-y-5">
                     <SectionHeader title="Risk Management" description="Control position sizing and drawdown limits" />
                     <div className="grid grid-cols-2 gap-4">
@@ -268,7 +425,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "entry_exit" && (
+                {effectiveActiveTab === "entry_exit" && (
                   <div className="space-y-5">
                     <SectionHeader title="Entry & Exit Rules" description="Configure trade entry timing and exit strategies" />
                     <div className="space-y-4">
@@ -368,7 +525,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "instruments" && (
+                {effectiveActiveTab === "instruments" && (
                   <div className="space-y-5">
                     <SectionHeader title="Instruments" description="Select which instruments to scan" />
                     <div className="flex items-center justify-between mb-2">
@@ -433,7 +590,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "sessions" && (
+                {effectiveActiveTab === "sessions" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during" />
                     <div className="grid grid-cols-2 gap-3">
@@ -487,7 +644,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "protection" && (
+                {effectiveActiveTab === "protection" && (
                   <div className="space-y-5">
                     <SectionHeader title="Protection" description="Safety limits and circuit breakers" />
                     <div className="grid grid-cols-2 gap-4">
@@ -507,7 +664,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "openingRange" && (
+                {effectiveActiveTab === "openingRange" && (
                   <div className="space-y-5">
                     <SectionHeader title="Opening Range" description="Use the first N hourly candles of the trading day to derive bias, levels, and filters" />
                     <ToggleField label="Enable Opening Range" description="Master toggle — all sub-features require this to be on" checked={config.openingRange?.enabled ?? false} onChange={v => updateField('openingRange', 'enabled', v)} />
@@ -528,6 +685,19 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 )}
               </>
             )}
+            {config && filteredTabs.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-full text-center py-12">
+                <Search className="h-8 w-8 text-muted-foreground/40 mb-3" />
+                <p className="text-sm text-muted-foreground">No settings match "{search}"</p>
+                <button
+                  onClick={() => setSearch("")}
+                  className="text-xs text-primary hover:underline mt-2"
+                >
+                  Clear search
+                </button>
+              </div>
+            )}
+            </HighlightContext.Provider>
           </div>
         </div>
       </div>
@@ -545,10 +715,12 @@ function SectionHeader({ title, description }: { title: string; description: str
 }
 
 function FieldGroup({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
+  const highlight = useContext(HighlightContext);
+  const isMatch = highlight.has(label.toLowerCase());
   return (
-    <div className="space-y-1.5">
+    <div className={`space-y-1.5 transition-all ${isMatch ? "ring-1 ring-primary/60 bg-primary/5 rounded-sm p-2 -m-2" : ""}`}>
       <div>
-        <Label className="text-xs font-medium">{label}</Label>
+        <Label className={`text-xs font-medium ${isMatch ? "text-primary" : ""}`}>{label}</Label>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>
       {children}
@@ -557,10 +729,12 @@ function FieldGroup({ label, description, children }: { label: string; descripti
 }
 
 function ToggleField({ label, description, checked, onChange }: { label: string; description?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  const highlight = useContext(HighlightContext);
+  const isMatch = highlight.has(label.toLowerCase());
   return (
-    <div className="flex items-start justify-between gap-3 p-3 border border-border hover:border-border/80 transition-colors">
+    <div className={`flex items-start justify-between gap-3 p-3 border transition-colors ${isMatch ? "border-primary/60 bg-primary/5" : "border-border hover:border-border/80"}`}>
       <div>
-        <p className="text-xs font-medium">{label}</p>
+        <p className={`text-xs font-medium ${isMatch ? "text-primary" : ""}`}>{label}</p>
         {description && <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="shrink-0 mt-0.5" />
