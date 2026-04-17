@@ -673,15 +673,15 @@ function analyzeMarketStructure(candles: Candle[]) {
 
   for (let i = 1; i < highs.length; i++) {
     if (highs[i].price > highs[i - 1].price) {
-      if (currentTrend === "bearish") choch.push({ type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
-      else bos.push({ type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
+      if (currentTrend === "bearish") choch.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
+      else bos.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
       currentTrend = "bullish";
     }
   }
   for (let i = 1; i < lows.length; i++) {
     if (lows[i].price < lows[i - 1].price) {
-      if (currentTrend === "bullish") choch.push({ type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
-      else bos.push({ type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
+      if (currentTrend === "bullish") choch.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
+      else bos.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
       currentTrend = "bearish";
     }
   }
@@ -695,28 +695,95 @@ function analyzeMarketStructure(candles: Candle[]) {
   return { trend, swingPoints: swings, bos, choch };
 }
 
-function detectOrderBlocks(candles: Candle[]): OrderBlock[] {
-  const obs: OrderBlock[] = [];
-  for (let i = 2; i < candles.length; i++) {
+function detectOrderBlocks(
+  candles: Candle[],
+  structureBreaks?: { index: number; type: string }[],
+): OrderBlock[] {
+  const OB_RECENCY = 50; // only keep OBs from the last N candles
+  const OB_CAP = 5;      // max OBs to return
+  const BREAK_LOOKAHEAD = 10; // structure break must occur within N candles after OB
+  const recencyStart = Math.max(2, candles.length - OB_RECENCY);
+
+  const candidates: (OrderBlock & { quality: number })[] = [];
+  for (let i = recencyStart; i < candles.length; i++) {
     const prev = candles[i - 1], curr = candles[i];
+
+    // Bullish OB: last bearish candle before a bullish engulf that closes above prior high
     if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
-      const ob: OrderBlock = { index: i - 1, high: prev.high, low: prev.low, type: "bullish", datetime: prev.datetime, mitigated: false, mitigatedPercent: 0 };
+      // Use candle body (open-to-close) for OB zone per ICT methodology
+      const obHigh = Math.max(prev.open, prev.close); // = prev.open (bearish candle)
+      const obLow = Math.min(prev.open, prev.close);   // = prev.close
+      const ob: OrderBlock & { quality: number } = {
+        index: i - 1, high: obHigh, low: obLow, type: "bullish",
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+      };
+
+      // Check mitigation (price returns to 50% of OB body)
       for (let j = i + 1; j < candles.length; j++) {
         const mid = (ob.high + ob.low) / 2;
-        if (candles[j].low <= mid) { ob.mitigatedPercent = Math.min(100, ((ob.high - candles[j].low) / (ob.high - ob.low)) * 100); if (ob.mitigatedPercent >= 50) ob.mitigated = true; break; }
+        if (candles[j].low <= mid) {
+          ob.mitigatedPercent = Math.min(100, ((ob.high - candles[j].low) / (ob.high - ob.low)) * 100);
+          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+          break;
+        }
       }
-      obs.push(ob);
+
+      // Quality scoring: structure break requirement
+      if (structureBreaks && structureBreaks.length > 0) {
+        const hasBreak = structureBreaks.some(b =>
+          b.type === "bullish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD
+        );
+        if (hasBreak) ob.quality += 2;
+      } else {
+        ob.quality += 1; // no structure data available — don't penalize
+      }
+
+      // Recency bonus (newer OBs score higher)
+      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
+
+      candidates.push(ob);
     }
+
+    // Bearish OB: last bullish candle before a bearish engulf that closes below prior low
     if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
-      const ob: OrderBlock = { index: i - 1, high: prev.high, low: prev.low, type: "bearish", datetime: prev.datetime, mitigated: false, mitigatedPercent: 0 };
+      const obHigh = Math.max(prev.open, prev.close); // = prev.close (bullish candle)
+      const obLow = Math.min(prev.open, prev.close);   // = prev.open
+      const ob: OrderBlock & { quality: number } = {
+        index: i - 1, high: obHigh, low: obLow, type: "bearish",
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+      };
+
+      // Check mitigation
       for (let j = i + 1; j < candles.length; j++) {
         const mid = (ob.high + ob.low) / 2;
-        if (candles[j].high >= mid) { ob.mitigatedPercent = Math.min(100, ((candles[j].high - ob.low) / (ob.high - ob.low)) * 100); if (ob.mitigatedPercent >= 50) ob.mitigated = true; break; }
+        if (candles[j].high >= mid) {
+          ob.mitigatedPercent = Math.min(100, ((candles[j].high - ob.low) / (ob.high - ob.low)) * 100);
+          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+          break;
+        }
       }
-      obs.push(ob);
+
+      // Quality scoring: structure break requirement
+      if (structureBreaks && structureBreaks.length > 0) {
+        const hasBreak = structureBreaks.some(b =>
+          b.type === "bearish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD
+        );
+        if (hasBreak) ob.quality += 2;
+      } else {
+        ob.quality += 1;
+      }
+
+      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
+
+      candidates.push(ob);
     }
   }
-  return obs;
+
+  // Sort by quality descending, then by recency (index) descending
+  candidates.sort((a, b) => b.quality - a.quality || b.index - a.index);
+
+  // Cap at OB_CAP most relevant OBs
+  return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
 }
 
 interface BreakerBlock {
@@ -1108,8 +1175,16 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
  */
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
-  const orderBlocks = detectOrderBlocks(candles);
+  const structureBreaks = [...structure.bos, ...structure.choch];
+  let orderBlocks = detectOrderBlocks(candles, structureBreaks);
   const fvgs = detectFVGs(candles);
+
+  // FVG adjacency bonus: tag OBs that have an FVG within 5 candles
+  // This doesn't filter them out, but boosts quality for Factor 2 detail
+  for (const ob of orderBlocks) {
+    const hasFVGNearby = fvgs.some(f => Math.abs(f.index - ob.index) <= 5);
+    (ob as any).hasFVGAdjacency = hasFVGNearby;
+  }
   const liquidityPools = detectLiquidityPools(candles);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
@@ -1148,6 +1223,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 2: Order Block (max 2.0) ──
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
+  // OBs are now quality-gated: body-based zones, structure-break required, recency-filtered, capped at 5.
   {
     let pts = 0;
     let detail = "";
@@ -1156,13 +1232,14 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
       if (insideOB) {
         pts = 2.0;
-        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-        if ((insideOB as any).hasDisplacement) {
-          detail += " — formed with displacement (scored via Factor 10)";
-        }
+        const tags: string[] = [];
+        if ((insideOB as any).hasDisplacement) tags.push("displacement");
+        if ((insideOB as any).hasFVGAdjacency) tags.push("FVG adjacent");
+        detail = `Price inside ${insideOB.type} OB (body) at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+        if (tags.length > 0) detail += ` [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
         pts = 0.5;
-        detail = `${activeOBs.length} active OBs nearby`;
+        detail = `${activeOBs.length} quality-filtered OBs nearby (body zones, structure-break gated)`;
       }
     } else {
       detail = "Order Blocks disabled";
