@@ -1268,6 +1268,39 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 16: VWAP Confluence (max 1.0; 0.5 base near VWAP + bias-aligned, +0.5 rejection) ──
+  const _vwapSymbol = config._currentSymbol || "EUR/USD";
+  const _vwapPipSize = (SPECS[_vwapSymbol] || SPECS["EUR/USD"]).pipSize;
+  const vwap = calculateAnchoredVWAP(candles, _vwapPipSize);
+  {
+    let pts = 0;
+    let detail = "VWAP unavailable";
+    const proximityPips = config.vwapProximityPips ?? 15;
+    if (config.useVWAP === false) {
+      detail = "VWAP disabled";
+    } else if (vwap.value != null && vwap.distancePips != null) {
+      // Bias-aligned proximity: long needs price >= VWAP (or within proximity below); short the inverse
+      const aboveVwap = lastPrice >= vwap.value;
+      const belowVwap = lastPrice <= vwap.value;
+      const longAligned = direction === "long" && (aboveVwap || vwap.distancePips <= proximityPips);
+      const shortAligned = direction === "short" && (belowVwap || vwap.distancePips <= proximityPips);
+      if ((longAligned || shortAligned) && vwap.distancePips <= proximityPips) {
+        pts = 0.5;
+        detail = `Price ${vwap.distancePips.toFixed(1)} pips from session VWAP ${vwap.value.toFixed(5)} (bias-aligned)`;
+        if ((direction === "long" && vwap.rejection === "bullish") || (direction === "short" && vwap.rejection === "bearish")) {
+          pts += 0.5;
+          detail += ` + ${vwap.rejection} rejection wick at VWAP`;
+        }
+      } else if (direction) {
+        detail = `VWAP ${vwap.value.toFixed(5)} — price ${vwap.distancePips.toFixed(1)} pips away (no alignment)`;
+      } else {
+        detail = `VWAP ${vwap.value.toFixed(5)} — no signal direction`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "VWAP", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
