@@ -2518,7 +2518,14 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.rejectionReasons = failedGates.map(g => g.reason);
       }
     } else {
-      detail.status = analysis.score >= config.minConfluence ? (isPaused ? "paused" : "no_direction") : "below_threshold";
+      if (analysis.score < config.minConfluence) {
+        detail.status = "below_threshold";
+      } else if (minFactorGate && !factorCountOk) {
+        detail.status = "below_threshold";
+        detail.reason = `Only ${detail.factorCount}/${analysis.factors.length} factors (need ≥${pairConfig.minFactorCount})`;
+      } else {
+        detail.status = isPaused ? "paused" : "no_direction";
+      }
     }
 
     scanDetails.push(detail);
