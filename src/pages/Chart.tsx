@@ -148,15 +148,21 @@ export default function Chart() {
         {/* Analysis Panels */}
         {panelOpen && (
           <div className="w-96 overflow-y-auto space-y-0">
-            <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk"]}>
+            <Accordion type="multiple" defaultValue={["confluence", "extended", "structure", "checklist", "levels", "session", "premium", "risk", "botscan"]}>
               {/* Confluence Score */}
               <AccordionItem value="confluence">
                 <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 w-full">
                     <Zap className="h-3.5 w-3.5 text-primary" />
-                    Confluence Score
-                    <span className={`font-mono font-bold ml-auto ${confluenceScore >= 6 ? 'text-success' : confluenceScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
-                      {confluenceScore}/10
+                    Confluence
+                    <span className="ml-auto flex items-center gap-2">
+                      <span className={`font-mono font-bold ${confluenceScore >= 6 ? 'text-success' : confluenceScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`} title="SMC Score">
+                        SMC {confluenceScore}/10
+                      </span>
+                      <span className="text-muted-foreground/50">·</span>
+                      <span className={`font-mono font-bold ${extScore >= 6 ? 'text-success' : extScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`} title="Extended ICT Score">
+                        EXT {extScore}/10
+                      </span>
                     </span>
                   </span>
                 </AccordionTrigger>
@@ -171,6 +177,66 @@ export default function Chart() {
                     {analysis?.reasoning?.slice(0, 3).map((r: string, i: number) => (
                       <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
                     ))}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              {/* Extended ICT Factors */}
+              <AccordionItem value="extended">
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    ICT Extended Factors
+                    <span className={`font-mono font-bold ml-auto ${extScore >= 6 ? 'text-success' : extScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
+                      {extScore}/10
+                    </span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
+                    {ext ? (
+                      <>
+                        <FactorRow label="Displacement" pass={!!ext.displacement?.detected}
+                          detail={ext.displacement?.detected ? `${ext.displacement.count}× large body, last ${ext.displacement.lastDirection}` : 'No large-body candles'} />
+                        <FactorRow label="Breaker Blocks" pass={(ext.breakers?.length || 0) > 0}
+                          detail={(ext.breakers?.length || 0) > 0 ? `${ext.breakers.length} flipped OB(s)` : 'None active'} />
+                        <FactorRow label="Unicorn Setup" pass={(ext.unicorns?.length || 0) > 0}
+                          detail={(ext.unicorns?.length || 0) > 0 ? `${ext.unicorns.length} breaker+FVG overlap` : 'No overlap'} />
+                        <FactorRow label="Silver Bullet" pass={!!ext.silverBullet?.active}
+                          detail={ext.silverBullet?.active ? ext.silverBullet.window : 'Outside window'} />
+                        <FactorRow label="Macro Time" pass={!!ext.macroTime?.active}
+                          detail={ext.macroTime?.active ? `xx:${String(ext.macroTime.utcMinute).padStart(2,'0')} UTC` : 'Outside macro'} />
+                        <FactorRow label="VWAP" pass={ext.vwap?.vwap !== null}
+                          detail={ext.vwap?.vwap !== null ? `${ext.vwap.position} @ ${ext.vwap.vwap.toFixed(5)} (${ext.vwap.distance.toFixed(2)}%)` : 'N/A'} />
+                        <FactorRow label="Power of 3" pass={!!ext.powerOf3?.complete || !!ext.powerOf3?.manipulation}
+                          detail={ext.powerOf3?.complete ? `Complete · ${ext.powerOf3.expansion}` : ext.powerOf3?.manipulation ? `Phase: ${ext.powerOf3.phase} · ${ext.powerOf3.manipulation}` : `Phase: ${ext.powerOf3?.phase || 'unknown'}`} />
+                        <p className="text-[10px] text-muted-foreground/70 mt-1 italic">SMT divergence requires cross-pair data — see Bot Scan below</p>
+                      </>
+                    ) : <span className="text-muted-foreground">Loading…</span>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              {/* Bot Scan (live) */}
+              <AccordionItem value="botscan">
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Radio className="h-3.5 w-3.5 text-primary" />
+                    Bot Scan (live)
+                    {botScanSignal?.signal?.score != null && (
+                      <span className={`font-mono font-bold ml-auto ${botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
+                        {Number(botScanSignal.signal.score).toFixed(1)}/10
+                      </span>
+                    )}
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 text-[11px]">
+                    {botScanSignal?.signal ? (
+                      <BotScanInline signal={botScanSignal.signal} scannedAt={botScanSignal.scannedAt} />
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">No recent bot scan for {selectedSymbol}. The scanner runs on its own cycle — check back soon.</p>
+                    )}
                   </div>
                 </AccordionContent>
               </AccordionItem>
