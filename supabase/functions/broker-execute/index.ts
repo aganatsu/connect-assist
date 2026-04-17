@@ -107,8 +107,9 @@ Deno.serve(async (req) => {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
         const units = direction === "long" ? Math.round(size * 100000) : -Math.round(size * 100000);
+        const oandaInstrument = resolveOandaSymbol(symbol, conn);
         const orderBody: any = {
-          order: { type: "MARKET", instrument: symbol.replace("/", "_"), units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
+          order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
         };
         if (stopLoss) orderBody.order.stopLossOnFill = { price: stopLoss.toString(), timeInForce: "GTC" };
         if (takeProfit) orderBody.order.takeProfitOnFill = { price: takeProfit.toString() };
