@@ -279,7 +279,8 @@ function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandle
   return { detected: false, type: null, correlatedPair: corrPair, detail: `No SMT divergence vs ${corrPair}` };
 }
 
-
+// ─── Premium/Discount Zone Calculation ──────────────────────────────
+function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
 
   const swings = detectSwingPoints(candles);
