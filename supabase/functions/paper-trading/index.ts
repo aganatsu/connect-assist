@@ -505,8 +505,11 @@ Deno.serve(async (req) => {
             await supabase.from("paper_positions").delete().eq("id", pos.id);
             closedIds.push(pos.id);
 
-            // Mirror close to all broker connections
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            await logClose(supabase, user.id, pos, {
+              closeReason, closeSource: "auto_engine", pnl, exitPrice,
+            });
+            // Mirror close to ONLY the brokers this position was mirrored to at open time
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Auto-close broker mirror [${pos.position_id}] ${closeReason}: ${brokerCloseResults.join("; ")}`);
           }
         }
@@ -685,8 +688,11 @@ Deno.serve(async (req) => {
       // Remove position
       await supabase.from("paper_positions").delete().eq("id", pos.id);
 
-      // Mirror close to all broker connections
-      const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+      await logClose(supabase, user.id, pos, {
+        closeReason, closeSource: "user", pnl, exitPrice: ep,
+      });
+      // Mirror close ONLY to brokers this position was mirrored to at open time
+      const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
       console.log(`Manual close broker mirror [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
 
       return respond({ success: true, pnl, pnlPips, postMortem, brokerClose: brokerCloseResults });
@@ -737,8 +743,11 @@ Deno.serve(async (req) => {
               what_worked: postMortem.whatWorked, what_failed: postMortem.whatFailed,
               lesson_learned: postMortem.lessonLearned, detail_json: postMortem,
             });
-            // Mirror close to brokers
-            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol);
+            await logClose(supabase, user.id, pos, {
+              closeReason: "kill_switch", closeSource: "kill_switch", pnl, exitPrice: ep,
+            });
+            // Mirror close ONLY to brokers this position was mirrored to at open time
+            const brokerCloseResults = await closeBrokerPositions(supabase, user.id, pos.position_id, pos.symbol, pos.mirrored_connection_ids);
             console.log(`Kill switch broker close [${pos.position_id}]: ${brokerCloseResults.join("; ")}`);
           }
 
