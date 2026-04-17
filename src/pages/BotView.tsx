@@ -493,8 +493,8 @@ export default function BotView() {
         <div className="h-56 border-t border-border mt-2 pt-2 shrink-0 flex gap-0 min-h-0">
           {/* Left: Latest Scan Pairs (60%) */}
           <div className="w-[60%] flex flex-col min-h-0 border-r border-border pr-2">
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
+            <div className="flex items-center justify-between mb-1 gap-2">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate">
                 Latest Scan
                 {logs.length > 0 && logs[0]?.scanned_at && (
                   <span className="ml-2 text-foreground font-mono">
@@ -502,11 +502,23 @@ export default function BotView() {
                   </span>
                 )}
               </p>
-              {logs.length > 0 && (
-                <span className="text-[9px] text-muted-foreground">
-                  {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
-                </span>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {botConfig?.strategy && (
+                  <Badge
+                    variant="outline"
+                    className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
+                    title="Active confluence gate. Setups must clear both thresholds to fire."
+                  >
+                    Gate: ≥{(botConfig.strategy.confluenceThreshold ?? botConfig.strategy.minConfluenceScore ?? 5).toFixed(1)}
+                    {(botConfig.strategy.minFactorCount ?? 0) > 0 && ` · ≥${botConfig.strategy.minFactorCount}/17 factors`}
+                  </Badge>
+                )}
+                {logs.length > 0 && (
+                  <span className="text-[9px] text-muted-foreground">
+                    {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
+                  </span>
+                )}
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto">
               {(() => {

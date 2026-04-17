@@ -90,7 +90,7 @@ function getDefaultConfig() {
     strategy: {
       // Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only (0-10 scale, 17 factors)
       enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-      minConfluenceScore: 6.0, htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
+      minConfluenceScore: 6.0, minFactorCount: 0, htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
       obMustBeAtSwing: true, obInvalidationClose: true, obMitigationType: "touch",
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
