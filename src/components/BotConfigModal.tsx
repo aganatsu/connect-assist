@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,11 +6,85 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search } from "lucide-react";
+
+// Index of every searchable setting in the modal — used by the search bar to filter
+// tabs and to highlight matching fields. Keep keywords broad so users can find
+// settings by intuition (e.g. "trailing", "spread", "news", "drawdown").
+const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
+  // Trading Style
+  { tab: "tradingStyle", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "auto", "style", "mode"] },
+  // Strategy
+  { tab: "strategy", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
+  { tab: "strategy", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
+  { tab: "strategy", label: "Min Factor Count", keywords: ["factor", "factors", "count", "breadth"] },
+  { tab: "strategy", label: "Order Blocks", keywords: ["ob", "order block", "smc", "institutional"] },
+  { tab: "strategy", label: "Fair Value Gaps", keywords: ["fvg", "imbalance", "gap"] },
+  { tab: "strategy", label: "Liquidity Sweeps", keywords: ["liquidity", "sweep", "pool"] },
+  { tab: "strategy", label: "Structure Breaks", keywords: ["bos", "choch", "structure", "break"] },
+  { tab: "strategy", label: "Displacement Detection", keywords: ["displacement", "candle"] },
+  { tab: "strategy", label: "Breaker Blocks", keywords: ["breaker", "flip", "failed ob"] },
+  { tab: "strategy", label: "Unicorn Model", keywords: ["unicorn", "breaker", "fvg overlap"] },
+  { tab: "strategy", label: "Silver Bullet Windows", keywords: ["silver bullet", "ict", "window", "macro"] },
+  { tab: "strategy", label: "ICT Macro Windows", keywords: ["macro", "ict", "reprice"] },
+  { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
+  { tab: "strategy", label: "VWAP Confluence", keywords: ["vwap", "anchored", "session"] },
+  { tab: "strategy", label: "AMD Phase Detection", keywords: ["amd", "accumulation", "manipulation", "distribution", "phase"] },
+  { tab: "strategy", label: "Require HTF Bias Alignment", keywords: ["htf", "bias", "higher timeframe", "alignment"] },
+  { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
+  { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
+  { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
+  // Risk
+  { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
+  { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
+  { tab: "risk", label: "Max Concurrent Trades", keywords: ["concurrent", "open", "positions", "max"] },
+  { tab: "risk", label: "Min R:R Ratio", keywords: ["rr", "risk reward", "ratio", "minimum"] },
+  { tab: "risk", label: "Portfolio Heat (%)", keywords: ["portfolio", "heat", "exposure", "total"] },
+  { tab: "risk", label: "Max Per Symbol", keywords: ["per symbol", "instrument", "max", "duplicate"] },
+  { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
+  // Entry / Exit
+  { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
+  { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
+  { tab: "entry_exit", label: "Close on Reverse Signal", keywords: ["reverse", "close", "opposite"] },
+  { tab: "entry_exit", label: "SL Method", keywords: ["sl", "stop loss", "method", "structure", "atr", "fixed pips"] },
+  { tab: "entry_exit", label: "Fixed SL Pips", keywords: ["sl", "fixed", "pips"] },
+  { tab: "entry_exit", label: "ATR Multiple", keywords: ["atr", "multiple", "sl"] },
+  { tab: "entry_exit", label: "ATR Period", keywords: ["atr", "period", "candles"] },
+  { tab: "entry_exit", label: "TP Method", keywords: ["tp", "take profit", "method", "rr", "next level"] },
+  { tab: "entry_exit", label: "Fixed TP Pips", keywords: ["tp", "fixed", "pips"] },
+  { tab: "entry_exit", label: "R:R Ratio", keywords: ["rr", "risk reward", "ratio", "tp"] },
+  { tab: "entry_exit", label: "TP ATR Multiple", keywords: ["tp", "atr", "multiple"] },
+  { tab: "entry_exit", label: "Trailing Stop", keywords: ["trailing", "stop", "trail"] },
+  { tab: "entry_exit", label: "Break Even", keywords: ["break even", "breakeven", "be"] },
+  { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out"] },
+  { tab: "entry_exit", label: "Time-Based Exit (hours)", keywords: ["time", "exit", "hours", "auto close"] },
+  // Instruments
+  { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
+  { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
+  { tab: "instruments", label: "Max Spread (pips)", keywords: ["spread", "max", "pips"] },
+  // Sessions
+  { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "sydney"] },
+  { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
+  { tab: "sessions", label: "Enable News Filter", keywords: ["news", "nfp", "fomc", "cpi", "economic", "filter"] },
+  { tab: "sessions", label: "Pause Window (minutes)", keywords: ["news", "pause", "window", "minutes"] },
+  // Protection
+  { tab: "protection", label: "Max Daily Loss ($)", keywords: ["daily loss", "kill switch", "dollar", "limit"] },
+  { tab: "protection", label: "Max Consecutive Losses", keywords: ["consecutive", "losses", "streak", "pause"] },
+  { tab: "protection", label: "Equity Circuit Breaker (%)", keywords: ["circuit breaker", "equity", "emergency", "stop"] },
+  // Opening Range
+  { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
+  { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
+  { tab: "openingRange", label: "Daily Bias from OR", keywords: ["bias", "or", "daily"] },
+  { tab: "openingRange", label: "Judas Swing Detection", keywords: ["judas", "swing", "fake", "sweep"] },
+  { tab: "openingRange", label: "OR Key Levels", keywords: ["key levels", "or", "support", "resistance"] },
+  { tab: "openingRange", label: "Premium/Discount from OR", keywords: ["premium", "discount", "or"] },
+  { tab: "openingRange", label: "Wait for OR Completion", keywords: ["wait", "completion", "or"] },
+];
 
 const PRESETS = {
   conservative: { confluenceThreshold: 6.5, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, tradingStyle: "swing_trader" as const, description: "Low risk, swing trading" },
