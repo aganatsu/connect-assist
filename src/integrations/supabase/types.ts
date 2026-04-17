@@ -214,6 +214,7 @@ export type Database = {
           open_time: string
           order_id: string
           order_type: string | null
+          partial_tp_fired: boolean
           position_id: string
           position_status: string
           signal_reason: string | null
@@ -236,6 +237,7 @@ export type Database = {
           open_time: string
           order_id: string
           order_type?: string | null
+          partial_tp_fired?: boolean
           position_id: string
           position_status?: string
           signal_reason?: string | null
@@ -258,6 +260,7 @@ export type Database = {
           open_time?: string
           order_id?: string
           order_type?: string | null
+          partial_tp_fired?: boolean
           position_id?: string
           position_status?: string
           signal_reason?: string | null
