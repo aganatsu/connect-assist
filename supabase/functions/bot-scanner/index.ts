@@ -1707,12 +1707,15 @@ async function runScanForUser(supabase: any, userId: string) {
                       }),
                     });
                     const exBody = await exRes.text();
-                    if (exRes.ok) {
+                    let parsedEx: any = null;
+                    try { parsedEx = JSON.parse(exBody); } catch {}
+                    if (exRes.ok && !(parsedEx?.error)) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                     } else {
-                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${exBody.slice(0, 300)}`);
-                      mirrorResults.push(`${conn.display_name}: failed`);
+                      const reason = parsedEx?.error || exBody.slice(0, 200);
+                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
+                      mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
                     }
                     continue;
                   }
@@ -1728,18 +1731,23 @@ async function runScanForUser(supabase: any, userId: string) {
 
                    // ── Fetch per-broker account balance and recalc lot size ──
                    let brokerVolume = size;
-                   try {
-                     if (balanceCache[conn.id] === undefined) {
-                       const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
-                       if (balRes.ok) {
-                         const balData: any = await balRes.json();
-                         balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
-                       } else {
-                         console.warn(`Broker balance fetch failed [${conn.display_name}] ${balRes.status} — skipping mirror`);
-                         mirrorResults.push(`${conn.display_name}: skipped (no balance)`);
-                         continue;
+                     try {
+                       if (balanceCache[conn.id] === undefined) {
+                         const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
+                         if (balRes.ok) {
+                           const balData: any = await balRes.json();
+                           balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
+                         } else {
+                           const balErrText = await balRes.text();
+                           const notConnected = /not connected to broker|region/i.test(balErrText);
+                           const reason = notConnected
+                             ? "MetaAPI account not deployed/connected to broker"
+                             : `balance fetch ${balRes.status}`;
+                           console.warn(`Broker balance fetch failed [${conn.display_name}] ${balRes.status} — ${reason}`);
+                           mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
+                           continue;
+                         }
                        }
-                     }
                      const brokerBalance = balanceCache[conn.id];
                      if (!brokerBalance || brokerBalance <= 0) {
                        console.warn(`Broker [${conn.display_name}] balance is 0 — skipping mirror`);

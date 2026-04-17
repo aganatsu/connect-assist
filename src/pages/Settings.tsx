@@ -110,6 +110,33 @@ function BrokerSettings() {
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
 
+  const checkStatus = async (connectionId: string, name: string) => {
+    const t = toast.loading(`Checking ${name}...`);
+    try {
+      const { data, error } = await supabase.functions.invoke("broker-execute", {
+        body: { action: "connection_status", connectionId },
+      });
+      if (error) throw error;
+      toast.dismiss(t);
+      if (!data?.ok) {
+        toast.error(`✗ ${name}: ${data?.error || "status check failed"}${data?.details ? ` — ${data.details}` : ""}`, { duration: 8000 });
+        return;
+      }
+      const { state, connectionStatus, ready, region, server } = data;
+      const meta = [region && `region: ${region}`, server && `server: ${server}`].filter(Boolean).join(" · ");
+      if (ready) {
+        toast.success(`✓ ${name} — DEPLOYED + CONNECTED${meta ? ` (${meta})` : ""}`, { duration: 6000 });
+      } else if (state === "DEPLOYED") {
+        toast.warning(`⚠ ${name} — Deployed but ${connectionStatus}. Check broker login/credentials.${meta ? ` (${meta})` : ""}`, { duration: 10000 });
+      } else {
+        toast.error(`✗ ${name} — state: ${state}, connection: ${connectionStatus}. Deploy the account in your MetaAPI dashboard.`, { duration: 10000 });
+      }
+    } catch (e: any) {
+      toast.dismiss(t);
+      toast.error(`Status check failed: ${e.message}`);
+    }
+  };
+
   // Normalize override KEYS consistently (uppercase, strip slashes/spaces/dots/dashes/underscores).
   // VALUES (broker symbol) are kept exactly as the user typed them.
   const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
@@ -167,6 +194,7 @@ function BrokerSettings() {
                 <Button size="sm" variant="outline" onClick={() => { setSelectedConnection(c); setConfigModalOpen(true); }} title="Edit bot config for this connection">
                   <Wrench className="h-3 w-3" />
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => checkStatus(c.id, c.display_name)} title="Check broker connection state">Status</Button>
                 <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>

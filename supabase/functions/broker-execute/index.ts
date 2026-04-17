@@ -257,6 +257,39 @@ Deno.serve(async (req) => {
       throw new Error(`${action} not supported for broker type: ${conn.broker_type}`);
     }
 
+    if (action === "connection_status") {
+      if (conn.broker_type === "metaapi") {
+        // Provisioning API — returns account state regardless of broker connection
+        const provUrl = `https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${conn.account_id}`;
+        const res = await fetch(provUrl, { headers: { "auth-token": conn.api_key } });
+        const body = await res.text();
+        if (!res.ok) {
+          return respond({ ok: false, error: `MetaAPI provisioning ${res.status}`, details: body.slice(0, 300), fallback: true }, 200);
+        }
+        const info: any = JSON.parse(body);
+        return respond({
+          ok: true,
+          state: info.state ?? "UNKNOWN",          // DEPLOYED / UNDEPLOYED / DEPLOYING
+          connectionStatus: info.connectionStatus ?? "UNKNOWN", // CONNECTED / DISCONNECTED / DISCONNECTED_FROM_BROKER
+          name: info.name,
+          login: info.login,
+          server: info.server,
+          region: info.region,
+          ready: info.state === "DEPLOYED" && info.connectionStatus === "CONNECTED",
+        });
+      }
+      if (conn.broker_type === "oanda") {
+        const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/summary`, {
+          headers: { Authorization: `Bearer ${conn.api_key}` },
+        });
+        if (!res.ok) return respond({ ok: false, error: `OANDA ${res.status}`, fallback: true }, 200);
+        const acct = (await res.json()).account;
+        return respond({ ok: true, state: "DEPLOYED", connectionStatus: "CONNECTED", ready: true, name: acct.alias, login: acct.id });
+      }
+      throw new Error(`connection_status not supported for: ${conn.broker_type}`);
+    }
+
     if (action === "close_trade") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
