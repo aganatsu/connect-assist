@@ -806,6 +806,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const displacement = detectDisplacement(candles);
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
+  // Breaker Blocks + Unicorn Setups (computed early, scored after direction)
+  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles) : [];
+  const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
+
   // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
   {
     let pts = 0;
