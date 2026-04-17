@@ -105,10 +105,21 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
   const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
   const [config, setConfig] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("strategy");
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (rawConfig && open) setConfig(JSON.parse(JSON.stringify(rawConfig)));
   }, [rawConfig, open]);
+
+  // Reset search + autofocus when modal opens
+  useEffect(() => {
+    if (open) {
+      setSearch("");
+      // Defer to next tick so input is mounted
+      setTimeout(() => searchRef.current?.focus(), 50);
+    }
+  }, [open]);
 
   const saveMut = useMutation({
     mutationFn: () => botConfigApi.update(config, connectionId),
