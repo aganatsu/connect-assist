@@ -207,7 +207,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       </div>
                       {(config.strategy?.minFactorCount ?? 0) > 0 && (
                         <p className="text-[10px] text-muted-foreground mt-1.5">
-                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/17 factors. Tip: 13/17 factors typically scores 7.0–9.5 depending on which factors hit.
+                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/17 factors. Tip: During kill zones, 8–10/17 factors typically score 6.0–8.5. Outside kill zones, expect 5–7 factors and 4.0–6.0 scores.
                         </p>
                       )}
                     </FieldGroup>
