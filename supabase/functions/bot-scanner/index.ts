@@ -1360,6 +1360,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSilverBullet: strategy.useSilverBullet ?? true,
     // ICT Macro Windows (defaults true)
     useMacroWindows: strategy.useMacroWindows ?? true,
+    // SMT Divergence (defaults true)
+    useSMT: strategy.useSMT ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
