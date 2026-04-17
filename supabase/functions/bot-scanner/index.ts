@@ -714,28 +714,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Market Structure", present: pts > 0, weight: 2.0, detail: detail || "Ranging — no trend" });
   }
 
-  // ── Factor 2: Order Block (max 2.0) ──
-  {
-    let pts = 0;
-    let detail = "";
-    if (config.enableOB !== false) {
-      const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
-      const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
-      if (insideOB) {
-        pts = 2.0;
-        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-      } else if (activeOBs.length > 0) {
-        pts = 0.5;
-        detail = `${activeOBs.length} active OBs nearby`;
-      }
-    } else {
-      detail = "Order Blocks disabled";
-    }
-    score += pts;
-    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
-  }
-
-  // Displacement detection (used by OB/FVG bonus + Factor 10)
+  // Displacement detection (used by OB/FVG bonus + new factor below)
   const displacement = detectDisplacement(candles);
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
