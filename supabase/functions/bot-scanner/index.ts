@@ -2512,7 +2512,15 @@ async function runScanForUser(supabase: any, userId: string) {
     details_json: scanDetails,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId };
+  } finally {
+    // Always release the scan lock, even on error
+    try {
+      await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+    } catch (e: any) {
+      console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
+    }
+  }
 }
 
 function respond(data: any, status = 200) {
