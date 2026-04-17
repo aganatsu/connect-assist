@@ -9,7 +9,8 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
-import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Sparkles, Radio } from "lucide-react";
+import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Radio, ChevronRight } from "lucide-react";
+import { unifyConfluence } from "@/lib/confluenceUnify";
 
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
