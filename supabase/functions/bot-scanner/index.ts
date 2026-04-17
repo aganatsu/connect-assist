@@ -1836,15 +1836,21 @@ async function runScanForUser(supabase: any, userId: string) {
     const entryInterval = getYahooInterval(pairConfig.entryTimeframe);
     const entryRange = getYahooRange(pairConfig.entryTimeframe);
 
-    // Fetch entry TF, daily, and optionally 1h candles
+    // Fetch entry TF, daily, optionally 1h, and SMT correlated pair candles in parallel
+    const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
+    const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
+    const smtFlag = smtPair && YAHOO_SYMBOLS[smtPair] ? 1 : 0;
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
-    if (pairConfig.openingRange?.enabled) {
-      fetchPromises.push(fetchCandles(pair, "1h", "2d"));
-    }
-    const [candles, dailyCandles, hourlyCandles] = await Promise.all(fetchPromises);
+    if (orFlag) fetchPromises.push(fetchCandles(pair, "1h", "2d"));
+    if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
+    const fetched = await Promise.all(fetchPromises);
+    const candles = fetched[0];
+    const dailyCandles = fetched[1];
+    const hourlyCandles = orFlag ? fetched[2] : undefined;
+    const smtCandles = smtFlag ? fetched[2 + orFlag] : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -1865,6 +1871,8 @@ async function runScanForUser(supabase: any, userId: string) {
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
+    // Compute SMT divergence vs correlated pair (if available) and inject into config
+    pairConfig._smtResult = smtCandles ? detectSMTDivergence(pair, candles, smtCandles) : null;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
     const detail: any = {
