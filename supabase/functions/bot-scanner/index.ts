@@ -53,11 +53,16 @@ const DEFAULTS = {
 };
 
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
+function normalizeSymKey(s: string): string {
+  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
+}
 function resolveSymbol(pair: string, conn: any): string {
-  const base = pair.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  // Override = exact broker symbol (no suffix appended)
-  if (overrides[base]) return overrides[base];
+  const norm = normalizeSymKey(pair);
+  for (const [k, v] of Object.entries(overrides)) {
+    if (normalizeSymKey(k) === norm && v) return String(v);
+  }
+  const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
   return base + (conn.symbol_suffix || "");
 }
 
