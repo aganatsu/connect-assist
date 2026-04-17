@@ -23,7 +23,18 @@ export async function invokeFunction<T = any>(
     }
     if (isAuthError(error, data)) {
       await supabase.auth.signOut().catch(() => {});
-      if (typeof window !== "undefined") window.location.href = "/login";
+      if (typeof window !== "undefined") {
+        try {
+          const { toast } = await import("sonner");
+          toast.error("Session expired", {
+            description: "Redirecting you to sign in again…",
+            duration: 2500,
+          });
+        } catch {}
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 1800);
+      }
       throw new Error("Session expired. Please sign in again.");
     }
   }
