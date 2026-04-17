@@ -896,10 +896,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
   }
 
-  // ── Factor 5: Kill Zone (max 1.0) ──
+  // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
+  const silverBullet = detectSilverBullet();
   {
-    const pts = session.isKillZone ? 1 : 0;
-    const detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    let pts = session.isKillZone ? 1 : 0;
+    let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
+      pts += 0.5;
+      detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+    }
     score += pts;
     factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
   }
