@@ -1,16 +1,34 @@
 import { supabase } from "@/integrations/supabase/client";
 
+// Detect auth errors from the edge function (401 / Unauthorized / bad_jwt / missing sub claim)
+function isAuthError(error: any, data: any): boolean {
+  const msg = (error?.message || data?.error || "").toString().toLowerCase();
+  const status = error?.context?.status ?? error?.status;
+  if (status === 401 || status === 403) return true;
+  return /unauthor|invalid.*jwt|bad.?jwt|missing sub|jwt expired/.test(msg);
+}
+
 // Helper to invoke edge functions with typed responses
 export async function invokeFunction<T = any>(
   functionName: string,
   body: Record<string, any>
 ): Promise<T> {
-  const { data, error } = await supabase.functions.invoke(functionName, {
-    body,
-  });
+  let { data, error } = await supabase.functions.invoke(functionName, { body });
+
+  // If auth failed, try refreshing the session once and retry.
+  if (isAuthError(error, data)) {
+    const { error: refreshErr } = await supabase.auth.refreshSession();
+    if (!refreshErr) {
+      ({ data, error } = await supabase.functions.invoke(functionName, { body }));
+    }
+    if (isAuthError(error, data)) {
+      await supabase.auth.signOut().catch(() => {});
+      if (typeof window !== "undefined") window.location.href = "/login";
+      throw new Error("Session expired. Please sign in again.");
+    }
+  }
+
   if (error) throw new Error(error.message || `${functionName} failed`);
-  // Graceful fallback: edge function returned a structured error with fallback flag.
-  // Don't throw — return the payload so callers can decide how to handle it.
   if (data?.error && !data?.fallback) throw new Error(data.error);
   return data as T;
 }
