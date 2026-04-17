@@ -413,6 +413,94 @@ function detectOrderBlocks(candles: Candle[]): OrderBlock[] {
   return obs;
 }
 
+interface BreakerBlock {
+  type: "bullish_breaker" | "bearish_breaker";
+  high: number;
+  low: number;
+  mitigatedAt: number;
+  originalOBType: "bullish" | "bearish";
+  isActive: boolean;
+}
+
+interface UnicornSetup {
+  type: "bullish_unicorn" | "bearish_unicorn";
+  breakerHigh: number;
+  breakerLow: number;
+  fvgHigh: number;
+  fvgLow: number;
+  overlapHigh: number;
+  overlapLow: number;
+}
+
+function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]): BreakerBlock[] {
+  const breakers: BreakerBlock[] = [];
+  for (const ob of orderBlocks) {
+    if (!ob.mitigated) continue;
+    // A bullish OB that broke = bearish breaker (former support is now resistance)
+    // A bearish OB that broke = bullish breaker (former resistance is now support)
+    const breakerType: "bullish_breaker" | "bearish_breaker" =
+      ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
+
+    // Find first candle index after the OB where the OB was clearly broken
+    // (close beyond OB body indicates mitigation/break)
+    let mitigatedAt = ob.index;
+    for (let j = ob.index + 1; j < candles.length; j++) {
+      if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
+      if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
+    }
+
+    // Check if the breaker zone has already been retested and rejected after mitigation
+    let isActive = true;
+    for (let j = mitigatedAt + 1; j < candles.length; j++) {
+      const c = candles[j];
+      const enteredZone = c.high >= ob.low && c.low <= ob.high;
+      if (!enteredZone) continue;
+      if (breakerType === "bearish_breaker") {
+        // expected to reject down — if a later candle closed back below ob.low, it was used
+        if (c.close < ob.low) { isActive = false; break; }
+      } else {
+        if (c.close > ob.high) { isActive = false; break; }
+      }
+    }
+
+    breakers.push({
+      type: breakerType,
+      high: ob.high,
+      low: ob.low,
+      mitigatedAt,
+      originalOBType: ob.type,
+      isActive,
+    });
+  }
+  return breakers.filter(b => b.isActive);
+}
+
+function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairValueGap[]): UnicornSetup[] {
+  const unicorns: UnicornSetup[] = [];
+  const activeFVGs = fvgs.filter(f => !f.mitigated);
+  for (const breaker of breakerBlocks) {
+    if (!breaker.isActive) continue;
+    const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
+    for (const fvg of activeFVGs) {
+      if (fvg.type !== wantFVGType) continue;
+      const overlapLow = Math.max(breaker.low, fvg.low);
+      const overlapHigh = Math.min(breaker.high, fvg.high);
+      if (overlapLow < overlapHigh) {
+        unicorns.push({
+          type: breaker.type === "bullish_breaker" ? "bullish_unicorn" : "bearish_unicorn",
+          breakerHigh: breaker.high,
+          breakerLow: breaker.low,
+          fvgHigh: fvg.high,
+          fvgLow: fvg.low,
+          overlapHigh,
+          overlapLow,
+        });
+      }
+    }
+  }
+  return unicorns;
+}
+
 function detectFVGs(candles: Candle[]): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
   for (let i = 2; i < candles.length; i++) {
