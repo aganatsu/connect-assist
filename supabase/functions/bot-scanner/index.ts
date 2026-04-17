@@ -2089,6 +2089,18 @@ async function runScanForUser(supabase: any, userId: string) {
       summary: analysis.summary,
       factorCount: analysis.factors.filter(f => f.present).length,
       factors: analysis.factors,
+      // ── analysis_snapshot: per-factor + new-factor breakdown for dashboard ──
+      analysis_snapshot: {
+        factorScores: analysis.factors.map((f: any) => ({ name: f.name, weight: f.weight, present: f.present, detail: f.detail })),
+        displacement: analysis.displacement ? { isDisplacement: analysis.displacement.isDisplacement, lastDirection: analysis.displacement.lastDirection } : null,
+        breakerBlocks: (analysis.breakerBlocks || []).length,
+        unicornSetups: (analysis.unicornSetups || []).length,
+        silverBullet: analysis.silverBullet || null,
+        macroWindow: analysis.macroWindow || null,
+        smt: analysis.smt || null,
+        vwap: analysis.vwap ? { value: analysis.vwap.value, distancePips: analysis.vwap.distancePips, rejection: analysis.vwap.rejection } : null,
+        amd: analysis.amd || null,
+      },
       status: "analyzed",
       tradingStyle: pairStyle,
     };
