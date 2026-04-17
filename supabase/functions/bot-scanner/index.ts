@@ -247,51 +247,82 @@ function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   return "day_trader";
 }
 
-// ─── Session Detection ──────────────────────────────────────────────
-function detectSession(): { name: string; isKillZone: boolean } {
-  const now = new Date();
-  const h = now.getUTCHours();
-  const m = now.getUTCMinutes();
-  const t = h + m / 60;
+// ─── DST-Aware New York Time Helper ─────────────────────────────────
+// Converts UTC Date to New York local time components.
+// US DST: 2nd Sunday of March 02:00 → 1st Sunday of November 02:00.
+// During EST (Nov–Mar): NY = UTC − 5.  During EDT (Mar–Nov): NY = UTC − 4.
+function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+  const year = utc.getUTCFullYear();
+  // 2nd Sunday of March
+  const mar1 = new Date(Date.UTC(year, 2, 1)); // March 1
+  const marSun2 = 14 - mar1.getUTCDay(); // day-of-month of 2nd Sunday
+  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0); // 02:00 EST = 07:00 UTC
+  // 1st Sunday of November
+  const nov1 = new Date(Date.UTC(year, 10, 1)); // November 1
+  const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
+  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0); // 02:00 EDT = 06:00 UTC
+  const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
+  const offsetH = isEDT ? 4 : 5;
+  const nyMs = utc.getTime() - offsetH * 3600_000;
+  const ny = new Date(nyMs);
+  const h = ny.getUTCHours();
+  const m = ny.getUTCMinutes();
+  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
+}
 
-  // Sydney: 21:00-06:00 UTC (wraps midnight)
-  if (t >= 21 || t < 6) {
-    const isKZ = t >= 21 || t < 0; // Sydney open KZ
-    return { name: "Sydney", isKillZone: isKZ };
+// ─── Session Detection (DST-aware) ─────────────────────────────────
+function detectSession(): { name: string; isKillZone: boolean } {
+  const ny = toNYTime(new Date());
+  const t = ny.t; // NY local decimal hours
+
+  // All times below are in New York local time (auto-adjusts for EST/EDT).
+  // Asian session: 20:00-00:00 NY (previous day evening in NY = Asian morning)
+  if (t >= 20 || t < 0) {
+    return { name: "Asian", isKillZone: false };
   }
-  // Asian: 00:00-09:00 UTC
-  if (t >= 0 && t < 9) {
-    const isKZ = t >= 0 && t < 4; // Asian kill zone: 00:00-04:00 UTC
-    return { name: "Asian", isKillZone: isKZ };
+  // Asian / Sydney overlap: 00:00-02:00 NY
+  if (t >= 0 && t < 2) {
+    return { name: "Asian", isKillZone: false };
   }
-  // London: 07:00-16:00 UTC
-  if (t >= 7 && t < 16) {
-    const isKZ = (t >= 7 && t < 10) || (t >= 14 && t < 16); // London open/close KZ
-    return { name: "London", isKillZone: isKZ };
+  // London session: 02:00-05:00 NY (London open = 7am GMT = 2am EST / 3am EDT)
+  // London Kill Zone: 02:00-05:00 NY — this is the HIGH PROBABILITY window
+  if (t >= 2 && t < 5) {
+    return { name: "London", isKillZone: true };
   }
-  // New York: 12:00-21:00 UTC
-  if (t >= 12 && t < 21) {
-    const isKZ = (t >= 12 && t < 15) || (t >= 19 && t < 21); // NY open/close KZ
-    return { name: "New York", isKillZone: isKZ };
+  // London continuation: 05:00-08:30 NY (London still open, but lower probability)
+  if (t >= 5 && t < 8.5) {
+    return { name: "London", isKillZone: false };
   }
+  // New York Kill Zone: 08:30-11:00 NY (NY open, highest volume)
+  if (t >= 8.5 && t < 11) {
+    return { name: "New York", isKillZone: true };
+  }
+  // NY continuation / London close overlap: 11:00-12:00 NY
+  // London Close Kill Zone: 10:00-12:00 NY (ICT London close)
+  if (t >= 11 && t < 12) {
+    return { name: "New York", isKillZone: true };
+  }
+  // NY afternoon: 12:00-16:00 NY (lower probability, PM session)
+  if (t >= 12 && t < 16) {
+    return { name: "New York", isKillZone: false };
+  }
+  // After hours: 16:00-20:00 NY
   return { name: "Off-Hours", isKillZone: false };
 }
 
-// ─── Silver Bullet Windows (ICT macro windows, 1h each) ────────────
-// Times in UTC, derived from NY time (EST = UTC-5). DST not modeled (matches existing session logic).
-//   London Open SB: 03:00-04:00 EST → 08:00-09:00 UTC
-//   AM SB:          10:00-11:00 EST → 15:00-16:00 UTC
-//   PM SB:          14:00-15:00 EST → 19:00-20:00 UTC
+// ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
+// ICT Silver Bullet: 1-hour windows where FVG forms and fills.
+//   London Open SB: 03:00-04:00 NY (London open manipulation)
+//   AM SB:          10:00-11:00 NY (NY morning session)
+//   PM SB:          14:00-15:00 NY (NY afternoon session)
 interface SilverBulletResult { active: boolean; window: string | null; minutesRemaining: number; }
 function detectSilverBullet(): SilverBulletResult {
-  const now = new Date();
-  const h = now.getUTCHours();
-  const m = now.getUTCMinutes();
-  const t = h + m / 60;
+  const ny = toNYTime(new Date());
+  const t = ny.t;
   const windows: { name: string; start: number; end: number }[] = [
-    { name: "London Open SB", start: 8,  end: 9  },
-    { name: "AM SB",          start: 15, end: 16 },
-    { name: "PM SB",          start: 19, end: 20 },
+    { name: "London Open SB", start: 3,  end: 4  },
+    { name: "AM SB",          start: 10, end: 11 },
+    { name: "PM SB",          start: 14, end: 15 },
   ];
   for (const w of windows) {
     if (t >= w.start && t < w.end) {
@@ -301,22 +332,21 @@ function detectSilverBullet(): SilverBulletResult {
   return { active: false, window: null, minutesRemaining: 0 };
 }
 
-// ─── ICT Macro Windows (institutional reprice, ~20min each) ────────
-// Times in UTC, derived from NY time (EST = UTC-5). DST not modeled.
+// ─── ICT Macro Windows (DST-aware, NY local time, ~20min each) ────
 interface MacroWindowResult { active: boolean; window: string | null; minutesRemaining: number; }
 function detectMacroWindow(): MacroWindowResult {
-  const now = new Date();
-  const tMin = now.getUTCHours() * 60 + now.getUTCMinutes();
-  // start/end in minutes since 00:00 UTC
+  const ny = toNYTime(new Date());
+  const tMin = ny.tMin; // minutes since midnight NY local
+  // All start/end in minutes since 00:00 NY local time
   const windows: { name: string; start: number; end: number }[] = [
-    { name: "London Macro 1",   start:  7 * 60 + 33, end:  7 * 60 + 50 }, // 02:33-02:50 EST
-    { name: "London Macro 2",   start:  9 * 60 +  3, end:  9 * 60 + 20 }, // 04:03-04:20 EST
-    { name: "NY Pre-Open Macro",start: 13 * 60 + 50, end: 14 * 60 + 10 }, // 08:50-09:10 EST
-    { name: "NY AM Macro",      start: 14 * 60 + 50, end: 15 * 60 + 10 }, // 09:50-10:10 EST
-    { name: "London Close Macro",start: 15 * 60 + 50, end: 16 * 60 + 10 }, // 10:50-11:10 EST
-    { name: "NY Lunch Macro",   start: 16 * 60 + 50, end: 17 * 60 + 10 }, // 11:50-12:10 EST
-    { name: "Last Hour Macro",  start: 18 * 60 + 10, end: 18 * 60 + 40 }, // 13:10-13:40 EST
-    { name: "PM Macro",         start: 20 * 60 + 15, end: 20 * 60 + 45 }, // 15:15-15:45 EST
+    { name: "London Macro 1",    start:  2 * 60 + 33, end:  2 * 60 + 50 }, // 02:33-02:50 NY
+    { name: "London Macro 2",    start:  4 * 60 +  3, end:  4 * 60 + 20 }, // 04:03-04:20 NY
+    { name: "NY Pre-Open Macro", start:  8 * 60 + 50, end:  9 * 60 + 10 }, // 08:50-09:10 NY
+    { name: "NY AM Macro",       start:  9 * 60 + 50, end: 10 * 60 + 10 }, // 09:50-10:10 NY
+    { name: "London Close Macro",start: 10 * 60 + 50, end: 11 * 60 + 10 }, // 10:50-11:10 NY
+    { name: "NY Lunch Macro",    start: 11 * 60 + 50, end: 12 * 60 + 10 }, // 11:50-12:10 NY
+    { name: "Last Hour Macro",   start: 13 * 60 + 10, end: 13 * 60 + 40 }, // 13:10-13:40 NY
+    { name: "PM Macro",          start: 15 * 60 + 15, end: 15 * 60 + 45 }, // 15:15-15:45 NY
   ];
   for (const w of windows) {
     if (tMin >= w.start && tMin < w.end) {
@@ -326,11 +356,11 @@ function detectMacroWindow(): MacroWindowResult {
   return { active: false, window: null, minutesRemaining: 0 };
 }
 
-// ─── ICT AMD Phase Detection ───────────────────────────────────────
-// Splits today's UTC candles into Asian (00-07), London (07-13), NY (13-21).
-//   Accumulation = Asian range built (consolidation).
-//   Manipulation = London sweeps Asian high or low (liquidity grab).
-//   Distribution = NY expands opposite the manipulation sweep.
+// ─── ICT AMD Phase Detection (DST-aware, NY local time) ───────────
+// Splits candles into NY-local buckets:
+//   Accumulation = Asian range (20:00-02:00 NY prev day evening into early morning)
+//   Manipulation = London session (02:00-08:30 NY) sweeps Asian high or low
+//   Distribution = NY session (08:30-16:00 NY) expands opposite the sweep
 interface AMDResult {
   phase: "accumulation" | "manipulation" | "distribution" | "unknown";
   bias: "bullish" | "bearish" | null;
@@ -341,15 +371,25 @@ interface AMDResult {
 }
 function detectAMDPhase(candles: Candle[]): AMDResult {
   if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
-  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
-  const today = candles.filter(c => c.datetime.slice(0, 10) === lastDate);
-  if (today.length === 0) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "No today candles" };
-  const hourOf = (c: Candle) => parseInt(c.datetime.slice(11, 13), 10);
-  const asian  = today.filter(c => { const h = hourOf(c); return h >= 0 && h < 7; });
-  const london = today.filter(c => { const h = hourOf(c); return h >= 7 && h < 13; });
-  const ny     = today.filter(c => { const h = hourOf(c); return h >= 13 && h < 21; });
+
+  // Convert each candle's UTC datetime to NY local hour for bucketing
+  const nyHourOf = (c: Candle): number => {
+    const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
+    return toNYTime(utc).h;
+  };
+
+  // Use recent candles for today's AMD analysis
+  const recent = candles.slice(-200);
+  // Asian accumulation: 20:00-02:00 NY (wraps midnight)
+  const asian  = recent.filter(c => { const h = nyHourOf(c); return h >= 20 || h < 2; });
+  // London manipulation: 02:00-09:00 NY
+  const london = recent.filter(c => { const h = nyHourOf(c); return h >= 2 && h < 9; });
+  // NY distribution: 09:00-16:00 NY
+  const nyCandles = recent.filter(c => { const h = nyHourOf(c); return h >= 9 && h < 16; });
+
   const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
   const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
+
   // Determine sweep from London candles
   let sweptSide: "high" | "low" | null = null;
   let bias: "bullish" | "bearish" | null = null;
@@ -362,7 +402,6 @@ function detectAMDPhase(candles: Candle[]): AMDResult {
     if (tookHigh && !tookLow && lClose < asianHigh) { sweptSide = "high"; bias = "bearish"; }
     else if (tookLow && !tookHigh && lClose > asianLow) { sweptSide = "low"; bias = "bullish"; }
     else if (tookHigh && tookLow) {
-      // Both swept — use later sweep direction by looking at last 1/3 of London
       const tail = london.slice(-Math.max(1, Math.floor(london.length / 3)));
       const tailHigh = Math.max(...tail.map(c => c.high));
       const tailLow  = Math.min(...tail.map(c => c.low));
@@ -370,24 +409,27 @@ function detectAMDPhase(candles: Candle[]): AMDResult {
       else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
     }
   }
-  // Determine current phase from clock + structure
-  const now = new Date();
-  const h = now.getUTCHours();
+
+  // Determine current phase from NY local clock + structure
+  const nowNY = toNYTime(new Date());
+  const h = nowNY.h;
   let phase: AMDResult["phase"] = "unknown";
-  if (h >= 0 && h < 7) phase = "accumulation";
-  else if (h >= 7 && h < 13) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
-  else if (h >= 13 && h < 21) {
-    // Distribution if NY has expanded opposite the sweep
-    if (sweptSide && ny.length > 0 && asianHigh != null && asianLow != null) {
-      const nyHigh = Math.max(...ny.map(c => c.high));
-      const nyLow  = Math.min(...ny.map(c => c.low));
-      const expandedDown = sweptSide === "high" && nyLow < asianLow;
-      const expandedUp   = sweptSide === "low"  && nyHigh > asianHigh;
+  if (h >= 20 || h < 2) phase = "accumulation";
+  else if (h >= 2 && h < 9) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
+  else if (h >= 9 && h < 16) {
+    if (sweptSide && nyCandles.length > 0 && asianHigh != null && asianLow != null) {
+      const nHigh = Math.max(...nyCandles.map(c => c.high));
+      const nLow  = Math.min(...nyCandles.map(c => c.low));
+      const expandedDown = sweptSide === "high" && nLow < asianLow;
+      const expandedUp   = sweptSide === "low"  && nHigh > asianHigh;
       phase = (expandedDown || expandedUp) ? "distribution" : "manipulation";
     } else {
       phase = "distribution";
     }
+  } else if (h >= 16 && h < 20) {
+    phase = "distribution";
   }
+
   const detail = sweptSide
     ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
     : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
@@ -1865,8 +1907,8 @@ async function runSafetyGates(
 
   // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
-    const now = new Date();
-    const hoursSinceMidnight = now.getUTCHours() + now.getUTCMinutes() / 60;
+    const nyNow = toNYTime(new Date());
+    const hoursSinceMidnight = nyNow.t; // NY local hours since midnight
     const candleCount = config.openingRange.candleCount || 24;
     // Convert candle count to hours based on entry timeframe
     const tfHours: Record<string, number> = { "1m": 1/60, "5m": 5/60, "15m": 0.25, "15min": 0.25, "30m": 0.5, "1h": 1, "4h": 4, "1d": 24 };
