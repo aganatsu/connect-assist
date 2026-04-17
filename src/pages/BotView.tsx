@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 import { CloseAuditLog } from "@/components/CloseAuditLog";
+import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { useNavigate } from "react-router-dom";
 
@@ -274,6 +275,7 @@ export default function BotView() {
                 <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
                 <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
                 <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
+                <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(!d.positions || d.positions.length === 0) ? (
@@ -346,6 +348,9 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
                 <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
+              </TabsContent>
+              <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
+                <BrokerLog />
               </TabsContent>
             </Tabs>
           </div>
