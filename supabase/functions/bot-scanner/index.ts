@@ -3,8 +3,10 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
+// Confluence is normalized to 0-10 (raw max ~21.5 across 17 factors, clamped).
+// Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only, <5.0 looser/scalp.
 const DEFAULTS = {
-  minConfluence: 6,
+  minConfluence: 6.0,
   htfBiasRequired: true,
   htfBiasHardVeto: false, // when true: ranging HTF blocks both sides; mismatch always blocks
   entryTimeframe: "15min",
@@ -971,6 +973,36 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
 
   return { stopLoss: sl, takeProfit: tp };
 }
+/**
+ * ─── CONFLUENCE FACTOR AUDIT (17 factors + OR enhancements) ──────────
+ * Max raw points possible when every factor and bonus aligns = 21.5
+ * Final score is normalized via Math.min(10, score) → 0–10 scale.
+ *
+ *  #  | Factor                 | Base | Bonus(es)
+ * ----+------------------------+------+-------------------------------------------
+ *  1  | Market Structure       | 2.0  | +0.5 OR bias (when OR enabled)
+ *  2  | Order Block            | 2.0  | (displacement bonus removed — see Factor 10)
+ *  3  | Fair Value Gap         | 1.5  | (displacement bonus removed — see Factor 10)
+ *  4  | Premium/Discount       | 2.0  | (capped)
+ *  5  | Session/Kill Zone      | 1.0  | +0.5 Silver Bullet combo
+ *  6  | Judas Swing            | 1.0  | +0.5 OR judas (high or low swept-and-reversed)
+ *  7  | PD/PW Levels           | 0.5  | +0.5 OR key-level proximity
+ *  8  | Reversal Candle        | 0.5  | —
+ *  9  | Liquidity Sweep        | 0.5  | —
+ * 10  | Displacement           | 1.0  | (sole path — no bonuses on OB/FVG)
+ * 11  | Breaker Block          | 1.0  | —
+ * 12  | Unicorn Model          | 1.5  | —
+ * 13  | Silver Bullet          | 1.0  | —
+ * 14  | Macro Window           | 0.5  | +0.5 Silver Bullet overlap combo
+ * 15  | SMT Divergence         | 1.0  | —
+ * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
+ * 17  | AMD Phase              | 0.5  | +0.5 distribution-phase bonus
+ * ----+------------------------+------+-------------------------------------------
+ *  TOTAL MAX RAW              = 21.5  (clamped to 10 for display via Math.min)
+ *
+ * Recommended thresholds on the 0-10 scale (post-clamp):
+ *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
+ */
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
@@ -1011,7 +1043,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles) : [];
   const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
 
-  // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
+  // ── Factor 2: Order Block (max 2.0) ──
+  // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   {
     let pts = 0;
     let detail = "";
@@ -1021,9 +1054,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideOB) {
         pts = 2.0;
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-        if (config.useDisplacement !== false && (insideOB as any).hasDisplacement) {
-          pts += 0.5;
-          detail += " — formed with displacement";
+        if ((insideOB as any).hasDisplacement) {
+          detail += " — formed with displacement (scored via Factor 10)";
         }
       } else if (activeOBs.length > 0) {
         pts = 0.5;
@@ -1036,7 +1068,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
   }
 
-  // ── Factor 3: Fair Value Gap (max 1.5, +0.5 displacement bonus) ──
+  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   {
     let pts = 0;
     let detail = "";
@@ -1046,9 +1079,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideFVG) {
         pts = 1.5;
         detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
-        if (config.useDisplacement !== false && (insideFVG as any).hasDisplacement) {
-          pts += 0.5;
-          detail += " — created by displacement";
+        if ((insideFVG as any).hasDisplacement) {
+          detail += " — created by displacement (scored via Factor 10)";
         }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
@@ -2057,6 +2089,18 @@ async function runScanForUser(supabase: any, userId: string) {
       summary: analysis.summary,
       factorCount: analysis.factors.filter(f => f.present).length,
       factors: analysis.factors,
+      // ── analysis_snapshot: per-factor + new-factor breakdown for dashboard ──
+      analysis_snapshot: {
+        factorScores: analysis.factors.map((f: any) => ({ name: f.name, weight: f.weight, present: f.present, detail: f.detail })),
+        displacement: analysis.displacement ? { isDisplacement: analysis.displacement.isDisplacement, lastDirection: analysis.displacement.lastDirection } : null,
+        breakerBlocks: (analysis.breakerBlocks || []).length,
+        unicornSetups: (analysis.unicornSetups || []).length,
+        silverBullet: analysis.silverBullet || null,
+        macroWindow: analysis.macroWindow || null,
+        smt: analysis.smt || null,
+        vwap: analysis.vwap ? { value: analysis.vwap.value, distancePips: analysis.vwap.distancePips, rejection: analysis.vwap.rejection } : null,
+        amd: analysis.amd || null,
+      },
       status: "analyzed",
       tradingStyle: pairStyle,
     };
