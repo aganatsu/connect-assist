@@ -2493,6 +2493,7 @@ async function runScanForUser(supabase: any, userId: string) {
                   .update({ mirrored_connection_ids: mirroredConnIds })
                   .eq("position_id", positionId).eq("user_id", userId);
               }
+            } else {
               detail.mt5Mirror = "skipped_no_connection";
             }
           } else {
