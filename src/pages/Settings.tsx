@@ -190,9 +190,10 @@ function BrokerSettings() {
                         <span>App Symbol</span><span>Broker Symbol</span><span></span>
                       </div>
                       {Object.entries(editOverrides).map(([sym, brokerSym]) => (
-                        <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
+                        <div key={sym} className="grid grid-cols-[1fr_1fr_auto_32px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
                           <span className="font-mono font-medium">{sym}</span>
                           <span className="font-mono text-primary">{brokerSym as string}</span>
+                          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => validateBrokerSymbol(c.id, sym)}>Validate</Button>
                           <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => { const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); }}><Trash2 className="h-3 w-3" /></Button>
                         </div>
                       ))}
@@ -202,7 +203,7 @@ function BrokerSettings() {
                     <Input value={editNewSymbol} onChange={e => setEditNewSymbol(e.target.value)} placeholder="App symbol (e.g. NAS100)" className="h-7 text-xs flex-1" />
                     <Input value={editNewSuffix} onChange={e => setEditNewSuffix(e.target.value)} placeholder="Broker symbol (e.g. USA100)" className="h-7 text-xs flex-1" />
                     <Button variant="outline" size="sm" className="h-7 text-xs" disabled={!editNewSymbol.trim() || !editNewSuffix.trim()} onClick={() => {
-                      setEditOverrides(prev => ({ ...prev, [editNewSymbol.trim().toUpperCase()]: editNewSuffix.trim() }));
+                      setEditOverrides(prev => ({ ...prev, [normalizeOverrideKey(editNewSymbol)]: editNewSuffix.trim() }));
                       setEditNewSymbol(""); setEditNewSuffix("");
                     }}>Add</Button>
                   </div>
