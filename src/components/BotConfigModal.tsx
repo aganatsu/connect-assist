@@ -712,10 +712,12 @@ function SectionHeader({ title, description }: { title: string; description: str
 }
 
 function FieldGroup({ label, description, children }: { label: string; description?: string; children: React.ReactNode }) {
+  const highlight = useContext(HighlightContext);
+  const isMatch = highlight.has(label.toLowerCase());
   return (
-    <div className="space-y-1.5">
+    <div className={`space-y-1.5 transition-all ${isMatch ? "ring-1 ring-primary/60 bg-primary/5 rounded-sm p-2 -m-2" : ""}`}>
       <div>
-        <Label className="text-xs font-medium">{label}</Label>
+        <Label className={`text-xs font-medium ${isMatch ? "text-primary" : ""}`}>{label}</Label>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>
       {children}
@@ -724,10 +726,12 @@ function FieldGroup({ label, description, children }: { label: string; descripti
 }
 
 function ToggleField({ label, description, checked, onChange }: { label: string; description?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  const highlight = useContext(HighlightContext);
+  const isMatch = highlight.has(label.toLowerCase());
   return (
-    <div className="flex items-start justify-between gap-3 p-3 border border-border hover:border-border/80 transition-colors">
+    <div className={`flex items-start justify-between gap-3 p-3 border transition-colors ${isMatch ? "border-primary/60 bg-primary/5" : "border-border hover:border-border/80"}`}>
       <div>
-        <p className="text-xs font-medium">{label}</p>
+        <p className={`text-xs font-medium ${isMatch ? "text-primary" : ""}`}>{label}</p>
         {description && <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="shrink-0 mt-0.5" />
