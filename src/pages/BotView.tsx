@@ -272,6 +272,7 @@ export default function BotView() {
                 <TabsTrigger value="open" className="text-[11px] h-6">Open ({d.positions?.length || 0})</TabsTrigger>
                 <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
                 <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
+                <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(!d.positions || d.positions.length === 0) ? (
