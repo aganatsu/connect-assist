@@ -268,12 +268,12 @@ Deno.serve(async (req) => {
         return respond(await res.json());
       }
       if (conn.broker_type === "metaapi") {
-        const res = await fetch(`https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${conn.account_id}/trade`, {
-          method: "POST", headers: { "auth-token": conn.api_key, "Content-Type": "application/json" },
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
         });
-        if (!res.ok) throw new Error(`MetaAPI close failed: ${res.status}`);
-        return respond(await res.json());
+        if (!res.ok) return respond({ error: `MetaAPI close failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        return respond(JSON.parse(body));
       }
     }
 
