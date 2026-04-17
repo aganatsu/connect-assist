@@ -194,11 +194,22 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         </SelectContent>
                       </Select>
                     </FieldGroup>
-                    <FieldGroup label="Confluence Threshold" description="Minimum score (1-10) required to consider a trade setup valid">
+                    <FieldGroup label="Confluence Threshold" description="Minimum weighted score (1-10) required to consider a trade setup valid">
                       <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.confluenceThreshold ?? 5}</span>
+                        <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={0.5} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}</span>
                       </div>
+                    </FieldGroup>
+                    <FieldGroup label="Min Factor Count" description="Require at least N of 17 factors to align (in addition to score threshold). 0 = off. Score is weighted but count enforces breadth.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={17} step={1} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/17</span>
+                      </div>
+                      {(config.strategy?.minFactorCount ?? 0) > 0 && (
+                        <p className="text-[10px] text-muted-foreground mt-1.5">
+                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/17 factors. Tip: 13/17 factors typically scores 7.0–9.5 depending on which factors hit.
+                        </p>
+                      )}
                     </FieldGroup>
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />

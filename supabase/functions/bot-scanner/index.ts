@@ -1533,6 +1533,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // ── Strategy mappings ──
     // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
     minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
+    // New: minimum count of present factors required (0 = off). Acts as an AND gate alongside score.
+    minFactorCount: strategy.minFactorCount ?? raw.minFactorCount ?? 0,
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
@@ -2125,7 +2127,10 @@ async function runScanForUser(supabase: any, userId: string) {
       tradingStyle: pairStyle,
     };
 
-    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
+    const minFactorGate = (pairConfig.minFactorCount ?? 0) > 0;
+    const factorCountOk = !minFactorGate || (detail.factorCount >= (pairConfig.minFactorCount ?? 0));
+
+    if (analysis.score >= adjustedMinConfluence && factorCountOk && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -2513,7 +2518,14 @@ async function runScanForUser(supabase: any, userId: string) {
         detail.rejectionReasons = failedGates.map(g => g.reason);
       }
     } else {
-      detail.status = analysis.score >= config.minConfluence ? (isPaused ? "paused" : "no_direction") : "below_threshold";
+      if (analysis.score < config.minConfluence) {
+        detail.status = "below_threshold";
+      } else if (minFactorGate && !factorCountOk) {
+        detail.status = "below_threshold";
+        detail.reason = `Only ${detail.factorCount}/${analysis.factors.length} factors (need ≥${pairConfig.minFactorCount})`;
+      } else {
+        detail.status = isPaused ? "paused" : "no_direction";
+      }
     }
 
     scanDetails.push(detail);
