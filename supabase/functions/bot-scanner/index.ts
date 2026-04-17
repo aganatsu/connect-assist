@@ -2371,6 +2371,7 @@ async function runScanForUser(supabase: any, userId: string) {
                     if (exRes.ok && !(parsedEx?.error)) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
+                      mirroredConnIds.push(conn.id);
                     } else {
                       const reason = parsedEx?.error || exBody.slice(0, 200);
                       console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
@@ -2466,13 +2467,14 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
                      try {
                        const parsed = JSON.parse(resBody);
-                        if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
-                          console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
-                          mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
-                       } else {
-                         mirrorResults.push(`${conn.display_name}: success`);
-                       }
-                     } catch { mirrorResults.push(`${conn.display_name}: success`); }
+                         if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
+                           console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
+                           mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                        } else {
+                          mirrorResults.push(`${conn.display_name}: success`);
+                          mirroredConnIds.push(conn.id);
+                        }
+                      } catch { mirrorResults.push(`${conn.display_name}: success`); mirroredConnIds.push(conn.id); }
                    } else {
                      console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
