@@ -5,10 +5,11 @@ import TradingViewChart from "@/components/TradingViewChart";
 import { Card, CardContent } from "@/components/ui/card";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
 import { marketApi, smcApi, paperApi } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
-import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap } from "lucide-react";
+import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Sparkles, Radio } from "lucide-react";
 
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
@@ -61,6 +62,25 @@ export default function Chart() {
     staleTime: 30000,
   });
 
+  // Latest bot scan signal for this symbol
+  const { data: botScanSignal } = useQuery({
+    queryKey: ['chart-bot-scan', selectedSymbol],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('scan_logs')
+        .select('details_json, scanned_at')
+        .order('scanned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const details = Array.isArray(data?.details_json) ? data.details_json : [];
+      const match = (details as any[]).find((d) => d?.pair === selectedSymbol);
+      return match ? { signal: match, scannedAt: data?.scanned_at as string } : null;
+    },
+    refetchInterval: 30000,
+    staleTime: 25000,
+  });
+
   const session = getCurrentSession();
   const kz = isInKillzone();
   const balance = paperStatus?.balance ?? 10000;
@@ -75,6 +95,8 @@ export default function Chart() {
   const activeFVGs = fvgs.filter((f: any) => !f.mitigated);
   const pdLevels = analysis?.pdLevels;
   const confluenceScore = analysis?.confluenceScore ?? 0;
+  const extScore = analysis?.extendedConfluenceScore ?? 0;
+  const ext = analysis?.extendedFactors;
 
   // Entry checklist
   const checklist = useMemo(() => {
@@ -126,15 +148,21 @@ export default function Chart() {
         {/* Analysis Panels */}
         {panelOpen && (
           <div className="w-96 overflow-y-auto space-y-0">
-            <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk"]}>
+            <Accordion type="multiple" defaultValue={["confluence", "extended", "structure", "checklist", "levels", "session", "premium", "risk", "botscan"]}>
               {/* Confluence Score */}
               <AccordionItem value="confluence">
                 <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 w-full">
                     <Zap className="h-3.5 w-3.5 text-primary" />
-                    Confluence Score
-                    <span className={`font-mono font-bold ml-auto ${confluenceScore >= 6 ? 'text-success' : confluenceScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
-                      {confluenceScore}/10
+                    Confluence
+                    <span className="ml-auto flex items-center gap-2">
+                      <span className={`font-mono font-bold ${confluenceScore >= 6 ? 'text-success' : confluenceScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`} title="SMC Score">
+                        SMC {confluenceScore}/10
+                      </span>
+                      <span className="text-muted-foreground/50">·</span>
+                      <span className={`font-mono font-bold ${extScore >= 6 ? 'text-success' : extScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`} title="Extended ICT Score">
+                        EXT {extScore}/10
+                      </span>
                     </span>
                   </span>
                 </AccordionTrigger>
@@ -149,6 +177,66 @@ export default function Chart() {
                     {analysis?.reasoning?.slice(0, 3).map((r: string, i: number) => (
                       <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
                     ))}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              {/* Extended ICT Factors */}
+              <AccordionItem value="extended">
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    ICT Extended Factors
+                    <span className={`font-mono font-bold ml-auto ${extScore >= 6 ? 'text-success' : extScore >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
+                      {extScore}/10
+                    </span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
+                    {ext ? (
+                      <>
+                        <FactorRow label="Displacement" pass={!!ext.displacement?.detected}
+                          detail={ext.displacement?.detected ? `${ext.displacement.count}× large body, last ${ext.displacement.lastDirection}` : 'No large-body candles'} />
+                        <FactorRow label="Breaker Blocks" pass={(ext.breakers?.length || 0) > 0}
+                          detail={(ext.breakers?.length || 0) > 0 ? `${ext.breakers.length} flipped OB(s)` : 'None active'} />
+                        <FactorRow label="Unicorn Setup" pass={(ext.unicorns?.length || 0) > 0}
+                          detail={(ext.unicorns?.length || 0) > 0 ? `${ext.unicorns.length} breaker+FVG overlap` : 'No overlap'} />
+                        <FactorRow label="Silver Bullet" pass={!!ext.silverBullet?.active}
+                          detail={ext.silverBullet?.active ? ext.silverBullet.window : 'Outside window'} />
+                        <FactorRow label="Macro Time" pass={!!ext.macroTime?.active}
+                          detail={ext.macroTime?.active ? `xx:${String(ext.macroTime.utcMinute).padStart(2,'0')} UTC` : 'Outside macro'} />
+                        <FactorRow label="VWAP" pass={ext.vwap?.vwap !== null}
+                          detail={ext.vwap?.vwap !== null ? `${ext.vwap.position} @ ${ext.vwap.vwap.toFixed(5)} (${ext.vwap.distance.toFixed(2)}%)` : 'N/A'} />
+                        <FactorRow label="Power of 3" pass={!!ext.powerOf3?.complete || !!ext.powerOf3?.manipulation}
+                          detail={ext.powerOf3?.complete ? `Complete · ${ext.powerOf3.expansion}` : ext.powerOf3?.manipulation ? `Phase: ${ext.powerOf3.phase} · ${ext.powerOf3.manipulation}` : `Phase: ${ext.powerOf3?.phase || 'unknown'}`} />
+                        <p className="text-[10px] text-muted-foreground/70 mt-1 italic">SMT divergence requires cross-pair data — see Bot Scan below</p>
+                      </>
+                    ) : <span className="text-muted-foreground">Loading…</span>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              {/* Bot Scan (live) */}
+              <AccordionItem value="botscan">
+                <AccordionTrigger className="text-xs px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <Radio className="h-3.5 w-3.5 text-primary" />
+                    Bot Scan (live)
+                    {botScanSignal?.signal?.score != null && (
+                      <span className={`font-mono font-bold ml-auto ${botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
+                        {Number(botScanSignal.signal.score).toFixed(1)}/10
+                      </span>
+                    )}
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent className="px-3 pb-2">
+                  <div className="bg-secondary/30 border border-border p-2 text-[11px]">
+                    {botScanSignal?.signal ? (
+                      <BotScanInline signal={botScanSignal.signal} scannedAt={botScanSignal.scannedAt} />
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground">No recent bot scan for {selectedSymbol}. The scanner runs on its own cycle — check back soon.</p>
+                    )}
                   </div>
                 </AccordionContent>
               </AccordionItem>
@@ -306,5 +394,61 @@ export default function Chart() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+function FactorRow({ label, pass, detail }: { label: string; pass: boolean; detail?: string }) {
+  return (
+    <div className="flex items-start gap-1.5 text-[10px]">
+      {pass ? <CheckCircle className="h-3 w-3 text-success shrink-0 mt-0.5" /> : <XCircle className="h-3 w-3 text-muted-foreground/40 shrink-0 mt-0.5" />}
+      <div className="flex-1">
+        <span className={pass ? 'text-foreground font-medium' : 'text-muted-foreground'}>{label}</span>
+        {detail && <span className="text-muted-foreground ml-1">— {detail}</span>}
+      </div>
+    </div>
+  );
+}
+
+function BotScanInline({ signal: d, scannedAt }: { signal: any; scannedAt?: string }) {
+  const status = d.status === 'trade_placed' ? 'PLACED' : d.status === 'rejected' ? 'REJECTED' : d.status === 'below_threshold' ? 'SKIP' : (d.status?.toUpperCase() || '—');
+  const statusColor = d.status === 'trade_placed' ? 'text-success' : d.status === 'rejected' ? 'text-destructive' : 'text-muted-foreground';
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        {d.direction === 'long' ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === 'short' ? <TrendingDown className="h-3 w-3 text-destructive" /> : null}
+        <span className="text-[10px] font-bold">{d.pair}</span>
+        <span className={`text-[9px] font-bold ${statusColor}`}>{status}</span>
+        {scannedAt && <span className="text-[9px] text-muted-foreground ml-auto">{new Date(scannedAt).toLocaleTimeString()}</span>}
+      </div>
+      {d.reason && (
+        <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why</p>
+          <p className="mt-0.5 text-[10px]">{d.reason}</p>
+        </div>
+      )}
+      {d.factors && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Factors ({d.factorCount || d.factors.length})</p>
+          {d.factors.map((f: any, i: number) => (
+            <div key={i} className="flex items-start gap-1 text-[9px]">
+              <span className={f.present ? 'text-success' : 'text-muted-foreground/50'}>{f.present ? '✓' : '✗'}</span>
+              <div>
+                <span className={f.present ? 'text-foreground' : 'text-muted-foreground/60'}>{f.name}</span>
+                {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {d.rejectionReasons?.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejected</p>
+          {d.rejectionReasons.map((r: string, i: number) => (
+            <p key={i} className="text-[9px] text-destructive">⚠ {r}</p>
+          ))}
+        </div>
+      )}
+      {d.summary && <p className="text-[9px] text-muted-foreground italic">{d.summary}</p>}
+    </div>
   );
 }
