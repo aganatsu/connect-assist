@@ -1,53 +1,32 @@
 
+User confirmed to proceed with the symbol mapping audit fixes from the previous (cancelled) message.
 
-## Problem Analysis
+## Plan: Fix Symbol Mapping
 
-**Yes, this is a critical issue.** Currently the bot:
+### Issues
+1. `resolveSymbol` in `broker-execute` is case-sensitive — UI uppercases keys but lookup may miss
+2. OANDA `place_order` bypasses `symbol_overrides` (hardcodes `replace("/", "_")`)
+3. `bot-scanner` mirror loop only filters MetaAPI — OANDA connections ignored
+4. Symbols with spaces (e.g. "US Oil") not normalized
+5. No validation that overrides exist at broker
 
-1. Calculates position size using the **paper account balance** (line 1377, 1509)
-2. Sends the **same lot size** to ALL connected broker accounts (lines 1676-1678)
+### Changes
 
-**Your scenario:**
-- $100 account + $10,000 account both connected
-- Bot calculates size for $10,000 risk (say 0.5 lots)
-- **Both accounts get 0.5 lots** — the $100 account is severely over-leveraged
+**`supabase/functions/broker-execute/index.ts`**
+- Make `resolveSymbol` normalize: trim + uppercase both pair and override keys, strip spaces and `/`
+- Use `resolveSymbol` for OANDA `place_order` too (instead of hardcoded `.replace("/", "_")`)
+- Apply same normalization in `account_summary`, `open_trades`, `symbol_specs` where symbol is referenced
+- Add a new `validate_symbol` action that calls broker symbol_specs and returns ok/error so UI can verify an override before saving
 
-## Solution
+**`supabase/functions/bot-scanner/index.ts`**
+- Update mirror query to include both `metaapi` AND `oanda` connections
+- Ensure resolved symbol passed to `place_order` uses the override map
 
-Fetch **per-broker account balance** and calculate **custom lot size for each broker**:
+**`src/pages/Settings.tsx`**
+- Normalize override keys consistently (trim + uppercase, strip spaces/slashes) before saving
+- Add a "Validate" button per override row that calls `validate_symbol` to confirm broker accepts it
 
-```text
-Current flow:
-  calculatePositionSize(paperBalance) → size → send same size to all brokers
-
-New flow:
-  For each broker:
-    fetchBrokerBalance(conn) → brokerBalance
-    calculatePositionSize(brokerBalance) → brokerSpecificSize
-    send trade with brokerSpecificSize
-```
-
-## Implementation
-
-### 1. Add `account_balance` action to `broker-execute` edge function
-- MetaAPI: `GET /users/current/accounts/{id}/account-information` → return `balance`, `equity`
-- OANDA: `GET /v3/accounts/{id}/summary` → return `balance`, `NAV`
-
-### 2. Update `bot-scanner` broker mirror loop
-- Before placing trade on each broker, fetch its account balance
-- Recalculate `brokerVolume` using `calculatePositionSize(brokerBalance, ...)`
-- Log: `"[BrokerA $100] size=0.01, [BrokerB $10k] size=0.5"`
-
-### 3. Add safety cap
-- Max 5% account risk per trade per broker (configurable)
-- If broker balance fetch fails, skip that broker (don't default to paper balance)
-
-## Files Changed
-- `supabase/functions/broker-execute/index.ts` — add `account_balance` action
-- `supabase/functions/bot-scanner/index.ts` — fetch per-broker balance, recalculate size per broker
-
-## What This Fixes
-- $100 account gets 0.01 lots, $10k account gets 0.5 lots — proportional sizing
-- No more over-leverage on small accounts
-- Each broker independently managed
-
+### Files
+- `supabase/functions/broker-execute/index.ts`
+- `supabase/functions/bot-scanner/index.ts`
+- `src/pages/Settings.tsx`
