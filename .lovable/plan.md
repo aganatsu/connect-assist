@@ -1,54 +1,35 @@
 
-User explicitly overrides the constraint and wants the full fix. I'll remove the memory file in default mode and execute the previously-approved plan.
+## Plan
 
-## Plan: Remove constraint + execute premature-close fix
+### Phase 1 — Port single-pair factors into `smc-analysis`
+Add to the existing `runFullAnalysis` function (NO change to bot-scanner):
+- **Displacement detection** (large-body candle vs avg, returns count + last direction)
+- **Breaker blocks** (mitigated OBs that flipped polarity)
+- **Unicorn setups** (breaker + overlapping FVG)
+- **Silver Bullet windows** (10-11 NY am, 2-3 NY pm — time-based)
+- **Macro times** (xx:50–xx:10 windows, 09:50, 10:50, 11:50 NY)
+- **VWAP** (session anchored — daily reset, computed from candles)
+- **Power of 3 / AMD** (Asian range → London manipulation → NY distribution — daily structure check)
 
-### Phase 0 — Memory
-- Delete `mem://constraints/no-bot-logic`
-- Update `mem://index.md` to drop the bot constraint line and reference
+Skip: **SMT divergence** (needs cross-pair data the chart doesn't fetch).
 
-### Phase 1 — Audit (read-only)
-Read in full and produce per-suspect findings (file + line + verdict):
-- `supabase/functions/bot-scanner/index.ts`
-- `supabase/functions/paper-trading/index.ts`
-- `supabase/functions/trades/index.ts`
-- `supabase/functions/broker-execute/index.ts` (already mostly read)
+Update return: add `extendedFactors: { displacement, breakers, unicorns, silverBullet, macroTime, vwap, powerOf3 }` and recompute a 2nd score `extendedConfluenceScore` using the same weighting as the bot-scanner audit doc, capped at 10.
 
-### Phase 2 — Schema migration
-New table `close_audit_log`:
-- `id uuid pk`, `user_id uuid`, `position_id text`, `symbol text`
-- `broker_connection_id uuid null`, `close_reason text`, `close_source text`
-- `pnl text`, `exit_price text`, `scan_cycle_id uuid null`, `detail_json jsonb`
-- `created_at timestamptz default now()`
-- RLS: `auth.uid() = user_id`
-- Index on `(user_id, created_at desc)`
+### Phase 2 — Update Chart panel
+Replace the thin "Confluence Score" accordion with a richer breakdown:
+- Show both scores side-by-side: **SMC Score** (existing) + **Extended Score** (new factors)
+- New accordion section "ICT Extended Factors" listing each new factor with ✓/✗ + detail
+- Kill zone, session badge already exist — no dup
 
-Add `close_reason text` to `paper_positions` if missing (paper_trade_history already has it).
+### Phase 3 — Add "Bot Scan (live)" accordion
+- Query `scan_logs` (latest row), find `details_json` entry where `pair === selectedSymbol`
+- Reuse the existing `ScanDetailInline` component pattern (or inline a slim version)
+- Show "No recent bot scan for this symbol" empty state
+- Auto-refresh every 30s
 
-### Phase 3 — Code fixes (only where audit confirms a bug)
+### Phase 4 — Deploy `smc-analysis`, verify in browser
 
-A. **Reverse-signal close** → restrict to same `symbol` AND same `broker_connection_id` (or paper-only if no connection). Never cross-symbol, never cross-connection.
-
-B. **Max concurrent** → enforce as pre-entry gate; reject signal with `gate: max_concurrent`. Remove any retroactive close.
-
-C. **Drawdown** → split:
-- `daily_loss_limit` / `max_drawdown` → block new entries only.
-- Existing `kill_switch_active` flag remains the only path that force-closes.
-
-D. **Broker mirror close** → use the exact `connection_id` stored on the position. Assert non-null. Never iterate all `broker_connections` on close.
-
-E. **Position sync** → if orphan-close exists, gate behind `enable_orphan_close` flag (default false). Default = log only.
-
-F. **Scan overlap** → per-user lock via `paper_accounts.scan_lock_until` (set `now() + 90s` at scan start, clear at end). If held → exit with `skipped: overlap`.
-
-G. **`close_reason` everywhere** → every close path sets `close_reason` + `close_source`, inserts one `close_audit_log` row. Paths covered: SL/TP, reverse-signal, manual, kill-switch, mirror callback.
-
-H. **Structured logging** → `console.log("[close]", {...})` on every close with full context.
-
-### Phase 4 — Deploy & verify
-- Deploy `bot-scanner`, `paper-trading`, `trades`, `broker-execute`
-- Inspect edge logs for `[close]` entries and `skipped: overlap`
-- Confirm `close_audit_log` rows appear with reason chain
-
-### Risk
-Low — additive guards + one new table. No scoring/analysis logic changes.
+### Out of scope
+- bot-scanner unchanged
+- SMT divergence skipped (multi-pair)
+- No DB schema changes
