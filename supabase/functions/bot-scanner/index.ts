@@ -1430,6 +1430,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useMacroWindows: strategy.useMacroWindows ?? true,
     // SMT Divergence (defaults true)
     useSMT: strategy.useSMT ?? true,
+    // VWAP confluence (defaults true)
+    useVWAP: strategy.useVWAP ?? true,
+    vwapProximityPips: strategy.vwapProximityPips ?? 15,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
