@@ -137,9 +137,19 @@ export function BrokerLog() {
         .limit(200);
       if (error) throw error;
 
+      type ScanDetail = {
+        status?: string;
+        pair?: string;
+        direction?: string;
+        positionId?: string;
+        size?: number | null;
+        entryPrice?: number | null;
+        mt5Mirror?: string;
+      };
+
       const rows: BrokerLogRow[] = [];
       for (const log of data || []) {
-        const details = Array.isArray(log.details_json) ? log.details_json : [];
+        const details = Array.isArray(log.details_json) ? (log.details_json as unknown as ScanDetail[]) : [];
         for (const d of details) {
           if (d.status !== "trade_placed") continue;
 
