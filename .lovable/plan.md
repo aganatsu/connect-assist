@@ -1,38 +1,48 @@
 
-## What's actually happening
+## Recommendation: Dual-threshold gating (score AND count)
 
-**Image 1 — "FACTORS (9/9)" vs score 8.0/10 with one ✗ visible:**
-- The denominator `/9` in BotView is **hardcoded** (`p.text-...`>Factors ({d.factorCount || 0}/9)</p>`) at lines 644 and 709 of `src/pages/BotView.tsx`.
-- The bot-scanner now emits **17 factors**, not 9. So `factorCount` (count of present factors) can exceed 9, and the denominator is misleading.
-- The "9/9" with one ✗ visible is because the panel only shows the legacy 9 factors in the scrollable area but the numerator counts all present factors across the full 17-factor list — the math no longer adds up visually.
-- Score 8.0 with one factor missing is correct: each factor has a weight (0.5–1.5), so missing one ≠ losing exactly 1 point.
+### Why both, not either
+- **Score alone** (current): 11/17 weighted = 9.5/10 can fire even when key factors miss, because heavy-weighted factors dominate.
+- **Count alone**: ignores that some factors matter more (e.g. HTF bias 1.5pt vs spread filter 0.5pt).
+- **Both together**: "≥7.5 score AND ≥13/17 factors" → forces broad alignment AND quality. This is how serious ICT traders gate.
 
-**Image 2 — "11/17 factors aligned (score: 9.5/10)":**
-- Built in `bot-scanner/index.ts` line 1453: `${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10)`.
-- This is **mathematically valid**: factors have weights (0.5, 1.0, 1.5). 11 present factors can sum to 9.5 weighted points (capped at 10). 17 is the new total factor count.
-- Not a bug — but the relationship between "11/17" and "9.5/10" isn't obvious to a reader.
+### Mapping for your 13/17 question
+With current weights (0.5–1.5), 13/17 factors typically score **7.0–9.5/10**. There's no fixed mapping — depends which 13. So the practical answer: set BOTH a count floor (13) and a score floor (~7.5) and you get the strict gate you want.
 
-## Plan — Fix the count display
+## Plan
 
-### 1. Fix hardcoded `/9` denominator in `src/pages/BotView.tsx`
-Replace both occurrences (lines 644 and 709) with the actual factor list length:
-```tsx
-Factors ({d.factorCount || 0}/{d.factors?.length || 0})
+### 1. Add `minFactorCount` to bot config (default 0 = off)
+- `BotConfigModal.tsx`: new slider 0–17 under existing "Min Confluence Score" slider, in the Strategy section
+- Helper text: "Require at least N of 17 factors to align (in addition to score threshold)"
+
+### 2. Gate logic in `bot-scanner/index.ts`
+One additional check after the score gate:
+```ts
+if ((cfg.minFactorCount ?? 0) > 0 && presentFactors.length < cfg.minFactorCount) {
+  reason = `Only ${presentFactors.length}/${factors.length} factors (need ≥${cfg.minFactorCount})`;
+  skip;
+}
 ```
-This will correctly show "11/17", "9/17", etc.
+Reason string surfaces in scan log so you see why a setup was skipped.
 
-### 2. Add a small explainer tooltip next to the factor count
-Hover/title text: "X factors present out of Y total. Score is weighted (each factor 0.5–1.5 pts), capped at 10."
+### 3. Show active thresholds on BotView
+Small badge above the scan list: `Gate: ≥7.5 score · ≥13/17 factors`. Makes it obvious what's filtering.
 
-### 3. Optional polish
-- Color the numerator green when ≥ 60% of factors present, amber 40–60%, muted otherwise — matches existing score color scheme.
+### 4. Live mapping helper in modal
+Below the two sliders, compute from the last ~20 `scan_logs` entries:
+> "Recent scans with ≥13 factors averaged 8.1/10 score (range 7.4–9.5)"
+Helps you pick a sensible pair without guessing.
 
 ### Out of scope
-- No edge function changes (the summary string in bot-scanner is already correct).
-- No re-weighting of factors.
+- No re-weighting of factors
+- No change to Chart unified confluence (display-only)
+- No DB migration (config_json is already jsonb)
 
 ### Files
-- `src/pages/BotView.tsx` (2 small string changes + optional tooltip)
+- `src/components/BotConfigModal.tsx` — slider + helper
+- `src/pages/BotView.tsx` — threshold badge
+- `supabase/functions/bot-scanner/index.ts` — count gate + reason
+- `supabase/functions/bot-config/index.ts` defaults — add `minFactorCount: 0`
 
 ### Risk
-Trivial — pure label/denominator fix.
+Low — additive, defaults off, existing behaviour preserved.
