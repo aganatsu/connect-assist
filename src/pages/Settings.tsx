@@ -194,6 +194,7 @@ function BrokerSettings() {
                 <Button size="sm" variant="outline" onClick={() => { setSelectedConnection(c); setConfigModalOpen(true); }} title="Edit bot config for this connection">
                   <Wrench className="h-3 w-3" />
                 </Button>
+                <Button size="sm" variant="outline" onClick={() => checkStatus(c.id, c.display_name)} title="Check broker connection state">Status</Button>
                 <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>
