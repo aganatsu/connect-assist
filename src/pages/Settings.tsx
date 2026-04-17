@@ -221,7 +221,7 @@ function BrokerSettings() {
                         <div key={sym} className="grid grid-cols-[1fr_1fr_auto_32px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
                           <span className="font-mono font-medium">{sym}</span>
                           <span className="font-mono text-primary">{brokerSym as string}</span>
-                          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => validateBrokerSymbol(c.id, sym)}>Validate</Button>
+                          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => validateBrokerSymbol(c.id, sym, String(brokerSym))}>Validate</Button>
                           <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => { const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); }}><Trash2 className="h-3 w-3" /></Button>
                         </div>
                       ))}
