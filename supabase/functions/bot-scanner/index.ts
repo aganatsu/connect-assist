@@ -1283,6 +1283,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useUnicornModel: strategy.useUnicornModel ?? true,
     // Silver Bullet macro windows (defaults true)
     useSilverBullet: strategy.useSilverBullet ?? true,
+    // ICT Macro Windows (defaults true)
+    useMacroWindows: strategy.useMacroWindows ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
