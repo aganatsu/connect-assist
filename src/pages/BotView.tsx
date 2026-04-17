@@ -343,6 +343,9 @@ export default function BotView() {
               <TabsContent value="history" className="flex-1 overflow-auto mt-1">
                 <TradeHistoryTable trades={d.tradeHistory || []} />
               </TabsContent>
+              <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
+                <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
+              </TabsContent>
             </Tabs>
           </div>
 
