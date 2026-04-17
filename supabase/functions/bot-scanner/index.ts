@@ -1210,6 +1210,30 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 15: SMT Divergence (max 1.0) ──
+  // Reads precomputed SMT result injected by scan loop via config._smtResult.
+  const smtResult: SMTResult | null = config._smtResult ?? null;
+  {
+    let pts = 0;
+    let detail = smtResult ? smtResult.detail : "SMT not computed (no correlated pair fetched)";
+    if (config.useSMT === false) {
+      detail = "SMT Divergence disabled";
+    } else if (smtResult && smtResult.detected && direction) {
+      const aligned = (direction === "long" && smtResult.type === "bullish")
+        || (direction === "short" && smtResult.type === "bearish");
+      if (aligned) {
+        pts = 1.0;
+        detail = `SMT aligned: ${smtResult.detail}`;
+      } else {
+        detail = `SMT detected (${smtResult.type}) but opposite to signal direction`;
+      }
+    } else if (smtResult && smtResult.detected) {
+      detail = `SMT (${smtResult.type}) detected but no signal direction yet`;
+    }
+    score += pts;
+    factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
