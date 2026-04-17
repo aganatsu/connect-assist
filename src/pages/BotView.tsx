@@ -288,7 +288,7 @@ export default function BotView() {
                 ) : (
                   <table className="w-full text-[11px] font-mono">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
-                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
+                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Dir</th>
                       <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
                       <th className="text-right py-1 px-1">P&L</th><th className="text-right py-1 px-1">Size</th>
                       <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
@@ -300,6 +300,7 @@ export default function BotView() {
                           <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
                             <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(p.openTime)}</td>
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                             <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
                             <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
@@ -321,7 +322,7 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
+                              <td colSpan={11} className="bg-secondary/20 border-b border-border p-2">
                                 <div className="space-y-1 text-[10px]">
                                   <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                                   <SignalReasoningCard signalReason={p.signalReason || ""} />
@@ -600,6 +601,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
   return (
     <table className="w-full text-[11px] font-mono">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
+        <th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Closed</th>
         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
         <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Exit</th>
         <th className="text-right py-1 px-1">Pips</th><th className="text-right py-1 px-1">P&L</th>
@@ -608,6 +610,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
       <tbody>
         {trades.slice(0, 30).map((t: any, i: number) => (
           <tr key={i} className={`border-b border-border/30 hover:bg-secondary/30 ${i % 2 === 1 ? "bg-secondary/10" : ""}`}>
+            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.openTime)}</td>
+            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.closedAt)}</td>
             <td className="py-1 px-1">{t.symbol}</td>
             <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
             <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>
