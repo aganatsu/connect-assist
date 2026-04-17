@@ -1141,6 +1141,25 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
+  const macroWindow = detectMacroWindow();
+  {
+    let pts = 0;
+    let detail = "Outside ICT macro reprice window";
+    if (config.useMacroWindows === false) {
+      detail = "Macro Windows disabled";
+    } else if (macroWindow.active) {
+      pts = 0.5;
+      detail = `${macroWindow.window} active — ${macroWindow.minutesRemaining}min remaining`;
+      if (silverBullet.active && config.useSilverBullet !== false) {
+        pts += 0.5;
+        detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
