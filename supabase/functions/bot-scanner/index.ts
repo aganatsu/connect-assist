@@ -451,39 +451,53 @@ interface SMTResult { detected: boolean; type: "bullish" | "bearish" | null; cor
 function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
   const corrPair = SMT_PAIRS[symbol] || null;
   if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
-  if (candles.length < 25 || correlatedCandles.length < 25) {
+  if (candles.length < 30 || correlatedCandles.length < 30) {
     return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
   }
-  // Compare last N candles' extremes vs prior N candles' extremes on both pairs
-  const N = 20;
-  const recent = candles.slice(-N);
-  const prior = candles.slice(-2 * N, -N);
-  const corrRecent = correlatedCandles.slice(-N);
-  const corrPrior = correlatedCandles.slice(-2 * N, -N);
-  if (prior.length < 5 || corrPrior.length < 5) {
-    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough history" };
+
+  // Use swing-point comparison (ICT methodology) instead of absolute extremes.
+  // Find the last 2 swing lows and last 2 swing highs on each pair.
+  const thisSwings = detectSwingPoints(candles, 3);
+  const corrSwings = detectSwingPoints(correlatedCandles, 3);
+
+  const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
+  const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
+  const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
+  const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
+
+  if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
   }
-  const high = (cs: Candle[]) => Math.max(...cs.map(c => c.high));
-  const low  = (cs: Candle[]) => Math.min(...cs.map(c => c.low));
-  const thisRecentHigh = high(recent), thisPriorHigh = high(prior);
-  const thisRecentLow  = low(recent),  thisPriorLow  = low(prior);
-  const corrRecentHigh = high(corrRecent), corrPriorHigh = high(corrPrior);
-  const corrRecentLow  = low(corrRecent),  corrPriorLow  = low(corrPrior);
-  // Bullish SMT: this pair takes prior low, correlated does not (buy-side opportunity)
-  if (thisRecentLow < thisPriorLow && corrRecentLow >= corrPriorLow) {
+
+  // Bullish SMT: primary pair's latest swing low is LOWER than prior swing low,
+  // but correlated pair's latest swing low is NOT lower (failed to confirm).
+  const thisLatestLow = thisLows[thisLows.length - 1].price;
+  const thisPriorLow  = thisLows[thisLows.length - 2].price;
+  const corrLatestLow = corrLows[corrLows.length - 1].price;
+  const corrPriorLow  = corrLows[corrLows.length - 2].price;
+
+  if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
     return {
       detected: true, type: "bullish", correlatedPair: corrPair,
-      detail: `${symbol} swept prior low (${thisRecentLow.toFixed(5)}) but ${corrPair} held — bullish SMT`,
+      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
     };
   }
-  // Bearish SMT: this pair takes prior high, correlated does not
-  if (thisRecentHigh > thisPriorHigh && corrRecentHigh <= corrPriorHigh) {
+
+  // Bearish SMT: primary pair's latest swing high is HIGHER than prior swing high,
+  // but correlated pair's latest swing high is NOT higher.
+  const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
+  const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
+  const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
+  const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
+
+  if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
     return {
       detected: true, type: "bearish", correlatedPair: corrPair,
-      detail: `${symbol} broke prior high (${thisRecentHigh.toFixed(5)}) but ${corrPair} held — bearish SMT`,
+      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
     };
   }
-  return { detected: false, type: null, correlatedPair: corrPair, detail: `No SMT divergence vs ${corrPair}` };
+
+  return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
 }
 
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
@@ -1250,6 +1264,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 3: Fair Value Gap (max 1.5) ──
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
+  // ICT: Consequent Encroachment (CE) = 50% of FVG is a key entry level.
   {
     let pts = 0;
     let detail = "";
@@ -1257,10 +1272,19 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const activeFVGs = fvgs.filter(f => !f.mitigated);
       const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
       if (insideFVG) {
-        pts = 1.5;
-        detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
+        const ce = (insideFVG.high + insideFVG.low) / 2; // Consequent Encroachment
+        const fvgRange = insideFVG.high - insideFVG.low;
+        const distFromCE = Math.abs(lastPrice - ce);
+        const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15; // within 15% of CE
+        if (nearCE) {
+          pts = 1.5;
+          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} — optimal entry`;
+        } else {
+          pts = 1.0;
+          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
+        }
         if ((insideFVG as any).hasDisplacement) {
-          detail += " — created by displacement (scored via Factor 10)";
+          detail += " [displacement-created, scored via Factor 10]";
         }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
@@ -1299,12 +1323,24 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   }
 
   // ── Factor 6: Judas Swing (max 1.0) ──
+  // ICT: Judas Swing should occur during a kill zone (London or NY open).
   {
     let pts = 0;
-    if (judasSwing.detected && judasSwing.confirmed) pts = 1;
-    else if (judasSwing.detected) pts = 0.5;
+    let detail = judasSwing.description;
+    if (judasSwing.detected && judasSwing.confirmed) {
+      if (session.isKillZone) {
+        pts = 1;
+        detail += " — during kill zone (high probability)";
+      } else {
+        pts = 0.5;
+        detail += " — outside kill zone (lower probability)";
+      }
+    } else if (judasSwing.detected) {
+      pts = 0.25;
+      detail += " (unconfirmed)";
+    }
     score += pts;
-    factors.push({ name: "Judas Swing", present: pts > 0, weight: 1.0, detail: judasSwing.description });
+    factors.push({ name: "Judas Swing", present: pts > 0, weight: 1.0, detail });
   }
 
   // ── Factor 7: PD/PW Levels (max 0.5) ──
@@ -1329,9 +1365,35 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   }
 
   // ── Factor 8: Reversal Candle (max 0.5) ──
+  // ICT: reversal candles matter when they form at a key level (OB, FVG, PD/PW).
   {
-    const pts = reversalCandle.detected ? 0.5 : 0;
-    const detail = reversalCandle.detected ? `${reversalCandle.type} reversal candle on latest bar` : "No reversal pattern";
+    let pts = 0;
+    let detail = "No reversal pattern";
+    if (reversalCandle.detected) {
+      const lastC = candles[candles.length - 1];
+      const lastMid = (lastC.high + lastC.low) / 2;
+      // Check if reversal formed at an OB
+      const atOB = orderBlocks.some(ob => !ob.mitigated && lastC.low <= ob.high && lastC.high >= ob.low);
+      // Check if reversal formed at an FVG
+      const atFVG = fvgs.some(f => !f.mitigated && lastC.low <= f.high && lastC.high >= f.low);
+      // Check if reversal formed at a PD/PW level
+      const atPDPW = pdLevels ? [
+        pdLevels.pdh, pdLevels.pdl, pdLevels.pwh, pdLevels.pwl,
+      ].some(lvl => Math.abs(lastMid - lvl) / lastMid <= 0.002) : false;
+
+      const atKeyLevel = atOB || atFVG || atPDPW;
+      if (atKeyLevel) {
+        pts = 0.5;
+        const levels: string[] = [];
+        if (atOB) levels.push("OB");
+        if (atFVG) levels.push("FVG");
+        if (atPDPW) levels.push("PD/PW level");
+        detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")})`;
+      } else {
+        pts = 0.25;
+        detail = `${reversalCandle.type} reversal candle detected but not at a key level`;
+      }
+    }
     score += pts;
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail });
   }
@@ -1419,6 +1481,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   }
 
   // ── Factor 10: Displacement (max 1.0) ──
+  // ICT: True displacement should create an FVG (institutional footprint).
   {
     let pts = 0;
     let detail = "No displacement candle in last 5 bars";
@@ -1427,9 +1490,16 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         const aligned = (direction === "long" && displacement.lastDirection === "bullish")
           || (direction === "short" && displacement.lastDirection === "bearish");
         if (aligned) {
-          pts = 1.0;
           const last = displacement.displacementCandles[displacement.displacementCandles.length - 1];
-          detail = `Displacement candle confirms institutional commitment (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+          // Check if displacement candle created an FVG (within 1 candle of displacement)
+          const createdFVG = fvgs.some(f => Math.abs(f.index - last.index) <= 1);
+          if (createdFVG) {
+            pts = 1.0;
+            detail = `Displacement + FVG created — strong institutional footprint (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+          } else {
+            pts = 0.5;
+            detail = `Displacement aligned but no FVG created (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+          }
         } else {
           detail = `Displacement detected but opposite to signal direction (${displacement.lastDirection})`;
         }
