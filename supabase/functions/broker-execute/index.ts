@@ -4,13 +4,37 @@ import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
-// Resolve symbol name: check full remap first, then apply default suffix
+// Normalize a symbol/key for case-insensitive, whitespace-insensitive matching.
+// Strips slashes, spaces, dots, hyphens, underscores; uppercases.
+function normalizeKey(s: string): string {
+  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
+}
+
+// Resolve symbol name: check normalized override map first, then apply default suffix.
+// Override value (broker symbol) is returned EXACTLY as the user entered it.
 function resolveSymbol(symbol: string, conn: any): string {
-  const base = symbol.replace("/", "");
-  const overrides = conn.symbol_overrides || {};
-  // Override = exact broker symbol (no suffix appended)
-  if (overrides[base]) return overrides[base];
+  const rawOverrides = conn.symbol_overrides || {};
+  const norm = normalizeKey(symbol);
+  // Build a normalized lookup so "EUR/USD", "eurusd", "EURUSD" all hit the same entry
+  for (const [k, v] of Object.entries(rawOverrides)) {
+    if (normalizeKey(k) === norm && v) return String(v);
+  }
+  const base = symbol.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
   return base + (conn.symbol_suffix || "");
+}
+
+// OANDA uses underscore format (EUR_USD). Honor overrides first.
+function resolveOandaSymbol(symbol: string, conn: any): string {
+  const rawOverrides = conn.symbol_overrides || {};
+  const norm = normalizeKey(symbol);
+  for (const [k, v] of Object.entries(rawOverrides)) {
+    if (normalizeKey(k) === norm && v) return String(v);
+  }
+  // Default: convert "EUR/USD" or "EURUSD" to "EUR_USD"
+  const cleaned = symbol.trim().replace(/\s+/g, "").toUpperCase();
+  if (cleaned.includes("/")) return cleaned.replace("/", "_");
+  if (cleaned.length === 6 && !cleaned.includes("_")) return `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
+  return cleaned;
 }
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
