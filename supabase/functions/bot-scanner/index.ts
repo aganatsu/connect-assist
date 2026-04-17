@@ -971,6 +971,36 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
 
   return { stopLoss: sl, takeProfit: tp };
 }
+/**
+ * ─── CONFLUENCE FACTOR AUDIT (17 factors + OR enhancements) ──────────
+ * Max raw points possible when every factor and bonus aligns = 21.5
+ * Final score is normalized via Math.min(10, score) → 0–10 scale.
+ *
+ *  #  | Factor                 | Base | Bonus(es)
+ * ----+------------------------+------+-------------------------------------------
+ *  1  | Market Structure       | 2.0  | +0.5 OR bias (when OR enabled)
+ *  2  | Order Block            | 2.0  | (displacement bonus removed — see Factor 10)
+ *  3  | Fair Value Gap         | 1.5  | (displacement bonus removed — see Factor 10)
+ *  4  | Premium/Discount       | 2.0  | (capped)
+ *  5  | Session/Kill Zone      | 1.0  | +0.5 Silver Bullet combo
+ *  6  | Judas Swing            | 1.0  | +0.5 OR judas (high or low swept-and-reversed)
+ *  7  | PD/PW Levels           | 0.5  | +0.5 OR key-level proximity
+ *  8  | Reversal Candle        | 0.5  | —
+ *  9  | Liquidity Sweep        | 0.5  | —
+ * 10  | Displacement           | 1.0  | (sole path — no bonuses on OB/FVG)
+ * 11  | Breaker Block          | 1.0  | —
+ * 12  | Unicorn Model          | 1.5  | —
+ * 13  | Silver Bullet          | 1.0  | —
+ * 14  | Macro Window           | 0.5  | +0.5 Silver Bullet overlap combo
+ * 15  | SMT Divergence         | 1.0  | —
+ * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
+ * 17  | AMD Phase              | 0.5  | +0.5 distribution-phase bonus
+ * ----+------------------------+------+-------------------------------------------
+ *  TOTAL MAX RAW              = 21.5  (clamped to 10 for display via Math.min)
+ *
+ * Recommended thresholds on the 0-10 scale (post-clamp):
+ *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
+ */
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const orderBlocks = detectOrderBlocks(candles);
