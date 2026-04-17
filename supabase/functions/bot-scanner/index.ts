@@ -53,11 +53,16 @@ const DEFAULTS = {
 };
 
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
+function normalizeSymKey(s: string): string {
+  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
+}
 function resolveSymbol(pair: string, conn: any): string {
-  const base = pair.replace("/", "");
   const overrides = conn.symbol_overrides || {};
-  // Override = exact broker symbol (no suffix appended)
-  if (overrides[base]) return overrides[base];
+  const norm = normalizeSymKey(pair);
+  for (const [k, v] of Object.entries(overrides)) {
+    if (normalizeSymKey(k) === norm && v) return String(v);
+  }
+  const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
   return base + (conn.symbol_suffix || "");
 }
 
@@ -1545,6 +1550,7 @@ async function runScanForUser(supabase: any, userId: string) {
             if (account.execution_mode === "live") {
               const { data: closeConns } = await supabase.from("broker_connections")
                 .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              // NOTE: OANDA close mirroring is handled separately via broker-execute close_trade
               if (closeConns && closeConns.length > 0) {
                 for (const conn of closeConns) {
                   try {
@@ -1565,13 +1571,12 @@ async function runScanForUser(supabase: any, userId: string) {
                       p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
                     );
                     if (!brokerPos) {
-                      // Fallback: match by symbol
-                      const base = opp.symbol.replace("/", "");
-                      const overrides = conn.symbol_overrides || {};
-                      const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+                      // Fallback: match by symbol (uses normalized override lookup)
+                      const brokerSymbol = resolveSymbol(opp.symbol, conn);
+                      const normTarget = brokerSymbol.replace(/[._\-\s]/g, "").toUpperCase();
                       const symFallback = brokerPositions.find((p: any) =>
-                        p.symbol === brokerSymbol || p.symbol === base ||
-                        p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+                        p.symbol === brokerSymbol ||
+                        p.symbol?.replace(/[._\-\s]/g, "").toUpperCase() === normTarget
                       );
                       if (symFallback) {
                         const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: symFallback.id }) });
@@ -1677,11 +1682,40 @@ async function runScanForUser(supabase: any, userId: string) {
         try {
           if (account.execution_mode === "live") {
             const { data: connections } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
               for (const conn of connections) {
                 try {
+                  if (conn.broker_type !== "metaapi") {
+                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
+                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                      },
+                      body: JSON.stringify({
+                        action: "place_order",
+                        connectionId: conn.id,
+                        symbol: pair,
+                        direction: analysis.direction,
+                        size,
+                        stopLoss: sl,
+                        takeProfit: tp,
+                        userId,
+                      }),
+                    });
+                    const exBody = await exRes.text();
+                    if (exRes.ok) {
+                      console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
+                      mirrorResults.push(`${conn.display_name}: success`);
+                    } else {
+                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${exBody.slice(0, 300)}`);
+                      mirrorResults.push(`${conn.display_name}: failed`);
+                    }
+                    continue;
+                  }
                   let authToken = conn.api_key;
                   let metaAccountId = conn.account_id;
                   if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
