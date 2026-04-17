@@ -322,7 +322,7 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={10} className="bg-secondary/20 border-b border-border p-2">
+                              <td colSpan={11} className="bg-secondary/20 border-b border-border p-2">
                                 <div className="space-y-1 text-[10px]">
                                   <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                                   <SignalReasoningCard signalReason={p.signalReason || ""} />
