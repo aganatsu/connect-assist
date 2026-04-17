@@ -1632,9 +1632,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
     // UI writes: minRR; legacy DB: minRiskReward
     minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
-    maxDrawdown: risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
-    // UI writes: defaultRR; legacy DB: minRiskReward (reuse for TP ratio)
-    tpRatio: risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? DEFAULTS.tpRatio,
+    // maxDrawdown is set later (combined with circuitBreakerPct)
+    // tpRatio is set later (in SL/TP method block)
+
     // Legacy DB keys
     maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
