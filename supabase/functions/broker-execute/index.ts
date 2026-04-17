@@ -188,7 +188,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "symbol_specs" || action === "validate_symbol") {
-      const { symbol } = payload;
+      const { symbol, brokerSymbol } = payload;
       if (!symbol) throw new Error("Missing symbol parameter");
 
       if (conn.broker_type === "metaapi") {
@@ -198,7 +198,7 @@ Deno.serve(async (req) => {
           authToken = conn.account_id;
           metaAccountId = conn.api_key;
         }
-        const brokerSym = resolveSymbol(symbol, conn);
+        const brokerSym = (brokerSymbol || resolveSymbol(symbol, conn)).toString();
         const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
           if (action === "validate_symbol") {

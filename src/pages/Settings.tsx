@@ -141,16 +141,16 @@ function BrokerSettings() {
   // VALUES (broker symbol) are kept exactly as the user typed them.
   const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
 
-  const validateBrokerSymbol = async (connectionId: string, appSymbol: string) => {
-    const t = toast.loading(`Validating ${appSymbol}...`);
+  const validateBrokerSymbol = async (connectionId: string, appSymbol: string, brokerSymbol?: string) => {
+    const t = toast.loading(`Validating ${brokerSymbol || appSymbol}...`);
     try {
       const { data, error } = await supabase.functions.invoke("broker-execute", {
-        body: { action: "validate_symbol", connectionId, symbol: appSymbol },
+        body: { action: "validate_symbol", connectionId, symbol: appSymbol, brokerSymbol },
       });
       if (error) throw error;
       toast.dismiss(t);
       if (data?.ok) toast.success(`✓ ${appSymbol} → ${data.brokerSymbol}`);
-      else toast.error(`✗ ${data?.brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);
+      else toast.error(`✗ ${data?.brokerSymbol || brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);
     } catch (e: any) {
       toast.dismiss(t);
       toast.error(`Validation failed: ${e.message}`);
@@ -221,7 +221,7 @@ function BrokerSettings() {
                         <div key={sym} className="grid grid-cols-[1fr_1fr_auto_32px] gap-2 px-3 py-2 text-xs items-center border-t border-border">
                           <span className="font-mono font-medium">{sym}</span>
                           <span className="font-mono text-primary">{brokerSym as string}</span>
-                          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => validateBrokerSymbol(c.id, sym)}>Validate</Button>
+                          <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={() => validateBrokerSymbol(c.id, sym, String(brokerSym))}>Validate</Button>
                           <Button variant="ghost" size="sm" className="h-5 w-5 p-0" onClick={() => { const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); }}><Trash2 className="h-3 w-3" /></Button>
                         </div>
                       ))}
