@@ -898,8 +898,6 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  score = Math.min(10, Math.round(score * 10) / 10);
-
   // Determine direction
   let direction: "long" | "short" | null = null;
   if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
@@ -909,6 +907,33 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     if (pd.currentZone === "discount") direction = "long";
     else if (pd.currentZone === "premium") direction = "short";
   }
+
+  // ── Factor 10: Displacement (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No displacement candle in last 5 bars";
+    if (config.useDisplacement !== false) {
+      if (displacement.isDisplacement && direction && displacement.lastDirection) {
+        const aligned = (direction === "long" && displacement.lastDirection === "bullish")
+          || (direction === "short" && displacement.lastDirection === "bearish");
+        if (aligned) {
+          pts = 1.0;
+          const last = displacement.displacementCandles[displacement.displacementCandles.length - 1];
+          detail = `Displacement candle confirms institutional commitment (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+        } else {
+          detail = `Displacement detected but opposite to signal direction (${displacement.lastDirection})`;
+        }
+      } else if (displacement.isDisplacement) {
+        detail = `Displacement detected (${displacement.lastDirection}) but no signal direction`;
+      }
+    } else {
+      detail = "Displacement scoring disabled";
+    }
+    score += pts;
+    factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail });
+  }
+
+  score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -925,9 +950,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
+  const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}`;
 
   return {
     score, direction, bias, summary, factors,
