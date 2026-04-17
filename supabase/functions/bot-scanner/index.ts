@@ -120,6 +120,40 @@ function calculateATR(candles: Candle[], period = 14): number {
   return atrSum / period;
 }
 
+// ─── Session-Anchored VWAP ─────────────────────────────────────────
+// Anchors at the start of the current UTC day. Returns current VWAP, distance in pips,
+// and whether the latest candle wicked through and rejected VWAP (for bonus).
+interface VWAPResult { value: number | null; distancePips: number | null; rejection: "bullish" | "bearish" | null; barsAnchored: number; }
+function calculateAnchoredVWAP(candles: Candle[], pipSize: number): VWAPResult {
+  if (candles.length === 0 || pipSize <= 0) {
+    return { value: null, distancePips: null, rejection: null, barsAnchored: 0 };
+  }
+  // Find anchor index = first candle whose UTC date matches the latest candle's UTC date
+  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
+  let anchorIdx = candles.length - 1;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].datetime.slice(0, 10) === lastDate) anchorIdx = i; else break;
+  }
+  let pvSum = 0, vSum = 0;
+  // Volume not available from Yahoo OHLC payload here; use range as proxy weight (high-low+epsilon).
+  for (let i = anchorIdx; i < candles.length; i++) {
+    const c = candles[i];
+    const typical = (c.high + c.low + c.close) / 3;
+    const w = Math.max(1e-9, c.high - c.low);
+    pvSum += typical * w;
+    vSum += w;
+  }
+  const value = vSum > 0 ? pvSum / vSum : null;
+  if (value == null) return { value: null, distancePips: null, rejection: null, barsAnchored: candles.length - anchorIdx };
+  const last = candles[candles.length - 1];
+  const distancePips = Math.abs(last.close - value) / pipSize;
+  // Rejection wick: candle traded through VWAP but closed back on one side
+  let rejection: "bullish" | "bearish" | null = null;
+  if (last.low < value && last.close > value && (last.close - last.open) > 0) rejection = "bullish";
+  else if (last.high > value && last.close < value && (last.open - last.close) > 0) rejection = "bearish";
+  return { value, distancePips, rejection, barsAnchored: candles.length - anchorIdx };
+}
+
 function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
 
@@ -1234,6 +1268,39 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 16: VWAP Confluence (max 1.0; 0.5 base near VWAP + bias-aligned, +0.5 rejection) ──
+  const _vwapSymbol = config._currentSymbol || "EUR/USD";
+  const _vwapPipSize = (SPECS[_vwapSymbol] || SPECS["EUR/USD"]).pipSize;
+  const vwap = calculateAnchoredVWAP(candles, _vwapPipSize);
+  {
+    let pts = 0;
+    let detail = "VWAP unavailable";
+    const proximityPips = config.vwapProximityPips ?? 15;
+    if (config.useVWAP === false) {
+      detail = "VWAP disabled";
+    } else if (vwap.value != null && vwap.distancePips != null) {
+      // Bias-aligned proximity: long needs price >= VWAP (or within proximity below); short the inverse
+      const aboveVwap = lastPrice >= vwap.value;
+      const belowVwap = lastPrice <= vwap.value;
+      const longAligned = direction === "long" && (aboveVwap || vwap.distancePips <= proximityPips);
+      const shortAligned = direction === "short" && (belowVwap || vwap.distancePips <= proximityPips);
+      if ((longAligned || shortAligned) && vwap.distancePips <= proximityPips) {
+        pts = 0.5;
+        detail = `Price ${vwap.distancePips.toFixed(1)} pips from session VWAP ${vwap.value.toFixed(5)} (bias-aligned)`;
+        if ((direction === "long" && vwap.rejection === "bullish") || (direction === "short" && vwap.rejection === "bearish")) {
+          pts += 0.5;
+          detail += ` + ${vwap.rejection} rejection wick at VWAP`;
+        }
+      } else if (direction) {
+        detail = `VWAP ${vwap.value.toFixed(5)} — price ${vwap.distancePips.toFixed(1)} pips away (no alignment)`;
+      } else {
+        detail = `VWAP ${vwap.value.toFixed(5)} — no signal direction`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "VWAP", present: pts > 0, weight: 1.0, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1255,14 +1322,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const sbSummary = silverBullet.active ? ` | ${silverBullet.window}` : "";
   const mwSummary = macroWindow.active ? ` | ${macroWindow.window}` : "";
   const smtSummary = smtResult?.detected ? ` | SMT ${smtResult.type} vs ${smtResult.correlatedPair}` : "";
+  const vwapSummary = vwap.value != null ? ` | VWAP ${vwap.value.toFixed(5)}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap,
   };
 }
 
@@ -1362,6 +1430,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useMacroWindows: strategy.useMacroWindows ?? true,
     // SMT Divergence (defaults true)
     useSMT: strategy.useSMT ?? true,
+    // VWAP confluence (defaults true)
+    useVWAP: strategy.useVWAP ?? true,
+    vwapProximityPips: strategy.vwapProximityPips ?? 15,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
