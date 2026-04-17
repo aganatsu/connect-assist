@@ -556,16 +556,15 @@ Deno.serve(async (req) => {
           }
 
           // Partial take profit: close a portion of the position at first TP level
-          if (!closeReason && exitFlags.partialTP && exitFlags.partialTPPercent > 0 && exitFlags.partialTPLevel > 0 && tp !== null && sl !== null) {
+          // Guard: only fire once per position using partial_tp_fired flag (fixes runaway loop)
+          if (!closeReason && exitFlags.partialTP && exitFlags.partialTPPercent > 0 && exitFlags.partialTPLevel > 0 && tp !== null && sl !== null && !pos.partial_tp_fired) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const profitPips = pos.direction === "long"
               ? (currentPrice - entryPrice) / spec.pipSize
               : (entryPrice - currentPrice) / spec.pipSize;
             const slDistancePips = Math.abs(entryPrice - sl) / spec.pipSize;
             const partialTriggerPips = slDistancePips * exitFlags.partialTPLevel; // e.g., 1.0R
-            // Check if partial TP was already taken (size would have been reduced)
-            const originalSize = parseFloat(pos.original_size || pos.size);
-            if (profitPips >= partialTriggerPips && size >= originalSize * 0.99) {
+            if (profitPips >= partialTriggerPips) {
               // Close partialTPPercent of the position
               const closeSize = size * (exitFlags.partialTPPercent / 100);
               const remainSize = size - closeSize;
@@ -579,15 +578,18 @@ Deno.serve(async (req) => {
                 close_reason: "partial_tp", signal_reason: pos.signal_reason || "",
                 signal_score: pos.signal_score, order_id: pos.order_id,
               });
-              // Update position size and balance
-              await supabase.from("paper_positions").update({ size: remainSize.toString() }).eq("id", pos.id);
+              // Update position size and set fired flag, then update balance
+              await supabase.from("paper_positions").update({
+                size: remainSize.toString(),
+                partial_tp_fired: true,
+              }).eq("id", pos.id);
               const curBal = parseFloat(account?.balance || "10000");
               const newBal = curBal + partialPnl;
               const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
               await supabase.from("paper_accounts").update({
                 balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
               }).eq("user_id", user.id);
-              console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)}`);
+              console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)} (flag set, won't re-fire)`);
             }
           }
 
