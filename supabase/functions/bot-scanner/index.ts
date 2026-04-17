@@ -288,6 +288,60 @@ interface OrderBlock { index: number; high: number; low: number; type: "bullish"
 interface FairValueGap { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; }
 interface LiquidityPool { price: number; type: "buy-side" | "sell-side"; strength: number; datetime: string; swept: boolean; }
 interface ReasoningFactor { name: string; present: boolean; weight: number; detail: string; }
+interface DisplacementCandle { index: number; bodyRatio: number; rangeMultiple: number; direction: "bullish" | "bearish"; }
+interface DisplacementResult { isDisplacement: boolean; displacementCandles: DisplacementCandle[]; lastDirection: "bullish" | "bearish" | null; }
+
+// ─── Displacement Detection ─────────────────────────────────────────
+function detectDisplacement(candles: Candle[]): DisplacementResult {
+  if (candles.length < 25) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
+  const window = candles.slice(-21, -1); // last 20 prior candles
+  let bodySum = 0, rangeSum = 0;
+  for (const c of window) {
+    bodySum += Math.abs(c.close - c.open);
+    rangeSum += (c.high - c.low);
+  }
+  const avgBody = bodySum / window.length;
+  const avgRange = rangeSum / window.length;
+  if (avgBody <= 0 || avgRange <= 0) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
+
+  const checkStart = Math.max(0, candles.length - 5);
+  const displacementCandles: DisplacementCandle[] = [];
+  for (let i = checkStart; i < candles.length; i++) {
+    const c = candles[i];
+    const body = Math.abs(c.close - c.open);
+    const range = c.high - c.low;
+    if (range <= 0) continue;
+    const bodyRatio = body / range;
+    const rangeMultiple = range / avgRange;
+    const bodyMultiple = body / avgBody;
+    if (bodyMultiple >= 2.0 && bodyRatio >= 0.7 && rangeMultiple >= 1.5) {
+      displacementCandles.push({
+        index: i, bodyRatio, rangeMultiple,
+        direction: c.close > c.open ? "bullish" : "bearish",
+      });
+    }
+  }
+  const lastDirection = displacementCandles.length > 0
+    ? displacementCandles[displacementCandles.length - 1].direction
+    : null;
+  return { isDisplacement: displacementCandles.length > 0, displacementCandles, lastDirection };
+}
+
+function tagDisplacementQuality(
+  orderBlocks: OrderBlock[],
+  fvgs: FairValueGap[],
+  displacementCandles: DisplacementCandle[],
+) {
+  for (const ob of orderBlocks) {
+    const hasNearby = displacementCandles.some(d => d.index > ob.index && d.index <= ob.index + 3);
+    (ob as any).hasDisplacement = hasNearby;
+  }
+  for (const fvg of fvgs) {
+    // FVG middle candle is at fvg.index (we store index of middle/c2 candle)
+    const createdByDisp = displacementCandles.some(d => d.index === fvg.index);
+    (fvg as any).hasDisplacement = createdByDisp;
+  }
+}
 
 // ─── SMC Analysis Functions ─────────────────────────────────────────
 
@@ -660,7 +714,11 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Market Structure", present: pts > 0, weight: 2.0, detail: detail || "Ranging — no trend" });
   }
 
-  // ── Factor 2: Order Block (max 2.0) ──
+  // Displacement detection (used by OB/FVG bonus + new factor below)
+  const displacement = detectDisplacement(candles);
+  tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
+
+  // ── Factor 2: Order Block (max 2.0, +0.5 displacement bonus) ──
   {
     let pts = 0;
     let detail = "";
@@ -670,6 +728,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideOB) {
         pts = 2.0;
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+        if (config.useDisplacement !== false && (insideOB as any).hasDisplacement) {
+          pts += 0.5;
+          detail += " — formed with displacement";
+        }
       } else if (activeOBs.length > 0) {
         pts = 0.5;
         detail = `${activeOBs.length} active OBs nearby`;
@@ -681,7 +743,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
   }
 
-  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  // ── Factor 3: Fair Value Gap (max 1.5, +0.5 displacement bonus) ──
   {
     let pts = 0;
     let detail = "";
@@ -691,6 +753,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (insideFVG) {
         pts = 1.5;
         detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}`;
+        if (config.useDisplacement !== false && (insideFVG as any).hasDisplacement) {
+          pts += 0.5;
+          detail += " — created by displacement";
+        }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
         detail = `${activeFVGs.length} unfilled FVGs in range`;
@@ -832,8 +898,6 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  score = Math.min(10, Math.round(score * 10) / 10);
-
   // Determine direction
   let direction: "long" | "short" | null = null;
   if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
@@ -843,6 +907,33 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     if (pd.currentZone === "discount") direction = "long";
     else if (pd.currentZone === "premium") direction = "short";
   }
+
+  // ── Factor 10: Displacement (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No displacement candle in last 5 bars";
+    if (config.useDisplacement !== false) {
+      if (displacement.isDisplacement && direction && displacement.lastDirection) {
+        const aligned = (direction === "long" && displacement.lastDirection === "bullish")
+          || (direction === "short" && displacement.lastDirection === "bearish");
+        if (aligned) {
+          pts = 1.0;
+          const last = displacement.displacementCandles[displacement.displacementCandles.length - 1];
+          detail = `Displacement candle confirms institutional commitment (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+        } else {
+          detail = `Displacement detected but opposite to signal direction (${displacement.lastDirection})`;
+        }
+      } else if (displacement.isDisplacement) {
+        detail = `Displacement detected (${displacement.lastDirection}) but no signal direction`;
+      }
+    } else {
+      detail = "Displacement scoring disabled";
+    }
+    score += pts;
+    factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail });
+  }
+
+  score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -859,14 +950,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
+  const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
-    pd, session, pdLevels, lastPrice, stopLoss, takeProfit,
+    pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement,
   };
 }
 
@@ -955,6 +1047,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
     // UI writes: useStructureBreak; legacy DB: enableBOS + enableCHoCH
     enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
+    // Displacement scoring (defaults true)
+    useDisplacement: strategy.useDisplacement ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
