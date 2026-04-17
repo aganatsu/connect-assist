@@ -199,18 +199,14 @@ Deno.serve(async (req) => {
           metaAccountId = conn.api_key;
         }
         const brokerSym = resolveSymbol(symbol, conn);
-        const res = await fetch(
-          `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSym)}/specification`,
-          { headers: { "auth-token": authToken } },
-        );
+        const { res, body } = await metaFetch(metaAccountId, authToken, (b) => `${b}/symbols/${encodeURIComponent(brokerSym)}/specification`);
         if (!res.ok) {
-          const errText = await res.text();
           if (action === "validate_symbol") {
-            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: errText.slice(0, 300) });
+            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: body.slice(0, 300) });
           }
-          throw new Error(`MetaAPI symbol_specs error: ${res.status}`);
+          return respond({ error: `MetaAPI symbol_specs error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
         }
-        const spec: any = await res.json();
+        const spec: any = JSON.parse(body);
         if (action === "validate_symbol") {
           return respond({ ok: true, brokerSymbol: brokerSym, digits: spec.digits, minVolume: spec.minVolume, maxVolume: spec.maxVolume });
         }
