@@ -14,13 +14,14 @@ Deno.serve(async (req) => {
     );
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) throw new Error("Unauthorized");
+    const authedUser = user;
 
     const { action, ...payload } = await req.json();
     const connectionId = payload.connectionId || null;
 
     // Helper to build the query filter for connection-specific or global config
     function configQuery(q: any) {
-      q = q.eq("user_id", user.id);
+      q = q.eq("user_id", authedUser.id);
       if (connectionId) {
         q = q.eq("connection_id", connectionId);
       } else {
