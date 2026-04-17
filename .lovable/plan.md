@@ -1,62 +1,38 @@
 
-User asks whether unifying the two scores (SMC + Extended ICT) into one panel on the Chart tab would be a good idea.
+## What's actually happening
 
-Short answer: **yes** — two separate scores side-by-side is confusing because:
-- Users see two numbers and don't know which to trust
-- The factors overlap conceptually (both are ICT/SMC)
-- Decision-making is faster with one combined signal
+**Image 1 — "FACTORS (9/9)" vs score 8.0/10 with one ✗ visible:**
+- The denominator `/9` in BotView is **hardcoded** (`p.text-...`>Factors ({d.factorCount || 0}/9)</p>`) at lines 644 and 709 of `src/pages/BotView.tsx`.
+- The bot-scanner now emits **17 factors**, not 9. So `factorCount` (count of present factors) can exceed 9, and the denominator is misleading.
+- The "9/9" with one ✗ visible is because the panel only shows the legacy 9 factors in the scrollable area but the numerator counts all present factors across the full 17-factor list — the math no longer adds up visually.
+- Score 8.0 with one factor missing is correct: each factor has a weight (0.5–1.5), so missing one ≠ losing exactly 1 point.
 
-Recommended unification:
+**Image 2 — "11/17 factors aligned (score: 9.5/10)":**
+- Built in `bot-scanner/index.ts` line 1453: `${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10)`.
+- This is **mathematically valid**: factors have weights (0.5, 1.0, 1.5). 11 present factors can sum to 9.5 weighted points (capped at 10). 17 is the new total factor count.
+- Not a bug — but the relationship between "11/17" and "9.5/10" isn't obvious to a reader.
 
-## Plan — Unify Confluence on Chart tab
+## Plan — Fix the count display
 
-### 1. Single "Total Confluence" score
-- Combine SMC (max 10) + Extended (max 10) → weighted sum normalized to **/10**
-- Default weights: SMC 50% / Extended 50% (already the natural split)
-- Color-coded badge: red <4, amber 4–6.5, green >6.5
-- Show direction (BUY/SELL/NEUTRAL) inferred from majority factor bias
-
-### 2. Single unified "Confluence Factors" accordion
-Replace the two current accordions ("Confluence Score" + "ICT Extended Factors") with ONE grouped list:
-
-```text
-Total Confluence: 7.5 / 10  [BUY]
-
-▸ Structure & Bias
-   ✓ Trend (H4 bullish)
-   ✓ Power of 3 (NY distribution up)
-   ✗ Judas Swing
-
-▸ Zones
-   ✓ Order Block (bullish, 1.0823)
-   ✓ FVG overlap
-   ✓ Breaker Block flipped bullish
-   ✓ Unicorn setup
-
-▸ Timing
-   ✓ Kill Zone (NY AM)
-   ✓ Silver Bullet window
-   ✗ Macro Time
-
-▸ Price Action
-   ✓ Displacement (3 candles up)
-   ✓ Above VWAP
-   ✗ Liquidity sweep
+### 1. Fix hardcoded `/9` denominator in `src/pages/BotView.tsx`
+Replace both occurrences (lines 644 and 709) with the actual factor list length:
+```tsx
+Factors ({d.factorCount || 0}/{d.factors?.length || 0})
 ```
+This will correctly show "11/17", "9/17", etc.
 
-Each row keeps the ✓/✗ + detail it has today — just regrouped.
+### 2. Add a small explainer tooltip next to the factor count
+Hover/title text: "X factors present out of Y total. Score is weighted (each factor 0.5–1.5 pts), capped at 10."
 
-### 3. Keep "Bot Scan (live)" as a separate accordion
-It's a different data source (scheduled scanner output) — leave it alone.
-
-### 4. Files to change
-- `src/pages/Chart.tsx` — collapse two accordions into one, compute unified score + grouping
-- Small helper `src/lib/confluenceUnify.ts` — pure function: `(smc, extended) => { total, direction, groups[] }`
-- No edge function changes, no DB changes
+### 3. Optional polish
+- Color the numerator green when ≥ 60% of factors present, amber 40–60%, muted otherwise — matches existing score color scheme.
 
 ### Out of scope
-- Configurable weights in Settings (can be follow-up)
-- Bot Scan panel stays separate
+- No edge function changes (the summary string in bot-scanner is already correct).
+- No re-weighting of factors.
+
+### Files
+- `src/pages/BotView.tsx` (2 small string changes + optional tooltip)
 
 ### Risk
-Low — pure presentation refactor, both data sources already exist on the page.
+Trivial — pure label/denominator fix.
