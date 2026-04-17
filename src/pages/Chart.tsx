@@ -5,10 +5,11 @@ import TradingViewChart from "@/components/TradingViewChart";
 import { Card, CardContent } from "@/components/ui/card";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
 import { marketApi, smcApi, paperApi } from "@/lib/api";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
-import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap } from "lucide-react";
+import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Sparkles, Radio } from "lucide-react";
 
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
@@ -59,6 +60,25 @@ export default function Chart() {
     queryKey: ['paper-status'],
     queryFn: () => paperApi.status(),
     staleTime: 30000,
+  });
+
+  // Latest bot scan signal for this symbol
+  const { data: botScanSignal } = useQuery({
+    queryKey: ['chart-bot-scan', selectedSymbol],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('scan_logs')
+        .select('details_json, scanned_at')
+        .order('scanned_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      const details = Array.isArray(data?.details_json) ? data.details_json : [];
+      const match = (details as any[]).find((d) => d?.pair === selectedSymbol);
+      return match ? { signal: match, scannedAt: data?.scanned_at as string } : null;
+    },
+    refetchInterval: 30000,
+    staleTime: 25000,
   });
 
   const session = getCurrentSession();
