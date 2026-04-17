@@ -331,7 +331,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "strategy" && (
+                {effectiveActiveTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
                     <FieldGroup label="Auto Scan Interval" description="How often the bot scans for new trade setups (in seconds)">
@@ -391,7 +391,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "risk" && (
+                {effectiveActiveTab === "risk" && (
                   <div className="space-y-5">
                     <SectionHeader title="Risk Management" description="Control position sizing and drawdown limits" />
                     <div className="grid grid-cols-2 gap-4">
@@ -422,7 +422,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "entry_exit" && (
+                {effectiveActiveTab === "entry_exit" && (
                   <div className="space-y-5">
                     <SectionHeader title="Entry & Exit Rules" description="Configure trade entry timing and exit strategies" />
                     <div className="space-y-4">
@@ -522,7 +522,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "instruments" && (
+                {effectiveActiveTab === "instruments" && (
                   <div className="space-y-5">
                     <SectionHeader title="Instruments" description="Select which instruments to scan" />
                     <div className="flex items-center justify-between mb-2">
@@ -587,7 +587,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "sessions" && (
+                {effectiveActiveTab === "sessions" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during" />
                     <div className="grid grid-cols-2 gap-3">
@@ -641,7 +641,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "protection" && (
+                {effectiveActiveTab === "protection" && (
                   <div className="space-y-5">
                     <SectionHeader title="Protection" description="Safety limits and circuit breakers" />
                     <div className="grid grid-cols-2 gap-4">
@@ -661,7 +661,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
-                {activeTab === "openingRange" && (
+                {effectiveActiveTab === "openingRange" && (
                   <div className="space-y-5">
                     <SectionHeader title="Opening Range" description="Use the first N hourly candles of the trading day to derive bias, levels, and filters" />
                     <ToggleField label="Enable Opening Range" description="Master toggle — all sub-features require this to be on" checked={config.openingRange?.enabled ?? false} onChange={v => updateField('openingRange', 'enabled', v)} />
