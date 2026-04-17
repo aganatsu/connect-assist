@@ -1533,6 +1533,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // ── Strategy mappings ──
     // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
     minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
+    // New: minimum count of present factors required (0 = off). Acts as an AND gate alongside score.
+    minFactorCount: strategy.minFactorCount ?? raw.minFactorCount ?? 0,
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
