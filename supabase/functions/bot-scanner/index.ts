@@ -74,6 +74,39 @@ function resolveSymbol(pair: string, conn: any): string {
   return base + (conn.symbol_suffix || "");
 }
 
+// ─── MetaAPI Region Failover ────────────────────────────────────────
+// Replicate the same failover logic from broker-execute: try London → New York → Singapore.
+// Caches the successful region per account to avoid repeated probing.
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+async function metaFetch(
+  accountId: string,
+  authToken: string,
+  pathBuilder: (base: string) => string,
+  init?: RequestInit,
+): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const res = await fetch(url, { ...init, headers });
+    const body = await res.text();
+    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+    lastBody = body; lastStatus = res.status;
+    // If the error is NOT a region mismatch, stop trying other regions
+    if (!/region|not connected to broker/i.test(body)) {
+      return { res: new Response(body, { status: res.status }), body };
+    }
+    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+}
+
 // ─── Trading Style Overrides ────────────────────────────────────────
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
@@ -2286,11 +2319,10 @@ async function runScanForUser(supabase: any, userId: string) {
                       authToken = conn.account_id;
                       metaAccountId = conn.api_key;
                     }
-                    const closeBaseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-                    const closeHeaders: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
-                    const posRes = await fetch(`${closeBaseUrl}/positions`, { headers: closeHeaders });
+                    // Use region-failover metaFetch instead of hardcoded London URL
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
                     if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
-                    const brokerPositions: any[] = await posRes.json();
+                    const brokerPositions: any[] = JSON.parse(posBody);
                     const commentTag = `paper:${opp.position_id}`;
                     const shortTag = commentTag.slice(0, 28);
                     const brokerPos = brokerPositions.find((p: any) =>
@@ -2300,7 +2332,7 @@ async function runScanForUser(supabase: any, userId: string) {
                       console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
                       continue;
                     }
-                    const closeRes = await fetch(`${closeBaseUrl}/trade`, { method: "POST", headers: closeHeaders, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
                     console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
                   } catch (e: any) {
                     console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
@@ -2405,6 +2437,50 @@ async function runScanForUser(supabase: any, userId: string) {
               for (const conn of connections) {
                 try {
                   if (conn.broker_type !== "metaapi") {
+                    // ── OANDA spread check: fetch live pricing before placing order ──
+                    if (conn.broker_type === "oanda" && config.spreadFilterEnabled) {
+                      try {
+                        const oandaBase = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+                        // Resolve OANDA symbol format (EUR/USD → EUR_USD)
+                        const rawOverrides = conn.symbol_overrides || {};
+                        let oandaSym = pair;
+                        const normKey = pair.trim().replace(/[\s/._-]/g, "").toUpperCase();
+                        for (const [k, v] of Object.entries(rawOverrides)) {
+                          if (k.trim().replace(/[\s/._-]/g, "").toUpperCase() === normKey && v) { oandaSym = String(v); break; }
+                        }
+                        if (oandaSym === pair) {
+                          const cleaned = pair.trim().replace(/\s+/g, "").toUpperCase();
+                          if (cleaned.includes("/")) oandaSym = cleaned.replace("/", "_");
+                          else if (cleaned.length === 6 && !cleaned.includes("_")) oandaSym = `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
+                          else oandaSym = cleaned;
+                        }
+                        const priceRes = await fetch(`${oandaBase}/v3/accounts/${conn.account_id}/pricing?instruments=${encodeURIComponent(oandaSym)}`, {
+                          headers: { Authorization: `Bearer ${conn.api_key}` },
+                        });
+                        if (priceRes.ok) {
+                          const priceData: any = await priceRes.json();
+                          const pricing = priceData.prices?.[0];
+                          if (pricing) {
+                            const oBid = parseFloat(pricing.bids?.[0]?.price ?? "0");
+                            const oAsk = parseFloat(pricing.asks?.[0]?.price ?? "0");
+                            if (oBid > 0 && oAsk > 0) {
+                              const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+                              const oSpreadPips = (oAsk - oBid) / pairSpec.pipSize;
+                              console.log(`OANDA spread [${conn.display_name}] ${oandaSym}: bid=${oBid} ask=${oAsk} spread=${oSpreadPips.toFixed(2)} pips (max=${config.maxSpreadPips})`);
+                              if (oSpreadPips > config.maxSpreadPips) {
+                                console.warn(`OANDA spread too wide [${conn.display_name}]: ${oSpreadPips.toFixed(2)} > ${config.maxSpreadPips} — skipping`);
+                                mirrorResults.push(`${conn.display_name}: skipped (spread ${oSpreadPips.toFixed(1)} > ${config.maxSpreadPips})`);
+                                continue;
+                              }
+                            }
+                          }
+                        } else {
+                          console.warn(`OANDA pricing fetch failed [${conn.display_name}]: ${priceRes.status} — proceeding without spread check`);
+                        }
+                      } catch (spreadErr: any) {
+                        console.warn(`OANDA spread check error [${conn.display_name}]: ${spreadErr?.message} — proceeding without spread check`);
+                      }
+                    }
                     // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
                     const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
                       method: "POST",
@@ -2443,21 +2519,19 @@ async function runScanForUser(supabase: any, userId: string) {
                     authToken = conn.account_id;
                     metaAccountId = conn.api_key;
                   }
-                  const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-                  const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+                  // Use region-failover metaFetch instead of hardcoded London URL
                    const brokerSymbol = resolveSymbol(pair, conn);
 
                    // ── Fetch per-broker account balance and recalc lot size ──
                    let brokerVolume = size;
                      try {
                        if (balanceCache[conn.id] === undefined) {
-                         const balRes = await fetch(`${baseUrl}/account-information`, { headers: { "auth-token": authToken } });
+                         const { res: balRes, body: balBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/account-information`);
                          if (balRes.ok) {
-                           const balData: any = await balRes.json();
+                           const balData: any = JSON.parse(balBody);
                            balanceCache[conn.id] = parseFloat(balData.balance ?? balData.equity ?? "0");
                          } else {
-                           const balErrText = await balRes.text();
-                           const notConnected = /not connected to broker|region/i.test(balErrText);
+                           const notConnected = /not connected to broker|region/i.test(balBody);
                            const reason = notConnected
                              ? "MetaAPI account not deployed/connected to broker"
                              : `balance fetch ${balRes.status}`;
@@ -2485,12 +2559,9 @@ async function runScanForUser(supabase: any, userId: string) {
                    const specCacheKey = `${conn.id}:${brokerSymbol}`;
                    if (!specCache[specCacheKey]) {
                      try {
-                       const specRes = await fetch(
-                         `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/specification`,
-                         { headers: { "auth-token": authToken } },
-                       );
+                       const { res: specRes, body: specBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/specification`);
                        if (specRes.ok) {
-                         const specData: any = await specRes.json();
+                         const specData: any = JSON.parse(specBody);
                          specCache[specCacheKey] = {
                            minVolume: specData.minVolume ?? 0.01,
                            maxVolume: specData.maxVolume ?? 100,
@@ -2515,12 +2586,9 @@ async function runScanForUser(supabase: any, userId: string) {
                    let brokerAsk: number | null = null;
                    let brokerSpreadPips: number | null = null;
                    try {
-                     const priceRes = await fetch(
-                       `${baseUrl}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`,
-                       { headers: { "auth-token": authToken } },
-                     );
+                     const { res: priceRes, body: priceBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`);
                      if (priceRes.ok) {
-                       const priceData: any = await priceRes.json();
+                       const priceData: any = JSON.parse(priceBody);
                        brokerBid = priceData.bid ?? null;
                        brokerAsk = priceData.ask ?? null;
                        if (brokerBid != null && brokerAsk != null) {
@@ -2567,8 +2635,7 @@ async function runScanForUser(supabase: any, userId: string) {
                    if (brokerSL) mt5Body.stopLoss = brokerSL;
                    if (brokerTP) mt5Body.takeProfit = brokerTP;
                    console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${brokerSpreadPips?.toFixed(2) ?? "?"} pips`);
-                   const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
-                   const resBody = await mt5Res.text();
+                   const { res: mt5Res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
                    if (mt5Res.ok) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
                      try {

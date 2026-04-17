@@ -95,7 +95,37 @@ function calcPnl(dir: string, entry: number, current: number, size: number, symb
   return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
 }
 
-// ─── MT5 Mirror Helper ──────────────────────────────────────────────
+// ─── MetaAPI Region Failover ──────────────────────────────────────────────────
+const META_REGIONS = ["london", "new-york", "singapore"];
+const regionCache = new Map<string, string>();
+function metaBaseUrl(region: string, accountId: string) {
+  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
+}
+async function metaFetch(
+  accountId: string,
+  authToken: string,
+  pathBuilder: (base: string) => string,
+  init?: RequestInit,
+): Promise<{ res: Response; body: string }> {
+  const cached = regionCache.get(accountId);
+  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  let lastBody = ""; let lastStatus = 504;
+  for (const region of order) {
+    const url = pathBuilder(metaBaseUrl(region, accountId));
+    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
+    const res = await fetch(url, { ...init, headers });
+    const body = await res.text();
+    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+    lastBody = body; lastStatus = res.status;
+    if (!/region|not connected to broker/i.test(body)) {
+      return { res: new Response(body, { status: res.status }), body };
+    }
+    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+  }
+  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
+}
+
+// ─── MT5 Mirror Helper ──────────────────────────────────────────────────────
 async function mirrorToMT5(supabase: any, userId: string, params: {
   action: "open" | "close";
   symbol: string;
@@ -104,49 +134,73 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
   stopLoss?: number | null;
   takeProfit?: number | null;
   positionId?: string;
-}): Promise<{ success: boolean; mt5Result?: any; error?: string; connectionId?: string }> {
+}): Promise<{ success: boolean; mt5Result?: any; error?: string; connectionId?: string; connectionIds?: string[] }> {
   try {
-    // Find active metaapi broker connection
+    // Find ALL active metaapi broker connections (not just the first one)
     const { data: connections } = await supabase.from("broker_connections")
       .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
     if (!connections || connections.length === 0) return { success: false, error: "no_connection" };
-    const conn = connections[0];
-
-    // Auto-detect swapped fields: JWT tokens start with "eyJ", account IDs are UUIDs
-    let authToken = conn.api_key;
-    let metaAccountId = conn.account_id;
-    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-      authToken = conn.account_id;
-      metaAccountId = conn.api_key;
-    }
-
-    const baseUrl = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-    const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
 
     if (params.action === "open") {
-      const body: any = {
-        actionType: params.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
-        symbol: params.symbol.replace("/", ""),
-        volume: params.size,
-      };
-      if (params.stopLoss) body.stopLoss = params.stopLoss;
-      if (params.takeProfit) body.takeProfit = params.takeProfit;
-      if (params.positionId) body.comment = `paper:${params.positionId}`;
+      const successIds: string[] = [];
+      let firstResult: any = null;
+      let lastError: string | null = null;
 
-      const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(body) });
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error(`MT5 mirror open failed [${res.status}]: ${errText}`);
-        return { success: false, error: `MT5 order failed: ${res.status}` };
+      for (const conn of connections) {
+        try {
+          let authToken = conn.api_key;
+          let metaAccountId = conn.account_id;
+          if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+            authToken = conn.account_id;
+            metaAccountId = conn.api_key;
+          }
+
+          const body: any = {
+            actionType: params.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+            symbol: params.symbol.replace("/", ""),
+            volume: params.size,
+          };
+          if (params.stopLoss) body.stopLoss = params.stopLoss;
+          if (params.takeProfit) body.takeProfit = params.takeProfit;
+          if (params.positionId) body.comment = `paper:${params.positionId}`;
+
+          const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+          });
+          if (res.ok) {
+            const parsed = JSON.parse(resBody);
+            if (!firstResult) firstResult = parsed;
+            successIds.push(conn.id);
+            console.log(`MT5 mirror open [${conn.display_name}]: SUCCESS`);
+          } else {
+            lastError = `MT5 order failed on ${conn.display_name}: ${res.status}`;
+            console.warn(`MT5 mirror open [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
+          }
+        } catch (connErr: any) {
+          lastError = connErr?.message || String(connErr);
+          console.warn(`MT5 mirror open [${conn.display_name}] error: ${lastError}`);
+        }
       }
-      return { success: true, mt5Result: await res.json(), connectionId: conn.id };
+
+      if (successIds.length > 0) {
+        return { success: true, mt5Result: firstResult, connectionId: successIds[0], connectionIds: successIds };
+      }
+      return { success: false, error: lastError || "all connections failed" };
     }
 
     if (params.action === "close") {
-      // Find MT5 position by comment matching paper position ID
-      const posRes = await fetch(`${baseUrl}/positions`, { headers });
+      // Close action: use the first connection (close fan-out is handled by closeBrokerPositions)
+      const conn = connections[0];
+      let authToken = conn.api_key;
+      let metaAccountId = conn.account_id;
+      if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+        authToken = conn.account_id;
+        metaAccountId = conn.api_key;
+      }
+
+      const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
       if (!posRes.ok) return { success: false, error: `MT5 positions fetch failed: ${posRes.status}` };
-      const mt5Positions = await posRes.json();
+      const mt5Positions = JSON.parse(posBody);
       const mt5Pos = mt5Positions.find((p: any) =>
         p.comment?.includes(`paper:${params.positionId}`) ||
         p.symbol === params.symbol?.replace("/", "")
@@ -154,17 +208,19 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
       if (!mt5Pos) return { success: false, error: "MT5 position not found" };
 
       const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: mt5Pos.id };
-      const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
-      if (!res.ok) return { success: false, error: `MT5 close failed: ${res.status}` };
-      return { success: true, mt5Result: await res.json() };
+      const { res: closeRes, body: closeResBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody),
+      });
+      if (!closeRes.ok) return { success: false, error: `MT5 close failed: ${closeRes.status}` };
+      return { success: true, mt5Result: JSON.parse(closeResBody) };
     }
 
     return { success: false, error: "unknown action" };
   } catch (e: any) {
     const msg = e?.message || String(e);
     if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
-      console.warn("MT5 mirror SSL issue — credentials saved, trade may still execute:", msg);
-      return { success: false, error: "SSL certificate issue — credentials are saved" };
+      console.warn("MT5 mirror SSL issue \u2014 credentials saved, trade may still execute:", msg);
+      return { success: false, error: "SSL certificate issue \u2014 credentials are saved" };
     }
     console.error("MT5 mirror error:", msg);
     return { success: false, error: msg };
@@ -203,13 +259,12 @@ async function closeBrokerPositions(
           authToken = conn.account_id;
           metaAccountId = conn.api_key;
         }
-        const baseUrl = `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-        const headers: Record<string, string> = { "auth-token": authToken, "Content-Type": "application/json" };
+        // Use region-failover metaFetch instead of hardcoded London URL
 
         // Find broker position by comment tag
-        const posRes = await fetch(`${baseUrl}/positions`, { headers });
+        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
         if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
-        const brokerPositions: any[] = await posRes.json();
+        const brokerPositions: any[] = JSON.parse(posBody);
         // MT4 truncates comments to ~31 chars, so use startsWith on the short prefix
         const commentTag = `paper:${positionId}`;
         const shortTag = commentTag.slice(0, 28); // safe for MT4 truncation
@@ -227,12 +282,12 @@ async function closeBrokerPositions(
           );
           if (!symMatch) { results.push(`${conn.display_name}: position not found`); continue; }
           const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: symMatch.id };
-          const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
+          const { res } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody) });
           results.push(`${conn.display_name}: ${res.ok ? "closed (symbol match)" : "close failed " + res.status}`);
           continue;
         }
         const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id };
-        const res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(closeBody) });
+        const { res } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody) });
         results.push(`${conn.display_name}: ${res.ok ? "closed" : "close failed " + res.status}`);
         if (res.ok) console.log(`Broker close [${conn.display_name}]: closed position for paper:${positionId}`);
         else console.warn(`Broker close [${conn.display_name}]: failed ${res.status}`);
@@ -631,12 +686,13 @@ Deno.serve(async (req) => {
           action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
         });
         if (mt5Mirror.success) {
-          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots on connection ${mt5Mirror.connectionId}`);
-          // Record which broker connection this position was mirrored to so close
-          // is restricted to ONLY this connection (no cross-broker fan-out).
-          if (mt5Mirror.connectionId) {
+          const mirroredIds = mt5Mirror.connectionIds || (mt5Mirror.connectionId ? [mt5Mirror.connectionId] : []);
+          console.log(`MT5 mirror: opened ${symbol} ${direction} ${size} lots on ${mirroredIds.length} connection(s)`);
+          // Record ALL broker connections this position was mirrored to so close
+          // fan-out targets only these connections.
+          if (mirroredIds.length > 0) {
             await supabase.from("paper_positions")
-              .update({ mirrored_connection_ids: [mt5Mirror.connectionId] })
+              .update({ mirrored_connection_ids: mirroredIds })
               .eq("position_id", positionId).eq("user_id", user.id);
           }
         } else if (mt5Mirror.error !== "no_connection") {
