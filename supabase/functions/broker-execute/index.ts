@@ -168,7 +168,7 @@ Deno.serve(async (req) => {
       throw new Error(`account_balance not supported for broker type: ${conn.broker_type}`);
     }
 
-    if (action === "symbol_specs") {
+    if (action === "symbol_specs" || action === "validate_symbol") {
       const { symbol } = payload;
       if (!symbol) throw new Error("Missing symbol parameter");
 
@@ -179,12 +179,22 @@ Deno.serve(async (req) => {
           authToken = conn.account_id;
           metaAccountId = conn.api_key;
         }
+        const brokerSym = resolveSymbol(symbol, conn);
         const res = await fetch(
-          `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(symbol)}/specification`,
+          `https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSym)}/specification`,
           { headers: { "auth-token": authToken } },
         );
-        if (!res.ok) throw new Error(`MetaAPI symbol_specs error: ${res.status}`);
+        if (!res.ok) {
+          const errText = await res.text();
+          if (action === "validate_symbol") {
+            return respond({ ok: false, brokerSymbol: brokerSym, status: res.status, error: errText.slice(0, 300) });
+          }
+          throw new Error(`MetaAPI symbol_specs error: ${res.status}`);
+        }
         const spec: any = await res.json();
+        if (action === "validate_symbol") {
+          return respond({ ok: true, brokerSymbol: brokerSym, digits: spec.digits, minVolume: spec.minVolume, maxVolume: spec.maxVolume });
+        }
         return respond({
           contractSize: spec.contractSize ?? 1,
           minVolume: spec.minVolume ?? 0.01,
@@ -197,13 +207,28 @@ Deno.serve(async (req) => {
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(symbol)}`, {
+        const oandaSym = resolveOandaSymbol(symbol, conn);
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/instruments?instruments=${encodeURIComponent(oandaSym)}`, {
           headers: { Authorization: `Bearer ${conn.api_key}` },
         });
-        if (!res.ok) throw new Error(`OANDA symbol_specs error: ${res.status}`);
+        if (!res.ok) {
+          const errText = await res.text();
+          if (action === "validate_symbol") {
+            return respond({ ok: false, brokerSymbol: oandaSym, status: res.status, error: errText.slice(0, 300) });
+          }
+          throw new Error(`OANDA symbol_specs error: ${res.status}`);
+        }
         const data: any = await res.json();
         const inst = data.instruments?.[0];
-        if (!inst) throw new Error(`OANDA instrument not found: ${symbol}`);
+        if (!inst) {
+          if (action === "validate_symbol") {
+            return respond({ ok: false, brokerSymbol: oandaSym, error: `Instrument not found: ${oandaSym}` });
+          }
+          throw new Error(`OANDA instrument not found: ${oandaSym}`);
+        }
+        if (action === "validate_symbol") {
+          return respond({ ok: true, brokerSymbol: oandaSym, digits: inst.displayPrecision });
+        }
         return respond({
           contractSize: 1,
           minVolume: parseFloat(inst.minimumTradeSize || "0.01"),
@@ -214,7 +239,7 @@ Deno.serve(async (req) => {
         });
       }
 
-      throw new Error(`symbol_specs not supported for broker type: ${conn.broker_type}`);
+      throw new Error(`${action} not supported for broker type: ${conn.broker_type}`);
     }
 
     if (action === "close_trade") {
