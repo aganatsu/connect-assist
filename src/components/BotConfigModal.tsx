@@ -419,6 +419,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         </div>
                       );
                     })}
+                    {/* ── Spread Filter ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="Spread Filter" description="Skip broker execution when the live bid/ask spread is too wide" />
+                      <ToggleField label="Enable Spread Filter" description="Block live trades when spread exceeds the maximum" checked={config.instruments?.spreadFilterEnabled ?? true} onChange={v => updateField('instruments', 'spreadFilterEnabled', v)} />
+                      <FieldGroup label="Max Spread (pips)" description="Maximum allowed spread before skipping broker execution">
+                        <div className="flex items-center gap-4">
+                          <Slider value={[config.instruments?.maxSpreadPips ?? 3]} onValueChange={v => updateField('instruments', 'maxSpreadPips', v[0])} min={0.5} max={20} step={0.5} className="flex-1" disabled={!(config.instruments?.spreadFilterEnabled ?? true)} />
+                          <span className="text-sm font-mono font-bold w-12 text-right">{config.instruments?.maxSpreadPips ?? 3}</span>
+                        </div>
+                      </FieldGroup>
+                    </div>
                   </div>
                 )}
 
@@ -462,6 +473,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       })}
                     </div>
                     <ToggleField label="Kill Zone Only Trading" description="Only trade during high-volume kill zone windows" checked={config.sessions?.killZoneOnly ?? false} onChange={v => updateField('sessions', 'killZoneOnly', v)} />
+                    {/* ── News Event Filter ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="News Event Filter" description="Pause trading around high-impact economic events (NFP, FOMC, CPI, etc.)" />
+                      <ToggleField label="Enable News Filter" description="Block new trades when a high-impact event is imminent" checked={config.sessions?.newsFilterEnabled ?? true} onChange={v => updateField('sessions', 'newsFilterEnabled', v)} />
+                      <FieldGroup label="Pause Window (minutes)" description="Minutes before a high-impact event to stop opening new trades">
+                        <div className="flex items-center gap-4">
+                          <Slider value={[config.sessions?.newsFilterPauseMinutes ?? 30]} onValueChange={v => updateField('sessions', 'newsFilterPauseMinutes', v[0])} min={5} max={120} step={5} className="flex-1" disabled={!(config.sessions?.newsFilterEnabled ?? true)} />
+                          <span className="text-sm font-mono font-bold w-12 text-right">{config.sessions?.newsFilterPauseMinutes ?? 30}m</span>
+                        </div>
+                      </FieldGroup>
+                    </div>
                   </div>
                 )}
 

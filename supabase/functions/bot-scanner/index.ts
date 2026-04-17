@@ -52,6 +52,12 @@ const DEFAULTS = {
     mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" | "auto",
     autoDetectEnabled: false,
   },
+  // ── Spread Filter ──
+  spreadFilterEnabled: true,
+  maxSpreadPips: 3,
+  // ── News Event Filter ──
+  newsFilterEnabled: true,
+  newsFilterPauseMinutes: 30,
 };
 
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
@@ -1650,6 +1656,14 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // ── Opening Range & Trading Style (already nested, keep as-is) ──
     openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
     tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
+
+    // ── Spread Filter ──
+    spreadFilterEnabled: instruments.spreadFilterEnabled ?? raw.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
+    maxSpreadPips: instruments.maxSpreadPips ?? raw.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
+
+    // ── News Event Filter ──
+    newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
+    newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? DEFAULTS.newsFilterPauseMinutes,
   };
 
   return merged;
@@ -1870,6 +1884,45 @@ async function runSafetyGates(
       gates.push({ passed: false, reason: `Daily net P&L -$${Math.abs(netLoss).toFixed(2)} >= $${config.protectionMaxDailyLossDollar} limit (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
     } else {
       gates.push({ passed: true, reason: `Daily net P&L $${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} (gross loss: $${Math.abs(grossLoss).toFixed(2)})` });
+    }
+  }
+
+  // Gate 16: News Event Filter — block trades near high-impact economic events
+  if (config.newsFilterEnabled) {
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL");
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (supabaseUrl && serviceKey) {
+        const newsRes = await fetch(`${supabaseUrl}/functions/v1/fundamentals`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({
+            action: "high_impact_check",
+            pair: symbol,
+            withinMinutes: config.newsFilterPauseMinutes || 30,
+          }),
+        });
+        if (newsRes.ok) {
+          const newsData: any = await newsRes.json();
+          if (newsData.hasHighImpact) {
+            const eventNames = (newsData.events || []).map((e: any) => e.name || e.title || "event").join(", ");
+            gates.push({ passed: false, reason: `News filter: high-impact event within ${config.newsFilterPauseMinutes}min — ${eventNames}` });
+          } else {
+            gates.push({ passed: true, reason: `No high-impact news within ${config.newsFilterPauseMinutes}min for ${symbol}` });
+          }
+        } else {
+          // Don't block trades if the news API is temporarily unavailable
+          gates.push({ passed: true, reason: "News filter: API unavailable — skipped" });
+        }
+      } else {
+        gates.push({ passed: true, reason: "News filter: env not configured — skipped" });
+      }
+    } catch (e: any) {
+      console.warn(`News filter error for ${symbol}: ${e?.message}`);
+      gates.push({ passed: true, reason: `News filter error: ${e?.message} — skipped` });
     }
   }
 
@@ -2281,7 +2334,7 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags }),
+          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes } }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -2457,15 +2510,63 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
                    }
 
+                   // ── Spread-aware execution: fetch live bid/ask and validate spread ──
+                   let brokerBid: number | null = null;
+                   let brokerAsk: number | null = null;
+                   let brokerSpreadPips: number | null = null;
+                   try {
+                     const priceRes = await fetch(
+                       `${baseUrl}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`,
+                       { headers: { "auth-token": authToken } },
+                     );
+                     if (priceRes.ok) {
+                       const priceData: any = await priceRes.json();
+                       brokerBid = priceData.bid ?? null;
+                       brokerAsk = priceData.ask ?? null;
+                       if (brokerBid != null && brokerAsk != null) {
+                         const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+                         brokerSpreadPips = (brokerAsk - brokerBid) / pairSpec.pipSize;
+                         console.log(`Spread check [${conn.display_name}] ${brokerSymbol}: bid=${brokerBid}, ask=${brokerAsk}, spread=${brokerSpreadPips.toFixed(2)} pips`);
+                       }
+                     } else {
+                       console.warn(`Price fetch [${conn.display_name}] ${brokerSymbol}: HTTP ${priceRes.status}`);
+                     }
+                   } catch (priceErr: any) {
+                     console.warn(`Price fetch error [${conn.display_name}] ${brokerSymbol}: ${priceErr?.message}`);
+                   }
+
+                   // Gate: skip this broker if spread exceeds configured maximum
+                   if (pairConfig.spreadFilterEnabled && brokerSpreadPips != null && brokerSpreadPips > pairConfig.maxSpreadPips) {
+                     console.warn(`Spread filter [${conn.display_name}]: ${brokerSpreadPips.toFixed(2)} pips > ${pairConfig.maxSpreadPips} max — skipping`);
+                     mirrorResults.push(`${conn.display_name}: skipped (spread ${brokerSpreadPips.toFixed(1)} > ${pairConfig.maxSpreadPips} max)`);
+                     continue;
+                   }
+
+                   // Adjust SL/TP for broker spread (widen SL by half-spread, tighten TP by half-spread)
+                   let brokerSL = sl;
+                   let brokerTP = tp;
+                   if (brokerSpreadPips != null && brokerSpreadPips > 0) {
+                     const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+                     const halfSpread = (brokerSpreadPips * pairSpec.pipSize) / 2;
+                     if (analysis.direction === "long") {
+                       // Long: entry is at ask, SL needs extra room below
+                       brokerSL = sl - halfSpread;
+                     } else {
+                       // Short: entry is at bid, SL needs extra room above
+                       brokerSL = sl + halfSpread;
+                     }
+                     console.log(`SL adjusted for spread [${conn.display_name}]: ${sl} → ${brokerSL} (half-spread=${halfSpread.toFixed(6)})`);
+                   }
+
                    const mt5Body: any = {
                      actionType: analysis.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
                      symbol: brokerSymbol,
                      volume: brokerVolume,
                      comment: `paper:${positionId}`,
                    };
-                   if (sl) mt5Body.stopLoss = sl;
-                   if (tp) mt5Body.takeProfit = tp;
-                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${sl}, TP=${tp}`);
+                   if (brokerSL) mt5Body.stopLoss = brokerSL;
+                   if (brokerTP) mt5Body.takeProfit = brokerTP;
+                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${brokerSpreadPips?.toFixed(2) ?? "?"} pips`);
                    const mt5Res = await fetch(`${baseUrl}/trade`, { method: "POST", headers, body: JSON.stringify(mt5Body) });
                    const resBody = await mt5Res.text();
                    if (mt5Res.ok) {
