@@ -601,6 +601,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
   return (
     <table className="w-full text-[11px] font-mono">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
+        <th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Closed</th>
         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
         <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Exit</th>
         <th className="text-right py-1 px-1">Pips</th><th className="text-right py-1 px-1">P&L</th>
@@ -609,6 +610,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
       <tbody>
         {trades.slice(0, 30).map((t: any, i: number) => (
           <tr key={i} className={`border-b border-border/30 hover:bg-secondary/30 ${i % 2 === 1 ? "bg-secondary/10" : ""}`}>
+            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.openTime)}</td>
+            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.closedAt)}</td>
             <td className="py-1 px-1">{t.symbol}</td>
             <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
             <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>
