@@ -558,6 +558,7 @@ function runBacktestSafetyGates(
   openPositions: OpenPosition[],
   dailyCandles: Candle[] | null,
   recentTrades: BacktestTrade[],
+  currentCandleMs: number,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
 
