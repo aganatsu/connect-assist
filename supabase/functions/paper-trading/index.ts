@@ -303,6 +303,176 @@ async function closeBrokerPositions(
   return results;
 }
 
+// ─── Modify Broker SL/TP (sync trailing stop & break even to broker) ────────
+async function modifyBrokerSL(
+  supabase: any,
+  userId: string,
+  positionId: string,
+  symbol: string,
+  direction: string,
+  newSL: number,
+  mirroredConnectionIds: string[] | null | undefined,
+): Promise<string[]> {
+  const results: string[] = [];
+  try {
+    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
+    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
+
+    const ids = (mirroredConnectionIds || []).filter(Boolean);
+    if (ids.length === 0) return ["no_mirrored_connections"];
+
+    const { data: connections } = await supabase.from("broker_connections")
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
+    if (!connections || connections.length === 0) return ["no_connection"];
+
+    for (const conn of connections) {
+      try {
+        let authToken = conn.api_key;
+        let metaAccountId = conn.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          authToken = conn.account_id;
+          metaAccountId = conn.api_key;
+        }
+
+        // Find broker position by comment tag
+        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
+        const brokerPositions: any[] = JSON.parse(posBody);
+        const commentTag = `paper:${positionId}`;
+        const shortTag = commentTag.slice(0, 28);
+        let brokerPos = brokerPositions.find((p: any) =>
+          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+        );
+        if (!brokerPos) {
+          // Fallback: match by symbol
+          const base = symbol.replace("/", "");
+          const overrides = conn.symbol_overrides || {};
+          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+          brokerPos = brokerPositions.find((p: any) =>
+            p.symbol === brokerSymbol || p.symbol === base ||
+            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+          );
+        }
+        if (!brokerPos) { results.push(`${conn.display_name}: position not found for SL modify`); continue; }
+
+        // Adjust SL for broker spread (same logic as bot-scanner open)
+        const spec = SPECS[symbol] || SPECS["EUR/USD"];
+        let adjustedSL = newSL;
+        if (brokerPos.currentPrice && brokerPos.openPrice) {
+          // Estimate spread from broker position data
+          // Use a conservative 1-pip buffer for safety
+          const safetyBuffer = spec.pipSize;
+          adjustedSL = direction === "long" ? newSL - safetyBuffer : newSL + safetyBuffer;
+        }
+
+        const modifyBody = {
+          actionType: "POSITION_MODIFY",
+          positionId: brokerPos.id,
+          stopLoss: adjustedSL,
+        };
+        const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+        });
+        if (res.ok) {
+          console.log(`Broker SL modify [${conn.display_name}]: SL updated to ${adjustedSL} for paper:${positionId}`);
+          results.push(`${conn.display_name}: SL modified to ${adjustedSL}`);
+        } else {
+          console.warn(`Broker SL modify [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
+          results.push(`${conn.display_name}: modify failed ${res.status}`);
+        }
+      } catch (e: any) {
+        console.warn(`Broker SL modify [${conn.display_name}] error: ${e?.message}`);
+        results.push(`${conn.display_name}: error`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`modifyBrokerSL error: ${e?.message}`);
+    results.push("error");
+  }
+  return results;
+}
+
+// ─── Partial Close on Broker (mirror partial TP) ────────────────────
+async function partialCloseBroker(
+  supabase: any,
+  userId: string,
+  positionId: string,
+  symbol: string,
+  closeVolumeFraction: number,
+  mirroredConnectionIds: string[] | null | undefined,
+): Promise<string[]> {
+  const results: string[] = [];
+  try {
+    const { data: account } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", userId).single();
+    if (account?.execution_mode !== "live") return ["skipped_paper_mode"];
+
+    const ids = (mirroredConnectionIds || []).filter(Boolean);
+    if (ids.length === 0) return ["no_mirrored_connections"];
+
+    const { data: connections } = await supabase.from("broker_connections")
+      .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).in("id", ids);
+    if (!connections || connections.length === 0) return ["no_connection"];
+
+    for (const conn of connections) {
+      try {
+        let authToken = conn.api_key;
+        let metaAccountId = conn.account_id;
+        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+          authToken = conn.account_id;
+          metaAccountId = conn.api_key;
+        }
+
+        // Find broker position by comment tag
+        const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+        if (!posRes.ok) { results.push(`${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
+        const brokerPositions: any[] = JSON.parse(posBody);
+        const commentTag = `paper:${positionId}`;
+        const shortTag = commentTag.slice(0, 28);
+        let brokerPos = brokerPositions.find((p: any) =>
+          p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+        );
+        if (!brokerPos) {
+          const base = symbol.replace("/", "");
+          const overrides = conn.symbol_overrides || {};
+          const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+          brokerPos = brokerPositions.find((p: any) =>
+            p.symbol === brokerSymbol || p.symbol === base ||
+            p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+          );
+        }
+        if (!brokerPos) { results.push(`${conn.display_name}: position not found for partial close`); continue; }
+
+        // Calculate partial close volume: fraction of broker position volume
+        const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
+        const closeVolume = Math.max(0.01, Math.round(brokerVolume * closeVolumeFraction * 100) / 100);
+
+        const partialBody = {
+          actionType: "POSITION_CLOSE_ID",
+          positionId: brokerPos.id,
+          volume: closeVolume,  // MetaAPI supports partial close via volume parameter
+        };
+        const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(partialBody),
+        });
+        if (res.ok) {
+          console.log(`Broker partial close [${conn.display_name}]: closed ${closeVolume} lots (${(closeVolumeFraction * 100).toFixed(0)}%) of paper:${positionId}`);
+          results.push(`${conn.display_name}: partial closed ${closeVolume} lots`);
+        } else {
+          console.warn(`Broker partial close [${conn.display_name}] failed [${res.status}]: ${resBody.slice(0, 300)}`);
+          results.push(`${conn.display_name}: partial close failed ${res.status}`);
+        }
+      } catch (e: any) {
+        console.warn(`Broker partial close [${conn.display_name}] error: ${e?.message}`);
+        results.push(`${conn.display_name}: error`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`partialCloseBroker error: ${e?.message}`);
+    results.push("error");
+  }
+  return results;
+}
+
 // ─── Structured close logging + audit row ───────────────────────────
 async function logClose(
   supabase: any,
@@ -493,11 +663,20 @@ Deno.serve(async (req) => {
           } catch {}
 
           // Check SL hit
+          // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
+          // If price gaps through SL, use the gap price. Then add simulated slippage.
+          const slippagePips = exitFlags.slippagePips ?? 0.5; // default 0.5 pips slippage on SL
           if (sl !== null) {
             if (pos.direction === "long" && currentPrice <= sl) {
-              closeReason = "sl_hit"; exitPrice = sl;
+              closeReason = "sl_hit";
+              const gapPrice = Math.min(sl, currentPrice); // Use worse price (lower for longs)
+              const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+              exitPrice = gapPrice - (slippagePips * spec.pipSize); // Slippage worsens the fill
             } else if (pos.direction === "short" && currentPrice >= sl) {
-              closeReason = "sl_hit"; exitPrice = sl;
+              closeReason = "sl_hit";
+              const gapPrice = Math.max(sl, currentPrice); // Use worse price (higher for shorts)
+              const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+              exitPrice = gapPrice + (slippagePips * spec.pipSize); // Slippage worsens the fill
             }
           }
 
@@ -530,6 +709,10 @@ Deno.serve(async (req) => {
               const newSL = entryPrice;
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
                 await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                sl = newSL; // Update local reference
+                // FIX 1: Sync break-even SL to broker
+                const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
+                console.log(`Break-even broker SL sync [${pos.position_id}]: ${beModifyResults.join("; ")}`);
               }
             }
           }
@@ -554,6 +737,9 @@ Deno.serve(async (req) => {
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
                 await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
                 sl = newSL; // Update local reference for SL check above
+                // FIX 1: Sync trailing SL to broker
+                const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
+                console.log(`Trailing stop broker SL sync [${pos.position_id}]: ${trailModifyResults.join("; ")}`);
               }
             }
           }
@@ -593,6 +779,9 @@ Deno.serve(async (req) => {
                 balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
               }).eq("user_id", user.id);
               console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)} (flag set, won't re-fire)`);
+              // FIX 2: Mirror partial close to broker
+              const partialBrokerResults = await partialCloseBroker(supabase, user.id, pos.position_id, pos.symbol, exitFlags.partialTPPercent / 100, pos.mirrored_connection_ids);
+              console.log(`Partial TP broker mirror [${pos.position_id}]: ${partialBrokerResults.join("; ")}`);
             }
           }
 
