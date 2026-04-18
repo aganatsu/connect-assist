@@ -623,7 +623,27 @@ function ConnectionDetail({
                             </DropdownMenuContent>
                           </DropdownMenu>
                         ) : (
-                          <span className="font-mono text-primary truncate">{brokerSym}</span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-primary truncate">{brokerSym}</span>
+                            {(() => {
+                              const info = probeBySymbol[brokerSym];
+                              if (!info) return null;
+                              return (
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <TradeModeBadge tradeMode={info.tradeMode} />
+                                  {info.hasLivePrice ? (
+                                    <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 border-success/40 text-success">
+                                      <Zap className="h-2 w-2" /> live
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 text-muted-foreground">
+                                      <Ban className="h-2 w-2" /> no quote
+                                    </Badge>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
                         )}
                         <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                           const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
