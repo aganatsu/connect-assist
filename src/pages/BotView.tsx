@@ -996,18 +996,21 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Factors */}
       {d.factors && (
         <div className="space-y-0.5">
-          <p
-            className={`text-[8px] uppercase tracking-wider font-bold ${
-              d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.6
-                ? "text-success"
-                : d.factors.length > 0 && (d.factorCount || 0) / d.factors.length >= 0.4
-                  ? "text-warning"
-                  : "text-muted-foreground"
-            }`}
-            title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–2.0 pts), grouped into 9 categories with anti-double-count rules, capped at 10.`}
-          >
-            Factors ({d.factorCount || 0}/{d.factors.length})
-          </p>
+          {(() => {
+            const primaryFactors = d.factors.filter((f: any) => f.name !== "Power of 3 Combo");
+            const primaryPresent = primaryFactors.filter((f: any) => f.present).length;
+            const ratio = primaryFactors.length > 0 ? primaryPresent / primaryFactors.length : 0;
+            return (
+              <p
+                className={`text-[8px] uppercase tracking-wider font-bold ${
+                  ratio >= 0.6 ? "text-success" : ratio >= 0.4 ? "text-warning" : "text-muted-foreground"
+                }`}
+                title={`${primaryPresent} primary factors present out of ${primaryFactors.length} total (Power of 3 Combo is an enhancement). Score is weighted, grouped into 9 categories with anti-double-count rules, capped at 10.`}
+              >
+                Factors ({primaryPresent}/{primaryFactors.length})
+              </p>
+            );
+          })()}
           {d.factors.map((f: any, fi: number) => (
             <div key={fi} className="flex items-start gap-1 text-[9px]">
               <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
