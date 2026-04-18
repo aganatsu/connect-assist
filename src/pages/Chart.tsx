@@ -39,11 +39,14 @@ export default function Chart() {
     refetchInterval: 10000,
   });
 
-  const { data: candles } = useQuery({
+  // Fetch candles WITH the data-source header (so we can show a badge).
+  const { data: candleData } = useQuery({
     queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
-    queryFn: () => marketApi.candles(selectedSymbol, selectedTimeframe, 200),
+    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 200),
     staleTime: 60000,
   });
+  const candles = candleData?.candles;
+  const candleSource: CandleSource = candleData?.source ?? "unknown";
 
   const { data: dailyCandles } = useQuery({
     queryKey: ['chart-daily', selectedSymbol],
