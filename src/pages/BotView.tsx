@@ -119,6 +119,15 @@ export default function BotView() {
   };
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
+
+  // Pull the candle-source meta entry that the scanner prepends to details_json
+  // (so we can show which feed served the latest scan), and produce a filtered
+  // list that excludes the meta row from rendering as a fake "pair".
+  const latestRawDetails: any[] = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+  const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
+  const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
+  const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
+
   const closedToday = (d.tradeHistory || []).filter((t: any) => {
     const today = new Date().toISOString().split('T')[0];
     return t.closedAt?.startsWith(today);
