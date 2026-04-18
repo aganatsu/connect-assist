@@ -3054,13 +3054,32 @@ async function runScanForUser(supabase: any, userId: string) {
     rejected_count: (account.rejected_count || 0) + rejectedCount,
   }).eq("user_id", userId);
 
+  // End source tally and prepend a __meta entry so the UI can display
+  // which feed served this scan cycle.
+  const sourceTally = endScanSourceTally();
+  const detailsWithMeta = [
+    {
+      __meta: true,
+      candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "yahoo" | "none"
+      sourceBreakdown: {
+        metaapi: sourceTally.metaapi,
+        twelvedata: sourceTally.twelvedata,
+        yahoo: sourceTally.yahoo,
+        none: sourceTally.none,
+      },
+      brokerConnected: !!_scanBrokerConn,
+    },
+    ...scanDetails,
+  ];
+  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, yahoo=${sourceTally.yahoo}, none=${sourceTally.none})`);
+
   // Log the scan
   await supabase.from("scan_logs").insert({
     user_id: userId,
     pairs_scanned: config.instruments.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
-    details_json: scanDetails,
+    details_json: detailsWithMeta,
   });
 
   return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId };
