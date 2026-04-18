@@ -12,8 +12,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { toast } from "sonner";
 import {
   Plus, Trash2, Wand2, List, Wrench, Activity, CheckCircle2, XCircle,
-  Server, KeyRound, Hash, Copy, RadioTower, ChevronRight,
+  Server, KeyRound, Hash, Copy, RadioTower, ChevronRight, ChevronDown, Zap, Ban,
 } from "lucide-react";
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { brokerApi } from "@/lib/api";
 import { BotConfigModal } from "@/components/BotConfigModal";
 import { supabase } from "@/integrations/supabase/client";
