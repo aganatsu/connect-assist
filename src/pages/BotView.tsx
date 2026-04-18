@@ -611,8 +611,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
   if (!trades || trades.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No trades</p>;
 
   const reasonColor = (r: string) => {
-    if (r === "tp_hit") return "text-success";
+    if (r === "tp_hit" || r === "trail_hit") return "text-success";
     if (r === "sl_hit") return "text-destructive";
+    if (r === "be_hit") return "text-muted-foreground";
     if (r === "time_exit" || r === "kill_switch") return "text-warning";
     return "text-muted-foreground";
   };
@@ -657,11 +658,14 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       <div className="flex items-center gap-2 mb-1">
                         <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 border rounded ${
-                          t.closeReason === "tp_hit" ? "bg-success/15 border-success/40 text-success" :
+                          t.closeReason === "tp_hit" || t.closeReason === "trail_hit" ? "bg-success/15 border-success/40 text-success" :
                           t.closeReason === "sl_hit" ? "bg-destructive/15 border-destructive/40 text-destructive" :
+                          t.closeReason === "be_hit" ? "bg-secondary border-border text-foreground" :
                           "bg-muted/40 border-border text-muted-foreground"
                         }`}>
                           Closed: {t.closeReason || "—"}
+                          {t.closeReason === "trail_hit" && " (trailing stop locked profit)"}
+                          {t.closeReason === "be_hit" && " (break-even SL)"}
                         </span>
                       </div>
                       <SignalReasoningCard signalReason={t.signalReason || ""} />

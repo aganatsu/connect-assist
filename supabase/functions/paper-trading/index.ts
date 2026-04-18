@@ -665,15 +665,19 @@ Deno.serve(async (req) => {
           // Check SL hit
           // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
           // If price gaps through SL, use the gap price. Then add simulated slippage.
+          // close_reason on paper_positions is reused as a "sl state" tag:
+          //   null/"" = original SL, "be" = moved to break-even, "trail" = trailing stop active
+          const slState: string = (pos.close_reason || "").toString();
+          const slHitReason = slState === "trail" ? "trail_hit" : slState === "be" ? "be_hit" : "sl_hit";
           const slippagePips = exitFlags.slippagePips ?? 0.5; // default 0.5 pips slippage on SL
           if (sl !== null) {
             if (pos.direction === "long" && currentPrice <= sl) {
-              closeReason = "sl_hit";
+              closeReason = slHitReason;
               const gapPrice = Math.min(sl, currentPrice); // Use worse price (lower for longs)
               const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
               exitPrice = gapPrice - (slippagePips * spec.pipSize); // Slippage worsens the fill
             } else if (pos.direction === "short" && currentPrice >= sl) {
-              closeReason = "sl_hit";
+              closeReason = slHitReason;
               const gapPrice = Math.max(sl, currentPrice); // Use worse price (higher for shorts)
               const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
               exitPrice = gapPrice + (slippagePips * spec.pipSize); // Slippage worsens the fill
@@ -708,8 +712,9 @@ Deno.serve(async (req) => {
               // Move SL to entry (break even)
               const newSL = entryPrice;
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "be" }).eq("id", pos.id);
                 sl = newSL; // Update local reference
+                pos.close_reason = "be"; // keep local in sync for trail check below
                 // FIX 1: Sync break-even SL to broker
                 const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
                 console.log(`Break-even broker SL sync [${pos.position_id}]: ${beModifyResults.join("; ")}`);
@@ -735,8 +740,9 @@ Deno.serve(async (req) => {
                 : currentPrice + trailDistance;
               // Only move SL in favorable direction (never widen it)
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
                 sl = newSL; // Update local reference for SL check above
+                pos.close_reason = "trail";
                 // FIX 1: Sync trailing SL to broker
                 const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
                 console.log(`Trailing stop broker SL sync [${pos.position_id}]: ${trailModifyResults.join("; ")}`);
