@@ -1,0 +1,987 @@
+/**
+ * _shared/smcAnalysis.ts — Shared SMC (Smart Money Concepts) analysis module
+ * ──────────────────────────────────────────────────────────────────────────
+ * Extracted from bot-scanner so both the live scanner AND the backtester
+ * use the exact same detection logic. No drift, no re-implementation.
+ *
+ * Exports:
+ *   Types:       Candle, SwingPoint, OrderBlock, FairValueGap, LiquidityPool,
+ *                BreakerBlock, UnicornSetup, DisplacementResult, SMTResult,
+ *                VWAPResult, AMDResult, SilverBulletResult, MacroWindowResult,
+ *                ReasoningFactor, GateResult, SLTPInput
+ *   Detection:   detectSwingPoints, analyzeMarketStructure, detectOrderBlocks,
+ *                detectFVGs, detectLiquidityPools, detectDisplacement,
+ *                tagDisplacementQuality, detectBreakerBlocks, detectUnicornSetups,
+ *                detectJudasSwing, detectReversalCandle, calculatePDLevels,
+ *                calculatePremiumDiscount, computeOpeningRange,
+ *                detectSMTDivergence, calculateAnchoredVWAP, calculateATR,
+ *                detectAMDPhase, detectSilverBullet, detectMacroWindow,
+ *                detectSession, detectOptimalStyle
+ *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize
+ *   Constants:   SPECS, YAHOO_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
+ *                STYLE_OVERRIDES, DEFAULTS
+ */
+
+// ─── Types ──────────────────────────────────────────────────────────
+export interface Candle {
+  datetime: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export interface SwingPoint {
+  index: number;
+  price: number;
+  type: "high" | "low";
+  datetime: string;
+}
+
+export interface OrderBlock {
+  index: number;
+  high: number;
+  low: number;
+  type: "bullish" | "bearish";
+  datetime: string;
+  mitigated: boolean;
+  mitigatedPercent: number;
+}
+
+export interface FairValueGap {
+  index: number;
+  high: number;
+  low: number;
+  type: "bullish" | "bearish";
+  datetime: string;
+  mitigated: boolean;
+}
+
+export interface LiquidityPool {
+  price: number;
+  type: "buy-side" | "sell-side";
+  strength: number;
+  datetime: string;
+  swept: boolean;
+}
+
+export interface BreakerBlock {
+  type: "bullish_breaker" | "bearish_breaker";
+  high: number;
+  low: number;
+  mitigatedAt: number;
+  originalOBType: "bullish" | "bearish";
+  isActive: boolean;
+}
+
+export interface UnicornSetup {
+  type: "bullish_unicorn" | "bearish_unicorn";
+  breakerHigh: number;
+  breakerLow: number;
+  fvgHigh: number;
+  fvgLow: number;
+  overlapHigh: number;
+  overlapLow: number;
+}
+
+export interface DisplacementCandle {
+  index: number;
+  bodyRatio: number;
+  rangeMultiple: number;
+  direction: "bullish" | "bearish";
+}
+
+export interface DisplacementResult {
+  isDisplacement: boolean;
+  displacementCandles: DisplacementCandle[];
+  lastDirection: "bullish" | "bearish" | null;
+}
+
+export interface SMTResult {
+  detected: boolean;
+  type: "bullish" | "bearish" | null;
+  correlatedPair: string | null;
+  detail: string;
+}
+
+export interface VWAPResult {
+  value: number | null;
+  distancePips: number | null;
+  rejection: "bullish" | "bearish" | null;
+  barsAnchored: number;
+}
+
+export interface AMDResult {
+  phase: "accumulation" | "manipulation" | "distribution" | "unknown";
+  bias: "bullish" | "bearish" | null;
+  asianHigh: number | null;
+  asianLow: number | null;
+  sweptSide: "high" | "low" | null;
+  detail: string;
+}
+
+export interface SilverBulletResult {
+  active: boolean;
+  window: string | null;
+  minutesRemaining: number;
+}
+
+export interface MacroWindowResult {
+  active: boolean;
+  window: string | null;
+  minutesRemaining: number;
+}
+
+export interface ReasoningFactor {
+  name: string;
+  present: boolean;
+  weight: number;
+  detail: string;
+}
+
+export interface GateResult {
+  passed: boolean;
+  reason: string;
+}
+
+export interface SLTPInput {
+  direction: "long" | "short" | null;
+  lastPrice: number;
+  pipSize: number;
+  config: any;
+  swings: SwingPoint[];
+  orderBlocks: OrderBlock[];
+  liquidityPools: LiquidityPool[];
+  pdLevels: any;
+  atrValue: number;
+}
+
+export interface OpeningRangeResult {
+  high: number;
+  low: number;
+  midpoint: number;
+  completed: boolean;
+}
+
+// ─── Constants ──────────────────────────────────────────────────────
+export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: string; marginPerLot?: number }> = {
+  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800 },
+  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 700 },
+  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
+  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
+  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
+  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
+  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
+  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
+  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800 },
+  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 800 },
+  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
+  "US30": { pipSize: 1.0, lotUnits: 1, type: "index", marginPerLot: 5000 },
+  "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000 },
+  "SPX500": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000 },
+  "XAU/USD": { pipSize: 0.01, lotUnits: 100, type: "commodity", marginPerLot: 2000 },
+  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, type: "commodity", marginPerLot: 1500 },
+  "US Oil": { pipSize: 0.01, lotUnits: 1000, type: "commodity", marginPerLot: 2000 },
+  "BTC/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 5000 },
+  "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000 },
+};
+
+export const YAHOO_SYMBOLS: Record<string, string> = {
+  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
+  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
+  "USD/CHF": "USDCHF=X",
+  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
+  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
+  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
+  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
+  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  "AUD/CHF": "AUDCHF=X", "AUD/NZD": "AUDNZD=X", "CAD/CHF": "CADCHF=X",
+  "CHF/JPY": "CHFJPY=X", "NZD/CAD": "NZDCAD=X", "NZD/CHF": "NZDCHF=X",
+  "NZD/JPY": "NZDJPY=X",
+  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
+};
+
+export const SMT_PAIRS: Record<string, string> = {
+  "EUR/USD": "GBP/USD", "GBP/USD": "EUR/USD",
+  "USD/JPY": "USD/CHF", "USD/CHF": "USD/JPY",
+  "AUD/USD": "NZD/USD", "NZD/USD": "AUD/USD",
+  "XAU/USD": "XAG/USD", "XAG/USD": "XAU/USD",
+  "BTC/USD": "ETH/USD", "ETH/USD": "BTC/USD",
+};
+
+export const ASSET_PROFILES: Record<string, { slBufferMultiplier: number; proximityMultiplier: number; skipSessionGate: boolean; minConfluenceAdj: number }> = {
+  forex:     { slBufferMultiplier: 1.0, proximityMultiplier: 1.0, skipSessionGate: false, minConfluenceAdj: 0 },
+  index:     { slBufferMultiplier: 3.0, proximityMultiplier: 2.0, skipSessionGate: false, minConfluenceAdj: 0 },
+  commodity: { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: false, minConfluenceAdj: 0 },
+  crypto:    { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: true,  minConfluenceAdj: 0 },
+};
+
+export function getAssetProfile(symbol: string) {
+  const spec = SPECS[symbol];
+  const type = spec?.type || "forex";
+  return ASSET_PROFILES[type] || ASSET_PROFILES.forex;
+}
+
+export const STYLE_OVERRIDES: Record<string, any> = {
+  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 5 },
+  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 5.5 },
+  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 6.5 },
+};
+
+export const DEFAULTS = {
+  entryTimeframe: "15min",
+  htfTimeframe: "1day",
+  htfBiasRequired: true,
+  htfBiasHardVeto: false,
+  minConfluence: 5.5,
+  onlyBuyInDiscount: true,
+  onlySellInPremium: true,
+  riskPerTrade: 1,
+  maxDailyLoss: 5,
+  maxDrawdown: 15,
+  maxOpenPositions: 5,
+  maxPerSymbol: 2,
+  portfolioHeat: 10,
+  minRiskReward: 1.5,
+  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
+  fixedSLPips: 25,
+  slATRMultiple: 1.5,
+  slATRPeriod: 14,
+  slBufferPips: 2,
+  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
+  fixedTPPips: 50,
+  tpRatio: 2.0,
+  tpATRMultiple: 2.0,
+  breakEvenEnabled: true,
+  breakEvenPips: 20,
+  enabledSessions: ["London", "New York"],
+  enabledDays: [1, 2, 3, 4, 5],
+  instruments: [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
+    "XAU/USD", "BTC/USD",
+  ],
+  openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+  tradingStyle: { mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" | "auto", autoDetectEnabled: false },
+  spreadFilterEnabled: true,
+  maxSpreadPips: 3,
+  newsFilterEnabled: true,
+  newsFilterPauseMinutes: 30,
+  cooldownMinutes: 0,
+  closeOnReverse: false,
+  trailingStopEnabled: false,
+  trailingStopPips: 15,
+  trailingStopActivation: "after_1r",
+  partialTPEnabled: false,
+  partialTPPercent: 50,
+  partialTPLevel: 1.0,
+  maxHoldHours: 0,
+  killZoneOnly: false,
+  maxConsecutiveLosses: 0,
+  protectionMaxDailyLossDollar: 0,
+  minFactorCount: 0,
+  useSMT: true,
+  _currentSymbol: "" as string,
+  _smtResult: null as any,
+};
+
+// ─── DST-Aware New York Time Helper ─────────────────────────────────
+export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+  const year = utc.getUTCFullYear();
+  const mar1 = new Date(Date.UTC(year, 2, 1));
+  const marSun2 = 14 - mar1.getUTCDay();
+  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0);
+  const nov1 = new Date(Date.UTC(year, 10, 1));
+  const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
+  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0);
+  const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
+  const offsetH = isEDT ? 4 : 5;
+  const nyMs = utc.getTime() - offsetH * 3600_000;
+  const ny = new Date(nyMs);
+  const h = ny.getUTCHours();
+  const m = ny.getUTCMinutes();
+  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
+}
+
+// ─── Backtest variant: accepts a timestamp instead of using Date.now() ──
+export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+  return toNYTime(new Date(utcMs));
+}
+
+// ─── Session Detection ──────────────────────────────────────────────
+export function detectSession(atMs?: number): { name: string; isKillZone: boolean } {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const t = ny.t;
+  if (t >= 20 || t < 0) return { name: "Asian", isKillZone: false };
+  if (t >= 0 && t < 2) return { name: "Asian", isKillZone: false };
+  if (t >= 2 && t < 5) return { name: "London", isKillZone: true };
+  if (t >= 5 && t < 8.5) return { name: "London", isKillZone: false };
+  if (t >= 8.5 && t < 11) return { name: "New York", isKillZone: true };
+  if (t >= 11 && t < 12) return { name: "New York", isKillZone: true };
+  if (t >= 12 && t < 16) return { name: "New York", isKillZone: false };
+  return { name: "Off-Hours", isKillZone: false };
+}
+
+// ─── Silver Bullet Windows ──────────────────────────────────────────
+export function detectSilverBullet(atMs?: number): SilverBulletResult {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const t = ny.t;
+  const windows = [
+    { name: "London Open SB", start: 3, end: 4 },
+    { name: "AM SB", start: 10, end: 11 },
+    { name: "PM SB", start: 14, end: 15 },
+  ];
+  for (const w of windows) {
+    if (t >= w.start && t < w.end) {
+      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
+// ─── ICT Macro Windows ──────────────────────────────────────────────
+export function detectMacroWindow(atMs?: number): MacroWindowResult {
+  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const tMin = ny.tMin;
+  const windows = [
+    { name: "London Macro 1",    start: 2*60+33, end: 2*60+50 },
+    { name: "London Macro 2",    start: 4*60+3,  end: 4*60+20 },
+    { name: "NY Pre-Open Macro", start: 8*60+50, end: 9*60+10 },
+    { name: "NY AM Macro",       start: 9*60+50, end: 10*60+10 },
+    { name: "London Close Macro",start: 10*60+50,end: 11*60+10 },
+    { name: "NY Lunch Macro",    start: 11*60+50,end: 12*60+10 },
+    { name: "Last Hour Macro",   start: 13*60+10,end: 13*60+40 },
+    { name: "PM Macro",          start: 15*60+15,end: 15*60+45 },
+  ];
+  for (const w of windows) {
+    if (tMin >= w.start && tMin < w.end) {
+      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
+    }
+  }
+  return { active: false, window: null, minutesRemaining: 0 };
+}
+
+// ─── ICT AMD Phase Detection ────────────────────────────────────────
+export function detectAMDPhase(candles: Candle[], atMs?: number): AMDResult {
+  if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
+
+  const nyHourOf = (c: Candle): number => {
+    const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
+    return toNYTime(utc).h;
+  };
+
+  const recent = candles.slice(-200);
+  const asian  = recent.filter(c => { const h = nyHourOf(c); return h >= 20 || h < 2; });
+  const london = recent.filter(c => { const h = nyHourOf(c); return h >= 2 && h < 9; });
+  const nyCandles = recent.filter(c => { const h = nyHourOf(c); return h >= 9 && h < 16; });
+
+  const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
+  const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
+
+  let sweptSide: "high" | "low" | null = null;
+  let bias: "bullish" | "bearish" | null = null;
+  if (asianHigh != null && asianLow != null && london.length > 0) {
+    const lHigh = Math.max(...london.map(c => c.high));
+    const lLow  = Math.min(...london.map(c => c.low));
+    const lClose = london[london.length - 1].close;
+    const tookHigh = lHigh > asianHigh;
+    const tookLow  = lLow  < asianLow;
+    if (tookHigh && !tookLow && lClose < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+    else if (tookLow && !tookHigh && lClose > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    else if (tookHigh && tookLow) {
+      const tail = london.slice(-Math.max(1, Math.floor(london.length / 3)));
+      const tailHigh = Math.max(...tail.map(c => c.high));
+      const tailLow  = Math.min(...tail.map(c => c.low));
+      if (tailHigh > asianHigh && tail[tail.length - 1].close < asianHigh) { sweptSide = "high"; bias = "bearish"; }
+      else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
+    }
+  }
+
+  const nowNY = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
+  const h = nowNY.h;
+  let phase: AMDResult["phase"] = "unknown";
+  if (h >= 20 || h < 2) phase = "accumulation";
+  else if (h >= 2 && h < 9) phase = sweptSide ? "manipulation" : (asian.length > 0 ? "manipulation" : "accumulation");
+  else if (h >= 9 && h < 16) {
+    if (sweptSide && nyCandles.length > 0 && asianHigh != null && asianLow != null) {
+      const nHigh = Math.max(...nyCandles.map(c => c.high));
+      const nLow  = Math.min(...nyCandles.map(c => c.low));
+      const expandedDown = sweptSide === "high" && nLow < asianLow;
+      const expandedUp   = sweptSide === "low"  && nHigh > asianHigh;
+      phase = (expandedDown || expandedUp) ? "distribution" : "manipulation";
+    } else {
+      phase = "distribution";
+    }
+  } else if (h >= 16 && h < 20) {
+    phase = "distribution";
+  }
+
+  const detail = sweptSide
+    ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
+    : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
+  return { phase, bias, asianHigh, asianLow, sweptSide, detail };
+}
+
+// ─── Standalone ATR Calculation ─────────────────────────────────────
+export function calculateATR(candles: Candle[], period = 14): number {
+  if (candles.length < period + 1) return 0;
+  let atrSum = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const prev = candles[i - 1];
+    const curr = candles[i];
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    atrSum += tr;
+  }
+  return atrSum / period;
+}
+
+// ─── Session-Anchored VWAP ──────────────────────────────────────────
+export function calculateAnchoredVWAP(candles: Candle[], pipSize: number): VWAPResult {
+  if (candles.length === 0 || pipSize <= 0) {
+    return { value: null, distancePips: null, rejection: null, barsAnchored: 0 };
+  }
+  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
+  let anchorIdx = candles.length - 1;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (candles[i].datetime.slice(0, 10) === lastDate) anchorIdx = i; else break;
+  }
+  let pvSum = 0, vSum = 0;
+  for (let i = anchorIdx; i < candles.length; i++) {
+    const c = candles[i];
+    const typical = (c.high + c.low + c.close) / 3;
+    const w = Math.max(1e-9, c.high - c.low);
+    pvSum += typical * w;
+    vSum += w;
+  }
+  const value = vSum > 0 ? pvSum / vSum : null;
+  if (value == null) return { value: null, distancePips: null, rejection: null, barsAnchored: candles.length - anchorIdx };
+  const last = candles[candles.length - 1];
+  const distancePips = Math.abs(last.close - value) / pipSize;
+  let rejection: "bullish" | "bearish" | null = null;
+  if (last.low < value && last.close > value && (last.close - last.open) > 0) rejection = "bullish";
+  else if (last.high > value && last.close < value && (last.open - last.close) > 0) rejection = "bearish";
+  return { value, distancePips, rejection, barsAnchored: candles.length - anchorIdx };
+}
+
+// ─── Optimal Style Detection ────────────────────────────────────────
+export function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
+  if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
+  const atrPeriod = Math.min(14, dailyCandles.length - 1);
+  let atrSum = 0;
+  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
+    const prev = dailyCandles[i - 1];
+    const curr = dailyCandles[i];
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    atrSum += tr;
+  }
+  const atr = atrSum / atrPeriod;
+  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
+  const atrPercent = avgPrice > 0 ? (atr / avgPrice) * 100 : 0;
+  const recentClose = dailyCandles[dailyCandles.length - 1].close;
+  const fiveDaysAgo = dailyCandles[Math.max(0, dailyCandles.length - 6)].close;
+  const trendMove = Math.abs(recentClose - fiveDaysAgo);
+  const trendStrength = atr > 0 ? trendMove / (atr * 5) : 0;
+  if (atrPercent < 0.5 && trendStrength < 0.3) return "scalper";
+  if (atrPercent > 1.0 && trendStrength > 0.5) return "swing_trader";
+  return "day_trader";
+}
+
+// ─── SMC Detection Functions ────────────────────────────────────────
+
+export function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[] {
+  const swings: SwingPoint[] = [];
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= lookback; j++) {
+      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) isHigh = false;
+      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) isLow = false;
+    }
+    if (isHigh) swings.push({ index: i, price: candles[i].high, type: "high", datetime: candles[i].datetime });
+    if (isLow) swings.push({ index: i, price: candles[i].low, type: "low", datetime: candles[i].datetime });
+  }
+  return swings;
+}
+
+export function analyzeMarketStructure(candles: Candle[]) {
+  const swings = detectSwingPoints(candles);
+  const highs = swings.filter(s => s.type === "high"), lows = swings.filter(s => s.type === "low");
+  let currentTrend = "ranging";
+  const bos: any[] = [], choch: any[] = [];
+
+  for (let i = 1; i < highs.length; i++) {
+    if (highs[i].price > highs[i - 1].price) {
+      if (currentTrend === "bearish") choch.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
+      else bos.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
+      currentTrend = "bullish";
+    }
+  }
+  for (let i = 1; i < lows.length; i++) {
+    if (lows[i].price < lows[i - 1].price) {
+      if (currentTrend === "bullish") choch.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
+      else bos.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
+      currentTrend = "bearish";
+    }
+  }
+
+  let trend: "bullish" | "bearish" | "ranging" = "ranging";
+  if (highs.length >= 2 && lows.length >= 2) {
+    const rH = highs.slice(-2), rL = lows.slice(-2);
+    if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) trend = "bullish";
+    else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
+  }
+  return { trend, swingPoints: swings, bos, choch };
+}
+
+export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[]): OrderBlock[] {
+  const OB_RECENCY = 50;
+  const OB_CAP = 5;
+  const BREAK_LOOKAHEAD = 10;
+  const recencyStart = Math.max(2, candles.length - OB_RECENCY);
+  const candidates: (OrderBlock & { quality: number })[] = [];
+
+  for (let i = recencyStart; i < candles.length; i++) {
+    const prev = candles[i - 1], curr = candles[i];
+    if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
+      const obHigh = Math.max(prev.open, prev.close);
+      const obLow = Math.min(prev.open, prev.close);
+      const ob: OrderBlock & { quality: number } = {
+        index: i - 1, high: obHigh, low: obLow, type: "bullish",
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+      };
+      for (let j = i + 1; j < candles.length; j++) {
+        const mid = (ob.high + ob.low) / 2;
+        if (candles[j].low <= mid) {
+          ob.mitigatedPercent = Math.min(100, ((ob.high - candles[j].low) / (ob.high - ob.low)) * 100);
+          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+          break;
+        }
+      }
+      if (structureBreaks && structureBreaks.length > 0) {
+        const hasBreak = structureBreaks.some(b => b.type === "bullish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD);
+        if (hasBreak) ob.quality += 2;
+      } else { ob.quality += 1; }
+      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
+      candidates.push(ob);
+    }
+    if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
+      const obHigh = Math.max(prev.open, prev.close);
+      const obLow = Math.min(prev.open, prev.close);
+      const ob: OrderBlock & { quality: number } = {
+        index: i - 1, high: obHigh, low: obLow, type: "bearish",
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+      };
+      for (let j = i + 1; j < candles.length; j++) {
+        const mid = (ob.high + ob.low) / 2;
+        if (candles[j].high >= mid) {
+          ob.mitigatedPercent = Math.min(100, ((candles[j].high - ob.low) / (ob.high - ob.low)) * 100);
+          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+          break;
+        }
+      }
+      if (structureBreaks && structureBreaks.length > 0) {
+        const hasBreak = structureBreaks.some(b => b.type === "bearish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD);
+        if (hasBreak) ob.quality += 2;
+      } else { ob.quality += 1; }
+      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
+      candidates.push(ob);
+    }
+  }
+  candidates.sort((a, b) => b.quality - a.quality || b.index - a.index);
+  return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
+}
+
+export function detectFVGs(candles: Candle[]): FairValueGap[] {
+  const fvgs: FairValueGap[] = [];
+  for (let i = 2; i < candles.length; i++) {
+    const c1 = candles[i - 2], c2 = candles[i - 1], c3 = candles[i];
+    if (c3.low > c1.high && c2.close > c2.open) {
+      const fvg: FairValueGap = { index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime, mitigated: false };
+      for (let j = i + 1; j < candles.length; j++) { if (candles[j].low <= fvg.low) { fvg.mitigated = true; break; } }
+      fvgs.push(fvg);
+    }
+    if (c1.low > c3.high && c2.close < c2.open) {
+      const fvg: FairValueGap = { index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime, mitigated: false };
+      for (let j = i + 1; j < candles.length; j++) { if (candles[j].high >= fvg.high) { fvg.mitigated = true; break; } }
+      fvgs.push(fvg);
+    }
+  }
+  return fvgs;
+}
+
+export function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPool[] {
+  const pools: LiquidityPool[] = [];
+  const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
+  const tol = priceRange * tolerance;
+  const last = candles[candles.length - 1];
+  const usedH = new Set<number>(), usedL = new Set<number>();
+
+  for (let i = 0; i < candles.length; i++) {
+    if (usedH.has(i)) continue;
+    let count = 1;
+    for (let j = i + 1; j < candles.length; j++) {
+      if (usedH.has(j)) continue;
+      if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
+    }
+    if (count >= 2) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
+  }
+  for (let i = 0; i < candles.length; i++) {
+    if (usedL.has(i)) continue;
+    let count = 1;
+    for (let j = i + 1; j < candles.length; j++) {
+      if (usedL.has(j)) continue;
+      if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
+    }
+    if (count >= 2) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
+  }
+  return pools.sort((a, b) => b.strength - a.strength);
+}
+
+export function detectDisplacement(candles: Candle[]): DisplacementResult {
+  if (candles.length < 25) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
+  const window = candles.slice(-21, -1);
+  let bodySum = 0, rangeSum = 0;
+  for (const c of window) {
+    bodySum += Math.abs(c.close - c.open);
+    rangeSum += (c.high - c.low);
+  }
+  const avgBody = bodySum / window.length;
+  const avgRange = rangeSum / window.length;
+  if (avgBody <= 0 || avgRange <= 0) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
+
+  const checkStart = Math.max(0, candles.length - 5);
+  const displacementCandles: DisplacementCandle[] = [];
+  for (let i = checkStart; i < candles.length; i++) {
+    const c = candles[i];
+    const body = Math.abs(c.close - c.open);
+    const range = c.high - c.low;
+    if (range <= 0) continue;
+    const bodyRatio = body / range;
+    const rangeMultiple = range / avgRange;
+    const bodyMultiple = body / avgBody;
+    if (bodyMultiple >= 2.0 && bodyRatio >= 0.7 && rangeMultiple >= 1.5) {
+      displacementCandles.push({
+        index: i, bodyRatio, rangeMultiple,
+        direction: c.close > c.open ? "bullish" : "bearish",
+      });
+    }
+  }
+  const lastDirection = displacementCandles.length > 0
+    ? displacementCandles[displacementCandles.length - 1].direction
+    : null;
+  return { isDisplacement: displacementCandles.length > 0, displacementCandles, lastDirection };
+}
+
+export function tagDisplacementQuality(
+  orderBlocks: OrderBlock[],
+  fvgs: FairValueGap[],
+  displacementCandles: DisplacementCandle[],
+) {
+  for (const ob of orderBlocks) {
+    const hasNearby = displacementCandles.some(d => d.index > ob.index && d.index <= ob.index + 3);
+    (ob as any).hasDisplacement = hasNearby;
+  }
+  for (const fvg of fvgs) {
+    const createdByDisp = displacementCandles.some(d => d.index === fvg.index);
+    (fvg as any).hasDisplacement = createdByDisp;
+  }
+}
+
+export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]): BreakerBlock[] {
+  const breakers: BreakerBlock[] = [];
+  for (const ob of orderBlocks) {
+    if (!ob.mitigated) continue;
+    const breakerType: "bullish_breaker" | "bearish_breaker" =
+      ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
+    let mitigatedAt = ob.index;
+    for (let j = ob.index + 1; j < candles.length; j++) {
+      if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
+      if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
+    }
+    let isActive = true;
+    for (let j = mitigatedAt + 1; j < candles.length; j++) {
+      const c = candles[j];
+      const enteredZone = c.high >= ob.low && c.low <= ob.high;
+      if (!enteredZone) continue;
+      if (breakerType === "bearish_breaker") {
+        if (c.close < ob.low) { isActive = false; break; }
+      } else {
+        if (c.close > ob.high) { isActive = false; break; }
+      }
+    }
+    breakers.push({ type: breakerType, high: ob.high, low: ob.low, mitigatedAt, originalOBType: ob.type, isActive });
+  }
+  return breakers.filter(b => b.isActive);
+}
+
+export function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairValueGap[]): UnicornSetup[] {
+  const unicorns: UnicornSetup[] = [];
+  const activeFVGs = fvgs.filter(f => !f.mitigated);
+  for (const breaker of breakerBlocks) {
+    if (!breaker.isActive) continue;
+    const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
+    for (const fvg of activeFVGs) {
+      if (fvg.type !== wantFVGType) continue;
+      const overlapLow = Math.max(breaker.low, fvg.low);
+      const overlapHigh = Math.min(breaker.high, fvg.high);
+      if (overlapLow < overlapHigh) {
+        unicorns.push({
+          type: breaker.type === "bullish_breaker" ? "bullish_unicorn" : "bearish_unicorn",
+          breakerHigh: breaker.high, breakerLow: breaker.low,
+          fvgHigh: fvg.high, fvgLow: fvg.low, overlapHigh, overlapLow,
+        });
+      }
+    }
+  }
+  return unicorns;
+}
+
+export function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
+  const corrPair = SMT_PAIRS[symbol] || null;
+  if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
+  if (candles.length < 30 || correlatedCandles.length < 30) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
+  }
+  const thisSwings = detectSwingPoints(candles, 3);
+  const corrSwings = detectSwingPoints(correlatedCandles, 3);
+  const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
+  const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
+  const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
+  const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
+
+  if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
+    return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
+  }
+
+  const thisLatestLow = thisLows[thisLows.length - 1].price;
+  const thisPriorLow  = thisLows[thisLows.length - 2].price;
+  const corrLatestLow = corrLows[corrLows.length - 1].price;
+  const corrPriorLow  = corrLows[corrLows.length - 2].price;
+
+  if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
+    return {
+      detected: true, type: "bullish", correlatedPair: corrPair,
+      detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held — bullish SMT`,
+    };
+  }
+
+  const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
+  const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
+  const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
+  const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
+
+  if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
+    return {
+      detected: true, type: "bearish", correlatedPair: corrPair,
+      detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held — bearish SMT`,
+    };
+  }
+
+  return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
+}
+
+export function detectJudasSwing(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
+  const none = { detected: false, type: null as any, confirmed: false, description: "No Judas Swing" };
+  if (candles.length < 20) return none;
+  const recent = candles.slice(-20);
+  const midnightOpen = recent[0].open;
+  const range = Math.max(...recent.map(c => c.high)) - Math.min(...recent.map(c => c.low));
+  const firstHalf = recent.slice(0, 10);
+  const currentClose = recent[recent.length - 1].close;
+
+  const firstHalfLow = Math.min(...firstHalf.map(c => c.low));
+  const dropBelow = midnightOpen - firstHalfLow;
+  if (dropBelow > range * 0.3 && currentClose > midnightOpen) {
+    return { detected: true, type: "bullish", confirmed: true, description: `Bullish Judas: false break below ${midnightOpen.toFixed(5)}, reversed above` };
+  }
+
+  const firstHalfHigh = Math.max(...firstHalf.map(c => c.high));
+  const spikeAbove = firstHalfHigh - midnightOpen;
+  if (spikeAbove > range * 0.3 && currentClose < midnightOpen) {
+    return { detected: true, type: "bearish", confirmed: true, description: `Bearish Judas: false break above ${midnightOpen.toFixed(5)}, reversed below` };
+  }
+
+  return none;
+}
+
+export function detectReversalCandle(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null } {
+  if (candles.length < 2) return { detected: false, type: null };
+  const last = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const bodySize = Math.abs(last.close - last.open);
+  const totalRange = last.high - last.low;
+  if (totalRange === 0) return { detected: false, type: null };
+
+  const upperWick = last.high - Math.max(last.open, last.close);
+  const lowerWick = Math.min(last.open, last.close) - last.low;
+
+  if (bodySize / totalRange < 0.3 && lowerWick / totalRange > 0.6 && last.close > last.open) return { detected: true, type: "bullish" };
+  if (bodySize / totalRange < 0.3 && upperWick / totalRange > 0.6 && last.close < last.open) return { detected: true, type: "bearish" };
+  if (prev.close < prev.open && last.close > last.open && last.open <= prev.close && last.close >= prev.open) return { detected: true, type: "bullish" };
+  if (prev.close > prev.open && last.close < last.open && last.open >= prev.close && last.close <= prev.open) return { detected: true, type: "bearish" };
+
+  return { detected: false, type: null };
+}
+
+export function calculatePDLevels(dailyCandles: Candle[]) {
+  if (dailyCandles.length < 10) return null;
+  const prev = dailyCandles[dailyCandles.length - 2];
+  const weekCandles = dailyCandles.slice(-5);
+  return {
+    pdh: prev.high, pdl: prev.low, pdo: prev.open, pdc: prev.close,
+    pwh: Math.max(...weekCandles.map(c => c.high)),
+    pwl: Math.min(...weekCandles.map(c => c.low)),
+    pwo: weekCandles[0].open,
+    pwc: weekCandles[weekCandles.length - 1].close,
+  };
+}
+
+export function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
+  if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const swings = detectSwingPoints(candles);
+  const recentHighs = swings.filter(s => s.type === "high").slice(-5);
+  const recentLows = swings.filter(s => s.type === "low").slice(-5);
+  if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const swingHigh = Math.max(...recentHighs.map(s => s.price));
+  const swingLow = Math.min(...recentLows.map(s => s.price));
+  const range = swingHigh - swingLow;
+  if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
+  const lastPrice = candles[candles.length - 1].close;
+  const zonePercent = ((lastPrice - swingLow) / range) * 100;
+  let currentZone = "equilibrium";
+  if (zonePercent > 55) currentZone = "premium";
+  else if (zonePercent < 45) currentZone = "discount";
+  const oteZone = zonePercent >= 62 && zonePercent <= 79;
+  return { currentZone, zonePercent, oteZone };
+}
+
+export function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
+  if (!hourlyCandles || hourlyCandles.length === 0) return null;
+  const now = new Date();
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const todayCandles = hourlyCandles.filter(c => c.datetime >= todayStart);
+  if (todayCandles.length === 0) return null;
+  const orCandles = todayCandles.slice(0, candleCount);
+  const high = Math.max(...orCandles.map(c => c.high));
+  const low = Math.min(...orCandles.map(c => c.low));
+  return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
+}
+
+// ─── SL/TP Calculation ──────────────────────────────────────────────
+export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
+  const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
+  if (!direction) return { stopLoss: null, takeProfit: null };
+
+  const buffer = (config.slBufferPips || 2) * pipSize;
+  let sl: number | null = null;
+  let tp: number | null = null;
+
+  const slMethod: string = config.slMethod || "structure";
+  if (slMethod === "fixed_pips") {
+    const dist = (config.fixedSLPips || 25) * pipSize;
+    sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+  } else if (slMethod === "atr_based") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.slATRMultiple || 1.5);
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    } else {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else if (slMethod === "below_ob") {
+    if (direction === "long") {
+      const bullishOBs = orderBlocks.filter(ob => !ob.mitigated && ob.type === "bullish" && ob.low < lastPrice).sort((a, b) => b.low - a.low);
+      if (bullishOBs.length > 0) sl = bullishOBs[0].low - buffer;
+    } else {
+      const bearishOBs = orderBlocks.filter(ob => !ob.mitigated && ob.type === "bearish" && ob.high > lastPrice).sort((a, b) => a.high - b.high);
+      if (bearishOBs.length > 0) sl = bearishOBs[0].high + buffer;
+    }
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  } else {
+    if (direction === "long") {
+      const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
+      if (recentLows.length > 0) sl = Math.max(...recentLows.map(s => s.price)) - buffer;
+    } else {
+      const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
+      if (recentHighs.length > 0) sl = Math.min(...recentHighs.map(s => s.price)) + buffer;
+    }
+    if (sl === null) {
+      const dist = (config.fixedSLPips || 25) * pipSize;
+      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
+    }
+  }
+
+  const tpMethod: string = config.tpMethod || "rr_ratio";
+  const slDistance = Math.abs(lastPrice - sl);
+
+  if (tpMethod === "fixed_pips") {
+    const dist = (config.fixedTPPips || 50) * pipSize;
+    tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+  } else if (tpMethod === "next_level") {
+    const targets: number[] = [];
+    if (direction === "long") {
+      if (pdLevels) {
+        if (pdLevels.pdh > lastPrice) targets.push(pdLevels.pdh);
+        if (pdLevels.pwh > lastPrice) targets.push(pdLevels.pwh);
+      }
+      liquidityPools.filter(lp => lp.type === "buy-side" && lp.price > lastPrice && lp.strength >= 2).forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => a - b);
+    } else {
+      if (pdLevels) {
+        if (pdLevels.pdl < lastPrice) targets.push(pdLevels.pdl);
+        if (pdLevels.pwl < lastPrice) targets.push(pdLevels.pwl);
+      }
+      liquidityPools.filter(lp => lp.type === "sell-side" && lp.price < lastPrice && lp.strength >= 2).forEach(lp => targets.push(lp.price));
+      targets.sort((a, b) => b - a);
+    }
+    if (targets.length > 0) tp = targets[0];
+    else {
+      const dist = (config.fixedTPPips || 50) * pipSize;
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    }
+  } else if (tpMethod === "atr_multiple") {
+    if (atrValue > 0) {
+      const dist = atrValue * (config.tpATRMultiple || 2.0);
+      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
+    } else {
+      tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
+    }
+  } else {
+    tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
+  }
+
+  return { stopLoss: sl, takeProfit: tp };
+}
+
+// ─── Position Sizing ────────────────────────────────────────────────
+export function calculatePositionSize(balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string): number {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const riskAmount = balance * (riskPercent / 100);
+  const slDistance = Math.abs(entryPrice - stopLoss);
+  if (slDistance === 0) return 0.01;
+  const lots = riskAmount / (slDistance * spec.lotUnits);
+  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
+}
+
+// ─── PnL Calculation ────────────────────────────────────────────────
+export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string) {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const diff = dir === "long" ? current - entry : entry - current;
+  return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
+}
