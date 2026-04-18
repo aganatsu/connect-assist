@@ -430,7 +430,7 @@ export default function Backtest() {
                     <Toggle label="SMT Divergence" description="Smart Money divergence vs correlated pair" checked={config.strategy.useSMT} onChange={v => updateConfig("strategy", "useSMT", v)} />
                     <Toggle label="VWAP Confluence" description="Session-anchored VWAP alignment" checked={config.strategy.useVWAP} onChange={v => updateConfig("strategy", "useVWAP", v)} />
                     <Toggle label="AMD Phase" description="Accumulation→Manipulation→Distribution" checked={config.strategy.useAMD} onChange={v => updateConfig("strategy", "useAMD", v)} />
-                    <Toggle label="FOTSI Currency Strength" description="Factor 18: 28-pair TSI aggregation (±1.5 pts) + Gate 17 OB/OS veto" checked={config.strategy.useFOTSI} onChange={v => updateConfig("strategy", "useFOTSI", v)} />
+                    <Toggle label="FOTSI Currency Strength" description="Scores trades by currency flow (+1.5 pts buying strong vs weak). Blocks when TSI > +50 (overbought) or < -50 (oversold)" checked={config.strategy.useFOTSI} onChange={v => updateConfig("strategy", "useFOTSI", v)} />
                   </div>
                   <Separator />
                   <SectionHeader title="Bias & Filters" description="Higher timeframe bias and premium/discount zone filters" icon={Eye} />
