@@ -148,7 +148,23 @@ function BrokerSettings() {
     onError: (e: any) => toast.error(`Symbols list failed: ${e.message}`),
   });
 
-  const openSymbols = (id: string, name: string) => {
+  const autoMapMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.autoMapSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error("Auto-map failed", { description: data?.error || "Unknown error" });
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      toast.success(`Mapped ${data.mapped} pairs`, {
+        description: data.unmapped?.length
+          ? `Unmapped: ${data.unmapped.slice(0, 5).join(", ")}${data.unmapped.length > 5 ? "…" : ""}`
+          : "All canonical pairs found on broker",
+        duration: 8000,
+      });
+    },
+    onError: (e: any) => toast.error(`Auto-map failed: ${e.message}`),
+  });
     setSymbolsConnName(name);
     setSymbolsFilter("");
     setSymbolsData(null);
