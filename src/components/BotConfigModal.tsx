@@ -35,6 +35,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
   { tab: "strategy", label: "VWAP Confluence", keywords: ["vwap", "anchored", "session"] },
   { tab: "strategy", label: "AMD Phase Detection", keywords: ["amd", "accumulation", "manipulation", "distribution", "phase"] },
+  { tab: "strategy", label: "FOTSI Currency Strength", keywords: ["fotsi", "currency strength", "tsi", "28 pair", "overbought", "oversold", "veto"] },
   { tab: "strategy", label: "Require HTF Bias Alignment", keywords: ["htf", "bias", "higher timeframe", "alignment"] },
   { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
   { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
@@ -381,6 +382,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD). +1.0 pt when one sweeps liquidity but the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
                       <ToggleField label="VWAP Confluence" description="Session-anchored VWAP (UTC daily). +0.5 pt when price is bias-aligned within 15 pips, +0.5 bonus on rejection wick" checked={config.strategy?.useVWAP ?? true} onChange={v => updateField('strategy', 'useVWAP', v)} />
                       <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +0.5 when bias-aligned to Asian sweep, +0.5 in NY distribution phase" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
+                      <ToggleField label="FOTSI Currency Strength" description="Factor 18: 28-pair TSI aggregation. +1.5 strong alignment, +0.75 moderate, -0.5 counter-trend. Gate 17 vetoes OB/OS extremes" checked={config.strategy?.useFOTSI ?? true} onChange={v => updateField('strategy', 'useFOTSI', v)} />
                     </div>
                     <ToggleField label="Require HTF Bias Alignment" description="Only trade in the direction of higher timeframe bias" checked={config.strategy?.requireHTFBias ?? true} onChange={v => updateField('strategy', 'requireHTFBias', v)} />
                     <ToggleField label="HTF Bias Hard Veto" description="Block longs unless daily is bullish, shorts unless daily is bearish (no ranging exception, no score override)" checked={config.strategy?.htfBiasHardVeto ?? false} onChange={v => updateField('strategy', 'htfBiasHardVeto', v)} />

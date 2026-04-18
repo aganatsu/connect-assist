@@ -83,6 +83,7 @@ const DEFAULTS = {
   // ── Strategy gates ──
   minFactorCount: 0,
   useSMT: true,
+  useFOTSI: true,
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -1705,7 +1706,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let pts = 0;
     let detail = "";
     const fotsi = config._fotsiResult as FOTSIResult | null;
-    if (fotsi && direction) {
+    if (fotsi && direction && config.useFOTSI !== false) {
       const currencies = parsePairCurrencies(config._currentSymbol || "");
       if (currencies) {
         const [base, quote] = currencies;
@@ -1856,6 +1857,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
     // AMD Phase (defaults true)
     useAMD: strategy.useAMD ?? true,
+    // FOTSI Currency Strength (defaults true)
+    useFOTSI: strategy.useFOTSI ?? true,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
@@ -2234,7 +2237,7 @@ async function runSafetyGates(
   // Also checks quote currency curve for secondary veto.
   {
     const fotsi = (config as any)._fotsiResult as FOTSIResult | null;
-    if (fotsi) {
+    if (fotsi && config.useFOTSI !== false) {
       const currencies = parsePairCurrencies(symbol);
       if (currencies) {
         const [base, quote] = currencies;
