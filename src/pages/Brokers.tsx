@@ -249,6 +249,7 @@ export default function BrokersPage() {
             ) : selected ? (
               <ConnectionDetail
                 connection={selected}
+                probeDetails={probeByConn[selected.id]}
                 onTest={() => testMutation.mutate(selected.id)}
                 onCheckStatus={() => checkStatus(selected.id, selected.display_name)}
                 onAutoMap={() => autoMapMutation.mutate(selected.id)}
