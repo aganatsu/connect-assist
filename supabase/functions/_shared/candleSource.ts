@@ -112,6 +112,46 @@ function metaapiTimeframe(canon: string): string {
 // ─── MetaAPI region failover (mirrors broker-execute) ────────────────
 const META_REGIONS = ["london", "new-york", "singapore"];
 const regionCache = new Map<string, string>();
+// Cache of symbols we've already subscribed to per account (in-memory, per cold start)
+// Key: `${accountId}:${symbol}` → true
+const subscribedSymbols = new Set<string>();
+
+// Probe + subscribe a symbol via current-candles?keepSubscription=true.
+// This both validates that the broker recognizes the symbol AND triggers a
+// long-term market data subscription, which is required on some brokers
+// (e.g. HFMarkets) before historical-market-data will return data.
+// Returns true if the symbol is valid and subscribed; false if 404/invalid.
+async function metaSubscribeSymbol(
+  authToken: string,
+  metaAccountId: string,
+  region: string,
+  brokerSymbol: string,
+  canon: string,
+): Promise<boolean> {
+  const cacheKey = `${metaAccountId}:${brokerSymbol}`;
+  if (subscribedSymbols.has(cacheKey)) return true;
+
+  const tf = metaapiTimeframe(canon);
+  const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/current-candles/${tf}?keepSubscription=true`;
+  try {
+    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    if (res.ok) {
+      subscribedSymbols.add(cacheKey);
+      console.log(`[candleSource] MetaAPI subscribed ${brokerSymbol} on ${region}`);
+      return true;
+    }
+    if (res.status === 404) {
+      const body = await res.text();
+      console.warn(`[candleSource] MetaAPI subscribe 404 for ${brokerSymbol} on ${region}: ${body.slice(0, 120)}`);
+      return false;
+    }
+    console.warn(`[candleSource] MetaAPI subscribe ${res.status} for ${brokerSymbol}`);
+    return false;
+  } catch (e: any) {
+    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol}: ${e?.message}`);
+    return false;
+  }
+}
 
 async function metaFetchCandles(
   conn: BrokerConn,
