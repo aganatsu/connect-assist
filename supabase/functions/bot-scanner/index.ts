@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
@@ -1720,27 +1721,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   };
 }
 
-// ─── Fetch candles from Yahoo ───────────────────────────────────────
-async function fetchCandles(symbol: string, interval = "15m", range = "5d"): Promise<Candle[]> {
-  const yahooSymbol = YAHOO_SYMBOLS[symbol];
-  if (!yahooSymbol) return [];
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=${interval}&range=${range}`;
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": "SMC-Bot-Scanner/1.0" } });
-    const data = await res.json();
-    if (!data?.chart?.result?.[0]) return [];
-    const result = data.chart.result[0];
-    const timestamps: number[] = result.timestamp || [];
-    const quotes = result.indicators?.quote?.[0];
-    if (!quotes) return [];
-    const candles: Candle[] = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      const o = quotes.open?.[i], h = quotes.high?.[i], l = quotes.low?.[i], c = quotes.close?.[i];
-      if (o == null || h == null || l == null || c == null) continue;
-      candles.push({ datetime: new Date(timestamps[i] * 1000).toISOString(), open: o, high: h, low: l, close: c });
-    }
-    return candles;
-  } catch { return []; }
+// ─── Fetch candles via shared multi-source helper ────────────────────
+// Tries: MetaAPI (broker feed) → Twelve Data → Yahoo Finance
+// Module-scoped reference set per-scan so the loop below can stay terse.
+let _scanBrokerConn: BrokerConn | null = null;
+async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Promise<Candle[]> {
+  const result = await fetchCandlesWithFallback({
+    symbol,
+    interval,
+    limit: 300,
+    brokerConn: _scanBrokerConn,
+  });
+  return result.candles;
 }
 
 // ─── Position sizing ────────────────────────────────────────────────
