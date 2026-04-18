@@ -197,22 +197,40 @@ async function metaFetchCandles(
   for (const region of order) {
     try {
       let result = await fetchHistorical(region);
-      // If historical 404'd, the symbol may need a subscription (HFMarkets-style).
-      // Probe + subscribe via current-candles?keepSubscription=true, then retry once.
+
+      // CASE A: historical 404'd. The symbol may need a subscription (HFMarkets-style).
+      // Probe + subscribe via current-candles?keepSubscription=true, then retry with backoff.
+      const cacheKey = `${metaAccountId}:${brokerSymbol}`;
       if (!result.ok && result.status === 404 && /could not find path|notfounderror|symbol/i.test(result.body)) {
-        const cacheKey = `${metaAccountId}:${brokerSymbol}`;
         if (!subscribedSymbols.has(cacheKey)) {
           const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, region, brokerSymbol, canon);
           if (subscribed) {
-            // Brief pause to give MetaAPI a moment to backfill history after subscription
-            await new Promise((r) => setTimeout(r, 1500));
-            result = await fetchHistorical(region);
+            // Retry with growing backoff — HFMarkets can take 5-10s to backfill history
+            for (const waitMs of [2000, 4000, 6000]) {
+              await new Promise((r) => setTimeout(r, waitMs));
+              result = await fetchHistorical(region);
+              if (result.ok && (result.candles?.length ?? 0) > 0) break;
+              if (!result.ok) break; // hard error, stop retrying
+            }
           }
+        }
+      }
+
+      // CASE B: historical returned 200 OK but empty array. This happens immediately after
+      // subscription before MetaAPI has backfilled history. Retry a few times with backoff.
+      if (result.ok && (result.candles?.length ?? 0) === 0 && subscribedSymbols.has(cacheKey)) {
+        for (const waitMs of [2000, 4000, 6000]) {
+          await new Promise((r) => setTimeout(r, waitMs));
+          result = await fetchHistorical(region);
+          if (result.ok && (result.candles?.length ?? 0) > 0) break;
         }
       }
 
       if (result.ok) {
         regionCache.set(metaAccountId, region);
+        if ((result.candles?.length ?? 0) === 0) {
+          console.warn(`[candleSource] MetaAPI ${brokerSymbol} returned 200 but empty after ${subscribedSymbols.has(cacheKey) ? "subscribe + retries" : "first call"} on ${region}`);
+        }
         return result.candles ?? [];
       }
 
