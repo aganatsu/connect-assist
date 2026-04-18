@@ -19,8 +19,36 @@ export interface MatchResult {
 
 const ALNUM = /[A-Z0-9]/;
 
+/**
+ * Canonical → broker-name aliases. Indices and commodities have no universal
+ * naming convention, so we try multiple known variants. The strict matcher
+ * still applies (one-char prefix, ≤4-char suffix), and the tradability probe
+ * picks the live variant from whatever matches.
+ */
+const CANONICAL_ALIASES: Record<string, string[]> = {
+  "NAS100":  ["NAS100", "USTEC", "NDX100", "USNDAQ100", "NDX", "NASDAQ100", "USTECH"],
+  "SPX500":  ["SPX500", "US500", "SP500", "USSPX500", "SPX", "SP500m"],
+  "US30":    ["US30", "WS30", "DJ30", "USA30", "DOW30", "US30Cash"],
+  "US Oil":  ["USOIL", "WTI", "XTIUSD", "OIL", "CL", "USOil", "WTIUSD"],
+  "UK100":   ["UK100", "FTSE100", "FTSE", "UKX"],
+  "GER40":   ["GER40", "DAX40", "DE40", "DAX", "GER30"],
+  "JPN225":  ["JPN225", "NIKKEI", "JP225", "N225"],
+};
+
 function baseOf(canonical: string): string {
   return canonical.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+/** Returns all bases to try for a canonical symbol (aliases + the canonical). */
+function basesFor(canonical: string): string[] {
+  const aliases = CANONICAL_ALIASES[canonical] ?? CANONICAL_ALIASES[canonical.toUpperCase()];
+  if (aliases?.length) {
+    const set = new Set<string>();
+    for (const a of aliases) set.add(baseOf(a));
+    set.add(baseOf(canonical));
+    return [...set].filter(Boolean);
+  }
+  return [baseOf(canonical)].filter(Boolean);
 }
 
 /**
