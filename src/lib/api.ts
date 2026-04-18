@@ -117,6 +117,7 @@ export const brokerApi = {
   update: (data: any) => invokeFunction("broker-connections", { action: "update", ...data }),
   delete: (id: string) => invokeFunction("broker-connections", { action: "delete", id }),
   test: (id: string) => invokeFunction("broker-connections", { action: "test", id }),
+  listSymbols: (id: string) => invokeFunction("broker-connections", { action: "list_symbols", id }),
 };
 
 // ── SMC Analysis ──
