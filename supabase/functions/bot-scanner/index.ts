@@ -1249,8 +1249,10 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
       : lastPrice - slDistance * (config.tpRatio || 2.0);
   }
 
-  return { stopLoss: sl, takeProfit: tp };
+return { stopLoss: sl, takeProfit: tp };
 }
+
+/**
  * ─── CONFLUENCE FACTOR AUDIT (20 factors + OR enhancements) ──────────────
  * 9 Factor Groups with anti-double-count rules and group caps.
  * Final score is clamped to 0–10 via Math.min(10, score).
