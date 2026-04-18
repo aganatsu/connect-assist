@@ -611,8 +611,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
   if (!trades || trades.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No trades</p>;
 
   const reasonColor = (r: string) => {
-    if (r === "tp_hit") return "text-success";
+    if (r === "tp_hit" || r === "trail_hit") return "text-success";
     if (r === "sl_hit") return "text-destructive";
+    if (r === "be_hit") return "text-muted-foreground";
     if (r === "time_exit" || r === "kill_switch") return "text-warning";
     return "text-muted-foreground";
   };
