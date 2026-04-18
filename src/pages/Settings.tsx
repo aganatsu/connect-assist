@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy } from "lucide-react";
+import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy, Wand2 } from "lucide-react";
 import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -148,6 +148,24 @@ function BrokerSettings() {
     onError: (e: any) => toast.error(`Symbols list failed: ${e.message}`),
   });
 
+  const autoMapMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.autoMapSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error("Auto-map failed", { description: data?.error || "Unknown error" });
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      toast.success(`Mapped ${data.mapped} pairs`, {
+        description: data.unmapped?.length
+          ? `Unmapped: ${data.unmapped.slice(0, 5).join(", ")}${data.unmapped.length > 5 ? "…" : ""}`
+          : "All canonical pairs found on broker",
+        duration: 8000,
+      });
+    },
+    onError: (e: any) => toast.error(`Auto-map failed: ${e.message}`),
+  });
+
   const openSymbols = (id: string, name: string) => {
     setSymbolsConnName(name);
     setSymbolsFilter("");
@@ -244,9 +262,15 @@ function BrokerSettings() {
                 <Button size="sm" variant="outline" onClick={() => checkStatus(c.id, c.display_name)} title="Check broker connection state">Status</Button>
                 <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
                 {c.broker_type === "metaapi" && (
-                  <Button size="sm" variant="outline" onClick={() => openSymbols(c.id, c.display_name)} title="List all symbols this broker exposes" disabled={listSymbolsMutation.isPending}>
-                    <List className="h-3 w-3" />
-                  </Button>
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => autoMapMutation.mutate(c.id)} title="Auto-map symbols from broker (strict matcher)" disabled={autoMapMutation.isPending}>
+                      <Wand2 className="h-3 w-3 mr-1" />
+                      {autoMapMutation.isPending && autoMapMutation.variables === c.id ? "Mapping…" : "Re-map"}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => openSymbols(c.id, c.display_name)} title="List all symbols this broker exposes" disabled={listSymbolsMutation.isPending}>
+                      <List className="h-3 w-3" />
+                    </Button>
+                  </>
                 )}
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>
