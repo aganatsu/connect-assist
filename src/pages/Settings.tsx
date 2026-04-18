@@ -362,11 +362,66 @@ function BrokerSettings() {
           connectionName={selectedConnection.display_name}
         />
       )}
+
+      {/* MetaAPI symbols list dialog */}
+      <Dialog open={symbolsDialogOpen} onOpenChange={(o) => { setSymbolsDialogOpen(o); if (!o) setSymbolsData(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Broker symbols — {symbolsConnName}</DialogTitle>
+            <DialogDescription>
+              {listSymbolsMutation.isPending && "Loading symbols from MetaAPI…"}
+              {symbolsData && (
+                <>Loaded <span className="font-medium text-foreground">{symbolsData.total}</span> symbols from <span className="font-medium text-foreground">{symbolsData.region}</span>. Click any symbol to copy.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {symbolsData && (
+            <div className="space-y-3">
+              <Input
+                placeholder="Filter (e.g. BTC, EUR, XAU)"
+                value={symbolsFilter}
+                onChange={(e) => setSymbolsFilter(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <ScrollArea className="h-[400px] pr-3">
+                {(["crypto", "metals", "indices", "fx", "other"] as const).map((group) => {
+                  const list: string[] = (symbolsData.grouped?.[group] || []).filter((s: string) =>
+                    !symbolsFilter || s.toLowerCase().includes(symbolsFilter.toLowerCase())
+                  );
+                  if (list.length === 0) return null;
+                  return (
+                    <div key={group} className="mb-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                        {group} ({list.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {list.map((sym) => (
+                          <Badge
+                            key={sym}
+                            variant="outline"
+                            className="cursor-pointer hover:bg-secondary text-xs font-mono gap-1"
+                            onClick={() => { navigator.clipboard.writeText(sym); toast.success(`Copied "${sym}"`); }}
+                          >
+                            {sym}
+                            <Copy className="h-2.5 w-2.5 opacity-50" />
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </ScrollArea>
+              <p className="text-[10px] text-muted-foreground">
+                💡 Found the right symbol? Add it as a Symbol Mapping (e.g. "BTC/USD" → "{symbolsData.grouped?.crypto?.[0] || "BTCUSD"}") in the connection's Edit panel.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-
-function RiskSettings() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
   const risk = settings?.risk_settings_json || {};
