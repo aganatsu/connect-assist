@@ -680,18 +680,54 @@ function ConnectionDetail({
 
           {dirty && (
             <div className="flex gap-2 pt-2 border-t border-border">
-              <Button size="sm" onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? "Saving…" : "Save changes"}
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending || validating}>
+                {validating ? "Validating…" : updateMutation.isPending ? "Saving…" : isMetaApi ? "Validate & save" : "Save changes"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => {
                 setEditSuffix(c.symbol_suffix || "");
                 setEditOverrides(c.symbol_overrides || {});
+                setManuallyTouched(new Set());
                 setDirty(false);
               }}>Discard</Button>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Warn-confirm dialog: bad symbols detected by tradability probe */}
+      <Dialog open={warnDialog.open} onOpenChange={(o) => setWarnDialog((prev) => ({ ...prev, open: o }))}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-destructive" /> Untradable symbols detected
+            </DialogTitle>
+            <DialogDescription>
+              The following broker symbols may not work for live trading. Save anyway, or go back and fix them?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border border-border rounded divide-y divide-border max-h-64 overflow-auto">
+            {warnDialog.bad.map((b) => (
+              <div key={b.sym} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <div className="font-mono font-medium truncate">{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
+                  <div className="text-[10px] text-destructive mt-0.5">{b.reason}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setWarnDialog({ open: false, bad: [] })}>
+              Go back
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => {
+              setWarnDialog({ open: false, bad: [] });
+              updateMutation.mutate();
+            }} disabled={updateMutation.isPending}>
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
