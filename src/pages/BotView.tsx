@@ -607,10 +607,20 @@ export default function BotView() {
 }
 
 function TradeHistoryTable({ trades }: { trades: any[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
   if (!trades || trades.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No trades</p>;
+
+  const reasonColor = (r: string) => {
+    if (r === "tp_hit") return "text-success";
+    if (r === "sl_hit") return "text-destructive";
+    if (r === "time_exit" || r === "kill_switch") return "text-warning";
+    return "text-muted-foreground";
+  };
+
   return (
     <table className="w-full text-[11px] font-mono">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
+        <th className="w-4 py-1 px-1"></th>
         <th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Closed</th>
         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
         <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Exit</th>
@@ -618,19 +628,58 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
         <th className="text-left py-1 px-1">Reason</th>
       </tr></thead>
       <tbody>
-        {trades.slice(0, 30).map((t: any, i: number) => (
-          <tr key={i} className={`border-b border-border/30 hover:bg-secondary/30 ${i % 2 === 1 ? "bg-secondary/10" : ""}`}>
-            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.openTime)}</td>
-            <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.closedAt)}</td>
-            <td className="py-1 px-1">{t.symbol}</td>
-            <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
-            <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>
-            <td className="py-1 px-1 text-right">{parseFloat(t.exitPrice)?.toFixed(5)}</td>
-            <td className="py-1 px-1 text-right">{t.pnlPips?.toFixed(1)}</td>
-            <td className={`py-1 px-1 text-right font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</td>
-            <td className="py-1 px-1 text-[10px] text-muted-foreground">{t.closeReason}</td>
-          </tr>
-        ))}
+        {trades.slice(0, 30).map((t: any, i: number) => {
+          const key = t.orderId || t.positionId || `${t.symbol}-${t.closedAt}-${i}`;
+          const isOpen = expanded === key;
+          return (
+            <React.Fragment key={key}>
+              <tr
+                onClick={() => setExpanded(isOpen ? null : key)}
+                className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${i % 2 === 1 ? "bg-secondary/10" : ""}`}
+              >
+                <td className="py-1 px-1 text-muted-foreground">
+                  <ChevronDown className={`h-2.5 w-2.5 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+                </td>
+                <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.openTime)}</td>
+                <td className="py-1 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(t.closedAt)}</td>
+                <td className="py-1 px-1">{t.symbol}</td>
+                <td className={`py-1 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
+                <td className="py-1 px-1 text-right">{parseFloat(t.entryPrice)?.toFixed(5)}</td>
+                <td className="py-1 px-1 text-right">{parseFloat(t.exitPrice)?.toFixed(5)}</td>
+                <td className="py-1 px-1 text-right">{t.pnlPips?.toFixed(1)}</td>
+                <td className={`py-1 px-1 text-right font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</td>
+                <td className={`py-1 px-1 text-[10px] ${reasonColor(t.closeReason)}`}>{t.closeReason}</td>
+              </tr>
+              {isOpen && (
+                <tr className="bg-secondary/20 border-b border-border">
+                  <td colSpan={10} className="p-2">
+                    <div className="space-y-1 text-[10px]">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 border rounded ${
+                          t.closeReason === "tp_hit" ? "bg-success/15 border-success/40 text-success" :
+                          t.closeReason === "sl_hit" ? "bg-destructive/15 border-destructive/40 text-destructive" :
+                          "bg-muted/40 border-border text-muted-foreground"
+                        }`}>
+                          Closed: {t.closeReason || "—"}
+                        </span>
+                      </div>
+                      <SignalReasoningCard signalReason={t.signalReason || ""} />
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
+                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore}/10</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Size</span><span className="font-mono">{t.size}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{t.pnlPips?.toFixed(1)}</span></div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </React.Fragment>
+          );
+        })}
       </tbody>
     </table>
   );
