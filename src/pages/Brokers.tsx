@@ -111,17 +111,26 @@ export default function BrokersPage() {
   });
 
   const autoMapMutation = useMutation({
-    mutationFn: (id: string) => brokerApi.autoMapSymbols(id),
+    mutationFn: (id: string) => brokerApi.autoMapSymbols(id).then((d: any) => ({ ...d, _connId: id })),
     onSuccess: (data: any) => {
       if (!data?.success) {
         toast.error("Auto-map failed", { description: data?.error || "Unknown error" });
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      if (data.details && data._connId) {
+        setProbeByConn((prev) => ({ ...prev, [data._connId]: data.details as ProbeDetails }));
+      }
+      const variantsFound = data.details
+        ? Object.values(data.details as ProbeDetails).filter((d) => d.candidates.length > 1).length
+        : 0;
       toast.success(`Mapped ${data.mapped} pairs`, {
-        description: data.unmapped?.length
-          ? `Unmapped: ${data.unmapped.slice(0, 5).join(", ")}${data.unmapped.length > 5 ? "…" : ""}`
-          : "All canonical pairs found on broker",
+        description: [
+          data.unmapped?.length
+            ? `Unmapped: ${data.unmapped.slice(0, 5).join(", ")}${data.unmapped.length > 5 ? "…" : ""}`
+            : "All canonical pairs found on broker",
+          variantsFound > 0 ? `${variantsFound} pair${variantsFound !== 1 ? "s have" : " has"} alternates — pick from dropdown` : null,
+        ].filter(Boolean).join(" · "),
         duration: 8000,
       });
     },
