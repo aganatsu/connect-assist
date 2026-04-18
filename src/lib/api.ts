@@ -149,6 +149,20 @@ export const paperApi = {
   setExecutionMode: (mode: "paper" | "live") => invokeFunction("paper-trading", { action: "set_execution_mode", mode }),
 };
 
+// ── Backtest Engine ──
+export const backtestApi = {
+  run: (params: {
+    instruments: string[];
+    startDate: string;
+    endDate: string;
+    startingBalance: number;
+    config: any;
+    tradingStyle?: string;
+    slippagePips?: number;
+    spreadPips?: number;
+  }) => invokeFunction("backtest-engine", params),
+};
+
 // ── Bot Scanner ──
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
