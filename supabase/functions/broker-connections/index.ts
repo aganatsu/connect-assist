@@ -82,35 +82,72 @@ Deno.serve(async (req) => {
         let authToken = conn.api_key;
         let metaAccountId = conn.account_id;
         if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          // Fields are swapped — correct them
           authToken = conn.account_id;
           metaAccountId = conn.api_key;
         }
 
+        // Step 1: provisioning API — does the account exist on MetaAPI at all?
+        let provisioning: any = null;
         try {
           const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
             headers: { "auth-token": authToken, "Content-Type": "application/json" },
           });
-          if (!provRes.ok) {
+          if (provRes.ok) {
+            provisioning = await provRes.json();
+          } else {
             const errText = await provRes.text();
-            throw new Error(`MetaAPI error ${provRes.status}: ${errText}`);
+            return respond({
+              success: false,
+              stage: "provisioning",
+              error: `MetaAPI provisioning ${provRes.status}: ${errText.slice(0, 200)}`,
+              hint: provRes.status === 404
+                ? "Account ID not found in your MetaAPI account. Check the UUID in your MetaAPI dashboard."
+                : provRes.status === 401
+                ? "Auth token is invalid or expired. Generate a new one in your MetaAPI dashboard."
+                : "Check MetaAPI dashboard for account status.",
+            });
           }
-          const acct = await provRes.json();
-          return respond({
-            success: true,
-            name: acct.name,
-            type: acct.type,
-            platform: acct.platform,
-            state: acct.state,
-            connectionStatus: acct.connectionStatus,
-          });
         } catch (e: any) {
           const msg = e?.message || String(e);
           if (msg.includes("invalid peer certificate") || msg.includes("UnknownIssuer")) {
-            return respond({ success: false, error: "SSL certificate issue connecting to MetaApi. The credentials are saved and will work for trade execution." });
+            return respond({ success: false, error: "SSL certificate issue connecting to MetaApi." });
           }
-          throw e;
+          return respond({ success: false, stage: "provisioning", error: msg });
         }
+
+        // Step 2: ping each market-data region to find where candles can actually be served from
+        const REGIONS = ["london", "new-york", "singapore"];
+        const regionResults = await Promise.all(REGIONS.map(async (region) => {
+          const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/EURUSD${conn.symbol_suffix || ""}/timeframes/1d/candles?limit=1`;
+          try {
+            const res = await fetch(url, { headers: { "auth-token": authToken } });
+            const body = await res.text();
+            if (res.ok) {
+              const arr = JSON.parse(body);
+              return { region, ok: true, status: res.status, candleCount: Array.isArray(arr) ? arr.length : 0 };
+            }
+            return { region, ok: false, status: res.status, error: body.slice(0, 150) };
+          } catch (e: any) {
+            const msg = e?.message || String(e);
+            return { region, ok: false, status: 0, error: msg.includes("dns error") ? "DNS lookup failed (region not provisioned)" : msg.slice(0, 150) };
+          }
+        }));
+
+        const reachableRegion = regionResults.find((r) => r.ok)?.region ?? null;
+        return respond({
+          success: !!reachableRegion,
+          name: provisioning?.name,
+          type: provisioning?.type,
+          platform: provisioning?.platform,
+          state: provisioning?.state,
+          connectionStatus: provisioning?.connectionStatus,
+          configuredRegion: provisioning?.region,
+          reachableRegion,
+          regions: regionResults,
+          hint: !reachableRegion
+            ? "Account exists in MetaAPI but no region can serve candle data. Most likely the account is UNDEPLOYED — deploy it from your MetaAPI dashboard."
+            : undefined,
+        });
       }
 
       throw new Error(`Unsupported broker: ${conn.broker_type}`);
