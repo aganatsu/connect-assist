@@ -636,7 +636,7 @@ async function runScan(
     });
   }
 
-  const balance = parseFloat(account.balance || "10000");
+  const balance = parseFloat(String(account.balance ?? "10000"));
 
   // ── Load config ──
   // Bot #2 config is stored in bot_configs with bot_type = "fotsi_mr" in config_json
@@ -667,7 +667,7 @@ async function runScan(
   // Filter to only Bot #2 positions (check signal_reason for bot tag)
   const botPositions = (openPositions || []).filter(p => {
     try {
-      const sr = JSON.parse(p.signal_reason || "{}");
+      const sr = JSON.parse(String(p.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -683,7 +683,7 @@ async function runScan(
   }
 
   // ── Check daily loss limit ──
-  const dailyPnlBase = parseFloat(account.daily_pnl_base || "10000");
+  const dailyPnlBase = parseFloat(String(account.daily_pnl_base ?? "10000"));
   const dailyLoss = ((dailyPnlBase - balance) / dailyPnlBase) * 100;
   if (dailyLoss >= config.maxDailyLoss) {
     log(`Daily loss limit hit: ${dailyLoss.toFixed(2)}% >= ${config.maxDailyLoss}%`);
@@ -812,7 +812,7 @@ async function runScan(
       .limit(1);
 
     if (recentCloses && recentCloses.length > 0) {
-      const lastClose = new Date(recentCloses[0].closed_at).getTime();
+      const lastClose = new Date(String(recentCloses[0].closed_at)).getTime();
       const cooldownMs = config.cooldownMinutes * 60 * 1000;
       if (now.getTime() - lastClose < cooldownMs) {
         log(`  ${pair}: Cooldown active (${config.cooldownMinutes}min) — skip`);
@@ -1022,7 +1022,7 @@ async function getStatus(
 
   const botPositions = (positions || []).filter(p => {
     try {
-      const sr = JSON.parse(p.signal_reason || "{}");
+      const sr = JSON.parse(String(p.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -1036,7 +1036,7 @@ async function getStatus(
 
   const botTrades = (recentTrades || []).filter(t => {
     try {
-      const sr = JSON.parse(t.signal_reason || "{}");
+      const sr = JSON.parse(String(t.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -1072,7 +1072,7 @@ async function getScanLogs(
     if (l.bot_id) return l.bot_id === BOT_ID;
     // Otherwise check details JSON
     try {
-      const d = JSON.parse(l.details || "{}");
+      const d = JSON.parse(String((l as Record<string, unknown>).details ?? "{}"));
       return d.logs?.some((log: string) => log.includes("FOTSI Mean Reversion"));
     } catch { return false; }
   });
