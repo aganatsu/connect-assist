@@ -243,6 +243,11 @@ function BrokerSettings() {
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => checkStatus(c.id, c.display_name)} title="Check broker connection state">Status</Button>
                 <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
+                {c.broker_type === "metaapi" && (
+                  <Button size="sm" variant="outline" onClick={() => openSymbols(c.id, c.display_name)} title="List all symbols this broker exposes" disabled={listSymbolsMutation.isPending}>
+                    <List className="h-3 w-3" />
+                  </Button>
+                )}
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>
             </div>
