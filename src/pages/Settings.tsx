@@ -78,6 +78,10 @@ function BrokerSettings() {
   const [editOverrides, setEditOverrides] = useState<Record<string, string>>({});
   const [editNewSymbol, setEditNewSymbol] = useState("");
   const [editNewSuffix, setEditNewSuffix] = useState("");
+  const [symbolsDialogOpen, setSymbolsDialogOpen] = useState(false);
+  const [symbolsConnName, setSymbolsConnName] = useState("");
+  const [symbolsData, setSymbolsData] = useState<any>(null);
+  const [symbolsFilter, setSymbolsFilter] = useState("");
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
@@ -130,6 +134,28 @@ function BrokerSettings() {
     },
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
+
+  const listSymbolsMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.listSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error(`Symbols list failed`, { description: data?.error || "Unknown error", duration: 10000 });
+        return;
+      }
+      setSymbolsData(data);
+      setSymbolsDialogOpen(true);
+    },
+    onError: (e: any) => toast.error(`Symbols list failed: ${e.message}`),
+  });
+
+  const openSymbols = (id: string, name: string) => {
+    setSymbolsConnName(name);
+    setSymbolsFilter("");
+    setSymbolsData(null);
+    setSymbolsDialogOpen(true);
+    listSymbolsMutation.mutate(id);
+  };
+
 
   const checkStatus = async (connectionId: string, name: string) => {
     const t = toast.loading(`Checking ${name}...`);
