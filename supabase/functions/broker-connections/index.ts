@@ -202,6 +202,7 @@ Deno.serve(async (req) => {
         symbol_overrides: mapped.symbol_overrides,
         mapped: mapped.mapped,
         unmapped: mapped.unmapped,
+        details: mapped.details,
       });
     }
 
