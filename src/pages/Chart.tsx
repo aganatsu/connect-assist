@@ -4,7 +4,8 @@ import { AppShell } from "@/components/AppShell";
 import TradingViewChart from "@/components/TradingViewChart";
 import { Card, CardContent } from "@/components/ui/card";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
-import { marketApi, smcApi, paperApi } from "@/lib/api";
+import { marketApi, smcApi, paperApi, type CandleSource } from "@/lib/api";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
@@ -38,11 +39,14 @@ export default function Chart() {
     refetchInterval: 10000,
   });
 
-  const { data: candles } = useQuery({
+  // Fetch candles WITH the data-source header (so we can show a badge).
+  const { data: candleData } = useQuery({
     queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
-    queryFn: () => marketApi.candles(selectedSymbol, selectedTimeframe, 200),
+    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 200),
     staleTime: 60000,
   });
+  const candles = candleData?.candles;
+  const candleSource: CandleSource = candleData?.source ?? "unknown";
 
   const { data: dailyCandles } = useQuery({
     queryKey: ['chart-daily', selectedSymbol],
@@ -138,6 +142,7 @@ export default function Chart() {
               ))}
             </div>
             <div className="ml-auto flex items-center gap-2 text-[10px]">
+              <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
               <span className="flex items-center gap-1 text-muted-foreground"><Clock className="h-2.5 w-2.5" /> {session}</span>

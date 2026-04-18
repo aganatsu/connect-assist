@@ -21,6 +21,8 @@ import { BotConfigModal } from "@/components/BotConfigModal";
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
+import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
@@ -117,6 +119,15 @@ export default function BotView() {
   };
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
+
+  // Pull the candle-source meta entry that the scanner prepends to details_json
+  // (so we can show which feed served the latest scan), and produce a filtered
+  // list that excludes the meta row from rendering as a fake "pair".
+  const latestRawDetails: any[] = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+  const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
+  const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
+  const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
+
   const closedToday = (d.tradeHistory || []).filter((t: any) => {
     const today = new Date().toISOString().split('T')[0];
     return t.closedAt?.startsWith(today);
@@ -522,7 +533,8 @@ export default function BotView() {
                   </Badge>
                 )}
                 {logs.length > 0 && (
-                  <span className="text-[9px] text-muted-foreground">
+                  <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                    <DataSourceBadge source={latestSource} />
                     {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
                   </span>
                 )}
@@ -530,13 +542,12 @@ export default function BotView() {
             </div>
             <div className="flex-1 overflow-y-auto">
               {(() => {
-                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
-                if (latestDetails.length === 0) {
+                if (latestDetailsClean.length === 0) {
                   return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
                 }
                 return (
                   <div className="space-y-0">
-                    {latestDetails.map((sig: any, i: number) => {
+                    {latestDetailsClean.map((sig: any, i: number) => {
                       const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
                       const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
                       const isSelected = selectedPairIdx === i;
@@ -569,8 +580,7 @@ export default function BotView() {
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
             <div className="flex-1 overflow-y-auto">
               {(() => {
-                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
-                const selected = latestDetails[selectedPairIdx];
+                const selected = latestDetailsClean[selectedPairIdx];
                 if (!selected) {
                   return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                 }

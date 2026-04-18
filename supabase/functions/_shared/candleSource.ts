@@ -132,8 +132,7 @@ async function metaFetchCandles(
   const order = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
 
   for (const region of order) {
-    // NOTE: historical candles live on the market-data host, NOT the trading host (mt-client-api-v1).
-    const url = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
+    const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
     try {
       const res = await fetch(url, { headers: { "auth-token": authToken } });
       const body = await res.text();
@@ -176,12 +175,6 @@ function resolveBrokerSymbol(symbol: string, conn: BrokerConn): string {
 }
 
 // ─── Twelve Data ──────────────────────────────────────────────────────
-// In-memory cache: free tier = 8 credits/min. Cache for 60s to avoid burning quota.
-const tdCache = new Map<string, { at: number; candles: Candle[] }>();
-const TD_CACHE_MS = 60_000;
-// Track rate-limit cooldown so we don't keep hammering after a 429.
-let tdCooldownUntil = 0;
-
 async function twelveDataCandles(
   symbol: string,
   canon: string,
@@ -192,15 +185,6 @@ async function twelveDataCandles(
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return [];
 
-  const cacheKey = `${symbol}|${canon}|${limit}`;
-  const cached = tdCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < TD_CACHE_MS) {
-    return cached.candles;
-  }
-
-  // Respect cooldown after a rate-limit response.
-  if (Date.now() < tdCooldownUntil) return [];
-
   const interval = twelveDataInterval(canon);
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
   try {
@@ -208,15 +192,10 @@ async function twelveDataCandles(
     if (!res.ok) return [];
     const data = await res.json();
     if (data?.status === "error" || !Array.isArray(data?.values)) {
-      if (data?.message) {
-        console.warn(`[candleSource] Twelve Data: ${data.message}`);
-        if (data.code === 429 || /credits|rate limit/i.test(data.message)) {
-          tdCooldownUntil = Date.now() + 60_000;
-        }
-      }
+      if (data?.message) console.warn(`[candleSource] Twelve Data: ${data.message}`);
       return [];
     }
-    const candles: Candle[] = data.values.map((v: any) => ({
+    return data.values.map((v: any) => ({
       datetime: typeof v.datetime === "string" && v.datetime.length === 10
         ? `${v.datetime}T00:00:00Z`
         : `${v.datetime.replace(" ", "T")}Z`,
@@ -229,8 +208,6 @@ async function twelveDataCandles(
       Number.isFinite(c.open) && Number.isFinite(c.high) &&
       Number.isFinite(c.low) && Number.isFinite(c.close)
     );
-    tdCache.set(cacheKey, { at: Date.now(), candles });
-    return candles;
   } catch (e: any) {
     console.warn(`[candleSource] Twelve Data fetch error: ${e?.message}`);
     return [];
@@ -306,6 +283,33 @@ export interface FetchResult {
   source: "metaapi" | "twelvedata" | "yahoo" | "none";
 }
 
+// ─── Per-scan source tally (opt-in) ──────────────────────────────────
+// Bot scanner can call beginScanSourceTally() at the start of a cycle and
+// endScanSourceTally() at the end to learn which feeds served the candles.
+export interface SourceTally {
+  metaapi: number;
+  twelvedata: number;
+  yahoo: number;
+  none: number;
+  primary: "metaapi" | "twelvedata" | "yahoo" | "none";
+}
+let _activeTally: { metaapi: number; twelvedata: number; yahoo: number; none: number } | null = null;
+
+export function beginScanSourceTally(): void {
+  _activeTally = { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+}
+
+export function endScanSourceTally(): SourceTally {
+  const t = _activeTally ?? { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+  _activeTally = null;
+  // "primary" = the source that served the most candle requests this cycle
+  const entries: ["metaapi" | "twelvedata" | "yahoo" | "none", number][] = [
+    ["metaapi", t.metaapi], ["twelvedata", t.twelvedata], ["yahoo", t.yahoo], ["none", t.none],
+  ];
+  entries.sort((a, b) => b[1] - a[1]);
+  return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
+}
+
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
@@ -314,17 +318,27 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
     const brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     const candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
-    if (candles.length >= 30) return { candles: candles.slice(-limit), source: "metaapi" };
+    if (candles.length >= 30) {
+      if (_activeTally) _activeTally.metaapi++;
+      return { candles: candles.slice(-limit), source: "metaapi" };
+    }
   }
 
   // Try Twelve Data
   const td = await twelveDataCandles(opts.symbol, canon, limit);
-  if (td.length >= 30) return { candles: td.slice(-limit), source: "twelvedata" };
+  if (td.length >= 30) {
+    if (_activeTally) _activeTally.twelvedata++;
+    return { candles: td.slice(-limit), source: "twelvedata" };
+  }
 
   // Yahoo fallback (with 4h aggregation if needed)
   let yc = await yahooCandles(opts.symbol, canon);
   if (canon === "4h" && yc.length > 0) yc = aggregateTo4H(yc);
-  if (yc.length > 0) return { candles: yc.slice(-limit), source: "yahoo" };
+  if (yc.length > 0) {
+    if (_activeTally) _activeTally.yahoo++;
+    return { candles: yc.slice(-limit), source: "yahoo" };
+  }
 
+  if (_activeTally) _activeTally.none++;
   return { candles: [], source: "none" };
 }

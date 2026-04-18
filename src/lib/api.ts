@@ -45,9 +45,40 @@ export async function invokeFunction<T = any>(
 }
 
 // ── Market Data ──
+export type CandleSource = "metaapi" | "twelvedata" | "yahoo" | "none" | "unknown";
+export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
+
+// Low-level fetch so we can read the x-data-source response header
+// (the supabase-js invoke() helper doesn't expose response headers).
+async function fetchMarketData(body: Record<string, any>): Promise<{ data: any; source: CandleSource }> {
+  const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/market-data`;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+      "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  const source = (res.headers.get("x-data-source") as CandleSource) || "unknown";
+  if (!res.ok) throw new Error(data?.error || `market-data ${res.status}`);
+  if (data?.error && !data?.fallback) throw new Error(data.error);
+  return { data, source };
+}
+
 export const marketApi = {
   candles: (symbol: string, interval: string, outputsize = 200) =>
     invokeFunction("market-data", { action: "candles", symbol, interval, outputsize }),
+  // Returns candles plus the source ("metaapi" | "twelvedata" | "yahoo") so the UI
+  // can surface where prices are actually coming from.
+  candlesWithMeta: async (symbol: string, interval: string, outputsize = 200): Promise<CandlesWithMeta> => {
+    const { data, source } = await fetchMarketData({ action: "candles", symbol, interval, outputsize });
+    return { candles: Array.isArray(data) ? data : [], source };
+  },
   quote: (symbol: string) =>
     invokeFunction("market-data", { action: "quote", symbol }),
 };

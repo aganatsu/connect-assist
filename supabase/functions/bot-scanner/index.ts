@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,
@@ -2392,7 +2392,7 @@ async function runScanForUser(supabase: any, userId: string) {
   const isPaused = account.is_paused;
 
   // Load the user's active MetaAPI connection (used as primary candle source).
-  // Prefer rows where account_id is a clean UUID (correctly formed).
+  // Prefer rows where account_id is a clean UUID (correctly formed; avoids broken duplicates).
   const { data: brokerConns } = await supabase.from("broker_connections")
     .select("api_key, account_id, symbol_suffix, symbol_overrides, created_at")
     .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true)
@@ -2404,6 +2404,8 @@ async function runScanForUser(supabase: any, userId: string) {
     _scanBrokerConn = null;
   }
   console.log(`[scan ${scanCycleId}] Candle source: ${_scanBrokerConn ? "MetaAPI→TwelveData→Yahoo" : "TwelveData→Yahoo"}`);
+  // Start tallying which feed actually serves each pair this cycle.
+  beginScanSourceTally();
 
   const { data: openPositions } = await supabase.from("paper_positions").select("*")
     .eq("user_id", userId).eq("position_status", "open");
@@ -3052,18 +3054,38 @@ async function runScanForUser(supabase: any, userId: string) {
     rejected_count: (account.rejected_count || 0) + rejectedCount,
   }).eq("user_id", userId);
 
+  // End source tally and prepend a __meta entry so the UI can display
+  // which feed served this scan cycle.
+  const sourceTally = endScanSourceTally();
+  const detailsWithMeta = [
+    {
+      __meta: true,
+      candleSource: sourceTally.primary,         // "metaapi" | "twelvedata" | "yahoo" | "none"
+      sourceBreakdown: {
+        metaapi: sourceTally.metaapi,
+        twelvedata: sourceTally.twelvedata,
+        yahoo: sourceTally.yahoo,
+        none: sourceTally.none,
+      },
+      brokerConnected: !!_scanBrokerConn,
+    },
+    ...scanDetails,
+  ];
+  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, yahoo=${sourceTally.yahoo}, none=${sourceTally.none})`);
+
   // Log the scan
   await supabase.from("scan_logs").insert({
     user_id: userId,
     pairs_scanned: config.instruments.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,
-    details_json: scanDetails,
+    details_json: detailsWithMeta,
   });
 
   return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId };
   } finally {
-    // Always release the scan lock, even on error
+    // Always release the scan lock and clear the source tally, even on error.
+    try { endScanSourceTally(); } catch { /* ignore */ }
     try {
       await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
     } catch (e: any) {
