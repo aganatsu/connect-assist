@@ -468,14 +468,34 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
   // Try MetaAPI first if we have a broker connection
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
-    const brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
-    const candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+    let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
+    let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
+
+    // Lazy auto-mapping: if we got 0 candles AND there was no explicit override,
+    // fetch the broker's symbol list and try a strict match.
+    if (candles.length === 0 && !hasExplicitOverride(opts.symbol, opts.brokerConn)) {
+      const swapped = opts.brokerConn.account_id.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(opts.brokerConn.api_key);
+      const authToken = swapped ? opts.brokerConn.account_id : opts.brokerConn.api_key;
+      const metaAccountId = swapped ? opts.brokerConn.api_key : opts.brokerConn.account_id;
+      const symbolList = await loadBrokerSymbolList(authToken, metaAccountId);
+      const match = matchBrokerSymbol(opts.symbol, symbolList);
+      if (match && match.brokerSymbol !== brokerSymbol) {
+        console.log(`[candleSource] auto-mapping ${opts.symbol} ${brokerSymbol} → ${match.brokerSymbol}`);
+        brokerSymbol = match.brokerSymbol;
+        candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+        if (candles.length > 0) {
+          await persistSymbolOverride(opts.brokerConn, opts.symbol, brokerSymbol);
+        }
+      }
+    }
+
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.metaapi++;
       return { candles: candles.slice(-limit), source: "metaapi" };
     }
   }
+
 
   // Try Twelve Data
   const td = await twelveDataCandles(opts.symbol, canon, limit);
