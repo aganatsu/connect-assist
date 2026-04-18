@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,
