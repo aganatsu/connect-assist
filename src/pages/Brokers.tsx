@@ -589,6 +589,28 @@ function ConnectionDetail({
   );
 }
 
+function TradeModeBadge({ tradeMode }: { tradeMode?: string }) {
+  if (!tradeMode) {
+    return (
+      <Badge variant="outline" className="h-4 px-1 text-[9px] text-muted-foreground">?</Badge>
+    );
+  }
+  const m = tradeMode.toUpperCase();
+  if (m === "FULL") {
+    return (
+      <Badge variant="outline" className="h-4 px-1 text-[9px] border-success/40 text-success">FULL</Badge>
+    );
+  }
+  if (m === "DISABLED") {
+    return (
+      <Badge variant="outline" className="h-4 px-1 text-[9px] border-destructive/40 text-destructive">OFF</Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="h-4 px-1 text-[9px] text-warning">{m.slice(0, 6)}</Badge>
+  );
+}
+
 function Field({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
