@@ -466,11 +466,11 @@ function ConnectionDetail({
             </div>
             {overrideCount > 0 ? (
               <div className="border border-border rounded overflow-hidden">
-                <div className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 bg-secondary/40 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
-                  <span>App</span><span>Broker</span><span></span>
+                <div className="grid grid-cols-[28px_1fr_1fr_32px] gap-2 px-3 py-1.5 bg-secondary/40 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  <span>#</span><span>App</span><span>Broker</span><span></span>
                 </div>
                 <ScrollArea className="h-72">
-                  {Object.entries(editOverrides).map(([sym, brokerSym]) => {
+                  {Object.entries(editOverrides).map(([sym, brokerSym], idx) => {
                     // Find probe candidates for this row by matching normalized keys
                     const candidates = (() => {
                       if (!probeDetails) return [];
@@ -484,7 +484,8 @@ function ConnectionDetail({
                     const hasAlternates = candidates.length > 1;
 
                     return (
-                      <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
+                      <div key={sym} className="grid grid-cols-[28px_1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
+                        <span className="font-mono text-[10px] text-muted-foreground tabular-nums">{idx + 1}</span>
                         <span className="font-mono font-medium">{sym}</span>
                         {hasAlternates ? (
                           <DropdownMenu>
