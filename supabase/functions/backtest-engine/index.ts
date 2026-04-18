@@ -974,12 +974,14 @@ Deno.serve(async (req) => {
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // ── Fetch FOTSI Data ──
-    let fotsiResult: FOTSIResult | null = null;
+    // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
+    // Avoids lookahead bias: each historical bar uses FOTSI computed from
+    // daily candles up to (and including) that date only.
+    const fotsiTimeline = new Map<string, FOTSIResult>();
+    let fotsiCandleMap: Record<string, Candle[]> = {};
     try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
-      const fotsiCandleMap: Record<string, Candle[]> = {};
       for (let i = 0; i < fotsiPairs.length; i += 7) {
         const batch = fotsiPairs.slice(i, i + 7);
         const results = await Promise.all(
@@ -991,8 +993,26 @@ Deno.serve(async (req) => {
         if (i + 7 < fotsiPairs.length) await new Promise(r => setTimeout(r, 300));
       }
       if (Object.keys(fotsiCandleMap).length >= 20) {
-        fotsiResult = computeFOTSI(fotsiCandleMap);
-        console.log(`[backtest] FOTSI computed: ${Object.keys(fotsiCandleMap).length}/28 pairs`);
+        // Collect every unique daily date across all pairs in backtest range
+        const allDates = new Set<string>();
+        for (const candles of Object.values(fotsiCandleMap)) {
+          for (const c of candles) {
+            const d = c.datetime.slice(0, 10);
+            if (d >= startDate && d <= endDate) allDates.add(d);
+          }
+        }
+        const sortedDates = [...allDates].sort();
+        for (const date of sortedDates) {
+          const snapshot: Record<string, Candle[]> = {};
+          for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
+            const upTo = candles.filter(c => c.datetime.slice(0, 10) <= date);
+            if (upTo.length >= 30) snapshot[pair] = upTo;
+          }
+          if (Object.keys(snapshot).length >= 20) {
+            try { fotsiTimeline.set(date, computeFOTSI(snapshot)); } catch {}
+          }
+        }
+        console.log(`[backtest] FOTSI timeline built: ${fotsiTimeline.size} daily snapshots from ${Object.keys(fotsiCandleMap).length}/28 pairs`);
       }
     } catch (e: any) {
       console.warn(`[backtest] FOTSI computation error: ${e?.message}`);
