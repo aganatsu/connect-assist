@@ -54,6 +54,8 @@ export default function BrokersPage() {
   const [symbolsDialogOpen, setSymbolsDialogOpen] = useState(false);
   const [symbolsData, setSymbolsData] = useState<any>(null);
   const [symbolsFilter, setSymbolsFilter] = useState("");
+  // Per-connection probe results from latest auto-map (in-memory only)
+  const [probeByConn, setProbeByConn] = useState<Record<string, ProbeDetails>>({});
 
   const { data: connections = [] } = useQuery<Connection[]>({
     queryKey: ["broker-connections"],
