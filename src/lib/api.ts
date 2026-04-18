@@ -163,10 +163,35 @@ export const backtestApi = {
   }) => invokeFunction("backtest-engine", params),
 };
 
-// ── Bot Scanner ──
+// ── Bot Scanner (Bot #1 — SMC) ──
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   logs: () => invokeFunction("bot-scanner", { action: "scan_logs" }),
+};
+
+// ── Bot Scanner (Bot #2 — FOTSI Mean Reversion) ──
+export const fotsiScannerApi = {
+  scan: () => invokeFunction("bot-scanner-fotsi", { action: "scan" }),
+  status: () => invokeFunction("bot-scanner-fotsi", { action: "status" }),
+  scanLogs: () => invokeFunction("bot-scanner-fotsi", { action: "scan_logs" }),
+};
+
+// ── Bot #2 Config ──
+// Bot #2 config is stored as a `fotsi_mr` sub-key inside bot_configs.config_json
+export const fotsiConfigApi = {
+  get: async () => {
+    const full = await botConfigApi.get();
+    return full?.fotsi_mr ?? null;
+  },
+  update: async (fotsiConfig: any) => {
+    const full = await botConfigApi.get();
+    return botConfigApi.update({ ...full, fotsi_mr: fotsiConfig });
+  },
+  reset: async () => {
+    const full = await botConfigApi.get();
+    const { fotsi_mr, ...rest } = full || {};
+    return botConfigApi.update(rest);
+  },
 };
 
 // ── Fundamentals ──
