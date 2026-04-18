@@ -558,6 +558,7 @@ function runBacktestSafetyGates(
   openPositions: OpenPosition[],
   dailyCandles: Candle[] | null,
   recentTrades: BacktestTrade[],
+  currentCandleMs: number,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
 
@@ -598,12 +599,9 @@ function runBacktestSafetyGates(
   // (Simplified: use peak balance tracking from caller)
   gates.push({ passed: true, reason: "Drawdown within limits" });
 
-  // Gate 6: Daily loss limit
-  const todayTrades = recentTrades.filter(t => {
-    const tDate = t.exitTime.slice(0, 10);
-    const analysisDate = analysis.lastPrice ? new Date().toISOString().slice(0, 10) : "";
-    return tDate === analysisDate;
-  });
+  // Gate 6: Daily loss limit (use candle date, not wall-clock)
+  const currentDate = new Date(currentCandleMs).toISOString().slice(0, 10);
+  const todayTrades = recentTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
   const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
   const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
   gates.push({
@@ -622,13 +620,12 @@ function runBacktestSafetyGates(
     reason: `Portfolio heat: ${heatPct.toFixed(1)}% (max: ${config.portfolioHeat}%)`,
   });
 
-  // Gate 8: Cooldown
+  // Gate 8: Cooldown (use candle time, not wall-clock)
   const lastTradeOnSymbol = recentTrades.filter(t => t.symbol === symbol).slice(-1)[0];
   let cooldownOk = true;
   if (config.cooldownMinutes > 0 && lastTradeOnSymbol) {
     const lastExitMs = new Date(lastTradeOnSymbol.exitTime).getTime();
-    const nowMs = Date.now();
-    const elapsedMin = (nowMs - lastExitMs) / 60000;
+    const elapsedMin = (currentCandleMs - lastExitMs) / 60000;
     cooldownOk = elapsedMin >= config.cooldownMinutes;
   }
   gates.push({
@@ -759,23 +756,26 @@ function processExits(
       }
     }
 
-    // ── Partial TP (simplified: reduce size, record partial PnL) ──
+    // ── Partial TP (exit at trigger price, not candle close) ──
     if (!closeReason && pos.exitFlags.partialTP && !pos.partialTPFired && pos.exitFlags.partialTPPercent > 0) {
-      const profitPips = pos.direction === "long"
-        ? (candle.close - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.close) / spec.pipSize;
       const slDistPips = Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize;
       const triggerPips = slDistPips * (pos.exitFlags.partialTPLevel || 1.0);
-      if (profitPips >= triggerPips) {
+      const triggerPrice = pos.direction === "long"
+        ? pos.entryPrice + triggerPips * spec.pipSize
+        : pos.entryPrice - triggerPips * spec.pipSize;
+      const triggerHit = pos.direction === "long"
+        ? candle.high >= triggerPrice
+        : candle.low <= triggerPrice;
+      if (triggerHit) {
         const closeSize = pos.size * (pos.exitFlags.partialTPPercent / 100);
         const remainSize = pos.size - closeSize;
-        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, candle.close, closeSize, pos.symbol);
+        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol);
         closedTrades.push({
           id: `${pos.id}_partial`,
           symbol: pos.symbol,
           direction: pos.direction,
           entryPrice: pos.entryPrice,
-          exitPrice: candle.close,
+          exitPrice: triggerPrice,
           entryTime: pos.entryTime,
           exitTime: candle.datetime,
           size: closeSize,
@@ -974,12 +974,14 @@ Deno.serve(async (req) => {
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // ── Fetch FOTSI Data ──
-    let fotsiResult: FOTSIResult | null = null;
+    // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
+    // Avoids lookahead bias: each historical bar uses FOTSI computed from
+    // daily candles up to (and including) that date only.
+    const fotsiTimeline = new Map<string, FOTSIResult>();
+    let fotsiCandleMap: Record<string, Candle[]> = {};
     try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
-      const fotsiCandleMap: Record<string, Candle[]> = {};
       for (let i = 0; i < fotsiPairs.length; i += 7) {
         const batch = fotsiPairs.slice(i, i + 7);
         const results = await Promise.all(
@@ -991,8 +993,26 @@ Deno.serve(async (req) => {
         if (i + 7 < fotsiPairs.length) await new Promise(r => setTimeout(r, 300));
       }
       if (Object.keys(fotsiCandleMap).length >= 20) {
-        fotsiResult = computeFOTSI(fotsiCandleMap);
-        console.log(`[backtest] FOTSI computed: ${Object.keys(fotsiCandleMap).length}/28 pairs`);
+        // Collect every unique daily date across all pairs in backtest range
+        const allDates = new Set<string>();
+        for (const candles of Object.values(fotsiCandleMap)) {
+          for (const c of candles) {
+            const d = c.datetime.slice(0, 10);
+            if (d >= startDate && d <= endDate) allDates.add(d);
+          }
+        }
+        const sortedDates = [...allDates].sort();
+        for (const date of sortedDates) {
+          const snapshot: Record<string, Candle[]> = {};
+          for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
+            const upTo = candles.filter(c => c.datetime.slice(0, 10) <= date);
+            if (upTo.length >= 30) snapshot[pair] = upTo;
+          }
+          if (Object.keys(snapshot).length >= 20) {
+            try { fotsiTimeline.set(date, computeFOTSI(snapshot)); } catch {}
+          }
+        }
+        console.log(`[backtest] FOTSI timeline built: ${fotsiTimeline.size} daily snapshots from ${Object.keys(fotsiCandleMap).length}/28 pairs`);
       }
     } catch (e: any) {
       console.warn(`[backtest] FOTSI computation error: ${e?.message}`);
@@ -1096,10 +1116,24 @@ Deno.serve(async (req) => {
 
         // Set per-instrument config
         config._currentSymbol = symbol;
-        config._smtResult = smtCandles && smtCandles.length >= 30
-          ? detectSMTDivergence(symbol, window, smtCandles.slice(Math.max(0, smtCandles.length - window.length)))
-          : null;
-        (config as any)._fotsiResult = fotsiResult;
+        // SMT: align correlated-pair window to current candle time (no lookahead)
+        let smtAligned: Candle[] | null = null;
+        if (smtCandles && smtCandles.length >= 30) {
+          const smtUpToNow = smtCandles.filter(c => c.datetime <= candleTime);
+          if (smtUpToNow.length >= 30) {
+            smtAligned = smtUpToNow.slice(Math.max(0, smtUpToNow.length - window.length));
+          }
+        }
+        config._smtResult = smtAligned ? detectSMTDivergence(symbol, window, smtAligned) : null;
+        // FOTSI: look up snapshot for this candle's date (no lookahead)
+        const candleDateStr = candleTime.slice(0, 10);
+        let fotsiForBar: FOTSIResult | null = fotsiTimeline.get(candleDateStr) ?? null;
+        if (!fotsiForBar && fotsiTimeline.size > 0) {
+          // Fall back to most recent prior snapshot (weekend / missing day)
+          const priorDates = [...fotsiTimeline.keys()].filter(d => d <= candleDateStr).sort();
+          if (priorDates.length > 0) fotsiForBar = fotsiTimeline.get(priorDates[priorDates.length - 1]) ?? null;
+        }
+        (config as any)._fotsiResult = fotsiForBar;
 
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
 
@@ -1112,7 +1146,7 @@ Deno.serve(async (req) => {
         // ── Safety Gates ──
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config,
-          balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades,
+          balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades, candleMs,
         );
         const blockedGates = gates.filter(g => !g.passed);
         const allPassed = blockedGates.length === 0;
@@ -1126,12 +1160,18 @@ Deno.serve(async (req) => {
 
         if (!allPassed || !analysis.stopLoss || !analysis.takeProfit) continue;
 
-        // ── Close on Reverse ──
+        // ── Close on Reverse (apply spread cost to exit, mirrors entry) ──
         if (config.closeOnReverse) {
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const toClose = openPositions.filter(p => p.symbol === symbol && p.direction === oppositeDir);
           for (const pos of toClose) {
-            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, analysis.lastPrice, pos.size, pos.symbol);
+            const posSpec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const reverseSpread = spreadPips * posSpec.pipSize;
+            // Closing a long pays the bid (lower); closing a short pays the ask (higher)
+            const reverseExitPrice = pos.direction === "long"
+              ? analysis.lastPrice - reverseSpread / 2
+              : analysis.lastPrice + reverseSpread / 2;
+            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, reverseExitPrice, pos.size, pos.symbol);
             balance += pnl;
             if (balance > peakBalance) peakBalance = balance;
             allTrades.push({
@@ -1139,7 +1179,7 @@ Deno.serve(async (req) => {
               symbol: pos.symbol,
               direction: pos.direction,
               entryPrice: pos.entryPrice,
-              exitPrice: analysis.lastPrice,
+              exitPrice: reverseExitPrice,
               entryTime: pos.entryTime,
               exitTime: candleTime,
               size: pos.size,
