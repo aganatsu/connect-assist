@@ -116,7 +116,6 @@ const SPECS: Record<string, { pipSize: number; pipValue: number; minLot: number;
   "CAD/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "CAD/CHF": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "CHF/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
-  "NZD/USD": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/CAD": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/CHF": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
@@ -716,13 +715,13 @@ async function runScan(
 
   for (const [pair] of FOTSI_PAIRS) {
     try {
-      const candles = await fetchCandlesWithFallback({
+      const result = await fetchCandlesWithFallback({
         symbol: pair,
-        timeframe: "1d",
-        range: "6mo",
+        interval: "1d",
+        limit: 180,
       });
-      if (candles && candles.length > 0) {
-        candleMap[pair] = candles;
+      if (result?.candles && result.candles.length > 0) {
+        candleMap[pair] = result.candles;
         fetchedCount++;
       }
     } catch (err) {
@@ -823,11 +822,12 @@ async function runScan(
     const tf = config.entryTimeframe;
     let entryCandles: Candle[] | null = null;
     try {
-      entryCandles = await fetchCandlesWithFallback({
+      const entryResult = await fetchCandlesWithFallback({
         symbol: pair,
-        timeframe: tf === "4h" ? "4h" : "1h",
-        range: "3mo",
+        interval: tf === "4h" ? "4h" : "1h",
+        limit: 300,
       });
+      entryCandles = entryResult?.candles ?? null;
     } catch (err) {
       log(`  ${pair}: Failed to fetch ${tf} candles: ${err}`);
       continue;
