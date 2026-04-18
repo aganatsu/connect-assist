@@ -3084,7 +3084,8 @@ async function runScanForUser(supabase: any, userId: string) {
 
   return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId };
   } finally {
-    // Always release the scan lock, even on error
+    // Always release the scan lock and clear the source tally, even on error.
+    try { endScanSourceTally(); } catch { /* ignore */ }
     try {
       await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
     } catch (e: any) {
