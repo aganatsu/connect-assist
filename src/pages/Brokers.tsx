@@ -667,7 +667,9 @@ function ConnectionDetail({
                 variant="outline" size="sm" className="h-8"
                 disabled={!newSym.trim() || !newBrokerSym.trim()}
                 onClick={() => {
-                  setEditOverrides((prev) => ({ ...prev, [normalizeOverrideKey(newSym)]: newBrokerSym.trim() }));
+                  const key = normalizeOverrideKey(newSym);
+                  setEditOverrides((prev) => ({ ...prev, [key]: newBrokerSym.trim() }));
+                  setManuallyTouched((prev) => new Set(prev).add(key));
                   setNewSym(""); setNewBrokerSym(""); setDirty(true);
                 }}
               >
