@@ -756,23 +756,26 @@ function processExits(
       }
     }
 
-    // ── Partial TP (simplified: reduce size, record partial PnL) ──
+    // ── Partial TP (exit at trigger price, not candle close) ──
     if (!closeReason && pos.exitFlags.partialTP && !pos.partialTPFired && pos.exitFlags.partialTPPercent > 0) {
-      const profitPips = pos.direction === "long"
-        ? (candle.close - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.close) / spec.pipSize;
       const slDistPips = Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize;
       const triggerPips = slDistPips * (pos.exitFlags.partialTPLevel || 1.0);
-      if (profitPips >= triggerPips) {
+      const triggerPrice = pos.direction === "long"
+        ? pos.entryPrice + triggerPips * spec.pipSize
+        : pos.entryPrice - triggerPips * spec.pipSize;
+      const triggerHit = pos.direction === "long"
+        ? candle.high >= triggerPrice
+        : candle.low <= triggerPrice;
+      if (triggerHit) {
         const closeSize = pos.size * (pos.exitFlags.partialTPPercent / 100);
         const remainSize = pos.size - closeSize;
-        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, candle.close, closeSize, pos.symbol);
+        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol);
         closedTrades.push({
           id: `${pos.id}_partial`,
           symbol: pos.symbol,
           direction: pos.direction,
           entryPrice: pos.entryPrice,
-          exitPrice: candle.close,
+          exitPrice: triggerPrice,
           entryTime: pos.entryTime,
           exitTime: candle.datetime,
           size: closeSize,
