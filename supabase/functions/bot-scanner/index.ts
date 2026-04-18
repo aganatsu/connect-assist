@@ -224,6 +224,89 @@ function calculateAnchoredVWAP(candles: Candle[], pipSize: number): VWAPResult {
   return { value, distancePips, rejection, barsAnchored: candles.length - anchorIdx };
 }
 
+// ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
+// Builds a histogram of time spent at each price level from OHLC candles.
+// Since forex lacks real volume, we use candle count at each price bin (TPO).
+// Returns POC (Point of Control), Value Area High/Low, and classified nodes.
+interface VolumeProfileResult {
+  poc: number;           // Point of Control — price level with most time
+  vah: number;           // Value Area High (70% of activity above this)
+  val: number;           // Value Area Low (70% of activity below this)
+  nodes: Array<{ price: number; count: number; type: "HVN" | "LVN" | "normal" }>;
+  totalBins: number;
+}
+
+function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileResult | null {
+  if (candles.length < 20) return null;
+
+  // Find the overall high and low across all candles
+  let overallHigh = -Infinity, overallLow = Infinity;
+  for (const c of candles) {
+    if (c.high > overallHigh) overallHigh = c.high;
+    if (c.low < overallLow) overallLow = c.low;
+  }
+  const range = overallHigh - overallLow;
+  if (range <= 0) return null;
+
+  const binSize = range / numBins;
+  const bins: number[] = new Array(numBins).fill(0);
+
+  // For each candle, increment every bin that falls within its high-low range
+  // This is the TPO (Time Price Opportunity) approach
+  for (const c of candles) {
+    const lowBin = Math.max(0, Math.floor((c.low - overallLow) / binSize));
+    const highBin = Math.min(numBins - 1, Math.floor((c.high - overallLow) / binSize));
+    for (let b = lowBin; b <= highBin; b++) {
+      bins[b]++;
+    }
+  }
+
+  // Find POC (bin with highest count)
+  let pocBin = 0, maxCount = 0;
+  for (let i = 0; i < numBins; i++) {
+    if (bins[i] > maxCount) {
+      maxCount = bins[i];
+      pocBin = i;
+    }
+  }
+  const poc = overallLow + (pocBin + 0.5) * binSize;
+
+  // Calculate Value Area (70% of total TPO count, expanding from POC)
+  const totalCount = bins.reduce((a, b) => a + b, 0);
+  const targetCount = totalCount * 0.70;
+  let vaLowBin = pocBin, vaHighBin = pocBin;
+  let vaCount = bins[pocBin];
+
+  while (vaCount < targetCount && (vaLowBin > 0 || vaHighBin < numBins - 1)) {
+    const expandLow = vaLowBin > 0 ? bins[vaLowBin - 1] : -1;
+    const expandHigh = vaHighBin < numBins - 1 ? bins[vaHighBin + 1] : -1;
+    if (expandLow >= expandHigh && expandLow >= 0) {
+      vaLowBin--;
+      vaCount += bins[vaLowBin];
+    } else if (expandHigh >= 0) {
+      vaHighBin++;
+      vaCount += bins[vaHighBin];
+    } else {
+      break;
+    }
+  }
+
+  const val = overallLow + vaLowBin * binSize;
+  const vah = overallLow + (vaHighBin + 1) * binSize;
+
+  // Classify nodes: HVN if count > 1.5x average, LVN if count < 0.5x average
+  const avgCount = totalCount / numBins;
+  const nodes = bins.map((count, i) => ({
+    price: overallLow + (i + 0.5) * binSize,
+    count,
+    type: count > avgCount * 1.5 ? "HVN" as const
+         : count < avgCount * 0.5 ? "LVN" as const
+         : "normal" as const,
+  }));
+
+  return { poc, vah, val, nodes, totalBins: numBins };
+}
+
 function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
 
@@ -618,7 +701,7 @@ interface SwingPoint { index: number; price: number; type: "high" | "low"; datet
 interface OrderBlock { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; mitigatedPercent: number; }
 interface FairValueGap { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; }
 interface LiquidityPool { price: number; type: "buy-side" | "sell-side"; strength: number; datetime: string; swept: boolean; }
-interface ReasoningFactor { name: string; present: boolean; weight: number; detail: string; }
+interface ReasoningFactor { name: string; present: boolean; weight: number; detail: string; group?: string; }
 interface DisplacementCandle { index: number; bodyRatio: number; rangeMultiple: number; direction: "bullish" | "bearish"; }
 interface DisplacementResult { isDisplacement: boolean; displacementCandles: DisplacementCandle[]; lastDirection: "bullish" | "bearish" | null; }
 
@@ -1170,31 +1253,57 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
 }
 /**
  * ─── CONFLUENCE FACTOR AUDIT (17 factors + OR enhancements) ──────────
- * Max raw points possible when every factor and bonus aligns = 23.0
- * Final score is normalized via Math.min(10, score) → 0–10 scale.
+ * 9 Factor Groups with anti-double-count rules and group caps.
+ * Final score is clamped to 0–10 via Math.min(10, score).
  *
- *  #  | Factor                 | Base | Bonus(es)
- * ----+------------------------+------+-------------------------------------------
- *  1  | Market Structure       | 2.0  | +0.5 OR bias (when OR enabled)
- *  2  | Order Block            | 2.0  | (quality-gated: structure break + body zone)
- *  3  | Fair Value Gap         | 1.5  | CE level check (1.5 at CE, 1.0 inside FVG)
- *  4  | Premium/Discount       | 2.0  | (capped)
- *  5  | Session/Kill Zone      | 1.0  | +0.5 Silver Bullet combo
- *  6  | Judas Swing            | 1.0  | +0.5 OR judas; kill-zone-gated
- *  7  | PD/PW Levels           | 1.0  | +0.5 OR key-level; weekly > daily (was 0.5)
- *  8  | Reversal Candle        | 0.5  | context-aware (full pts only at key level)
- *  9  | Liquidity Sweep        | 1.0  | strength-tiered (was 0.5)
- * 10  | Displacement           | 1.0  | FVG-creation-gated (1.0 with FVG, 0.5 without)
- * 11  | Breaker Block          | 1.0  | —
- * 12  | Unicorn Model          | 1.5  | —
- * 13  | Silver Bullet          | 1.0  | —
- * 14  | Macro Window           | 0.5  | +0.5 Silver Bullet overlap combo
- * 15  | SMT Divergence         | 1.0  | swing-point-based (not absolute extremes)
- * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
- * 17  | AMD Phase              | 1.0  | +0.5 distribution-phase bonus
+ * GROUP 1: Market Structure (cap 3.0)
+ *  1  | BOS/CHoCH              | 1.5  | Structure breaks only
+ * 19  | Trend Direction        | 1.5  | Entry TF trend alignment (-0.5 counter)
+ *
+ * GROUP 2: Daily Bias (cap 1.5)
+ * 20  | Daily Bias (HTF)       | 1.5  | Daily trend alignment (-0.5 counter)
+ *
+ * GROUP 3: Order Flow Zones (cap 3.0)
+ *  2  | Order Block            | 2.0  | Quality-gated
+ *  3  | Fair Value Gap         | 2.0  | CE level check (2.0 at CE, 1.5 inside)
+ * 11  | Breaker Block          | 1.0  | Proximity-gated
+ * 12  | Unicorn Model          | 1.5  | Absorbs Breaker + FVG when active
+ *
+ * GROUP 4: Premium/Discount & Fibonacci (cap 2.5)
+ *  4  | P/D + Fibonacci        | 2.0  | OTE sweet spot (70.5%) = 2.0
+ *  7  | PD/PW Levels           | 1.0  | Weekly/daily high-low proximity
+ *
+ * GROUP 5: Timing (cap 1.5)
+ *  5  | Session/Kill Zone      | 1.0  | Absorbed by SB when active
+ * 13  | Silver Bullet          | 1.0  | Absorbs Kill Zone (+0.5 boost)
+ * 14  | Macro Window           | 0.5  | Reduced to 0.25 during Kill Zone
+ *
+ * GROUP 6: Price Action (cap 2.0)
+ *  6  | Judas Swing            | 0.5  | Absorbed by AMD combo
+ *  8  | Reversal Candle        | 0.5  | Context-aware
+ *  9  | Liquidity Sweep        | 1.0  | Strength-tiered
+ * 10  | Displacement           | 1.0  | Reduced to 0.5 when FVG scored
+ *
+ * GROUP 7: AMD / Power of 3 (cap 1.5)
+ * 17  | AMD Phase              | 1.0  | +0.5 distribution bonus
+ *  —  | Power of 3 Combo       | +1.0 | AMD + Sweep/Judas + Trend aligned
+ *
+ * GROUP 8: Macro Confirmation (cap 2.0)
+ * 15  | SMT Divergence         | 1.0  | Swing-point-based
  * 18  | Currency Strength      | 1.5  | FOTSI alignment (-0.5 to +1.5)
- * ----+------------------------+------+-------------------------------------------
- *  TOTAL MAX RAW              = 24.0  (clamped to 10 for display via Math.min)
+ *
+ * GROUP 9: Volume Profile (cap 1.5)
+ * 16  | Volume Profile         | 1.5  | TPO-based POC/HVN/LVN + cross-validation
+ *
+ * Anti-double-count rules:
+ *  - Unicorn fires → Breaker=0, FVG=0
+ *  - Displacement+FVG overlap → Displacement reduced to 0.5
+ *  - OB+FVG same zone → cap combined at 3.0
+ *  - Silver Bullet fires → Kill Zone=0, SB boosted to 1.5
+ *  - AMD+Sweep fires → Judas=0
+ *  - Macro during Kill Zone → Macro reduced to 0.25
+ *
+ * TOTAL GROUP CAPS SUM = 18.5 (clamped to 10)
  *
  * Recommended thresholds on the 0-10 scale (post-clamp):
  *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
@@ -1222,21 +1331,26 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   let score = 0;
   const factors: ReasoningFactor[] = [];
 
-  // ── Factor 1: Market Structure (max 2.0) ──
-  // Structure break toggle: if enableStructureBreak is false, skip CHoCH/BOS points
+  // ── Factor 1: Market Structure / BOS/CHoCH (max 1.5) ──
+  // Scores structure breaks only. Trend direction is scored separately in Factor 19.
   {
     let pts = 0;
     let detail = "";
-    if (structure.trend !== "ranging") { pts += 1; detail = `${structure.trend} trend`; }
     if (config.enableStructureBreak !== false) {
-      if (structure.choch.length > 0) { pts += 1; detail += `, ${structure.choch.length} CHoCH`; }
-      else if (structure.bos.length > 0) { pts += 0.5; detail += `, ${structure.bos.length} BOS`; }
+      if (structure.choch.length > 0) {
+        pts = 1.5;
+        detail = `${structure.choch.length} CHoCH detected — trend reversal confirmed`;
+      } else if (structure.bos.length > 0) {
+        pts = 1.0;
+        detail = `${structure.bos.length} BOS detected — trend continuation`;
+      } else {
+        detail = "No BOS or CHoCH detected";
+      }
     } else {
-      detail += " (BOS/CHoCH disabled)";
+      detail = "BOS/CHoCH disabled";
     }
-    pts = Math.min(2, pts);
     score += pts;
-    factors.push({ name: "Market Structure", present: pts > 0, weight: 2.0, detail: detail || "Ranging — no trend" });
+    factors.push({ name: "Market Structure", present: pts > 0, weight: 1.5, detail, group: "Market Structure" });
   }
 
   // Displacement detection (used by OB/FVG bonus + new factor below)
@@ -1271,10 +1385,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "Order Blocks disabled";
     }
     score += pts;
-    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks" });
+    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks", group: "Order Flow Zones" });
   }
 
-  // ── Factor 3: Fair Value Gap (max 1.5) ──
+  // ── Factor 3: Fair Value Gap (max 2.0) ──
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   // ICT: Consequent Encroachment (CE) = 50% of FVG is a key entry level.
   {
@@ -1289,10 +1403,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         const distFromCE = Math.abs(lastPrice - ce);
         const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15; // within 15% of CE
         if (nearCE) {
-          pts = 1.5;
+          pts = 2.0;
           detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} — optimal entry`;
         } else {
-          pts = 1.0;
+          pts = 1.5;
           detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
         }
         if ((insideFVG as any).hasDisplacement) {
@@ -1306,19 +1420,78 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "FVGs disabled";
     }
     score += pts;
-    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: 1.5, detail: detail || "No active FVGs" });
+    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: 2.0, detail: detail || "No active FVGs", group: "Order Flow Zones" });
   }
 
-  // ── Factor 4: Premium/Discount (max 2.0) ──
+  // ── Factor 4: Premium/Discount & Fibonacci (max 2.5, group-capped) ──
+  // Merged: P/D zone + Fibonacci retracement levels + PD/PW levels.
+  // Uses the same swing high/low for both P/D and Fib calculations.
   {
     let pts = 0;
-    let detail = `Price at ${pd.zonePercent.toFixed(1)}% — ${pd.currentZone} zone`;
-    if (structure.trend === "bullish" && pd.currentZone === "discount") { pts += 1.5; }
-    else if (structure.trend === "bearish" && pd.currentZone === "premium") { pts += 1.5; }
-    if (pd.oteZone) { pts += 0.5; detail += " — OTE zone active"; }
-    pts = Math.min(2, pts);
+    const fibPercent = pd.zonePercent; // 0% = swing low, 100% = swing high
+    let detail = `Price at ${fibPercent.toFixed(1)}% of swing range — ${pd.currentZone} zone`;
+
+    // Fibonacci-aware scoring (direction-dependent):
+    // For LONGS: want price in discount (low fib %). OTE sweet spot = 61.8-78.6% retracement from high = 21.4-38.2% of range.
+    // For SHORTS: want price in premium (high fib %). OTE sweet spot = 61.8-78.6% retracement from low = 61.8-78.6% of range.
+    // Note: zonePercent is measured from swing low, so:
+    //   - For longs: OTE = price at 21.4-38.2% (deep discount, 61.8-78.6% retracement)
+    //   - For shorts: OTE = price at 61.8-78.6% (deep premium, 61.8-78.6% retracement)
+
+    // Use structure.trend as directional hint (direction variable isn't set yet)
+    const fibDirection = structure.trend === "bullish" ? "long" : structure.trend === "bearish" ? "short" : null;
+
+    if (fibDirection === "long") {
+      // Retracement from swing high: retrace% = 100 - fibPercent
+      const retrace = 100 - fibPercent;
+      if (retrace >= 70 && retrace <= 72) {
+        // 70.5% sweet spot (ICT optimal)
+        pts = 2.0;
+        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
+      } else if (retrace >= 61.8 && retrace <= 78.6) {
+        // OTE zone
+        pts = 1.5;
+        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (fibPercent < 45) {
+        // In discount but not OTE
+        pts = 1.0;
+        detail += ` | Discount zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (retrace >= 38.2 && retrace < 61.8) {
+        // Shallow retracement
+        pts = 0.5;
+        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
+      } else if (fibPercent >= 50) {
+        // Buying in premium — no points
+        detail += ` | Buying in premium — unfavorable`;
+      }
+    } else if (fibDirection === "short") {
+      // For shorts, fibPercent IS the retracement from swing low
+      const retrace = fibPercent;
+      if (retrace >= 70 && retrace <= 72) {
+        pts = 2.0;
+        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
+      } else if (retrace >= 61.8 && retrace <= 78.6) {
+        pts = 1.5;
+        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (fibPercent > 55) {
+        pts = 1.0;
+        detail += ` | Premium zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (retrace >= 38.2 && retrace < 61.8) {
+        pts = 0.5;
+        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
+      } else if (fibPercent <= 50) {
+        detail += ` | Selling in discount — unfavorable`;
+      }
+    } else {
+      // Ranging — no clear direction from structure, just report zone
+      if (pd.oteZone) {
+        pts = 0.5;
+        detail += " | OTE zone active (ranging — no directional bias)";
+      }
+    }
+
     score += pts;
-    factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
+    factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: 2.0, detail, group: "Premium/Discount & Fib" });
   }
 
   // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
@@ -1332,28 +1505,28 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail += ` + ${silverBullet.window} overlap (combo bonus)`;
     }
     score += pts;
-    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail, group: "Timing" });
   }
 
-  // ── Factor 6: Judas Swing (max 1.0) ──
-  // ICT: Judas Swing should occur during a kill zone (London or NY open).
+  // ── Factor 6: Judas Swing (max 0.5) ──
+  // ICT: Judas Swing is a confirmation signal, not a primary entry trigger.
   {
     let pts = 0;
     let detail = judasSwing.description;
     if (judasSwing.detected && judasSwing.confirmed) {
       if (session.isKillZone) {
-        pts = 1;
-        detail += " — during kill zone (high probability)";
-      } else {
         pts = 0.5;
+        detail += " — during kill zone (confirmed)";
+      } else {
+        pts = 0.25;
         detail += " — outside kill zone (lower probability)";
       }
     } else if (judasSwing.detected) {
-      pts = 0.25;
+      pts = 0.1;
       detail += " (unconfirmed)";
     }
     score += pts;
-    factors.push({ name: "Judas Swing", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Judas Swing", present: pts > 0, weight: 0.5, detail, group: "Price Action" });
   }
 
   // ── Factor 7: PD/PW Levels (max 1.0) ──
@@ -1377,7 +1550,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
     }
     score += pts;
-    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 1.0, detail, group: "Premium/Discount & Fib" });
   }
 
   // ── Factor 8: Reversal Candle (max 0.5) ──
@@ -1411,7 +1584,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
     }
     score += pts;
-    factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail });
+    factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail, group: "Price Action" });
   }
 
   // ── Factor 9: Liquidity Sweep (max 1.0) ──
@@ -1432,7 +1605,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "Liquidity Sweeps disabled";
     }
     score += pts;
-    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 1.0, detail, group: "Price Action" });
   }
 
   // ── Opening Range Enhancements ──
@@ -1502,6 +1675,32 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     else if (pd.currentZone === "premium") direction = "short";
   }
 
+  // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
+  // Scores whether the entry timeframe trend aligns with the trade direction.
+  // Penalizes counter-trend trades. Separate from BOS/CHoCH (Factor 1).
+  {
+    let pts = 0;
+    let detail = "";
+    if (direction && structure.trend !== "ranging") {
+      const trendAligned = (direction === "long" && structure.trend === "bullish")
+        || (direction === "short" && structure.trend === "bearish");
+      if (trendAligned) {
+        pts = 1.5;
+        detail = `Entry TF ${structure.trend} trend aligned with ${direction} direction`;
+      } else {
+        pts = -0.5;
+        detail = `Counter-trend: ${direction} against ${structure.trend} trend (penalty)`;
+      }
+    } else if (direction && structure.trend === "ranging") {
+      pts = 0.5;
+      detail = `Ranging market — direction set via P/D zone fallback (${direction})`;
+    } else {
+      detail = "No direction determined — trend scoring skipped";
+    }
+    score += pts;
+    factors.push({ name: "Trend Direction", present: pts > 0, weight: 1.5, detail, group: "Market Structure" });
+  }
+
   // ── Factor 10: Displacement (max 1.0) ──
   // ICT: True displacement should create an FVG (institutional footprint).
   {
@@ -1532,7 +1731,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "Displacement scoring disabled";
     }
     score += pts;
-    factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail, group: "Price Action" });
   }
 
   // ── Factor 11: Breaker Block (max 1.0) ──
@@ -1556,7 +1755,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "Breaker Blocks disabled";
     }
     score += pts;
-    factors.push({ name: "Breaker Block", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Breaker Block", present: pts > 0, weight: 1.0, detail, group: "Order Flow Zones" });
   }
 
   // ── Factor 12: Unicorn Model (max 1.5) ──
@@ -1580,7 +1779,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "Unicorn Model disabled";
     }
     score += pts;
-    factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail });
+    factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail, group: "Order Flow Zones" });
   }
 
   // ── Factor 13: Silver Bullet Window (max 1.0) ──
@@ -1594,7 +1793,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = `${silverBullet.window} active — ${silverBullet.minutesRemaining}min remaining (ICT macro window)`;
     }
     score += pts;
-    factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail, group: "Timing" });
   }
 
   // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
@@ -1613,7 +1812,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
     }
     score += pts;
-    factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail, group: "Timing" });
   }
 
   // ── Factor 15: SMT Divergence (max 1.0) ──
@@ -1637,41 +1836,72 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = `SMT (${smtResult.type}) detected but no signal direction yet`;
     }
     score += pts;
-    factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail, group: "Macro Confirmation" });
   }
 
-  // ── Factor 16: VWAP Confluence (max 1.0; 0.5 base near VWAP + bias-aligned, +0.5 rejection) ──
+  // ── Factor 16: Volume Profile (max 1.5) ──
+  // Replaces VWAP. Uses Time-at-Price (TPO) histogram to identify POC, HVN, LVN.
+  // Validates OBs and FVGs with price-time data.
+  const volumeProfile = computeVolumeProfile(candles);
+  {
+    let pts = 0;
+    let detail = "";
+    if (!volumeProfile) {
+      detail = "Volume Profile unavailable (insufficient candles)";
+    } else {
+      const { poc, vah, val, nodes } = volumeProfile;
+      const pipSize = (SPECS[config._currentSymbol || "EUR/USD"] || SPECS["EUR/USD"]).pipSize;
+      const distFromPOC = Math.abs(lastPrice - poc) / pipSize;
+      const pocProximityPips = 20; // within 20 pips of POC
+
+      // Find the node closest to current price
+      let closestNode = nodes[0];
+      let minDist = Infinity;
+      for (const node of nodes) {
+        const d = Math.abs(lastPrice - node.price);
+        if (d < minDist) { minDist = d; closestNode = node; }
+      }
+
+      if (distFromPOC <= pocProximityPips && direction) {
+        // Price at POC — institutional fair value level
+        pts = 1.0;
+        detail = `Price ${distFromPOC.toFixed(1)} pips from POC (${poc.toFixed(5)}) — institutional fair value`;
+      } else if (closestNode.type === "HVN" && direction) {
+        // Price at High Volume Node — institutional defense level
+        pts = 0.75;
+        detail = `Price at HVN (${closestNode.price.toFixed(5)}, ${closestNode.count} TPOs) — institutional defense level`;
+      } else if (closestNode.type === "LVN" && direction) {
+        // Price at Low Volume Node — fast-move zone (validates FVG)
+        pts = 0.5;
+        detail = `Price at LVN (${closestNode.price.toFixed(5)}) — thin liquidity zone (FVG validation)`;
+      } else if (direction) {
+        detail = `Price in normal volume zone (POC: ${poc.toFixed(5)}, VA: ${val.toFixed(5)}-${vah.toFixed(5)})`;
+      } else {
+        detail = `Volume Profile computed (POC: ${poc.toFixed(5)}) but no direction`;
+      }
+
+      // Cross-validation bonus: OB or FVG overlaps with HVN/LVN
+      if (pts > 0) {
+        const obAtHVN = closestNode.type === "HVN" && factors.some(f => f.name === "Order Block" && f.present);
+        const fvgAtLVN = closestNode.type === "LVN" && factors.some(f => f.name === "Fair Value Gap" && f.present);
+        if (obAtHVN) {
+          pts += 0.5;
+          detail += " + OB at HVN (cross-validated)";
+        } else if (fvgAtLVN) {
+          pts += 0.5;
+          detail += " + FVG at LVN (cross-validated)";
+        }
+      }
+      pts = Math.min(1.5, pts);
+    }
+    score += pts;
+    factors.push({ name: "Volume Profile", present: pts > 0, weight: 1.5, detail, group: "Volume Profile" });
+  }
+
+  // Retain VWAP calculation for backward compatibility (not scored)
   const _vwapSymbol = config._currentSymbol || "EUR/USD";
   const _vwapPipSize = (SPECS[_vwapSymbol] || SPECS["EUR/USD"]).pipSize;
   const vwap = calculateAnchoredVWAP(candles, _vwapPipSize);
-  {
-    let pts = 0;
-    let detail = "VWAP unavailable";
-    const proximityPips = config.vwapProximityPips ?? 15;
-    if (config.useVWAP === false) {
-      detail = "VWAP disabled";
-    } else if (vwap.value != null && vwap.distancePips != null) {
-      // Bias-aligned proximity: long needs price >= VWAP (or within proximity below); short the inverse
-      const aboveVwap = lastPrice >= vwap.value;
-      const belowVwap = lastPrice <= vwap.value;
-      const longAligned = direction === "long" && (aboveVwap || vwap.distancePips <= proximityPips);
-      const shortAligned = direction === "short" && (belowVwap || vwap.distancePips <= proximityPips);
-      if ((longAligned || shortAligned) && vwap.distancePips <= proximityPips) {
-        pts = 0.5;
-        detail = `Price ${vwap.distancePips.toFixed(1)} pips from session VWAP ${vwap.value.toFixed(5)} (bias-aligned)`;
-        if ((direction === "long" && vwap.rejection === "bullish") || (direction === "short" && vwap.rejection === "bearish")) {
-          pts += 0.5;
-          detail += ` + ${vwap.rejection} rejection wick at VWAP`;
-        }
-      } else if (direction) {
-        detail = `VWAP ${vwap.value.toFixed(5)} — price ${vwap.distancePips.toFixed(1)} pips away (no alignment)`;
-      } else {
-        detail = `VWAP ${vwap.value.toFixed(5)} — no signal direction`;
-      }
-    }
-    score += pts;
-    factors.push({ name: "VWAP", present: pts > 0, weight: 1.0, detail });
-  }
 
   // ── Factor 17: AMD Phase (max 1.0; 0.5 if bias aligned, +0.5 if in distribution phase) ──
   const amd = detectAMDPhase(candles);
@@ -1695,7 +1925,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
     }
     score += pts;
-    factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail });
+    factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail, group: "AMD / Power of 3" });
   }
 
   // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
@@ -1724,10 +1954,210 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       detail = "No direction — currency strength check skipped";
     }
     score += pts;
-    factors.push({ name: "Currency Strength", present: pts !== 0, weight: 1.5, detail });
+    factors.push({ name: "Currency Strength", present: pts !== 0, weight: 1.5, detail, group: "Macro Confirmation" });
   }
 
-  score = Math.min(10, Math.round(score * 10) / 10);
+  // ── Factor 20: Daily Bias / HTF Trend (max 1.5) ──
+  // Scores whether the daily timeframe trend aligns with the trade direction.
+  // Promoted from safety gate to scored factor — trend alignment is a core confluence.
+  {
+    let pts = 0;
+    let detail = "";
+    if (dailyCandles && dailyCandles.length >= 20 && direction) {
+      const dailyStructure = analyzeMarketStructure(dailyCandles);
+      const dailyTrend = dailyStructure.trend;
+      if (dailyTrend !== "ranging") {
+        const htfAligned = (direction === "long" && dailyTrend === "bullish")
+          || (direction === "short" && dailyTrend === "bearish");
+        if (htfAligned) {
+          pts = 1.5;
+          detail = `Daily ${dailyTrend} trend aligned with ${direction} — high conviction`;
+        } else {
+          pts = -0.5;
+          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} trend (penalty)`;
+        }
+      } else {
+        pts = 0.5;
+        detail = `Daily trend ranging — partial credit (no HTF directional bias)`;
+      }
+    } else if (!dailyCandles || dailyCandles.length < 20) {
+      detail = "Daily candles unavailable — HTF bias skipped";
+    } else {
+      detail = "No direction determined — HTF bias skipped";
+    }
+    score += pts;
+    factors.push({ name: "Daily Bias", present: pts > 0, weight: 1.5, detail, group: "Daily Bias" });
+  }
+
+  // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
+  // Corrects overlapping scores where sub-factors are subsets of parent factors.
+  // Applied AFTER all individual scoring, BEFORE final clamp.
+  {
+    const findFactor = (name: string) => factors.find(f => f.name === name);
+    const adjustFactor = (name: string, newWeight: number, reason: string) => {
+      const f = findFactor(name);
+      if (f && f.present) {
+        const diff = f.weight - newWeight;
+        if (diff > 0) {
+          score -= diff;
+          f.weight = newWeight;
+          f.detail += ` [adjusted: ${reason}]`;
+        }
+      }
+    };
+
+    // Rule 1: Unicorn fires → Breaker = 0, FVG = 0
+    // Unicorn IS Breaker + FVG overlap, so scoring all three is triple-counting.
+    const unicorn = findFactor("Unicorn Model");
+    if (unicorn && unicorn.present) {
+      const breaker = findFactor("Breaker Block");
+      const fvg = findFactor("Fair Value Gap");
+      if (breaker && breaker.present) {
+        score -= breaker.weight;
+        breaker.weight = 0;
+        breaker.detail += " [zeroed: absorbed by Unicorn Model]";
+      }
+      if (fvg && fvg.present) {
+        score -= fvg.weight;
+        fvg.weight = 0;
+        fvg.detail += " [zeroed: absorbed by Unicorn Model]";
+      }
+    }
+
+    // Rule 2: Displacement + FVG overlap
+    // If displacement created the FVG, reduce displacement to 0.5 (already partially counted in FVG).
+    const displacement = findFactor("Displacement");
+    const fvgFactor = findFactor("Fair Value Gap");
+    if (displacement && displacement.present && fvgFactor && fvgFactor.present
+        && displacement.detail.includes("FVG")) {
+      adjustFactor("Displacement", 0.5, "FVG already scored the displacement event");
+    }
+
+    // Rule 3: OB + FVG both inside same zone → cap combined at 3.0
+    // Only applies when Unicorn did NOT fire (Rule 1 already handles that case).
+    if (!(unicorn && unicorn.present)) {
+      const ob = findFactor("Order Block");
+      const fvg2 = findFactor("Fair Value Gap");
+      if (ob && ob.present && fvg2 && fvg2.present) {
+        const combinedZone = ob.weight + fvg2.weight;
+        if (combinedZone > 3.0) {
+          const excess = combinedZone - 3.0;
+          score -= excess;
+          fvg2.weight = Math.max(0, fvg2.weight - excess);
+          fvg2.detail += ` [capped: OB+FVG combined limited to 3.0]`;
+        }
+      }
+    }
+
+    // Rule 4: Silver Bullet fires → absorbs Kill Zone (not additive)
+    const sb = findFactor("Silver Bullet");
+    const kz = findFactor("Session/Kill Zone");
+    if (sb && sb.present && kz && kz.present) {
+      score -= kz.weight;
+      kz.weight = 0;
+      kz.detail += " [zeroed: absorbed by Silver Bullet]";
+      // Boost SB to 1.5 to absorb the timing value
+      const sbBoost = 0.5;
+      sb.weight = Math.min(1.5, sb.weight + sbBoost);
+      score += sbBoost;
+      sb.detail += " [boosted: absorbed Kill Zone timing]";
+    }
+
+    // Rule 5: AMD distribution + sweep → absorbs Judas
+    const amdFactor = findFactor("AMD Phase");
+    const judas = findFactor("Judas Swing");
+    const sweep = findFactor("Liquidity Sweep");
+    if (amdFactor && amdFactor.present && sweep && sweep.present && judas && judas.present) {
+      score -= judas.weight;
+      judas.weight = 0;
+      judas.detail += " [zeroed: absorbed by AMD + Sweep sequence]";
+    }
+
+    // Rule 6: Macro during Kill Zone → Macro reduced to 0.25
+    const macro = findFactor("Macro Window");
+    if (macro && macro.present && kz && kz.present && kz.weight > 0) {
+      // Only reduce if Kill Zone wasn't already zeroed by SB
+      adjustFactor("Macro Window", 0.25, "Kill Zone already scoring timing");
+    }
+  }
+
+  // ─── Power of 3 Combo Bonus (+1.0) ─────────────────────────────────────────
+  // ICT Power of 3: Consolidation (accumulation) → Fakeout (manipulation/Judas) → Trend (distribution)
+  // Awards +1.0 when AMD phase is distribution + sweep/Judas confirmed + trend direction aligned.
+  {
+    const findFactor = (name: string) => factors.find(f => f.name === name);
+    const amdF = findFactor("AMD Phase");
+    const sweepF = findFactor("Liquidity Sweep");
+    const judasF = findFactor("Judas Swing");
+    const trendF = findFactor("Trend Direction");
+
+    const amdPresent = amdF && amdF.present;
+    const sweepOrJudas = (sweepF && sweepF.present) || (judasF && judasF.present);
+    const trendAligned = trendF && trendF.present;
+
+    if (amdPresent && sweepOrJudas && trendAligned) {
+      const po3Bonus = 1.0;
+      score += po3Bonus;
+      factors.push({
+        name: "Power of 3 Combo",
+        present: true,
+        weight: po3Bonus,
+        detail: `Full ICT sequence: Accumulation → Manipulation (${sweepF?.present ? "sweep" : "Judas"}) → Distribution — high-probability setup`,
+        group: "AMD / Power of 3",
+      });
+    } else {
+      factors.push({
+        name: "Power of 3 Combo",
+        present: false,
+        weight: 0,
+        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Trend=${trendAligned ? "✓" : "✗"}`,
+        group: "AMD / Power of 3",
+      });
+    }
+  }
+
+  // ─── Group Caps Enforcement ─────────────────────────────────────────────────
+  // Each factor group has a hard cap to prevent any single group from dominating.
+  {
+    const GROUP_CAPS: Record<string, number> = {
+      "Market Structure": 3.0,
+      "Daily Bias": 1.5,
+      "Order Flow Zones": 3.0,
+      "Premium/Discount & Fib": 2.5,
+      "Timing": 1.5,
+      "Price Action": 2.0,
+      "AMD / Power of 3": 1.5,
+      "Macro Confirmation": 2.0,
+      "Volume Profile": 1.5,
+    };
+
+    // Sum weights per group
+    const groupTotals: Record<string, number> = {};
+    for (const f of factors) {
+      if (f.present && f.group) {
+        groupTotals[f.group] = (groupTotals[f.group] || 0) + f.weight;
+      }
+    }
+
+    // Apply caps — if a group exceeds its cap, proportionally reduce its factors
+    for (const [group, cap] of Object.entries(GROUP_CAPS)) {
+      const total = groupTotals[group] || 0;
+      if (total > cap) {
+        const excess = total - cap;
+        score -= excess;
+        // Proportionally reduce each factor in the group
+        const groupFactors = factors.filter(f => f.group === group && f.present && f.weight > 0);
+        const scaleFactor = cap / total;
+        for (const f of groupFactors) {
+          const newWeight = Math.round(f.weight * scaleFactor * 100) / 100;
+          f.weight = newWeight;
+          f.detail += ` [group-capped: ${group} limited to ${cap}]`;
+        }
+      }
+    }
+  }
+
+  score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -1744,22 +2174,25 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   const presentFactors = factors.filter(f => f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
-  const dispSummary = displacement.isDisplacement ? ` | Displacement: ${displacement.lastDirection}` : "";
-  const sbSummary = silverBullet.active ? ` | ${silverBullet.window}` : "";
-  const mwSummary = macroWindow.active ? ` | ${macroWindow.window}` : "";
-  const smtSummary = smtResult?.detected ? ` | SMT ${smtResult.type} vs ${smtResult.correlatedPair}` : "";
-  const vwapSummary = vwap.value != null ? ` | VWAP ${vwap.value.toFixed(5)}` : "";
-  const amdSummary = amd.bias ? ` | AMD ${amd.phase}/${amd.bias}` : "";
+
+  // Build grouped summary for the new 9-group structure
+  const groupNames = [...new Set(factors.filter(f => f.group).map(f => f.group!))];
+  const activeGroups = groupNames.filter(g => factors.some(f => f.group === g && f.present));
+  const groupSummaryParts = activeGroups.map(g => {
+    const gFactors = factors.filter(f => f.group === g && f.present);
+    return `${g}: ${gFactors.map(f => f.name).join("+")}`;
+  });
+
   const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}${fotsiSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}${fotsiSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned across ${activeGroups.length}/9 groups (score: ${score}/10). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors across ${activeGroups.length}/9 groups (score: ${score}/10)${fotsiSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
-    fotsiAlignment: _fotsiAlignment,
+    fotsiAlignment: _fotsiAlignment, volumeProfile,
   };
 }
 
