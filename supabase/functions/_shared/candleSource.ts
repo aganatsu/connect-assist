@@ -152,10 +152,18 @@ async function metaFetchCandles(
           Number.isFinite(c.low) && Number.isFinite(c.close)
         );
       }
-      // Not a region issue → stop probing
-      if (!/region|not connected to broker/i.test(body)) {
+      // 404 / NotFoundError → account isn't deployed in this region, try the next one.
+      // Other status codes (auth, rate-limit, etc.) are not region-specific → stop probing.
+      const isRegionMiss =
+        res.status === 404 ||
+        /region|not connected to broker|notfounderror|could not find path/i.test(body);
+      if (!isRegionMiss) {
         console.warn(`[candleSource] MetaAPI ${region} non-region error ${res.status}: ${body.slice(0, 120)}`);
         return [];
+      }
+      // Quietly continue to next region on 404 (avoids log spam from the multi-region probe)
+      if (region === order[order.length - 1]) {
+        console.warn(`[candleSource] MetaAPI account ${metaAccountId.slice(0, 8)}… not found in any region (${order.join(", ")})`);
       }
     } catch (e: any) {
       console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
