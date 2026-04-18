@@ -15,7 +15,9 @@
 // paper-trading exit engine.
 // ═══════════════════════════════════════════════════════════════════
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+// deno-lint-ignore no-explicit-any
+type SBClient = SupabaseClient<any, "public", any>;
 import {
   computeFOTSI,
   CURRENCIES,
