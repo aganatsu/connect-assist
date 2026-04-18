@@ -53,24 +53,39 @@ export function matchBrokerSymbol(
   canonical: string,
   brokerSymbols: string[],
 ): MatchResult | null {
-  const base = baseOf(canonical);
-  if (!base) return null;
+  const all = matchAllBrokerSymbols(canonical, brokerSymbols);
+  return all[0] ?? null;
+}
 
-  let best: { raw: string; score: number } | null = null;
+/**
+ * Return ALL candidate broker symbols matching the canonical pair,
+ * sorted by static score (best first). Use this when you want to
+ * probe each variant for tradability (Standard vs Raw vs Zero accounts).
+ */
+export function matchAllBrokerSymbols(
+  canonical: string,
+  brokerSymbols: string[],
+): MatchResult[] {
+  const base = baseOf(canonical);
+  if (!base) return [];
+
+  const scored: { raw: string; score: number }[] = [];
   for (const raw of brokerSymbols) {
     const s = scoreCandidate(base, raw);
     if (s < 0) continue;
-    if (!best || s < best.score) best = { raw, score: s };
+    scored.push({ raw, score: s });
   }
-  if (!best) return null;
+  scored.sort((a, b) => a.score - b.score);
 
-  const upper = best.raw.toUpperCase();
-  const idx = upper.indexOf(base);
-  return {
-    brokerSymbol: best.raw,
-    prefix: best.raw.slice(0, idx),
-    suffix: best.raw.slice(idx + base.length),
-  };
+  return scored.map(({ raw }) => {
+    const upper = raw.toUpperCase();
+    const idx = upper.indexOf(base);
+    return {
+      brokerSymbol: raw,
+      prefix: raw.slice(0, idx),
+      suffix: raw.slice(idx + base.length),
+    };
+  });
 }
 
 /**
