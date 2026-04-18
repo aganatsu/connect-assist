@@ -470,7 +470,7 @@ function ConnectionDetail({
                   <span>#</span><span>App</span><span>Broker</span><span></span>
                 </div>
                 <ScrollArea className="h-72">
-                  {Object.entries(editOverrides).map(([sym, brokerSym]) => {
+                  {Object.entries(editOverrides).map(([sym, brokerSym], idx) => {
                     // Find probe candidates for this row by matching normalized keys
                     const candidates = (() => {
                       if (!probeDetails) return [];
