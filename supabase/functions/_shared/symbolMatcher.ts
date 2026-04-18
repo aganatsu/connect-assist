@@ -94,18 +94,24 @@ export function matchAllBrokerSymbols(
   canonical: string,
   brokerSymbols: string[],
 ): MatchResult[] {
-  const base = baseOf(canonical);
-  if (!base) return [];
+  const bases = basesFor(canonical);
+  if (!bases.length) return [];
 
-  const scored: { raw: string; score: number }[] = [];
-  for (const raw of brokerSymbols) {
-    const s = scoreCandidate(base, raw);
-    if (s < 0) continue;
-    scored.push({ raw, score: s });
+  // Score every (base, raw) pair; keep the best score per raw symbol.
+  const bestByRaw = new Map<string, { base: string; score: number }>();
+  for (const base of bases) {
+    for (const raw of brokerSymbols) {
+      const s = scoreCandidate(base, raw);
+      if (s < 0) continue;
+      const prev = bestByRaw.get(raw);
+      if (!prev || s < prev.score) bestByRaw.set(raw, { base, score: s });
+    }
   }
+
+  const scored = [...bestByRaw.entries()].map(([raw, v]) => ({ raw, ...v }));
   scored.sort((a, b) => a.score - b.score);
 
-  return scored.map(({ raw }) => {
+  return scored.map(({ raw, base }) => {
     const upper = raw.toUpperCase();
     const idx = upper.indexOf(base);
     return {
