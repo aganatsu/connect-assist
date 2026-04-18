@@ -2391,11 +2391,18 @@ async function runScanForUser(supabase: any, userId: string) {
   const balance = parseFloat(account.balance || "10000");
   const isPaused = account.is_paused;
 
-  // Load the user's first active MetaAPI connection (used as primary candle source)
+  // Load the user's active MetaAPI connection (used as primary candle source).
+  // Prefer rows where account_id is a clean UUID (correctly formed).
   const { data: brokerConns } = await supabase.from("broker_connections")
-    .select("api_key, account_id, symbol_suffix, symbol_overrides")
-    .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).limit(1);
-  _scanBrokerConn = (brokerConns && brokerConns[0]) ? brokerConns[0] as BrokerConn : null;
+    .select("api_key, account_id, symbol_suffix, symbol_overrides, created_at")
+    .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true)
+    .order("created_at", { ascending: false });
+  if (brokerConns && brokerConns.length > 0) {
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    _scanBrokerConn = (brokerConns.find((r: any) => uuidRe.test(r.account_id)) || brokerConns[0]) as BrokerConn;
+  } else {
+    _scanBrokerConn = null;
+  }
   console.log(`[scan ${scanCycleId}] Candle source: ${_scanBrokerConn ? "MetaAPI→TwelveData→Yahoo" : "TwelveData→Yahoo"}`);
 
   const { data: openPositions } = await supabase.from("paper_positions").select("*")
