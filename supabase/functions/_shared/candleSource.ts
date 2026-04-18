@@ -20,6 +20,9 @@ export interface BrokerConn {
   account_id: string;
   symbol_suffix?: string;
   symbol_overrides?: Record<string, string>;
+  /** Optional connection row id — enables lazy auto-mapping persistence. */
+  id?: string;
+  user_id?: string;
 }
 
 // ─── Symbol mapping per provider ─────────────────────────────────────
