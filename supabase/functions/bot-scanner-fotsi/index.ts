@@ -15,7 +15,9 @@
 // paper-trading exit engine.
 // ═══════════════════════════════════════════════════════════════════
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+// deno-lint-ignore no-explicit-any
+type SBClient = SupabaseClient<any, "public", any>;
 import {
   computeFOTSI,
   CURRENCIES,
@@ -116,7 +118,6 @@ const SPECS: Record<string, { pipSize: number; pipValue: number; minLot: number;
   "CAD/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "CAD/CHF": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "CHF/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
-  "NZD/USD": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/JPY": { pipSize: 0.01, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/CAD": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
   "NZD/CHF": { pipSize: 0.0001, pipValue: 10, minLot: 0.01, maxLot: 100 },
@@ -605,7 +606,7 @@ Deno.serve(async (req: Request) => {
 // ─── Scan logic ────────────────────────────────────────────────────
 
 async function runScan(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   body: Record<string, unknown>,
   corsHeaders: Record<string, string>,
@@ -635,7 +636,7 @@ async function runScan(
     });
   }
 
-  const balance = parseFloat(account.balance || "10000");
+  const balance = parseFloat(String(account.balance ?? "10000"));
 
   // ── Load config ──
   // Bot #2 config is stored in bot_configs with bot_type = "fotsi_mr" in config_json
@@ -666,7 +667,7 @@ async function runScan(
   // Filter to only Bot #2 positions (check signal_reason for bot tag)
   const botPositions = (openPositions || []).filter(p => {
     try {
-      const sr = JSON.parse(p.signal_reason || "{}");
+      const sr = JSON.parse(String(p.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -682,7 +683,7 @@ async function runScan(
   }
 
   // ── Check daily loss limit ──
-  const dailyPnlBase = parseFloat(account.daily_pnl_base || "10000");
+  const dailyPnlBase = parseFloat(String(account.daily_pnl_base ?? "10000"));
   const dailyLoss = ((dailyPnlBase - balance) / dailyPnlBase) * 100;
   if (dailyLoss >= config.maxDailyLoss) {
     log(`Daily loss limit hit: ${dailyLoss.toFixed(2)}% >= ${config.maxDailyLoss}%`);
@@ -716,13 +717,13 @@ async function runScan(
 
   for (const [pair] of FOTSI_PAIRS) {
     try {
-      const candles = await fetchCandlesWithFallback({
+      const result = await fetchCandlesWithFallback({
         symbol: pair,
-        timeframe: "1d",
-        range: "6mo",
+        interval: "1d",
+        limit: 180,
       });
-      if (candles && candles.length > 0) {
-        candleMap[pair] = candles;
+      if (result?.candles && result.candles.length > 0) {
+        candleMap[pair] = result.candles;
         fetchedCount++;
       }
     } catch (err) {
@@ -811,7 +812,7 @@ async function runScan(
       .limit(1);
 
     if (recentCloses && recentCloses.length > 0) {
-      const lastClose = new Date(recentCloses[0].closed_at).getTime();
+      const lastClose = new Date(String(recentCloses[0].closed_at)).getTime();
       const cooldownMs = config.cooldownMinutes * 60 * 1000;
       if (now.getTime() - lastClose < cooldownMs) {
         log(`  ${pair}: Cooldown active (${config.cooldownMinutes}min) — skip`);
@@ -823,11 +824,12 @@ async function runScan(
     const tf = config.entryTimeframe;
     let entryCandles: Candle[] | null = null;
     try {
-      entryCandles = await fetchCandlesWithFallback({
+      const entryResult = await fetchCandlesWithFallback({
         symbol: pair,
-        timeframe: tf === "4h" ? "4h" : "1h",
-        range: "3mo",
+        interval: tf === "4h" ? "4h" : "1h",
+        limit: 300,
       });
+      entryCandles = entryResult?.candles ?? null;
     } catch (err) {
       log(`  ${pair}: Failed to fetch ${tf} candles: ${err}`);
       continue;
@@ -982,7 +984,7 @@ async function runScan(
 // ─── Scan log persistence ──────────────────────────────────────────
 
 async function saveScanLog(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   scanId: string,
   startTime: number,
@@ -1008,7 +1010,7 @@ async function saveScanLog(
 // ─── Status endpoint ───────────────────────────────────────────────
 
 async function getStatus(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   corsHeaders: Record<string, string>,
 ) {
@@ -1020,7 +1022,7 @@ async function getStatus(
 
   const botPositions = (positions || []).filter(p => {
     try {
-      const sr = JSON.parse(p.signal_reason || "{}");
+      const sr = JSON.parse(String(p.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -1034,7 +1036,7 @@ async function getStatus(
 
   const botTrades = (recentTrades || []).filter(t => {
     try {
-      const sr = JSON.parse(t.signal_reason || "{}");
+      const sr = JSON.parse(String(t.signal_reason ?? "{}"));
       return sr.bot === BOT_ID;
     } catch { return false; }
   });
@@ -1053,7 +1055,7 @@ async function getStatus(
 // ─── Scan logs endpoint ────────────────────────────────────────────
 
 async function getScanLogs(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   corsHeaders: Record<string, string>,
 ) {
@@ -1070,7 +1072,7 @@ async function getScanLogs(
     if (l.bot_id) return l.bot_id === BOT_ID;
     // Otherwise check details JSON
     try {
-      const d = JSON.parse(l.details || "{}");
+      const d = JSON.parse(String((l as Record<string, unknown>).details ?? "{}"));
       return d.logs?.some((log: string) => log.includes("FOTSI Mean Reversion"));
     } catch { return false; }
   });
