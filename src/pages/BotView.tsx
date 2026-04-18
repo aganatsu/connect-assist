@@ -542,13 +542,12 @@ export default function BotView() {
             </div>
             <div className="flex-1 overflow-y-auto">
               {(() => {
-                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
-                if (latestDetails.length === 0) {
+                if (latestDetailsClean.length === 0) {
                   return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
                 }
                 return (
                   <div className="space-y-0">
-                    {latestDetails.map((sig: any, i: number) => {
+                    {latestDetailsClean.map((sig: any, i: number) => {
                       const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
                       const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
                       const isSelected = selectedPairIdx === i;
