@@ -1,6 +1,59 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { buildBrokerSymbolMap } from "../_shared/symbolMatcher.ts";
 
+// Canonical pairs the bot scanner cares about — used for auto-mapping.
+const CANONICAL_PAIRS = [
+  "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF",
+  "EUR/GBP", "EUR/JPY", "GBP/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/NZD",
+  "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/NZD", "AUD/CAD", "AUD/JPY", "CAD/JPY",
+  "AUD/CHF", "AUD/NZD", "CAD/CHF", "CHF/JPY", "NZD/CAD", "NZD/CHF", "NZD/JPY",
+  "XAU/USD", "XAG/USD", "BTC/USD", "ETH/USD",
+  "US30", "NAS100", "SPX500", "US Oil",
+];
+
+const REGIONS = ["london", "new-york", "singapore"];
+
+async function fetchMetaApiSymbols(authToken: string, metaAccountId: string): Promise<{ symbols: string[]; region: string | null; error?: string }> {
+  let lastError = "No region returned symbols";
+  for (const region of REGIONS) {
+    const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
+    try {
+      const res = await fetch(url, { headers: { "auth-token": authToken } });
+      const body = await res.text();
+      if (res.ok) {
+        const arr = JSON.parse(body);
+        if (Array.isArray(arr)) return { symbols: arr.map(String), region };
+      } else {
+        lastError = `${region}: ${res.status} ${body.slice(0, 120)}`;
+      }
+    } catch (e: any) {
+      lastError = `${region}: ${e?.message || String(e)}`;
+    }
+  }
+  return { symbols: [], region: null, error: lastError };
+}
+
+function unswap(api_key: string, account_id: string): { authToken: string; metaAccountId: string } {
+  if (account_id.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(api_key)) {
+    return { authToken: account_id, metaAccountId: api_key };
+  }
+  return { authToken: api_key, metaAccountId: account_id };
+}
+
+/** Best-effort auto-mapping. Logs failures, never throws. */
+async function autoMapBrokerSymbols(api_key: string, account_id: string): Promise<{ symbol_suffix: string; symbol_overrides: Record<string, string>; mapped: number; unmapped: string[] } | null> {
+  try {
+    const { authToken, metaAccountId } = unswap(api_key, account_id);
+    const { symbols } = await fetchMetaApiSymbols(authToken, metaAccountId);
+    if (!symbols.length) return null;
+    const { overrides, suffix, unmapped } = buildBrokerSymbolMap(CANONICAL_PAIRS, symbols);
+    return { symbol_suffix: suffix, symbol_overrides: overrides, mapped: Object.keys(overrides).length, unmapped };
+  } catch (e: any) {
+    console.warn(`[broker-connections] auto-map failed: ${e?.message}`);
+    return null;
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -28,14 +81,29 @@ Deno.serve(async (req) => {
     }
 
     if (action === "create") {
+      // Auto-map MetaAPI symbols on create unless caller provided overrides
+      let symbol_suffix = payload.symbol_suffix || "";
+      let symbol_overrides = payload.symbol_overrides || {};
+      let auto_map_info: any = null;
+      if (
+        payload.broker_type === "metaapi" &&
+        Object.keys(symbol_overrides).length === 0
+      ) {
+        const mapped = await autoMapBrokerSymbols(payload.api_key, payload.account_id);
+        if (mapped) {
+          symbol_suffix = symbol_suffix || mapped.symbol_suffix;
+          symbol_overrides = mapped.symbol_overrides;
+          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped };
+        }
+      }
+
       const { data, error } = await supabase.from("broker_connections").insert({
         user_id: user.id, broker_type: payload.broker_type, display_name: payload.display_name,
         api_key: payload.api_key, account_id: payload.account_id, is_live: payload.is_live || false,
-        symbol_suffix: payload.symbol_suffix || "",
-        symbol_overrides: payload.symbol_overrides || {},
+        symbol_suffix, symbol_overrides,
       }).select("id, broker_type, display_name, account_id, is_live, is_active, symbol_suffix, symbol_overrides").single();
       if (error) throw error;
-      return respond(data);
+      return respond({ ...data, auto_map_info });
     }
 
     if (action === "update") {
@@ -61,8 +129,32 @@ Deno.serve(async (req) => {
       return respond({ success: true });
     }
 
+    if (action === "auto_map_symbols") {
+      // Manual re-discovery: fetch broker's symbol list, run strict matcher,
+      // overwrite symbol_suffix + symbol_overrides on the connection.
+      const { data: conn, error } = await supabase.from("broker_connections").select("*")
+        .eq("id", payload.id).eq("user_id", user.id).single();
+      if (error || !conn) throw new Error("Connection not found");
+      if (conn.broker_type !== "metaapi") throw new Error("auto_map_symbols only supported for MetaAPI");
+
+      const mapped = await autoMapBrokerSymbols(conn.api_key, conn.account_id);
+      if (!mapped) return respond({ success: false, error: "Could not fetch symbols from broker" });
+
+      const { error: upErr } = await supabase.from("broker_connections")
+        .update({ symbol_suffix: mapped.symbol_suffix, symbol_overrides: mapped.symbol_overrides })
+        .eq("id", payload.id).eq("user_id", user.id);
+      if (upErr) throw upErr;
+
+      return respond({
+        success: true,
+        symbol_suffix: mapped.symbol_suffix,
+        symbol_overrides: mapped.symbol_overrides,
+        mapped: mapped.mapped,
+        unmapped: mapped.unmapped,
+      });
+    }
+
     if (action === "test") {
-      // Fetch the connection's API key server-side
       const { data: conn, error } = await supabase.from("broker_connections").select("*")
         .eq("id", payload.id).eq("user_id", user.id).single();
       if (error || !conn) throw new Error("Connection not found");
@@ -78,15 +170,8 @@ Deno.serve(async (req) => {
       }
 
       if (conn.broker_type === "metaapi") {
-        // Auto-detect swapped fields: JWT tokens start with "eyJ", account IDs are UUIDs
-        let authToken = conn.api_key;
-        let metaAccountId = conn.account_id;
-        if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-          authToken = conn.account_id;
-          metaAccountId = conn.api_key;
-        }
+        const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
 
-        // Step 1: provisioning API — does the account exist on MetaAPI at all?
         let provisioning: any = null;
         try {
           const provRes = await fetch(`https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`, {
@@ -115,8 +200,6 @@ Deno.serve(async (req) => {
           return respond({ success: false, stage: "provisioning", error: msg });
         }
 
-        // Step 2: ping each market-data region to find where candles can actually be served from
-        const REGIONS = ["london", "new-york", "singapore"];
         const regionResults = await Promise.all(REGIONS.map(async (region) => {
           const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/EURUSD${conn.symbol_suffix || ""}/timeframes/1d/candles?limit=1`;
           try {
@@ -154,55 +237,16 @@ Deno.serve(async (req) => {
     }
 
     if (action === "list_symbols") {
-      // List all symbols exposed by a MetaAPI broker account.
-      // Useful for figuring out the exact name a broker uses (e.g. crypto on HFMarkets).
       const { data: conn, error } = await supabase.from("broker_connections").select("*")
         .eq("id", payload.id).eq("user_id", user.id).single();
       if (error || !conn) throw new Error("Connection not found");
       if (conn.broker_type !== "metaapi") throw new Error("list_symbols only supported for MetaAPI");
 
-      let authToken = conn.api_key;
-      let metaAccountId = conn.account_id;
-      if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-        authToken = conn.account_id;
-        metaAccountId = conn.api_key;
-      }
+      const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
+      const { symbols, region: usedRegion, error: lastError } = await fetchMetaApiSymbols(authToken, metaAccountId);
+      if (!usedRegion) return respond({ success: false, error: lastError });
 
-      const REGIONS = ["london", "new-york", "singapore"];
-      let symbols: string[] = [];
-      let usedRegion: string | null = null;
-      let lastError = "No region returned symbols";
-
-      for (const region of REGIONS) {
-        const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
-        try {
-          const res = await fetch(url, { headers: { "auth-token": authToken } });
-          const body = await res.text();
-          if (res.ok) {
-            const arr = JSON.parse(body);
-            if (Array.isArray(arr)) {
-              symbols = arr.map((s) => String(s));
-              usedRegion = region;
-              break;
-            }
-          } else {
-            lastError = `${region}: ${res.status} ${body.slice(0, 120)}`;
-          }
-        } catch (e: any) {
-          lastError = `${region}: ${e?.message || String(e)}`;
-        }
-      }
-
-      if (!usedRegion) {
-        return respond({ success: false, error: lastError });
-      }
-
-      // Group symbols by category for easier scanning
-      const fx: string[] = [];
-      const crypto: string[] = [];
-      const metals: string[] = [];
-      const indices: string[] = [];
-      const other: string[] = [];
+      const fx: string[] = [], crypto: string[] = [], metals: string[] = [], indices: string[] = [], other: string[] = [];
       for (const s of symbols) {
         const u = s.toUpperCase();
         if (/BTC|ETH|XRP|LTC|BCH|SOL|DOGE|ADA|DOT|LINK|XLM|TRX|AVAX|MATIC/.test(u)) crypto.push(s);

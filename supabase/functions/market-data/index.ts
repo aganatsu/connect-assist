@@ -20,9 +20,9 @@ async function loadBrokerConn(req: Request): Promise<BrokerConn | null> {
     if (error || !claimsData?.claims?.sub) return null;
     const userId = claimsData.claims.sub as string;
     const { data } = await supabase.from("broker_connections")
-      .select("api_key, account_id, symbol_suffix, symbol_overrides")
+      .select("id, api_key, account_id, symbol_suffix, symbol_overrides")
       .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true).limit(1);
-    return (data && data[0]) ? (data[0] as BrokerConn) : null;
+    return (data && data[0]) ? ({ ...data[0], user_id: userId } as BrokerConn) : null;
   } catch (e: any) {
     console.warn(`[market-data] broker conn load failed: ${e?.message}`);
     return null;

@@ -5,6 +5,7 @@
 //   3. Yahoo Finance — last-resort fallback (15-min delayed, undocumented)
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
+import { matchBrokerSymbol } from "./symbolMatcher.ts";
 
 export interface Candle {
   datetime: string;
@@ -20,6 +21,9 @@ export interface BrokerConn {
   account_id: string;
   symbol_suffix?: string;
   symbol_overrides?: Record<string, string>;
+  /** Optional connection row id — enables lazy auto-mapping persistence. */
+  id?: string;
+  user_id?: string;
 }
 
 // ─── Symbol mapping per provider ─────────────────────────────────────
@@ -273,6 +277,55 @@ function resolveBrokerSymbol(symbol: string, conn: BrokerConn): string {
   return base + (conn.symbol_suffix || "");
 }
 
+/** Whether `symbol` was resolved via an explicit override (vs. fallback suffix). */
+function hasExplicitOverride(symbol: string, conn: BrokerConn): boolean {
+  const overrides = conn.symbol_overrides || {};
+  const norm = symbol.toUpperCase().replace(/[\s/._-]/g, "");
+  return Object.keys(overrides).some((k) => k.toUpperCase().replace(/[\s/._-]/g, "") === norm);
+}
+
+const symbolListCache = new Map<string, string[]>(); // metaAccountId → symbols
+
+async function loadBrokerSymbolList(authToken: string, metaAccountId: string): Promise<string[]> {
+  const cached = symbolListCache.get(metaAccountId);
+  if (cached) return cached;
+  for (const region of META_REGIONS) {
+    try {
+      const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
+      const res = await fetch(url, { headers: { "auth-token": authToken } });
+      if (!res.ok) continue;
+      const arr = await res.json();
+      if (Array.isArray(arr)) {
+        const list = arr.map(String);
+        symbolListCache.set(metaAccountId, list);
+        return list;
+      }
+    } catch (e: any) {
+      console.warn(`[candleSource] symbol-list ${region} error: ${e?.message}`);
+    }
+  }
+  return [];
+}
+
+async function persistSymbolOverride(conn: BrokerConn, canonical: string, brokerSymbol: string): Promise<void> {
+  if (!conn.id) return;
+  try {
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.103.2");
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const overrides = { ...(conn.symbol_overrides || {}), [canonical]: brokerSymbol };
+    await supabase.from("broker_connections")
+      .update({ symbol_overrides: overrides })
+      .eq("id", conn.id);
+    conn.symbol_overrides = overrides; // mutate in-memory so subsequent calls in this scan use it
+    console.log(`[candleSource] auto-mapped ${canonical} → ${brokerSymbol} (persisted)`);
+  } catch (e: any) {
+    console.warn(`[candleSource] failed to persist override: ${e?.message}`);
+  }
+}
+
 // ─── Twelve Data ──────────────────────────────────────────────────────
 async function twelveDataCandles(
   symbol: string,
@@ -415,14 +468,34 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
   // Try MetaAPI first if we have a broker connection
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
-    const brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
-    const candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+    let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
+    let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
+
+    // Lazy auto-mapping: if we got 0 candles AND there was no explicit override,
+    // fetch the broker's symbol list and try a strict match.
+    if (candles.length === 0 && !hasExplicitOverride(opts.symbol, opts.brokerConn)) {
+      const swapped = opts.brokerConn.account_id.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(opts.brokerConn.api_key);
+      const authToken = swapped ? opts.brokerConn.account_id : opts.brokerConn.api_key;
+      const metaAccountId = swapped ? opts.brokerConn.api_key : opts.brokerConn.account_id;
+      const symbolList = await loadBrokerSymbolList(authToken, metaAccountId);
+      const match = matchBrokerSymbol(opts.symbol, symbolList);
+      if (match && match.brokerSymbol !== brokerSymbol) {
+        console.log(`[candleSource] auto-mapping ${opts.symbol} ${brokerSymbol} → ${match.brokerSymbol}`);
+        brokerSymbol = match.brokerSymbol;
+        candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+        if (candles.length > 0) {
+          await persistSymbolOverride(opts.brokerConn, opts.symbol, brokerSymbol);
+        }
+      }
+    }
+
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.metaapi++;
       return { candles: candles.slice(-limit), source: "metaapi" };
     }
   }
+
 
   // Try Twelve Data
   const td = await twelveDataCandles(opts.symbol, canon, limit);
