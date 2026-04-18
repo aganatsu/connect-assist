@@ -142,6 +142,7 @@ export default function Chart() {
               ))}
             </div>
             <div className="ml-auto flex items-center gap-2 text-[10px]">
+              <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
               <span className="flex items-center gap-1 text-muted-foreground"><Clock className="h-2.5 w-2.5" /> {session}</span>
