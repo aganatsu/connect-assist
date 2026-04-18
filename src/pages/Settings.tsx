@@ -17,10 +17,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 
-type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
+type SettingsTab = "risk" | "bot" | "preferences" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: "broker", label: "Broker Connection", icon: Link2 },
   { id: "risk", label: "Risk Management", icon: Shield },
   { id: "bot", label: "Bot Configuration", icon: Zap },
   { id: "preferences", label: "Preferences", icon: Palette },
@@ -29,7 +28,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ classN
 
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("broker");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("risk");
   const { signOut } = useAuth();
 
   return (
@@ -46,10 +45,12 @@ export default function SettingsPage() {
                 }`}><Icon className="h-4 w-4" />{tab.label}</button>
             );
           })}
+          <a href="/brokers" className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-muted-foreground hover:text-foreground hover:bg-secondary/50">
+            <Link2 className="h-4 w-4" />Broker Connections →
+          </a>
           <button onClick={() => signOut()} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-destructive hover:bg-destructive/10 mt-4">Sign out</button>
         </div>
         <div className="flex-1 max-w-2xl">
-          {activeTab === "broker" && <BrokerSettings />}
           {activeTab === "risk" && <RiskSettings />}
           {activeTab === "bot" && <BotConfigSettings />}
           {activeTab === "preferences" && <PreferencesSettings />}

@@ -13,6 +13,7 @@ import BotView from "./pages/BotView";
 import Journal from "./pages/Journal";
 import Backtest from "./pages/Backtest";
 import SettingsPage from "./pages/Settings";
+import BrokersPage from "./pages/Brokers";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
@@ -40,6 +41,7 @@ const App = () => (
               <Route path="/bot" element={<ProtectedRoute><BotView /></ProtectedRoute>} />
               <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
               <Route path="/backtest" element={<ProtectedRoute><Backtest /></ProtectedRoute>} />
+              <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

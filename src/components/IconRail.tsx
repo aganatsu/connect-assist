@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -15,7 +15,8 @@ const NAV_ITEMS = [
   { title: "Bot", url: "/bot", icon: Bot, shortcut: "5" },
   { title: "Journal", url: "/journal", icon: BookOpen, shortcut: "6" },
   { title: "Backtest", url: "/backtest", icon: FlaskConical, shortcut: "7" },
-  { title: "Settings", url: "/settings", icon: Settings, shortcut: "8" },
+  { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
+  { title: "Settings", url: "/settings", icon: Settings, shortcut: "9" },
 ];
 
 interface IconRailProps {

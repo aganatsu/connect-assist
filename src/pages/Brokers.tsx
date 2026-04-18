@@ -1,0 +1,598 @@
+import { useState, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { AppShell } from "@/components/AppShell";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { toast } from "sonner";
+import {
+  Plus, Trash2, Wand2, List, Wrench, Activity, CheckCircle2, XCircle,
+  Server, KeyRound, Hash, Copy, RadioTower, ChevronRight,
+} from "lucide-react";
+import { brokerApi } from "@/lib/api";
+import { BotConfigModal } from "@/components/BotConfigModal";
+import { supabase } from "@/integrations/supabase/client";
+
+type Connection = {
+  id: string;
+  broker_type: string;
+  display_name: string;
+  account_id: string;
+  is_live: boolean;
+  is_active: boolean;
+  symbol_suffix: string;
+  symbol_overrides: Record<string, string>;
+  created_at?: string;
+};
+
+const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
+
+export default function BrokersPage() {
+  const queryClient = useQueryClient();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [symbolsDialogOpen, setSymbolsDialogOpen] = useState(false);
+  const [symbolsData, setSymbolsData] = useState<any>(null);
+  const [symbolsFilter, setSymbolsFilter] = useState("");
+
+  const { data: connections = [] } = useQuery<Connection[]>({
+    queryKey: ["broker-connections"],
+    queryFn: () => brokerApi.list(),
+  });
+
+  const selected = useMemo(
+    () => connections.find((c) => c.id === selectedId) ?? connections[0] ?? null,
+    [connections, selectedId],
+  );
+
+  // Auto-select first connection on first load
+  if (!selectedId && connections.length > 0 && !showAddForm) {
+    setSelectedId(connections[0].id);
+  }
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      toast.success("Connection removed");
+      setSelectedId(null);
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.test(id),
+    onSuccess: (data: any) => {
+      if (Array.isArray(data.regions)) {
+        const lines = data.regions.map((r: any) =>
+          `${r.ok ? "✓" : "✗"} ${r.region}${r.ok ? ` (${r.candleCount} candle)` : ` — ${r.error || `HTTP ${r.status}`}`}`
+        ).join("\n");
+        const header = data.success
+          ? `✓ ${data.name || "MetaAPI"} reachable on "${data.reachableRegion}"`
+          : `✗ ${data.name || "Account exists"} but no region serves data`;
+        const meta = [data.state, data.connectionStatus, data.configuredRegion && `cfg: ${data.configuredRegion}`].filter(Boolean).join(" · ");
+        const body = `${meta ? meta + "\n" : ""}${lines}${data.hint ? `\n\n${data.hint}` : ""}`;
+        if (data.success) toast.success(header, { description: body, duration: 12000 });
+        else toast.error(header, { description: body, duration: 15000 });
+        return;
+      }
+      if (data.balance !== undefined) {
+        toast.success(`Connected! Balance: ${data.balance} ${data.currency || ""}`);
+        return;
+      }
+      if (data.success === false) {
+        toast.error(`✗ ${data.error || "Test failed"}`, { description: data.hint, duration: 12000 });
+        return;
+      }
+      toast.success(`Connected! ${data.name || ""} — ${data.connectionStatus || data.state || "OK"}`);
+    },
+    onError: (e: any) => toast.error(`Test failed: ${e.message}`),
+  });
+
+  const autoMapMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.autoMapSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error("Auto-map failed", { description: data?.error || "Unknown error" });
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      toast.success(`Mapped ${data.mapped} pairs`, {
+        description: data.unmapped?.length
+          ? `Unmapped: ${data.unmapped.slice(0, 5).join(", ")}${data.unmapped.length > 5 ? "…" : ""}`
+          : "All canonical pairs found on broker",
+        duration: 8000,
+      });
+    },
+    onError: (e: any) => toast.error(`Auto-map failed: ${e.message}`),
+  });
+
+  const listSymbolsMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.listSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error("Symbols list failed", { description: data?.error || "Unknown error" });
+        return;
+      }
+      setSymbolsData(data);
+      setSymbolsDialogOpen(true);
+    },
+    onError: (e: any) => toast.error(`Symbols list failed: ${e.message}`),
+  });
+
+  const checkStatus = async (connectionId: string, name: string) => {
+    const t = toast.loading(`Checking ${name}…`);
+    try {
+      const { data, error } = await supabase.functions.invoke("broker-execute", {
+        body: { action: "connection_status", connectionId },
+      });
+      if (error) throw error;
+      toast.dismiss(t);
+      if (!data?.ok) {
+        toast.error(`✗ ${name}: ${data?.error || "status check failed"}`, { duration: 8000 });
+        return;
+      }
+      const { state, connectionStatus, ready, region, server } = data;
+      const meta = [region && `region: ${region}`, server && `server: ${server}`].filter(Boolean).join(" · ");
+      if (ready) toast.success(`✓ ${name} — DEPLOYED + CONNECTED${meta ? ` (${meta})` : ""}`);
+      else if (state === "DEPLOYED") toast.warning(`⚠ ${name} — Deployed but ${connectionStatus}.`);
+      else toast.error(`✗ ${name} — state: ${state}, connection: ${connectionStatus}.`);
+    } catch (e: any) {
+      toast.dismiss(t);
+      toast.error(`Status check failed: ${e.message}`);
+    }
+  };
+
+  return (
+    <AppShell>
+      <div className="h-full flex flex-col">
+        {/* Page header */}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <Server className="h-5 w-5 text-primary" /> Brokers
+            </h1>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Manage broker connections and symbol mappings
+            </p>
+          </div>
+          <Button size="sm" onClick={() => { setShowAddForm(true); setSelectedId(null); }}>
+            <Plus className="h-4 w-4 mr-1.5" /> Add Connection
+          </Button>
+        </div>
+
+        {/* Split view */}
+        <div className="flex-1 flex gap-4 min-h-0">
+          {/* LEFT: connection list */}
+          <Card className="w-64 shrink-0 flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b border-border">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Connections ({connections.length})
+              </p>
+            </div>
+            <ScrollArea className="flex-1">
+              <div className="p-1.5 space-y-0.5">
+                {connections.length === 0 && !showAddForm && (
+                  <div className="p-6 text-center text-xs text-muted-foreground">
+                    No brokers yet. Click <span className="text-foreground font-medium">Add Connection</span> to get started.
+                  </div>
+                )}
+                {connections.map((c) => {
+                  const isSelected = !showAddForm && selected?.id === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => { setShowAddForm(false); setSelectedId(c.id); }}
+                      className={`w-full text-left px-2.5 py-2 rounded transition-colors group ${
+                        isSelected
+                          ? "bg-primary/10 text-primary"
+                          : "hover:bg-secondary/50 text-foreground"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                          c.is_active ? "bg-success" : "bg-muted-foreground"
+                        }`} />
+                        <span className="text-sm font-medium truncate flex-1">{c.display_name}</span>
+                        <ChevronRight className={`h-3 w-3 transition-opacity ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-50"}`} />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5 ml-3.5">
+                        {c.broker_type.toUpperCase()} · {c.is_live ? "Live" : "Demo"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </ScrollArea>
+          </Card>
+
+          {/* RIGHT: detail panel */}
+          <div className="flex-1 min-w-0 overflow-auto">
+            {showAddForm || connections.length === 0 ? (
+              <AddConnectionForm
+                onCreated={(newId) => {
+                  setShowAddForm(false);
+                  setSelectedId(newId);
+                }}
+                onCancel={() => setShowAddForm(false)}
+              />
+            ) : selected ? (
+              <ConnectionDetail
+                connection={selected}
+                onTest={() => testMutation.mutate(selected.id)}
+                onCheckStatus={() => checkStatus(selected.id, selected.display_name)}
+                onAutoMap={() => autoMapMutation.mutate(selected.id)}
+                onListSymbols={() => listSymbolsMutation.mutate(selected.id)}
+                onConfigOpen={() => setConfigModalOpen(true)}
+                onDelete={() => {
+                  if (confirm(`Delete "${selected.display_name}"?`)) deleteMutation.mutate(selected.id);
+                }}
+                isAutoMapping={autoMapMutation.isPending}
+                isListing={listSymbolsMutation.isPending}
+                isTesting={testMutation.isPending}
+              />
+            ) : null}
+          </div>
+        </div>
+
+        {/* Per-broker bot config */}
+        {selected && (
+          <BotConfigModal
+            open={configModalOpen}
+            onClose={() => setConfigModalOpen(false)}
+            connectionId={selected.id}
+            connectionName={selected.display_name}
+          />
+        )}
+
+        {/* Symbols dialog */}
+        <Dialog open={symbolsDialogOpen} onOpenChange={(o) => { setSymbolsDialogOpen(o); if (!o) setSymbolsData(null); }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Broker symbols — {selected?.display_name}</DialogTitle>
+              <DialogDescription>
+                {symbolsData && (
+                  <>Loaded <span className="font-medium text-foreground">{symbolsData.total}</span> symbols from <span className="font-medium text-foreground">{symbolsData.region}</span>. Click any to copy.</>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            {symbolsData && (
+              <div className="space-y-3">
+                <Input placeholder="Filter (e.g. BTC, EUR, XAU)" value={symbolsFilter} onChange={(e) => setSymbolsFilter(e.target.value)} className="h-8 text-sm" />
+                <ScrollArea className="h-[400px] pr-3">
+                  {(["crypto", "metals", "indices", "fx", "other"] as const).map((group) => {
+                    const list: string[] = (symbolsData.grouped?.[group] || []).filter((s: string) =>
+                      !symbolsFilter || s.toLowerCase().includes(symbolsFilter.toLowerCase())
+                    );
+                    if (list.length === 0) return null;
+                    return (
+                      <div key={group} className="mb-4">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                          {group} ({list.length})
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {list.map((sym) => (
+                            <Badge
+                              key={sym}
+                              variant="outline"
+                              className="cursor-pointer hover:bg-secondary text-xs font-mono gap-1"
+                              onClick={() => { navigator.clipboard.writeText(sym); toast.success(`Copied "${sym}"`); }}
+                            >
+                              {sym}
+                              <Copy className="h-2.5 w-2.5 opacity-50" />
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </ScrollArea>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
+      </div>
+    </AppShell>
+  );
+}
+
+// ─── Connection detail panel ─────────────────────────────────────────
+function ConnectionDetail({
+  connection: c, onTest, onCheckStatus, onAutoMap, onListSymbols,
+  onConfigOpen, onDelete, isAutoMapping, isListing, isTesting,
+}: {
+  connection: Connection;
+  onTest: () => void;
+  onCheckStatus: () => void;
+  onAutoMap: () => void;
+  onListSymbols: () => void;
+  onConfigOpen: () => void;
+  onDelete: () => void;
+  isAutoMapping: boolean;
+  isListing: boolean;
+  isTesting: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [editSuffix, setEditSuffix] = useState(c.symbol_suffix || "");
+  const [editOverrides, setEditOverrides] = useState<Record<string, string>>(c.symbol_overrides || {});
+  const [newSym, setNewSym] = useState("");
+  const [newBrokerSym, setNewBrokerSym] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  // Reset local state when selection changes
+  useMemo(() => {
+    setEditSuffix(c.symbol_suffix || "");
+    setEditOverrides(c.symbol_overrides || {});
+    setDirty(false);
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [c.id]);
+
+  const updateMutation = useMutation({
+    mutationFn: () => brokerApi.update({ id: c.id, symbol_suffix: editSuffix, symbol_overrides: editOverrides }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      toast.success("Saved");
+      setDirty(false);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const overrideCount = Object.keys(editOverrides).length;
+  const isMetaApi = c.broker_type === "metaapi";
+
+  return (
+    <div className="space-y-4">
+      {/* Header card */}
+      <Card>
+        <CardContent className="pt-5">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg font-bold truncate">{c.display_name}</h2>
+                {c.is_live ? (
+                  <Badge variant="destructive" className="h-5 text-[10px]">LIVE</Badge>
+                ) : (
+                  <Badge variant="secondary" className="h-5 text-[10px]">DEMO</Badge>
+                )}
+                {c.is_active ? (
+                  <Badge variant="outline" className="h-5 text-[10px] gap-1">
+                    <CheckCircle2 className="h-2.5 w-2.5 text-success" /> Active
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="h-5 text-[10px] gap-1">
+                    <XCircle className="h-2.5 w-2.5 text-muted-foreground" /> Inactive
+                  </Badge>
+                )}
+              </div>
+              <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                <Field icon={Server} label="Broker" value={c.broker_type.toUpperCase()} />
+                <Field icon={Hash} label="Account" value={c.account_id} mono />
+                <Field icon={KeyRound} label="Suffix" value={c.symbol_suffix || "—"} mono />
+                <Field icon={RadioTower} label="Mappings" value={`${overrideCount} symbol${overrideCount !== 1 ? "s" : ""}`} />
+              </div>
+            </div>
+          </div>
+
+          {/* Action toolbar */}
+          <div className="mt-4 flex flex-wrap gap-2 pt-4 border-t border-border">
+            <Button size="sm" variant="outline" onClick={onTest} disabled={isTesting}>
+              <Activity className="h-3.5 w-3.5 mr-1.5" /> Test
+            </Button>
+            <Button size="sm" variant="outline" onClick={onCheckStatus}>
+              <RadioTower className="h-3.5 w-3.5 mr-1.5" /> Status
+            </Button>
+            {isMetaApi && (
+              <>
+                <Button size="sm" variant="outline" onClick={onAutoMap} disabled={isAutoMapping}>
+                  <Wand2 className="h-3.5 w-3.5 mr-1.5" />
+                  {isAutoMapping ? "Mapping…" : "Auto-map symbols"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={onListSymbols} disabled={isListing}>
+                  <List className="h-3.5 w-3.5 mr-1.5" /> Browse symbols
+                </Button>
+              </>
+            )}
+            <Button size="sm" variant="outline" onClick={onConfigOpen}>
+              <Wrench className="h-3.5 w-3.5 mr-1.5" /> Bot config
+            </Button>
+            <div className="flex-1" />
+            <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={onDelete}>
+              <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Symbol mapping editor */}
+      <Card>
+        <CardContent className="pt-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold">Symbol Configuration</h3>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Maps app symbols (EUR/USD) to broker-specific symbols (EURUSDb, #BTCUSDr).
+              Use <span className="text-foreground font-medium">Auto-map</span> above to fill these in automatically.
+            </p>
+          </div>
+
+          <div>
+            <Label className="text-xs">Default suffix</Label>
+            <Input
+              value={editSuffix}
+              onChange={(e) => { setEditSuffix(e.target.value); setDirty(true); }}
+              placeholder="e.g. b, .raw, .pro"
+              className="mt-1 h-8 text-sm font-mono"
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Appended to symbols not explicitly mapped. EURUSD → EURUSD<span className="text-foreground">{editSuffix || "<suffix>"}</span>
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs">Symbol mappings ({overrideCount})</Label>
+            </div>
+            {overrideCount > 0 ? (
+              <div className="border border-border rounded overflow-hidden">
+                <div className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 bg-secondary/40 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  <span>App</span><span>Broker</span><span></span>
+                </div>
+                <ScrollArea className="max-h-72">
+                  {Object.entries(editOverrides).map(([sym, brokerSym]) => (
+                    <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
+                      <span className="font-mono font-medium">{sym}</span>
+                      <span className="font-mono text-primary truncate">{brokerSym}</span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                        const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
+                      }}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </ScrollArea>
+              </div>
+            ) : (
+              <div className="border border-dashed border-border rounded p-4 text-center text-xs text-muted-foreground">
+                No mappings yet. Click <span className="text-foreground font-medium">Auto-map symbols</span> to discover them automatically.
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input value={newSym} onChange={(e) => setNewSym(e.target.value)} placeholder="App symbol (EUR/USD)" className="h-8 text-xs flex-1 font-mono" />
+              <Input value={newBrokerSym} onChange={(e) => setNewBrokerSym(e.target.value)} placeholder="Broker symbol (EURUSDb)" className="h-8 text-xs flex-1 font-mono" />
+              <Button
+                variant="outline" size="sm" className="h-8"
+                disabled={!newSym.trim() || !newBrokerSym.trim()}
+                onClick={() => {
+                  setEditOverrides((prev) => ({ ...prev, [normalizeOverrideKey(newSym)]: newBrokerSym.trim() }));
+                  setNewSym(""); setNewBrokerSym(""); setDirty(true);
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          {dirty && (
+            <div className="flex gap-2 pt-2 border-t border-border">
+              <Button size="sm" onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? "Saving…" : "Save changes"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => {
+                setEditSuffix(c.symbol_suffix || "");
+                setEditOverrides(c.symbol_overrides || {});
+                setDirty(false);
+              }}>Discard</Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Field({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
+      <span className="text-muted-foreground">{label}:</span>
+      <span className={`truncate ${mono ? "font-mono" : ""}`}>{value}</span>
+    </div>
+  );
+}
+
+// ─── Add connection form ─────────────────────────────────────────────
+function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) => void; onCancel: () => void }) {
+  const queryClient = useQueryClient();
+  const [brokerType, setBrokerType] = useState<"oanda" | "metaapi">("metaapi");
+  const [displayName, setDisplayName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [isLive, setIsLive] = useState(false);
+
+  const createMutation = useMutation({
+    mutationFn: () => brokerApi.create({
+      broker_type: brokerType,
+      display_name: displayName || brokerType,
+      api_key: apiKey,
+      account_id: accountId,
+      is_live: isLive,
+    }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
+      const info = data?.auto_map_info;
+      toast.success("Connection saved", {
+        description: info ? `Auto-mapped ${info.mapped} pairs${info.unmapped?.length ? ` · ${info.unmapped.length} unmapped` : ""}` : undefined,
+      });
+      if (data?.id) onCreated(data.id);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  return (
+    <Card>
+      <CardContent className="pt-5 space-y-4 max-w-xl">
+        <div>
+          <h2 className="text-lg font-bold">New connection</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Symbols will be auto-mapped on save (MetaAPI only).
+          </p>
+        </div>
+
+        <div>
+          <Label className="text-xs">Broker</Label>
+          <select
+            value={brokerType}
+            onChange={(e) => setBrokerType(e.target.value as any)}
+            className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm"
+          >
+            <option value="metaapi">MetaAPI (MT4 / MT5)</option>
+            <option value="oanda">OANDA</option>
+          </select>
+        </div>
+
+        <div>
+          <Label className="text-xs">Display name</Label>
+          <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="My HFMarkets account" className="mt-1" />
+        </div>
+
+        <div>
+          <Label className="text-xs">{brokerType === "metaapi" ? "MetaAPI auth token (JWT)" : "API key / token"}</Label>
+          <Input
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={brokerType === "metaapi" ? "eyJhbGci..." : ""}
+            className="mt-1 font-mono text-xs"
+          />
+        </div>
+
+        <div>
+          <Label className="text-xs">{brokerType === "metaapi" ? "MetaAPI account ID (UUID)" : "Account ID"}</Label>
+          <Input
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+            placeholder={brokerType === "metaapi" ? "5e83d5a3-cbd9-..." : ""}
+            className="mt-1 font-mono text-xs"
+          />
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <Switch checked={isLive} onCheckedChange={setIsLive} />
+          <Label className="text-sm">Live account</Label>
+        </div>
+
+        <div className="flex gap-2 pt-2">
+          <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId || createMutation.isPending}>
+            {createMutation.isPending ? "Saving & mapping symbols…" : "Save Connection"}
+          </Button>
+          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
