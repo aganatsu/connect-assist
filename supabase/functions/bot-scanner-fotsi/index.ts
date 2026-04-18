@@ -570,11 +570,19 @@ Deno.serve(async (req: Request) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // ── Get user ──
-    const userId = body.userId;
+    // ── Get user from JWT (preferred) or body fallback ──
+    let userId: string | undefined = body.userId;
     if (!userId) {
-      return new Response(JSON.stringify({ error: "userId required" }), {
-        status: 400,
+      const authHeader = req.headers.get("Authorization");
+      if (authHeader?.startsWith("Bearer ")) {
+        const token = authHeader.replace("Bearer ", "");
+        const { data } = await supabase.auth.getClaims(token);
+        userId = data?.claims?.sub;
+      }
+    }
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "Unauthorized: missing userId or auth token" }), {
+        status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
