@@ -329,10 +329,11 @@ export default function BrokersPage() {
 
 // ─── Connection detail panel ─────────────────────────────────────────
 function ConnectionDetail({
-  connection: c, onTest, onCheckStatus, onAutoMap, onListSymbols,
+  connection: c, probeDetails, onTest, onCheckStatus, onAutoMap, onListSymbols,
   onConfigOpen, onDelete, isAutoMapping, isListing, isTesting,
 }: {
   connection: Connection;
+  probeDetails?: ProbeDetails;
   onTest: () => void;
   onCheckStatus: () => void;
   onAutoMap: () => void;
