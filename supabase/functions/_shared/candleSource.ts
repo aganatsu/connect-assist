@@ -5,6 +5,7 @@
 //   3. Yahoo Finance — last-resort fallback (15-min delayed, undocumented)
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
+import { matchBrokerSymbol } from "./symbolMatcher.ts";
 
 export interface Candle {
   datetime: string;
