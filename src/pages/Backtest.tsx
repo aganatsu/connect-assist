@@ -97,8 +97,8 @@ function getDefaultConfig() {
       useOrderBlocks: true, useFVG: true, useLiquiditySweep: true,
       useStructureBreak: true, useDisplacement: true, useBreakerBlocks: true,
       useUnicornModel: true, useSilverBullet: true, useMacroWindows: true,
-      useSMT: true, useVWAP: true, useAMD: true, useFOTSI: true,
-      vwapProximityPips: 15,
+      useSMT: true, useVolumeProfile: true, useAMD: true, useFOTSI: true,
+      useTrendDirection: true, useDailyBias: true,
       requireHTFBias: true, htfBiasHardVeto: false,
       onlyBuyInDiscount: true, onlySellInPremium: true,
       confluenceThreshold: 3.5,
@@ -428,7 +428,9 @@ export default function Backtest() {
                     <Toggle label="Silver Bullet" description="ICT Silver Bullet windows" checked={config.strategy.useSilverBullet} onChange={v => updateConfig("strategy", "useSilverBullet", v)} />
                     <Toggle label="Macro Windows" description="8 institutional reprice windows" checked={config.strategy.useMacroWindows} onChange={v => updateConfig("strategy", "useMacroWindows", v)} />
                     <Toggle label="SMT Divergence" description="Smart Money divergence vs correlated pair" checked={config.strategy.useSMT} onChange={v => updateConfig("strategy", "useSMT", v)} />
-                    <Toggle label="VWAP Confluence" description="Session-anchored VWAP alignment" checked={config.strategy.useVWAP} onChange={v => updateConfig("strategy", "useVWAP", v)} />
+                    <Toggle label="Volume Profile" description="TPO-based POC/HVN/LVN detection (1.5 pts)" checked={config.strategy.useVolumeProfile} onChange={v => updateConfig("strategy", "useVolumeProfile", v)} />
+                    <Toggle label="Trend Direction" description="Entry TF trend alignment (1.5 pts)" checked={config.strategy.useTrendDirection} onChange={v => updateConfig("strategy", "useTrendDirection", v)} />
+                    <Toggle label="Daily Bias" description="HTF daily bias confirmation (1.5 pts)" checked={config.strategy.useDailyBias} onChange={v => updateConfig("strategy", "useDailyBias", v)} />
                     <Toggle label="AMD Phase" description="Accumulation→Manipulation→Distribution" checked={config.strategy.useAMD} onChange={v => updateConfig("strategy", "useAMD", v)} />
                     <Toggle label="FOTSI Currency Strength" description="Scores trades by currency flow (+1.5 pts buying strong vs weak). Blocks when TSI > +50 (overbought) or < -50 (oversold)" checked={config.strategy.useFOTSI} onChange={v => updateConfig("strategy", "useFOTSI", v)} />
                   </div>

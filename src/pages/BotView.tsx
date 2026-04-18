@@ -605,7 +605,7 @@ export default function BotView() {
                     title="Active confluence gate. Setups must clear both thresholds to fire."
                   >
                     Gate: ≥{(botConfig.strategy.confluenceThreshold ?? botConfig.strategy.minConfluenceScore ?? 5).toFixed(1)}
-                    {(botConfig.strategy.minFactorCount ?? 0) > 0 && ` · ≥${botConfig.strategy.minFactorCount}/17 factors`}
+                    {(botConfig.strategy.minFactorCount ?? 0) > 0 && ` · ≥${botConfig.strategy.minFactorCount}/20 factors`}
                   </Badge>
                 )}
                 {activeBot === "smc" && logs.length > 0 && (
@@ -925,7 +925,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
                       ? "text-warning"
                       : "text-muted-foreground"
                 }`}
-                title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–1.5 pts), capped at 10.`}
+                title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–2.0 pts), grouped into 9 categories with anti-double-count rules, capped at 10.`}
               >
                 Factors ({d.factorCount || 0}/{d.factors.length})
               </p>
@@ -1001,7 +1001,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                   ? "text-warning"
                   : "text-muted-foreground"
             }`}
-            title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–1.5 pts), capped at 10.`}
+            title={`${d.factorCount || 0} factors present out of ${d.factors.length} total. Score is weighted (each factor 0.5–2.0 pts), grouped into 9 categories with anti-double-count rules, capped at 10.`}
           >
             Factors ({d.factorCount || 0}/{d.factors.length})
           </p>

@@ -33,7 +33,9 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Silver Bullet Windows", keywords: ["silver bullet", "ict", "window", "macro"] },
   { tab: "strategy", label: "ICT Macro Windows", keywords: ["macro", "ict", "reprice"] },
   { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
-  { tab: "strategy", label: "VWAP Confluence", keywords: ["vwap", "anchored", "session"] },
+  { tab: "strategy", label: "Volume Profile", keywords: ["volume", "profile", "poc", "hvn", "lvn", "tpo", "value area"] },
+  { tab: "strategy", label: "Trend Direction", keywords: ["trend", "direction", "entry", "timeframe", "higher highs", "lower lows"] },
+  { tab: "strategy", label: "Daily Bias", keywords: ["daily", "bias", "htf", "higher timeframe", "bullish", "bearish"] },
   { tab: "strategy", label: "AMD Phase Detection", keywords: ["amd", "accumulation", "manipulation", "distribution", "phase"] },
   { tab: "strategy", label: "FOTSI Currency Strength", keywords: ["fotsi", "currency strength", "tsi", "28 pair", "overbought", "oversold", "veto"] },
   { tab: "strategy", label: "Require HTF Bias Alignment", keywords: ["htf", "bias", "higher timeframe", "alignment"] },
@@ -358,14 +360,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         <span className="text-sm font-mono font-bold text-primary w-10 text-right">{(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}</span>
                       </div>
                     </FieldGroup>
-                    <FieldGroup label="Min Factor Count" description="Require at least N of 17 factors to align (in addition to score threshold). 0 = off. Score is weighted but count enforces breadth.">
+                    <FieldGroup label="Min Factor Count" description="Require at least N of 20 factors to align (in addition to score threshold). 0 = off. Score is weighted but count enforces breadth.">
                       <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={17} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/17</span>
+                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={20} step={1} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/20</span>
                       </div>
                       {(config.strategy?.minFactorCount ?? 0) > 0 && (
                         <p className="text-[10px] text-muted-foreground mt-1.5">
-                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/17 factors. Tip: During kill zones, 8–10/17 factors typically score 6.0–8.5. Outside kill zones, expect 5–7 factors and 4.0–6.0 scores.
+                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/20 factors. Tip: During kill zones, 10–14/20 factors typically score 6.0–8.5. Outside kill zones, expect 6–9 factors and 4.0–6.0 scores.
                         </p>
                       )}
                     </FieldGroup>
@@ -380,8 +382,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="Silver Bullet Windows" description="ICT macro windows (London 08-09, AM 15-16, PM 19-20 UTC). +1.0 pt, +0.5 combo bonus when overlapping a kill zone" checked={config.strategy?.useSilverBullet ?? true} onChange={v => updateField('strategy', 'useSilverBullet', v)} />
                       <ToggleField label="ICT Macro Windows" description="8 institutional reprice windows (~20min each). +0.5 pt, +0.5 combo bonus when overlapping a Silver Bullet" checked={config.strategy?.useMacroWindows ?? true} onChange={v => updateField('strategy', 'useMacroWindows', v)} />
                       <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD). +1.0 pt when one sweeps liquidity but the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
-                      <ToggleField label="VWAP Confluence" description="Session-anchored VWAP (UTC daily). +0.5 pt when price is bias-aligned within 15 pips, +0.5 bonus on rejection wick" checked={config.strategy?.useVWAP ?? true} onChange={v => updateField('strategy', 'useVWAP', v)} />
-                      <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +0.5 when bias-aligned to Asian sweep, +0.5 in NY distribution phase" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
+                      <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection. +1.5 pts when price at key volume node" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
+                      <ToggleField label="Trend Direction" description="Entry timeframe trend via HH/HL (bullish) or LH/LL (bearish). +1.5 pts when trend aligns with trade direction" checked={config.strategy?.useTrendDirection ?? true} onChange={v => updateField('strategy', 'useTrendDirection', v)} />
+                      <ToggleField label="Daily Bias" description="Higher timeframe daily bias confirmation. +1.5 pts when daily candle structure aligns with trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
+                      <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +1.0 pt when bias-aligned phase detected. Power of 3 combo bonus (+1.0) when AMD + Sweep/Judas + Trend all align" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
                       <ToggleField label="FOTSI Currency Strength" description="Scores trades by currency flow (+1.5 pts when buying strong vs weak). Blocks trades when TSI exceeds +50 (overbought) or -50 (oversold) — prevents buying exhausted currencies" checked={config.strategy?.useFOTSI ?? true} onChange={v => updateField('strategy', 'useFOTSI', v)} />
                     </div>
                     <ToggleField label="Require HTF Bias Alignment" description="Only trade in the direction of higher timeframe bias" checked={config.strategy?.requireHTFBias ?? true} onChange={v => updateField('strategy', 'requireHTFBias', v)} />

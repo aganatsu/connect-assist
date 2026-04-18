@@ -9,7 +9,7 @@ import {
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
-// Confluence is normalized to 0-10 (raw max ~23.0 across 17 factors, clamped).
+// Confluence is normalized to 0-10 (raw max ~23.0 across 20 factors, clamped).
 // Recommended: 5.0-5.5 for balanced, 6.5+ for A+ only, <4.0 looser/scalp.
 const DEFAULTS = {
   minConfluence: 5.5,
@@ -1251,8 +1251,7 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
 
   return { stopLoss: sl, takeProfit: tp };
 }
-/**
- * ─── CONFLUENCE FACTOR AUDIT (17 factors + OR enhancements) ──────────
+ * ─── CONFLUENCE FACTOR AUDIT (20 factors + OR enhancements) ──────────────
  * 9 Factor Groups with anti-double-count rules and group caps.
  * Final score is clamped to 0–10 via Math.min(10, score).
  *
