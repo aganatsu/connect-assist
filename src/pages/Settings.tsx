@@ -165,6 +165,8 @@ function BrokerSettings() {
     },
     onError: (e: any) => toast.error(`Auto-map failed: ${e.message}`),
   });
+
+  const openSymbols = (id: string, name: string) => {
     setSymbolsConnName(name);
     setSymbolsFilter("");
     setSymbolsData(null);
