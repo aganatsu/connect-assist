@@ -470,17 +470,84 @@ function ConnectionDetail({
                   <span>App</span><span>Broker</span><span></span>
                 </div>
                 <ScrollArea className="max-h-72">
-                  {Object.entries(editOverrides).map(([sym, brokerSym]) => (
-                    <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
-                      <span className="font-mono font-medium">{sym}</span>
-                      <span className="font-mono text-primary truncate">{brokerSym}</span>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
-                        const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
-                      }}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
+                  {Object.entries(editOverrides).map(([sym, brokerSym]) => {
+                    // Find probe candidates for this row by matching normalized keys
+                    const candidates = (() => {
+                      if (!probeDetails) return [];
+                      for (const [canonical, info] of Object.entries(probeDetails)) {
+                        if (normalizeOverrideKey(canonical) === normalizeOverrideKey(sym)) {
+                          return info.candidates;
+                        }
+                      }
+                      return [];
+                    })();
+                    const hasAlternates = candidates.length > 1;
+
+                    return (
+                      <div key={sym} className="grid grid-cols-[1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
+                        <span className="font-mono font-medium">{sym}</span>
+                        {hasAlternates ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left">
+                                <span className="truncate">{brokerSym}</span>
+                                <Badge variant="outline" className="h-4 px-1 text-[9px] shrink-0">
+                                  {candidates.length}
+                                </Badge>
+                                <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="start" className="w-64">
+                              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                Variants for {sym}
+                              </DropdownMenuLabel>
+                              <DropdownMenuSeparator />
+                              {candidates.map((cand) => {
+                                const isPicked = cand.brokerSymbol === brokerSym;
+                                return (
+                                  <DropdownMenuItem
+                                    key={cand.brokerSymbol}
+                                    onClick={() => {
+                                      if (cand.brokerSymbol === brokerSym) return;
+                                      setEditOverrides((prev) => ({ ...prev, [sym]: cand.brokerSymbol }));
+                                      setDirty(true);
+                                    }}
+                                    className="flex items-center justify-between gap-2 cursor-pointer"
+                                  >
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      {isPicked && <CheckCircle2 className="h-3 w-3 text-success shrink-0" />}
+                                      <span className={`font-mono text-xs truncate ${isPicked ? "font-semibold" : ""}`}>
+                                        {cand.brokerSymbol}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <TradeModeBadge tradeMode={cand.tradeMode} />
+                                      {cand.hasLivePrice ? (
+                                        <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 border-success/40 text-success">
+                                          <Zap className="h-2 w-2" /> live
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 text-muted-foreground">
+                                          <Ban className="h-2 w-2" /> no quote
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </DropdownMenuItem>
+                                );
+                              })}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : (
+                          <span className="font-mono text-primary truncate">{brokerSym}</span>
+                        )}
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                          const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
+                        }}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </ScrollArea>
               </div>
             ) : (
