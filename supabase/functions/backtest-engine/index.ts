@@ -182,6 +182,7 @@ function mapConfig(raw: any): any {
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
     useAMD: strategy.useAMD ?? true,
+    useFOTSI: strategy.useFOTSI ?? true,
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
     riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
@@ -474,7 +475,7 @@ function runConfluenceAnalysis(
   let f18Present = false;
   let fotsiAlignment: any = null;
   const fotsiResult = (config as any)._fotsiResult as FOTSIResult | null;
-  if (fotsiResult) {
+  if (fotsiResult && config.useFOTSI) {
     const direction = structure.trend === "bullish" ? "long" : structure.trend === "bearish" ? "short" : null;
     if (direction) {
       const currencies = parsePairCurrencies(config._currentSymbol || "");
@@ -656,7 +657,7 @@ function runBacktestSafetyGates(
 
   // Gate 17: FOTSI Overbought/Oversold Veto
   const fotsiResult = (config as any)._fotsiResult as FOTSIResult | null;
-  if (fotsiResult) {
+  if (fotsiResult && config.useFOTSI) {
     const currencies = parsePairCurrencies(symbol);
     if (currencies) {
       const [base, quote] = currencies;

@@ -97,7 +97,8 @@ function getDefaultConfig() {
       useOrderBlocks: true, useFVG: true, useLiquiditySweep: true,
       useStructureBreak: true, useDisplacement: true, useBreakerBlocks: true,
       useUnicornModel: true, useSilverBullet: true, useMacroWindows: true,
-      useSMT: true, useVWAP: true, useAMD: true,
+      useSMT: true, useVWAP: true, useAMD: true, useFOTSI: true,
+      vwapProximityPips: 15,
       requireHTFBias: true, htfBiasHardVeto: false,
       onlyBuyInDiscount: true, onlySellInPremium: true,
       confluenceThreshold: 3.5,
@@ -429,6 +430,7 @@ export default function Backtest() {
                     <Toggle label="SMT Divergence" description="Smart Money divergence vs correlated pair" checked={config.strategy.useSMT} onChange={v => updateConfig("strategy", "useSMT", v)} />
                     <Toggle label="VWAP Confluence" description="Session-anchored VWAP alignment" checked={config.strategy.useVWAP} onChange={v => updateConfig("strategy", "useVWAP", v)} />
                     <Toggle label="AMD Phase" description="Accumulation→Manipulation→Distribution" checked={config.strategy.useAMD} onChange={v => updateConfig("strategy", "useAMD", v)} />
+                    <Toggle label="FOTSI Currency Strength" description="Factor 18: 28-pair TSI aggregation (±1.5 pts) + Gate 17 OB/OS veto" checked={config.strategy.useFOTSI} onChange={v => updateConfig("strategy", "useFOTSI", v)} />
                   </div>
                   <Separator />
                   <SectionHeader title="Bias & Filters" description="Higher timeframe bias and premium/discount zone filters" icon={Eye} />
