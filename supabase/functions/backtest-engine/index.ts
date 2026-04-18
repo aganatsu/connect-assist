@@ -1116,10 +1116,24 @@ Deno.serve(async (req) => {
 
         // Set per-instrument config
         config._currentSymbol = symbol;
-        config._smtResult = smtCandles && smtCandles.length >= 30
-          ? detectSMTDivergence(symbol, window, smtCandles.slice(Math.max(0, smtCandles.length - window.length)))
-          : null;
-        (config as any)._fotsiResult = fotsiResult;
+        // SMT: align correlated-pair window to current candle time (no lookahead)
+        let smtAligned: Candle[] | null = null;
+        if (smtCandles && smtCandles.length >= 30) {
+          const smtUpToNow = smtCandles.filter(c => c.datetime <= candleTime);
+          if (smtUpToNow.length >= 30) {
+            smtAligned = smtUpToNow.slice(Math.max(0, smtUpToNow.length - window.length));
+          }
+        }
+        config._smtResult = smtAligned ? detectSMTDivergence(symbol, window, smtAligned) : null;
+        // FOTSI: look up snapshot for this candle's date (no lookahead)
+        const candleDateStr = candleTime.slice(0, 10);
+        let fotsiForBar: FOTSIResult | null = fotsiTimeline.get(candleDateStr) ?? null;
+        if (!fotsiForBar && fotsiTimeline.size > 0) {
+          // Fall back to most recent prior snapshot (weekend / missing day)
+          const priorDates = [...fotsiTimeline.keys()].filter(d => d <= candleDateStr).sort();
+          if (priorDates.length > 0) fotsiForBar = fotsiTimeline.get(priorDates[priorDates.length - 1]) ?? null;
+        }
+        (config as any)._fotsiResult = fotsiForBar;
 
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
 
@@ -1132,7 +1146,7 @@ Deno.serve(async (req) => {
         // ── Safety Gates ──
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config,
-          balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades,
+          balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades, candleMs,
         );
         const blockedGates = gates.filter(g => !g.passed);
         const allPassed = blockedGates.length === 0;
@@ -1146,12 +1160,18 @@ Deno.serve(async (req) => {
 
         if (!allPassed || !analysis.stopLoss || !analysis.takeProfit) continue;
 
-        // ── Close on Reverse ──
+        // ── Close on Reverse (apply spread cost to exit, mirrors entry) ──
         if (config.closeOnReverse) {
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const toClose = openPositions.filter(p => p.symbol === symbol && p.direction === oppositeDir);
           for (const pos of toClose) {
-            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, analysis.lastPrice, pos.size, pos.symbol);
+            const posSpec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+            const reverseSpread = spreadPips * posSpec.pipSize;
+            // Closing a long pays the bid (lower); closing a short pays the ask (higher)
+            const reverseExitPrice = pos.direction === "long"
+              ? analysis.lastPrice - reverseSpread / 2
+              : analysis.lastPrice + reverseSpread / 2;
+            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, reverseExitPrice, pos.size, pos.symbol);
             balance += pnl;
             if (balance > peakBalance) peakBalance = balance;
             allTrades.push({
@@ -1159,7 +1179,7 @@ Deno.serve(async (req) => {
               symbol: pos.symbol,
               direction: pos.direction,
               entryPrice: pos.entryPrice,
-              exitPrice: analysis.lastPrice,
+              exitPrice: reverseExitPrice,
               entryTime: pos.entryTime,
               exitTime: candleTime,
               size: pos.size,
