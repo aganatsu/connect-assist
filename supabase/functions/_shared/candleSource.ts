@@ -132,7 +132,8 @@ async function metaFetchCandles(
   const order = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
 
   for (const region of order) {
-    const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
+    // NOTE: historical candles live on the market-data host, NOT the trading host (mt-client-api-v1).
+    const url = `https://mt-market-data-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
     try {
       const res = await fetch(url, { headers: { "auth-token": authToken } });
       const body = await res.text();
