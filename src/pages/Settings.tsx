@@ -422,6 +422,8 @@ function BrokerSettings() {
     </div>
   );
 }
+
+function RiskSettings() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
   const risk = settings?.risk_settings_json || {};
