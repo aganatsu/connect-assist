@@ -4,7 +4,8 @@ import { AppShell } from "@/components/AppShell";
 import TradingViewChart from "@/components/TradingViewChart";
 import { Card, CardContent } from "@/components/ui/card";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
-import { marketApi, smcApi, paperApi } from "@/lib/api";
+import { marketApi, smcApi, paperApi, type CandleSource } from "@/lib/api";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
