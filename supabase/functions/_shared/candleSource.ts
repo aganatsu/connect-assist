@@ -276,6 +276,55 @@ function resolveBrokerSymbol(symbol: string, conn: BrokerConn): string {
   return base + (conn.symbol_suffix || "");
 }
 
+/** Whether `symbol` was resolved via an explicit override (vs. fallback suffix). */
+function hasExplicitOverride(symbol: string, conn: BrokerConn): boolean {
+  const overrides = conn.symbol_overrides || {};
+  const norm = symbol.toUpperCase().replace(/[\s/._-]/g, "");
+  return Object.keys(overrides).some((k) => k.toUpperCase().replace(/[\s/._-]/g, "") === norm);
+}
+
+const symbolListCache = new Map<string, string[]>(); // metaAccountId → symbols
+
+async function loadBrokerSymbolList(authToken: string, metaAccountId: string): Promise<string[]> {
+  const cached = symbolListCache.get(metaAccountId);
+  if (cached) return cached;
+  for (const region of META_REGIONS) {
+    try {
+      const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
+      const res = await fetch(url, { headers: { "auth-token": authToken } });
+      if (!res.ok) continue;
+      const arr = await res.json();
+      if (Array.isArray(arr)) {
+        const list = arr.map(String);
+        symbolListCache.set(metaAccountId, list);
+        return list;
+      }
+    } catch (e: any) {
+      console.warn(`[candleSource] symbol-list ${region} error: ${e?.message}`);
+    }
+  }
+  return [];
+}
+
+async function persistSymbolOverride(conn: BrokerConn, canonical: string, brokerSymbol: string): Promise<void> {
+  if (!conn.id) return;
+  try {
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2.103.2");
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const overrides = { ...(conn.symbol_overrides || {}), [canonical]: brokerSymbol };
+    await supabase.from("broker_connections")
+      .update({ symbol_overrides: overrides })
+      .eq("id", conn.id);
+    conn.symbol_overrides = overrides; // mutate in-memory so subsequent calls in this scan use it
+    console.log(`[candleSource] auto-mapped ${canonical} → ${brokerSymbol} (persisted)`);
+  } catch (e: any) {
+    console.warn(`[candleSource] failed to persist override: ${e?.message}`);
+  }
+}
+
 // ─── Twelve Data ──────────────────────────────────────────────────────
 async function twelveDataCandles(
   symbol: string,
