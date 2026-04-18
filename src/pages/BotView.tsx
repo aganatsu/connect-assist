@@ -21,6 +21,8 @@ import { BotConfigModal } from "@/components/BotConfigModal";
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
+import { DataSourceBadge } from "@/components/DataSourceBadge";
+import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
 export default function BotView() {
