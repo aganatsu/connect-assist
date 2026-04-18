@@ -34,6 +34,16 @@ type Connection = {
   created_at?: string;
 };
 
+type ProbedCandidate = {
+  brokerSymbol: string;
+  prefix: string;
+  suffix: string;
+  tradeMode?: string;
+  hasLivePrice?: boolean;
+  score: number;
+};
+type ProbeDetails = Record<string, { picked: string; candidates: ProbedCandidate[] }>;
+
 const normalizeOverrideKey = (s: string) => s.trim().toUpperCase().replace(/[\s/._-]/g, "");
 
 export default function BrokersPage() {
