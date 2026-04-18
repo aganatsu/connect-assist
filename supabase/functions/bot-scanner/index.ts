@@ -1,6 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import {
+  computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
+  parsePairCurrencies, getFOTSIPairNames,
+  type FOTSIResult, type Currency,
+} from "../_shared/fotsi.ts";
 
 
 // ─── Default Config (overridden by bot_configs) ─────────────────────
@@ -541,6 +546,10 @@ const YAHOO_SYMBOLS: Record<string, string> = {
   "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
   "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
   "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  // FOTSI-only crosses (not in default instruments but needed for currency strength)
+  "AUD/CHF": "AUDCHF=X", "AUD/NZD": "AUDNZD=X", "CAD/CHF": "CADCHF=X",
+  "CHF/JPY": "CHFJPY=X", "NZD/CAD": "NZDCAD=X", "NZD/CHF": "NZDCHF=X",
+  "NZD/JPY": "NZDJPY=X",
   // Indices
   "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
   // Commodities
@@ -1182,8 +1191,9 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
  * 15  | SMT Divergence         | 1.0  | swing-point-based (not absolute extremes)
  * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
  * 17  | AMD Phase              | 0.5  | +0.5 distribution-phase bonus
+ * 18  | Currency Strength      | 1.5  | FOTSI alignment (-0.5 to +1.5)
  * ----+------------------------+------+-------------------------------------------
- *  TOTAL MAX RAW              = 23.0  (clamped to 10 for display via Math.min)
+ *  TOTAL MAX RAW              = 24.5  (clamped to 10 for display via Math.min)
  *
  * Recommended thresholds on the 0-10 scale (post-clamp):
  *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
@@ -1687,6 +1697,35 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail });
   }
 
+  // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
+  // Uses pre-computed FOTSI strengths from the scan cycle (module-scoped _fotsiResult).
+  // Rewards trades aligned with macro currency flow; penalizes exhaustion trades.
+  let _fotsiAlignment: any = null;
+  {
+    let pts = 0;
+    let detail = "";
+    const fotsi = config._fotsiResult as FOTSIResult | null;
+    if (fotsi && direction) {
+      const currencies = parsePairCurrencies(config._currentSymbol || "");
+      if (currencies) {
+        const [base, quote] = currencies;
+        const dir = direction === "long" ? "BUY" : "SELL";
+        const alignment = getCurrencyAlignment(base, quote, dir as "BUY" | "SELL", fotsi.strengths);
+        _fotsiAlignment = alignment;
+        pts = alignment.score;
+        detail = `${alignment.label} (${base} ${alignment.baseTSI.toFixed(1)}, ${quote} ${alignment.quoteTSI.toFixed(1)}, spread ${alignment.spread.toFixed(1)})`;
+      } else {
+        detail = "Non-forex pair — currency strength N/A";
+      }
+    } else if (!fotsi) {
+      detail = "FOTSI data unavailable this cycle";
+    } else {
+      detail = "No direction — currency strength check skipped";
+    }
+    score += pts;
+    factors.push({ name: "Currency Strength", present: pts !== 0, weight: 1.5, detail });
+  }
+
   score = Math.min(10, Math.round(score * 10) / 10);
 
   // Calculate SL/TP using configurable methods
@@ -1710,14 +1749,16 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const smtSummary = smtResult?.detected ? ` | SMT ${smtResult.type} vs ${smtResult.correlatedPair}` : "";
   const vwapSummary = vwap.value != null ? ` | VWAP ${vwap.value.toFixed(5)}` : "";
   const amdSummary = amd.bias ? ` | AMD ${amd.phase}/${amd.bias}` : "";
+  const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned (score: ${score}/10). ${presentFactors.map(f => f.name).join(", ")}${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}${fotsiSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors (score: ${score}/10)${dispSummary}${sbSummary}${mwSummary}${smtSummary}${vwapSummary}${amdSummary}${fotsiSummary}`;
 
   return {
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
+    fotsiAlignment: _fotsiAlignment,
   };
 }
 
@@ -2186,6 +2227,31 @@ async function runSafetyGates(
     }
   }
 
+  // Gate 17: FOTSI Overbought/Oversold Veto — hard-block trades buying exhausted currencies
+  // Uses pre-computed FOTSI strengths from the scan cycle.
+  // BUY blocked if base TSI > +50 (buying overbought currency)
+  // SELL blocked if base TSI < -50 (selling oversold currency)
+  // Also checks quote currency curve for secondary veto.
+  {
+    const fotsi = (config as any)._fotsiResult as FOTSIResult | null;
+    if (fotsi) {
+      const currencies = parsePairCurrencies(symbol);
+      if (currencies) {
+        const [base, quote] = currencies;
+        const dir = direction === "long" ? "BUY" : "SELL";
+        const veto = checkOverboughtOversoldVeto(
+          base, quote, dir as "BUY" | "SELL",
+          fotsi.strengths, fotsi.series,
+        );
+        gates.push({ passed: !veto.vetoed, reason: veto.reason });
+      } else {
+        gates.push({ passed: true, reason: "FOTSI Gate: non-forex pair — skipped" });
+      }
+    } else {
+      gates.push({ passed: true, reason: "FOTSI Gate: data unavailable — skipped" });
+    }
+  }
+
   return gates;
 }
 
@@ -2350,6 +2416,37 @@ async function runScanForUser(supabase: any, userId: string) {
   let tradesPlaced = 0;
   let rejectedCount = 0;
 
+  // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
+  let _fotsiResult: FOTSIResult | null = null;
+  try {
+    const fotsiPairs = getFOTSIPairNames();
+    const fotsiCandleMap: Record<string, any[]> = {};
+    // Batch fetch daily candles for all 28 FOTSI pairs in parallel (groups of 7 to avoid rate limits)
+    for (let i = 0; i < fotsiPairs.length; i += 7) {
+      const batch = fotsiPairs.slice(i, i + 7);
+      const batchResults = await Promise.all(
+        batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
+      );
+      for (let j = 0; j < batch.length; j++) {
+        if (batchResults[j] && batchResults[j].length >= 30) {
+          fotsiCandleMap[batch[j]] = batchResults[j];
+        }
+      }
+      // Small delay between batches to avoid rate limiting
+      if (i + 7 < fotsiPairs.length) await new Promise(r => setTimeout(r, 300));
+    }
+    const fetchedCount = Object.keys(fotsiCandleMap).length;
+    if (fetchedCount >= 20) { // Need at least 20 of 28 pairs for meaningful FOTSI
+      _fotsiResult = computeFOTSI(fotsiCandleMap);
+      console.log(`[scan ${scanCycleId}] FOTSI computed: ${fetchedCount}/28 pairs, missing: [${_fotsiResult.missingPairs.join(", ")}]`);
+      console.log(`[scan ${scanCycleId}] FOTSI strengths: ${JSON.stringify(Object.fromEntries(Object.entries(_fotsiResult.strengths).map(([k, v]) => [k, (v as number).toFixed(1)])))}`); 
+    } else {
+      console.warn(`[scan ${scanCycleId}] FOTSI skipped: only ${fetchedCount}/28 pairs fetched (need ≥20)`);
+    }
+  } catch (e: any) {
+    console.warn(`[scan ${scanCycleId}] FOTSI computation error: ${e?.message}`);
+  }
+
   for (const pair of config.instruments) {
     if (!YAHOO_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
@@ -2416,6 +2513,8 @@ async function runScanForUser(supabase: any, userId: string) {
     pairConfig._currentSymbol = pair;
     // Compute SMT divergence vs correlated pair (if available) and inject into config
     pairConfig._smtResult = smtCandles ? detectSMTDivergence(pair, candles, smtCandles) : null;
+    // Inject FOTSI result for Factor 18 (Currency Strength)
+    (pairConfig as any)._fotsiResult = _fotsiResult;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
     const detail: any = {
@@ -2442,6 +2541,7 @@ async function runScanForUser(supabase: any, userId: string) {
         smt: analysis.smt || null,
         vwap: analysis.vwap ? { value: analysis.vwap.value, distancePips: analysis.vwap.distancePips, rejection: analysis.vwap.rejection } : null,
         amd: analysis.amd || null,
+        fotsi: analysis.fotsiAlignment || null,
       },
       status: "analyzed",
       tradingStyle: pairStyle,
@@ -2605,7 +2705,7 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes } }),
+          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
