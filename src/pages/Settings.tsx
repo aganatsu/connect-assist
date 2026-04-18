@@ -99,13 +99,31 @@ function BrokerSettings() {
   const testMutation = useMutation({
     mutationFn: (id: string) => brokerApi.test(id),
     onSuccess: (data: any) => {
+      // OANDA flow
       if (data.balance !== undefined) {
         toast.success(`Connected! Balance: ${data.balance} ${data.currency || ""}`);
-      } else if (data.name || data.connectionStatus) {
-        toast.success(`Connected! ${data.name || ""} — ${data.connectionStatus || data.state || "OK"}`);
-      } else {
-        toast.success("Connection verified!");
+        return;
       }
+      // MetaAPI multi-region report
+      if (Array.isArray(data.regions)) {
+        const lines = data.regions.map((r: any) =>
+          `${r.ok ? "✓" : "✗"} ${r.region}${r.ok ? ` (${r.candleCount} candle)` : ` — ${r.error || `HTTP ${r.status}`}`}`
+        ).join("\n");
+        const header = data.success
+          ? `✓ ${data.name || "MetaAPI"} reachable on "${data.reachableRegion}"`
+          : `✗ ${data.name || "Account exists"} but no region serves data`;
+        const meta = [data.state, data.connectionStatus, data.configuredRegion && `cfg: ${data.configuredRegion}`].filter(Boolean).join(" · ");
+        const body = `${meta ? meta + "\n" : ""}${lines}${data.hint ? `\n\n${data.hint}` : ""}`;
+        if (data.success) toast.success(header, { description: body, duration: 12000 });
+        else toast.error(header, { description: body, duration: 15000 });
+        return;
+      }
+      // Generic fallback
+      if (data.success === false) {
+        toast.error(`✗ ${data.error || "Test failed"}`, { description: data.hint, duration: 12000 });
+        return;
+      }
+      toast.success(`Connected! ${data.name || ""} — ${data.connectionStatus || data.state || "OK"}`);
     },
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
