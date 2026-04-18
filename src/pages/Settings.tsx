@@ -7,11 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench } from "lucide-react";
+import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy } from "lucide-react";
 import { brokerApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { BotConfigModal } from "@/components/BotConfigModal";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 
 type SettingsTab = "broker" | "risk" | "bot" | "preferences" | "about";
@@ -75,6 +78,10 @@ function BrokerSettings() {
   const [editOverrides, setEditOverrides] = useState<Record<string, string>>({});
   const [editNewSymbol, setEditNewSymbol] = useState("");
   const [editNewSuffix, setEditNewSuffix] = useState("");
+  const [symbolsDialogOpen, setSymbolsDialogOpen] = useState(false);
+  const [symbolsConnName, setSymbolsConnName] = useState("");
+  const [symbolsData, setSymbolsData] = useState<any>(null);
+  const [symbolsFilter, setSymbolsFilter] = useState("");
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
@@ -127,6 +134,28 @@ function BrokerSettings() {
     },
     onError: (e: any) => toast.error(`Test failed: ${e.message}`),
   });
+
+  const listSymbolsMutation = useMutation({
+    mutationFn: (id: string) => brokerApi.listSymbols(id),
+    onSuccess: (data: any) => {
+      if (!data?.success) {
+        toast.error(`Symbols list failed`, { description: data?.error || "Unknown error", duration: 10000 });
+        return;
+      }
+      setSymbolsData(data);
+      setSymbolsDialogOpen(true);
+    },
+    onError: (e: any) => toast.error(`Symbols list failed: ${e.message}`),
+  });
+
+  const openSymbols = (id: string, name: string) => {
+    setSymbolsConnName(name);
+    setSymbolsFilter("");
+    setSymbolsData(null);
+    setSymbolsDialogOpen(true);
+    listSymbolsMutation.mutate(id);
+  };
+
 
   const checkStatus = async (connectionId: string, name: string) => {
     const t = toast.loading(`Checking ${name}...`);
@@ -214,6 +243,11 @@ function BrokerSettings() {
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => checkStatus(c.id, c.display_name)} title="Check broker connection state">Status</Button>
                 <Button size="sm" variant="outline" onClick={() => testMutation.mutate(c.id)}>Test</Button>
+                {c.broker_type === "metaapi" && (
+                  <Button size="sm" variant="outline" onClick={() => openSymbols(c.id, c.display_name)} title="List all symbols this broker exposes" disabled={listSymbolsMutation.isPending}>
+                    <List className="h-3 w-3" />
+                  </Button>
+                )}
                 <Button size="sm" variant="destructive" onClick={() => deleteMutation.mutate(c.id)}><Trash2 className="h-3 w-3" /></Button>
               </div>
             </div>
@@ -328,6 +362,63 @@ function BrokerSettings() {
           connectionName={selectedConnection.display_name}
         />
       )}
+
+      {/* MetaAPI symbols list dialog */}
+      <Dialog open={symbolsDialogOpen} onOpenChange={(o) => { setSymbolsDialogOpen(o); if (!o) setSymbolsData(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Broker symbols — {symbolsConnName}</DialogTitle>
+            <DialogDescription>
+              {listSymbolsMutation.isPending && "Loading symbols from MetaAPI…"}
+              {symbolsData && (
+                <>Loaded <span className="font-medium text-foreground">{symbolsData.total}</span> symbols from <span className="font-medium text-foreground">{symbolsData.region}</span>. Click any symbol to copy.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {symbolsData && (
+            <div className="space-y-3">
+              <Input
+                placeholder="Filter (e.g. BTC, EUR, XAU)"
+                value={symbolsFilter}
+                onChange={(e) => setSymbolsFilter(e.target.value)}
+                className="h-8 text-sm"
+              />
+              <ScrollArea className="h-[400px] pr-3">
+                {(["crypto", "metals", "indices", "fx", "other"] as const).map((group) => {
+                  const list: string[] = (symbolsData.grouped?.[group] || []).filter((s: string) =>
+                    !symbolsFilter || s.toLowerCase().includes(symbolsFilter.toLowerCase())
+                  );
+                  if (list.length === 0) return null;
+                  return (
+                    <div key={group} className="mb-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                        {group} ({list.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {list.map((sym) => (
+                          <Badge
+                            key={sym}
+                            variant="outline"
+                            className="cursor-pointer hover:bg-secondary text-xs font-mono gap-1"
+                            onClick={() => { navigator.clipboard.writeText(sym); toast.success(`Copied "${sym}"`); }}
+                          >
+                            {sym}
+                            <Copy className="h-2.5 w-2.5 opacity-50" />
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </ScrollArea>
+              <p className="text-[10px] text-muted-foreground">
+                💡 Found the right symbol? Add it as a Symbol Mapping (e.g. "BTC/USD" → "{symbolsData.grouped?.crypto?.[0] || "BTCUSD"}") in the connection's Edit panel.
+              </p>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

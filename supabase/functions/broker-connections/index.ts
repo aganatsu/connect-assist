@@ -153,6 +153,68 @@ Deno.serve(async (req) => {
       throw new Error(`Unsupported broker: ${conn.broker_type}`);
     }
 
+    if (action === "list_symbols") {
+      // List all symbols exposed by a MetaAPI broker account.
+      // Useful for figuring out the exact name a broker uses (e.g. crypto on HFMarkets).
+      const { data: conn, error } = await supabase.from("broker_connections").select("*")
+        .eq("id", payload.id).eq("user_id", user.id).single();
+      if (error || !conn) throw new Error("Connection not found");
+      if (conn.broker_type !== "metaapi") throw new Error("list_symbols only supported for MetaAPI");
+
+      let authToken = conn.api_key;
+      let metaAccountId = conn.account_id;
+      if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+        authToken = conn.account_id;
+        metaAccountId = conn.api_key;
+      }
+
+      const REGIONS = ["london", "new-york", "singapore"];
+      let symbols: string[] = [];
+      let usedRegion: string | null = null;
+      let lastError = "No region returned symbols";
+
+      for (const region of REGIONS) {
+        const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
+        try {
+          const res = await fetch(url, { headers: { "auth-token": authToken } });
+          const body = await res.text();
+          if (res.ok) {
+            const arr = JSON.parse(body);
+            if (Array.isArray(arr)) {
+              symbols = arr.map((s) => String(s));
+              usedRegion = region;
+              break;
+            }
+          } else {
+            lastError = `${region}: ${res.status} ${body.slice(0, 120)}`;
+          }
+        } catch (e: any) {
+          lastError = `${region}: ${e?.message || String(e)}`;
+        }
+      }
+
+      if (!usedRegion) {
+        return respond({ success: false, error: lastError });
+      }
+
+      // Group symbols by category for easier scanning
+      const fx: string[] = [];
+      const crypto: string[] = [];
+      const metals: string[] = [];
+      const indices: string[] = [];
+      const other: string[] = [];
+      for (const s of symbols) {
+        const u = s.toUpperCase();
+        if (/BTC|ETH|XRP|LTC|BCH|SOL|DOGE|ADA|DOT|LINK|XLM|TRX|AVAX|MATIC/.test(u)) crypto.push(s);
+        else if (/XAU|XAG|GOLD|SILV/.test(u)) metals.push(s);
+        else if (/US30|US500|SPX|NAS|DAX|FTSE|NIK|HK|JPN|GER|UK100|NDX/.test(u)) indices.push(s);
+        else if (/^[#a-z]?(EUR|USD|GBP|JPY|AUD|CAD|CHF|NZD)/i.test(u) && u.length <= 12) fx.push(s);
+        else other.push(s);
+      }
+
+      return respond({ success: true, region: usedRegion, total: symbols.length, symbols, grouped: { fx, crypto, metals, indices, other } });
+    }
+
     return respond({ error: "Unknown action" });
   } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
