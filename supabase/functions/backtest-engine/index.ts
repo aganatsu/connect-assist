@@ -81,6 +81,99 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
+// Builds a histogram of time spent at each price level from OHLC candles.
+// Since forex lacks real volume, we use candle count at each price bin (TPO).
+// Returns POC (Point of Control), Value Area High/Low, and classified nodes.
+interface VolumeProfileResult {
+  poc: number;           // Point of Control — price level with most time
+  vah: number;           // Value Area High (70% of activity above this)
+  val: number;           // Value Area Low (70% of activity below this)
+  nodes: Array<{ price: number; count: number; type: "HVN" | "LVN" | "normal" }>;
+  totalBins: number;
+}
+
+function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileResult | null {
+  if (candles.length < 20) return null;
+
+  // Find the overall high and low across all candles
+  let overallHigh = -Infinity, overallLow = Infinity;
+  for (const c of candles) {
+    if (c.high > overallHigh) overallHigh = c.high;
+    if (c.low < overallLow) overallLow = c.low;
+  }
+  const range = overallHigh - overallLow;
+  if (range <= 0) return null;
+
+  const binSize = range / numBins;
+  const bins: number[] = new Array(numBins).fill(0);
+
+  // For each candle, increment every bin that falls within its high-low range
+  // This is the TPO (Time Price Opportunity) approach
+  for (const c of candles) {
+    const lowBin = Math.max(0, Math.floor((c.low - overallLow) / binSize));
+    const highBin = Math.min(numBins - 1, Math.floor((c.high - overallLow) / binSize));
+    for (let b = lowBin; b <= highBin; b++) {
+      bins[b]++;
+    }
+  }
+
+  // Find POC (bin with highest count)
+  let pocBin = 0, maxCount = 0;
+  for (let i = 0; i < numBins; i++) {
+    if (bins[i] > maxCount) {
+      maxCount = bins[i];
+      pocBin = i;
+    }
+  }
+  const poc = overallLow + (pocBin + 0.5) * binSize;
+
+  // Calculate Value Area (70% of total TPO count, expanding from POC)
+  const totalCount = bins.reduce((a, b) => a + b, 0);
+  const targetCount = totalCount * 0.70;
+  let vaLowBin = pocBin, vaHighBin = pocBin;
+  let vaCount = bins[pocBin];
+
+  while (vaCount < targetCount && (vaLowBin > 0 || vaHighBin < numBins - 1)) {
+    const expandLow = vaLowBin > 0 ? bins[vaLowBin - 1] : -1;
+    const expandHigh = vaHighBin < numBins - 1 ? bins[vaHighBin + 1] : -1;
+    if (expandLow >= expandHigh && expandLow >= 0) {
+      vaLowBin--;
+      vaCount += bins[vaLowBin];
+    } else if (expandHigh >= 0) {
+      vaHighBin++;
+      vaCount += bins[vaHighBin];
+    } else {
+      break;
+    }
+  }
+
+  const val = overallLow + vaLowBin * binSize;
+  const vah = overallLow + (vaHighBin + 1) * binSize;
+
+  // Classify nodes: HVN if count > 1.5x average, LVN if count < 0.5x average
+  const avgCount = totalCount / numBins;
+  const nodes = bins.map((count, i) => ({
+    price: overallLow + (i + 0.5) * binSize,
+    count,
+    type: count > avgCount * 1.5 ? "HVN" as const
+         : count < avgCount * 0.5 ? "LVN" as const
+         : "normal" as const,
+  }));
+
+  return { poc, vah, val, nodes, totalBins: numBins };
+}
+
+// ─── Local ReasoningFactor with group support ──────────────────────
+// Extends the shared ReasoningFactor with an optional group field for 9-group scoring.
+interface BacktestReasoningFactor {
+  name: string;
+  present: boolean;
+  weight: number;
+  detail: string;
+  group?: string;
+}
+
 // ─── Types ──────────────────────────────────────────────────────────
 interface BacktestTrade {
   id: string;
@@ -181,6 +274,9 @@ function mapConfig(raw: any): any {
     useSMT: strategy.useSMT ?? true,
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
+    useVolumeProfile: strategy.useVolumeProfile ?? true,
+    useTrendDirection: strategy.useTrendDirection ?? true,
+    useDailyBias: strategy.useDailyBias ?? true,
     useAMD: strategy.useAMD ?? true,
     useFOTSI: strategy.useFOTSI ?? true,
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
@@ -227,10 +323,20 @@ function mapConfig(raw: any): any {
   };
 }
 
-// ─── Confluence Analysis (mirrors runFullConfluenceAnalysis) ─────────
-// This is a faithful port of the 18-factor confluence scoring from bot-scanner.
-// It accepts a timestamp so time-dependent factors (session, silver bullet, macro, AMD)
-// are evaluated at the candle's time, not "now".
+// ─── Confluence Analysis (mirrors runFullConfluenceAnalysis from bot-scanner) ─────
+// 20-factor, 9-group scoring engine with anti-double-count rules, Power of 3 combo,
+// and group caps. Accepts a timestamp so time-dependent factors (session, silver bullet,
+// macro, AMD) are evaluated at the candle's time, not "now".
+//
+// GROUP 1: Market Structure (cap 3.0)  — BOS/CHoCH (1.5) + Trend Direction (1.5)
+// GROUP 2: Daily Bias (cap 1.5)        — Daily Bias/HTF (1.5)
+// GROUP 3: Order Flow Zones (cap 3.0)  — OB (2.0) + FVG (2.0) + Breaker (1.0) + Unicorn (1.5)
+// GROUP 4: P/D & Fib (cap 2.5)        — P/D+Fib (2.0) + PD/PW Levels (1.0)
+// GROUP 5: Timing (cap 1.5)           — Kill Zone (1.0) + Silver Bullet (1.0) + Macro (0.5)
+// GROUP 6: Price Action (cap 2.0)     — Judas (0.5) + Reversal (0.5) + Sweep (1.0) + Displacement (1.0)
+// GROUP 7: AMD / Power of 3 (cap 1.5) — AMD (1.0) + Po3 Combo (+1.0)
+// GROUP 8: Macro Confirmation (cap 2.0)— SMT (1.0) + Currency Strength (1.5)
+// GROUP 9: Volume Profile (cap 1.5)   — Volume Profile (1.5)
 function runConfluenceAnalysis(
   candles: Candle[],
   dailyCandles: Candle[] | null,
@@ -245,11 +351,18 @@ function runConfluenceAnalysis(
   // ── SMC Detection ──
   const structure = analyzeMarketStructure(candles);
   const allBreaks = [...structure.bos, ...structure.choch];
-  const orderBlocks = config.enableOB ? detectOrderBlocks(candles, allBreaks) : [];
+  let orderBlocks = config.enableOB ? detectOrderBlocks(candles, allBreaks) : [];
   const fvgs = config.enableFVG ? detectFVGs(candles) : [];
   const liquidityPools = config.enableLiquiditySweep ? detectLiquidityPools(candles) : [];
   const displacement = detectDisplacement(candles);
   if (displacement.isDisplacement) tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
+
+  // FVG adjacency bonus: tag OBs that have an FVG within 5 candles
+  for (const ob of orderBlocks) {
+    const hasFVGNearby = fvgs.some(f => Math.abs(f.index - ob.index) <= 5);
+    (ob as any).hasFVGAdjacency = hasFVGNearby;
+  }
+
   const breakerBlocks = config.useBreakerBlocks ? detectBreakerBlocks(orderBlocks, candles) : [];
   const unicornSetups = config.useUnicornModel ? detectUnicornSetups(breakerBlocks, fvgs) : [];
   const pd = calculatePremiumDiscount(candles);
@@ -257,6 +370,7 @@ function runConfluenceAnalysis(
   const judas = detectJudasSwing(candles);
   const reversal = detectReversalCandle(candles);
   const atrValue = calculateATR(candles, config.slATRPeriod || 14);
+  // Retain VWAP calculation for backward compatibility (not scored)
   const vwap = config.useVWAP ? calculateAnchoredVWAP(candles, pipSize) : null;
 
   // Time-dependent factors use atMs for backtest accuracy
@@ -273,236 +387,755 @@ function runConfluenceAnalysis(
     ? computeOpeningRange(hourlyCandles, config.openingRange.candleCount || 24)
     : null;
 
-  // ── HTF Bias ──
-  let htfBias: "bullish" | "bearish" | "ranging" = "ranging";
-  if (dailyCandles && dailyCandles.length >= 10) {
-    const htfStructure = analyzeMarketStructure(dailyCandles);
-    htfBias = htfStructure.trend;
-  }
-
-  // ── Factor Scoring (18 factors — exact same as bot-scanner) ──
+  // ── Factor Scoring (20 factors, 9 groups — mirrors bot-scanner) ──
   let score = 0;
-  const factors: ReasoningFactor[] = [];
+  const factors: BacktestReasoningFactor[] = [];
 
-  // Factor 1: Market Structure (2.0 + 0.5 OR bias)
-  const structureAligned = (structure.trend === "bullish") || (structure.trend === "bearish");
-  let f1Weight = structureAligned ? 2.0 : 0;
-  if (structureAligned && or && config.openingRange?.useBias) {
-    const orBias = lastPrice > or.midpoint ? "bullish" : "bearish";
-    if (orBias === structure.trend) f1Weight += 0.5;
+  // ── Factor 1: Market Structure / BOS/CHoCH (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.enableStructureBreak !== false) {
+      if (structure.choch.length > 0) {
+        pts = 1.5;
+        detail = `${structure.choch.length} CHoCH detected — trend reversal confirmed`;
+      } else if (structure.bos.length > 0) {
+        pts = 1.0;
+        detail = `${structure.bos.length} BOS detected — trend continuation`;
+      } else {
+        detail = "No BOS or CHoCH detected";
+      }
+    } else {
+      detail = "BOS/CHoCH disabled";
+    }
+    score += pts;
+    factors.push({ name: "Market Structure", present: pts > 0, weight: 1.5, detail, group: "Market Structure" });
   }
-  factors.push({ name: "Market Structure", present: structureAligned, weight: f1Weight, detail: `Trend: ${structure.trend}` });
-  if (structureAligned) score += f1Weight;
 
-  // Factor 2: Order Block (2.0)
-  const nearOB = orderBlocks.filter(ob => {
-    if (ob.mitigated) return false;
-    const prox = getAssetProfile(config._currentSymbol).proximityMultiplier;
-    const dist = Math.abs(lastPrice - (ob.high + ob.low) / 2) / pipSize;
-    return dist < 30 * prox;
-  });
-  const obAligned = nearOB.some(ob =>
-    (structure.trend === "bullish" && ob.type === "bullish") ||
-    (structure.trend === "bearish" && ob.type === "bearish")
-  );
-  const f2Weight = obAligned ? 2.0 : 0;
-  factors.push({ name: "Order Block", present: obAligned, weight: f2Weight, detail: `${nearOB.length} nearby OBs` });
-  if (obAligned) score += f2Weight;
-
-  // Factor 3: Fair Value Gap (1.5)
-  const activeFVGs = fvgs.filter(f => !f.mitigated);
-  const nearFVG = activeFVGs.filter(f => {
-    const mid = (f.high + f.low) / 2;
-    return Math.abs(lastPrice - mid) / pipSize < 20;
-  });
-  const fvgAligned = nearFVG.some(f =>
-    (structure.trend === "bullish" && f.type === "bullish") ||
-    (structure.trend === "bearish" && f.type === "bearish")
-  );
-  let f3Weight = 0;
-  if (fvgAligned) {
-    const bestFVG = nearFVG[0];
-    const ce = (bestFVG.high + bestFVG.low) / 2;
-    const atCE = Math.abs(lastPrice - ce) / pipSize < 5;
-    f3Weight = atCE ? 1.5 : 1.0;
+  // ── Factor 2: Order Block (max 2.0) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.enableOB !== false) {
+      const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
+      const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
+      if (insideOB) {
+        pts = 2.0;
+        const tags: string[] = [];
+        if ((insideOB as any).hasDisplacement) tags.push("displacement");
+        if ((insideOB as any).hasFVGAdjacency) tags.push("FVG adjacent");
+        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
+        if (tags.length > 0) detail += ` [${tags.join(", ")}]`;
+      } else if (activeOBs.length > 0) {
+        pts = 0.5;
+        detail = `${activeOBs.length} quality-filtered OBs nearby`;
+      }
+    } else {
+      detail = "Order Blocks disabled";
+    }
+    score += pts;
+    factors.push({ name: "Order Block", present: pts > 0, weight: 2.0, detail: detail || "No active order blocks", group: "Order Flow Zones" });
   }
-  factors.push({ name: "Fair Value Gap", present: fvgAligned, weight: f3Weight, detail: `${nearFVG.length} active FVGs nearby` });
-  if (fvgAligned) score += f3Weight;
 
-  // Factor 4: Premium/Discount (2.0)
-  const pdAligned = (structure.trend === "bullish" && pd.currentZone === "discount") ||
-                    (structure.trend === "bearish" && pd.currentZone === "premium");
-  const f4Weight = pdAligned ? (pd.oteZone ? 2.0 : 1.5) : 0;
-  factors.push({ name: "Premium/Discount", present: pdAligned, weight: f4Weight, detail: `Zone: ${pd.currentZone} (${pd.zonePercent.toFixed(0)}%)` });
-  if (pdAligned) score += f4Weight;
-
-  // Factor 5: Session/Kill Zone (1.5 + 0.5 SB combo)
-  const sessionOk = session.isKillZone;
-  let f5Weight = sessionOk ? 1.5 : (session.name !== "Off-Hours" ? 0.5 : 0);
-  if (sessionOk && silverBullet.active) f5Weight += 0.5;
-  factors.push({ name: "Session/Kill Zone", present: sessionOk, weight: f5Weight, detail: `${session.name} ${session.isKillZone ? "(KZ)" : ""}` });
-  score += f5Weight;
-
-  // Factor 6: Judas Swing (1.0 + 0.5 OR judas)
-  const judasAligned = judas.detected && (
-    (structure.trend === "bullish" && judas.type === "bullish") ||
-    (structure.trend === "bearish" && judas.type === "bearish")
-  );
-  let f6Weight = judasAligned && session.isKillZone ? 1.0 : 0;
-  if (judasAligned && or && config.openingRange?.useJudasSwing) f6Weight += 0.5;
-  factors.push({ name: "Judas Swing", present: !!judasAligned, weight: f6Weight, detail: judas.description });
-  if (judasAligned) score += f6Weight;
-
-  // Factor 7: PD/PW Levels (1.0 + 0.5 OR key-level)
-  let f7Weight = 0;
-  let f7Present = false;
-  if (pdLevels) {
-    const levelProx = 15 * (getAssetProfile(config._currentSymbol).proximityMultiplier || 1);
-    const nearPDH = Math.abs(lastPrice - pdLevels.pdh) / pipSize < levelProx;
-    const nearPDL = Math.abs(lastPrice - pdLevels.pdl) / pipSize < levelProx;
-    const nearPWH = Math.abs(lastPrice - pdLevels.pwh) / pipSize < levelProx;
-    const nearPWL = Math.abs(lastPrice - pdLevels.pwl) / pipSize < levelProx;
-    if (nearPWH || nearPWL) { f7Weight = 1.0; f7Present = true; }
-    else if (nearPDH || nearPDL) { f7Weight = 0.5; f7Present = true; }
-    if (f7Present && or && config.openingRange?.useKeyLevels) f7Weight += 0.5;
+  // ── Factor 3: Fair Value Gap (max 2.0) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.enableFVG !== false) {
+      const activeFVGs = fvgs.filter(f => !f.mitigated);
+      const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
+      if (insideFVG) {
+        const ce = (insideFVG.high + insideFVG.low) / 2;
+        const fvgRange = insideFVG.high - insideFVG.low;
+        const distFromCE = Math.abs(lastPrice - ce);
+        const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15;
+        if (nearCE) {
+          pts = 2.0;
+          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} — optimal entry`;
+        } else {
+          pts = 1.5;
+          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
+        }
+        if ((insideFVG as any).hasDisplacement) {
+          detail += " [displacement-created, scored via Factor 10]";
+        }
+      } else if (activeFVGs.length > 0) {
+        pts = 0.5;
+        detail = `${activeFVGs.length} unfilled FVGs in range`;
+      }
+    } else {
+      detail = "FVGs disabled";
+    }
+    score += pts;
+    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: 2.0, detail: detail || "No active FVGs", group: "Order Flow Zones" });
   }
-  factors.push({ name: "PD/PW Levels", present: f7Present, weight: f7Weight, detail: pdLevels ? `PDH:${pdLevels.pdh.toFixed(5)} PDL:${pdLevels.pdl.toFixed(5)}` : "No daily data" });
-  if (f7Present) score += f7Weight;
 
-  // Factor 8: Reversal Candle (0.5)
-  const reversalAligned = reversal.detected && (
-    (structure.trend === "bullish" && reversal.type === "bullish") ||
-    (structure.trend === "bearish" && reversal.type === "bearish")
-  );
-  const f8Weight = reversalAligned ? (obAligned || fvgAligned ? 0.5 : 0.25) : 0;
-  factors.push({ name: "Reversal Candle", present: !!reversalAligned, weight: f8Weight, detail: reversal.type || "none" });
-  if (reversalAligned) score += f8Weight;
+  // ── Factor 4: Premium/Discount & Fibonacci (max 2.0) ──
+  {
+    let pts = 0;
+    const fibPercent = pd.zonePercent;
+    let detail = `Price at ${fibPercent.toFixed(1)}% of swing range — ${pd.currentZone} zone`;
+    const fibDirection = structure.trend === "bullish" ? "long" : structure.trend === "bearish" ? "short" : null;
 
-  // Factor 9: Liquidity Sweep (1.0)
-  const recentSweep = liquidityPools.filter(lp => lp.swept && lp.strength >= 2);
-  const sweepAligned = recentSweep.some(lp =>
-    (structure.trend === "bullish" && lp.type === "sell-side") ||
-    (structure.trend === "bearish" && lp.type === "buy-side")
-  );
-  const f9Weight = sweepAligned ? (recentSweep.some(lp => lp.strength >= 3) ? 1.0 : 0.75) : 0;
-  factors.push({ name: "Liquidity Sweep", present: sweepAligned, weight: f9Weight, detail: `${recentSweep.length} swept pools` });
-  if (sweepAligned) score += f9Weight;
+    if (fibDirection === "long") {
+      const retrace = 100 - fibPercent;
+      if (retrace >= 70 && retrace <= 72) {
+        pts = 2.0;
+        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
+      } else if (retrace >= 61.8 && retrace <= 78.6) {
+        pts = 1.5;
+        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (fibPercent < 45) {
+        pts = 1.0;
+        detail += ` | Discount zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (retrace >= 38.2 && retrace < 61.8) {
+        pts = 0.5;
+        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
+      } else if (fibPercent >= 50) {
+        detail += ` | Buying in premium — unfavorable`;
+      }
+    } else if (fibDirection === "short") {
+      const retrace = fibPercent;
+      if (retrace >= 70 && retrace <= 72) {
+        pts = 2.0;
+        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
+      } else if (retrace >= 61.8 && retrace <= 78.6) {
+        pts = 1.5;
+        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (fibPercent > 55) {
+        pts = 1.0;
+        detail += ` | Premium zone (${retrace.toFixed(1)}% retracement)`;
+      } else if (retrace >= 38.2 && retrace < 61.8) {
+        pts = 0.5;
+        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
+      } else if (fibPercent <= 50) {
+        detail += ` | Selling in discount — unfavorable`;
+      }
+    } else {
+      if (pd.oteZone) {
+        pts = 0.5;
+        detail += " | OTE zone active (ranging — no directional bias)";
+      }
+    }
+    score += pts;
+    factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: 2.0, detail, group: "Premium/Discount & Fib" });
+  }
 
-  // Factor 10: Displacement (1.0)
-  const dispAligned = displacement.isDisplacement && (
-    (structure.trend === "bullish" && displacement.lastDirection === "bullish") ||
-    (structure.trend === "bearish" && displacement.lastDirection === "bearish")
-  );
-  const dispCreatedFVG = displacement.displacementCandles.some(d => fvgs.some(f => (f as any).hasDisplacement));
-  const f10Weight = dispAligned ? (dispCreatedFVG ? 1.0 : 0.5) : 0;
-  factors.push({ name: "Displacement", present: !!dispAligned, weight: f10Weight, detail: displacement.lastDirection || "none" });
-  if (dispAligned) score += f10Weight;
+  // ── Factor 5: Kill Zone (max 1.0) ──
+  {
+    let pts = session.isKillZone ? 1.0 : 0;
+    let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
+    if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
+      pts += 0.5;
+      detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+    }
+    score += pts;
+    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail, group: "Timing" });
+  }
 
-  // Factor 11: Breaker Block (1.0)
-  const breakerAligned = breakerBlocks.some(b =>
-    (structure.trend === "bullish" && b.type === "bullish_breaker") ||
-    (structure.trend === "bearish" && b.type === "bearish_breaker")
-  );
-  const f11Weight = breakerAligned ? 1.0 : 0;
-  factors.push({ name: "Breaker Block", present: breakerAligned, weight: f11Weight, detail: `${breakerBlocks.length} active breakers` });
-  if (breakerAligned) score += f11Weight;
+  // ── Factor 6: Judas Swing (max 0.5) ──
+  {
+    let pts = 0;
+    let detail = judas.description;
+    if (judas.detected && judas.confirmed) {
+      if (session.isKillZone) {
+        pts = 0.5;
+        detail += " — during kill zone (confirmed)";
+      } else {
+        pts = 0.25;
+        detail += " — outside kill zone (lower probability)";
+      }
+    } else if (judas.detected) {
+      pts = 0.1;
+      detail += " (unconfirmed)";
+    }
+    score += pts;
+    factors.push({ name: "Judas Swing", present: pts > 0, weight: 0.5, detail, group: "Price Action" });
+  }
 
-  // Factor 12: Unicorn Model (1.5)
-  const unicornAligned = unicornSetups.some(u =>
-    (structure.trend === "bullish" && u.type === "bullish_unicorn") ||
-    (structure.trend === "bearish" && u.type === "bearish_unicorn")
-  );
-  const f12Weight = unicornAligned ? 1.5 : 0;
-  factors.push({ name: "Unicorn Model", present: unicornAligned, weight: f12Weight, detail: `${unicornSetups.length} setups` });
-  if (unicornAligned) score += f12Weight;
+  // ── Factor 7: PD/PW Levels (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No PD/PW levels";
+    if (pdLevels) {
+      const threshold = lastPrice * 0.002;
+      const nearLevels = [
+        { name: "PDH", price: pdLevels.pdh }, { name: "PDL", price: pdLevels.pdl },
+        { name: "PWH", price: pdLevels.pwh }, { name: "PWL", price: pdLevels.pwl },
+      ].filter(l => Math.abs(lastPrice - l.price) <= threshold);
+      if (nearLevels.length > 0) {
+        const nearWeekly = nearLevels.some(l => l.name.startsWith("PW"));
+        pts = nearWeekly ? 1.0 : 0.75;
+        detail = `Price near ${nearLevels.map(l => l.name).join(", ")} (${nearLevels[0].price.toFixed(5)})${nearWeekly ? " — weekly level" : ""}`;
+      } else {
+        detail = `PDH=${pdLevels.pdh.toFixed(5)}, PDL=${pdLevels.pdl.toFixed(5)}, PWH=${pdLevels.pwh.toFixed(5)}, PWL=${pdLevels.pwl.toFixed(5)}`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "PD/PW Levels", present: pts > 0, weight: 1.0, detail, group: "Premium/Discount & Fib" });
+  }
 
-  // Factor 13: Silver Bullet (1.0)
-  const f13Weight = silverBullet.active ? 1.0 : 0;
-  factors.push({ name: "Silver Bullet", present: silverBullet.active, weight: f13Weight, detail: silverBullet.window || "inactive" });
-  if (silverBullet.active) score += f13Weight;
+  // ── Factor 8: Reversal Candle (max 0.5) ──
+  {
+    let pts = 0;
+    let detail = "No reversal pattern";
+    if (reversal.detected) {
+      const lastC = candles[candles.length - 1];
+      const lastMid = (lastC.high + lastC.low) / 2;
+      const atOB = orderBlocks.some(ob => !ob.mitigated && lastC.low <= ob.high && lastC.high >= ob.low);
+      const atFVG = fvgs.some(f => !f.mitigated && lastC.low <= f.high && lastC.high >= f.low);
+      const atPDPW = pdLevels ? [
+        pdLevels.pdh, pdLevels.pdl, pdLevels.pwh, pdLevels.pwl,
+      ].some(lvl => Math.abs(lastMid - lvl) / lastMid <= 0.002) : false;
+      const atKeyLevel = atOB || atFVG || atPDPW;
+      if (atKeyLevel) {
+        pts = 0.5;
+        const levels: string[] = [];
+        if (atOB) levels.push("OB");
+        if (atFVG) levels.push("FVG");
+        if (atPDPW) levels.push("PD/PW level");
+        detail = `${reversal.type} reversal at key level (${levels.join(", ")})`;
+      } else {
+        pts = 0.25;
+        detail = `${reversal.type} reversal candle detected but not at a key level`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "Reversal Candle", present: pts > 0, weight: 0.5, detail, group: "Price Action" });
+  }
 
-  // Factor 14: Macro Window (0.5 + 0.5 SB overlap)
-  let f14Weight = macroWindow.active ? 0.5 : 0;
-  if (macroWindow.active && silverBullet.active) f14Weight += 0.5;
-  factors.push({ name: "Macro Window", present: macroWindow.active, weight: f14Weight, detail: macroWindow.window || "inactive" });
-  if (macroWindow.active) score += f14Weight;
+  // ── Factor 9: Liquidity Sweep (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.enableLiquiditySweep !== false) {
+      const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
+      if (sweptPool) {
+        pts = sweptPool.strength >= 4 ? 1.0 : 0.75;
+        detail = `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)${sweptPool.strength >= 4 ? " — strong pool" : ""}`;
+      } else {
+        detail = "No recent liquidity sweep";
+      }
+    } else {
+      detail = "Liquidity Sweeps disabled";
+    }
+    score += pts;
+    factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: 1.0, detail, group: "Price Action" });
+  }
 
-  // Factor 15: SMT Divergence (1.0)
-  const smtAligned = smt?.detected && (
-    (structure.trend === "bullish" && smt.type === "bullish") ||
-    (structure.trend === "bearish" && smt.type === "bearish")
-  );
-  const f15Weight = smtAligned ? 1.0 : 0;
-  factors.push({ name: "SMT Divergence", present: !!smtAligned, weight: f15Weight, detail: smt?.detail || "N/A" });
-  if (smtAligned) score += f15Weight;
-
-  // Factor 16: VWAP (0.5 + 0.5 rejection)
-  let f16Weight = 0;
-  let f16Present = false;
-  if (vwap && vwap.value != null && vwap.distancePips != null) {
-    const proxPips = config.vwapProximityPips || 15;
-    if (vwap.distancePips <= proxPips) {
-      f16Weight = 0.5;
-      f16Present = true;
-      if (vwap.rejection && (
-        (structure.trend === "bullish" && vwap.rejection === "bullish") ||
-        (structure.trend === "bearish" && vwap.rejection === "bearish")
-      )) f16Weight += 0.5;
+  // ── Opening Range Enhancements ──
+  if (or && config.openingRange?.enabled) {
+    // (a) OR Bias boost — modifies Factor 1
+    if (config.openingRange.useBias && or.completed) {
+      if (lastPrice > or.high) { score += 0.5; factors[0].detail += " | OR bias: bullish (above OR high)"; }
+      else if (lastPrice < or.low) { score += 0.5; factors[0].detail += " | OR bias: bearish (below OR low)"; }
+    }
+    // (b) OR Judas Swing — enhances Factor 6
+    if (config.openingRange.useJudasSwing && or.completed) {
+      const recentCandles = candles.slice(-10);
+      const sweptHigh = recentCandles.some(c => c.high > or.high);
+      const sweptLow = recentCandles.some(c => c.low < or.low);
+      if (sweptHigh && lastPrice < or.high) {
+        score += 0.5;
+        const f6 = factors.find(f => f.name === "Judas Swing");
+        if (f6) { f6.present = true; f6.detail += " | OR high swept then reversed"; }
+      }
+      if (sweptLow && lastPrice > or.low) {
+        score += 0.5;
+        const f6 = factors.find(f => f.name === "Judas Swing");
+        if (f6) { f6.present = true; f6.detail += " | OR low swept then reversed"; }
+      }
+    }
+    // (c) OR Key Levels — enhances Factor 7
+    if (config.openingRange.useKeyLevels && or.completed) {
+      const threshold = lastPrice * 0.002;
+      const orLevels = [
+        { name: "OR High", price: or.high },
+        { name: "OR Low", price: or.low },
+        { name: "OR Mid", price: or.midpoint },
+      ];
+      const nearOR = orLevels.find(l => Math.abs(lastPrice - l.price) <= threshold);
+      if (nearOR) {
+        score += 0.5;
+        const f7 = factors.find(f => f.name === "PD/PW Levels");
+        if (f7) { f7.present = true; f7.detail += ` | Near ${nearOR.name} (${nearOR.price.toFixed(5)})`; }
+      }
+    }
+    // (d) OR Premium/Discount override — modifies Factor 4
+    if (config.openingRange.usePremiumDiscount && or.completed) {
+      const orRange = or.high - or.low;
+      if (orRange > 0) {
+        const orZonePercent = ((lastPrice - or.low) / orRange) * 100;
+        const orZone = orZonePercent > 55 ? "premium" : orZonePercent < 45 ? "discount" : "equilibrium";
+        const f4 = factors.find(f => f.name === "Premium/Discount & Fib");
+        if (f4) { f4.detail += ` | OR zone: ${orZone} (${orZonePercent.toFixed(1)}%)`; }
+      }
     }
   }
-  factors.push({ name: "VWAP", present: f16Present, weight: f16Weight, detail: vwap?.value ? `VWAP: ${vwap.value.toFixed(5)}` : "N/A" });
-  if (f16Present) score += f16Weight;
 
-  // Factor 17: AMD Phase (0.5 + 0.5 distribution)
-  let f17Weight = 0;
-  let f17Present = false;
-  if (amd && amd.phase !== "unknown") {
-    const amdBiasAligned = (
-      (structure.trend === "bullish" && amd.bias === "bullish") ||
-      (structure.trend === "bearish" && amd.bias === "bearish")
-    );
-    if (amdBiasAligned) {
-      f17Weight = 0.5;
-      f17Present = true;
-      if (amd.phase === "distribution") f17Weight += 0.5;
-    }
+  // ── Determine direction (BEFORE direction-dependent factors 10-20) ──
+  let direction: "long" | "short" | null = null;
+  if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
+  else if (structure.trend === "bearish" && pd.currentZone !== "discount") direction = "short";
+  else if (structure.trend === "ranging") {
+    if (pd.currentZone === "discount") direction = "long";
+    else if (pd.currentZone === "premium") direction = "short";
   }
-  factors.push({ name: "AMD Phase", present: f17Present, weight: f17Weight, detail: amd?.detail || "N/A" });
-  if (f17Present) score += f17Weight;
 
-  // Factor 18: Currency Strength / FOTSI (max +1.5, min -0.5)
-  let f18Weight = 0;
-  let f18Present = false;
+  // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.useTrendDirection !== false && direction && structure.trend !== "ranging") {
+      const trendAligned = (direction === "long" && structure.trend === "bullish")
+        || (direction === "short" && structure.trend === "bearish");
+      if (trendAligned) {
+        pts = 1.5;
+        detail = `Entry TF ${structure.trend} trend aligned with ${direction} direction`;
+      } else {
+        pts = -0.5;
+        detail = `Counter-trend: ${direction} against ${structure.trend} trend (penalty)`;
+      }
+    } else if (direction && structure.trend === "ranging") {
+      pts = 0.5;
+      detail = `Ranging market — direction set via P/D zone fallback (${direction})`;
+    } else {
+      detail = "No direction determined — trend scoring skipped";
+    }
+    score += pts;
+    factors.push({ name: "Trend Direction", present: pts > 0, weight: 1.5, detail, group: "Market Structure" });
+  }
+
+  // ── Factor 10: Displacement (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No displacement candle in last 5 bars";
+    if (config.useDisplacement !== false) {
+      if (displacement.isDisplacement && direction && displacement.lastDirection) {
+        const aligned = (direction === "long" && displacement.lastDirection === "bullish")
+          || (direction === "short" && displacement.lastDirection === "bearish");
+        if (aligned) {
+          const last = displacement.displacementCandles[displacement.displacementCandles.length - 1];
+          const createdFVG = fvgs.some(f => Math.abs(f.index - last.index) <= 1);
+          if (createdFVG) {
+            pts = 1.0;
+            detail = `Displacement + FVG created — strong institutional footprint (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+          } else {
+            pts = 0.5;
+            detail = `Displacement aligned but no FVG created (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
+          }
+        } else {
+          detail = `Displacement detected but opposite to signal direction (${displacement.lastDirection})`;
+        }
+      } else if (displacement.isDisplacement) {
+        detail = `Displacement detected (${displacement.lastDirection}) but no signal direction`;
+      }
+    } else {
+      detail = "Displacement scoring disabled";
+    }
+    score += pts;
+    factors.push({ name: "Displacement", present: pts > 0, weight: 1.0, detail, group: "Price Action" });
+  }
+
+  // ── Factor 11: Breaker Block (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "No active breaker block aligned with signal";
+    if (config.useBreakerBlocks !== false && direction && breakerBlocks.length > 0) {
+      const wantType = direction === "long" ? "bullish_breaker" : "bearish_breaker";
+      const aligned = breakerBlocks.find(b => b.type === wantType);
+      if (aligned) {
+        const mid = (aligned.high + aligned.low) / 2;
+        const distPct = Math.abs(lastPrice - mid) / lastPrice;
+        if (distPct <= 0.01) {
+          pts = 1.0;
+          detail = `Price near ${aligned.type.replace("_", " ")} at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)}`;
+        } else {
+          detail = `${aligned.type.replace("_", " ")} exists but price too far (${(distPct * 100).toFixed(2)}%)`;
+        }
+      }
+    } else if (config.useBreakerBlocks === false) {
+      detail = "Breaker Blocks disabled";
+    }
+    score += pts;
+    factors.push({ name: "Breaker Block", present: pts > 0, weight: 1.0, detail, group: "Order Flow Zones" });
+  }
+
+  // ── Factor 12: Unicorn Model (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "No unicorn (Breaker + FVG overlap) aligned with signal";
+    if (config.useUnicornModel !== false && direction && unicornSetups.length > 0) {
+      const wantType = direction === "long" ? "bullish_unicorn" : "bearish_unicorn";
+      const aligned = unicornSetups.find(u => u.type === wantType
+        && lastPrice >= u.overlapLow && lastPrice <= u.overlapHigh);
+      if (aligned) {
+        pts = 1.5;
+        detail = `Unicorn: Breaker + FVG overlap at ${aligned.overlapLow.toFixed(5)}-${aligned.overlapHigh.toFixed(5)}`;
+      } else {
+        const anyAligned = unicornSetups.find(u => u.type === wantType);
+        if (anyAligned) {
+          detail = `Unicorn zone exists at ${anyAligned.overlapLow.toFixed(5)}-${anyAligned.overlapHigh.toFixed(5)} but price outside overlap`;
+        }
+      }
+    } else if (config.useUnicornModel === false) {
+      detail = "Unicorn Model disabled";
+    }
+    score += pts;
+    factors.push({ name: "Unicorn Model", present: pts > 0, weight: 1.5, detail, group: "Order Flow Zones" });
+  }
+
+  // ── Factor 13: Silver Bullet Window (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = "Outside Silver Bullet macro window";
+    if (config.useSilverBullet === false) {
+      detail = "Silver Bullet disabled";
+    } else if (silverBullet.active) {
+      pts = 1.0;
+      detail = `${silverBullet.window} active — ${silverBullet.minutesRemaining}min remaining`;
+    }
+    score += pts;
+    factors.push({ name: "Silver Bullet", present: pts > 0, weight: 1.0, detail, group: "Timing" });
+  }
+
+  // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
+  {
+    let pts = 0;
+    let detail = "Outside ICT macro reprice window";
+    if (config.useMacroWindows === false) {
+      detail = "Macro Windows disabled";
+    } else if (macroWindow.active) {
+      pts = 0.5;
+      detail = `${macroWindow.window} active — ${macroWindow.minutesRemaining}min remaining`;
+      if (silverBullet.active && config.useSilverBullet !== false) {
+        pts += 0.5;
+        detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "Macro Window", present: pts > 0, weight: 1.0, detail, group: "Timing" });
+  }
+
+  // ── Factor 15: SMT Divergence (max 1.0) ──
+  {
+    let pts = 0;
+    let detail = smt ? smt.detail : "SMT not computed (no correlated pair fetched)";
+    if (config.useSMT === false) {
+      detail = "SMT Divergence disabled";
+    } else if (smt && smt.detected && direction) {
+      const aligned = (direction === "long" && smt.type === "bullish")
+        || (direction === "short" && smt.type === "bearish");
+      if (aligned) {
+        pts = 1.0;
+        detail = `SMT aligned: ${smt.detail}`;
+      } else {
+        detail = `SMT detected (${smt.type}) but opposite to signal direction`;
+      }
+    } else if (smt && smt.detected) {
+      detail = `SMT (${smt.type}) detected but no signal direction yet`;
+    }
+    score += pts;
+    factors.push({ name: "SMT Divergence", present: pts > 0, weight: 1.0, detail, group: "Macro Confirmation" });
+  }
+
+  // ── Factor 16: Volume Profile (max 1.5) — replaces VWAP scoring ──
+  const volumeProfile = config.useVolumeProfile !== false ? computeVolumeProfile(candles) : null;
+  {
+    let pts = 0;
+    let detail = "";
+    if (!volumeProfile) {
+      detail = config.useVolumeProfile === false ? "Volume Profile disabled" : "Volume Profile unavailable (insufficient candles)";
+    } else {
+      const { poc, vah, val, nodes } = volumeProfile;
+      const distFromPOC = Math.abs(lastPrice - poc) / pipSize;
+      const pocProximityPips = 20;
+
+      let closestNode = nodes[0];
+      let minDist = Infinity;
+      for (const node of nodes) {
+        const d = Math.abs(lastPrice - node.price);
+        if (d < minDist) { minDist = d; closestNode = node; }
+      }
+
+      if (distFromPOC <= pocProximityPips && direction) {
+        pts = 1.0;
+        detail = `Price ${distFromPOC.toFixed(1)} pips from POC (${poc.toFixed(5)}) — institutional fair value`;
+      } else if (closestNode.type === "HVN" && direction) {
+        pts = 0.75;
+        detail = `Price at HVN (${closestNode.price.toFixed(5)}, ${closestNode.count} TPOs) — institutional defense level`;
+      } else if (closestNode.type === "LVN" && direction) {
+        pts = 0.5;
+        detail = `Price at LVN (${closestNode.price.toFixed(5)}) — thin liquidity zone (FVG validation)`;
+      } else if (direction) {
+        detail = `Price in normal volume zone (POC: ${poc.toFixed(5)}, VA: ${val.toFixed(5)}-${vah.toFixed(5)})`;
+      } else {
+        detail = `Volume Profile computed (POC: ${poc.toFixed(5)}) but no direction`;
+      }
+
+      // Cross-validation bonus: OB or FVG overlaps with HVN/LVN
+      if (pts > 0) {
+        const obAtHVN = closestNode.type === "HVN" && factors.some(f => f.name === "Order Block" && f.present);
+        const fvgAtLVN = closestNode.type === "LVN" && factors.some(f => f.name === "Fair Value Gap" && f.present);
+        if (obAtHVN) {
+          pts += 0.5;
+          detail += " + OB at HVN (cross-validated)";
+        } else if (fvgAtLVN) {
+          pts += 0.5;
+          detail += " + FVG at LVN (cross-validated)";
+        }
+      }
+      pts = Math.min(1.5, pts);
+    }
+    score += pts;
+    factors.push({ name: "Volume Profile", present: pts > 0, weight: 1.5, detail, group: "Volume Profile" });
+  }
+
+  // ── Factor 17: AMD Phase (max 1.0; +0.5 distribution bonus) ──
+  {
+    let pts = 0;
+    let detail = amd ? `AMD: ${amd.detail}` : "AMD not computed";
+    if (config.useAMD === false) {
+      detail = "AMD Phase disabled";
+    } else if (direction && amd && amd.bias) {
+      const aligned = (direction === "long" && amd.bias === "bullish") || (direction === "short" && amd.bias === "bearish");
+      if (aligned) {
+        pts = 1.0;
+        if (amd.phase === "distribution") {
+          pts += 0.5;
+          detail = `AMD distribution + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        } else {
+          detail = `AMD ${amd.phase} + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
+        }
+      } else {
+        detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
+      }
+    }
+    score += pts;
+    factors.push({ name: "AMD Phase", present: pts > 0, weight: 1.0, detail, group: "AMD / Power of 3" });
+  }
+
+  // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
   let fotsiAlignment: any = null;
-  const fotsiResult = (config as any)._fotsiResult as FOTSIResult | null;
-  if (fotsiResult && config.useFOTSI) {
-    const direction = structure.trend === "bullish" ? "long" : structure.trend === "bearish" ? "short" : null;
-    if (direction) {
+  {
+    let pts = 0;
+    let detail = "";
+    const fotsi = (config as any)._fotsiResult as FOTSIResult | null;
+    if (fotsi && direction && config.useFOTSI !== false) {
       const currencies = parsePairCurrencies(config._currentSymbol || "");
       if (currencies) {
         const [base, quote] = currencies;
         const dir = direction === "long" ? "BUY" : "SELL";
-        fotsiAlignment = getCurrencyAlignment(base, quote, dir as "BUY" | "SELL", fotsiResult.strengths);
+        fotsiAlignment = getCurrencyAlignment(base, quote, dir as "BUY" | "SELL", fotsi.strengths);
+        pts = fotsiAlignment.score;
+        detail = `${fotsiAlignment.label} (${base} ${fotsiAlignment.baseTSI.toFixed(1)}, ${quote} ${fotsiAlignment.quoteTSI.toFixed(1)}, spread ${fotsiAlignment.spread.toFixed(1)})`;
+      } else {
+        detail = "Non-forex pair — currency strength N/A";
       }
-      if (fotsiAlignment) {
-        f18Weight = fotsiAlignment.score;
-        f18Present = fotsiAlignment.score !== 0;
+    } else if (!fotsi) {
+      detail = "FOTSI data unavailable this cycle";
+    } else {
+      detail = "No direction — currency strength check skipped";
+    }
+    score += pts;
+    factors.push({ name: "Currency Strength", present: pts !== 0, weight: 1.5, detail, group: "Macro Confirmation" });
+  }
+
+  // ── Factor 20: Daily Bias / HTF Trend (max 1.5) ──
+  {
+    let pts = 0;
+    let detail = "";
+    if (config.useDailyBias !== false && dailyCandles && dailyCandles.length >= 20 && direction) {
+      const dailyStructure = analyzeMarketStructure(dailyCandles);
+      const dailyTrend = dailyStructure.trend;
+      if (dailyTrend !== "ranging") {
+        const htfAligned = (direction === "long" && dailyTrend === "bullish")
+          || (direction === "short" && dailyTrend === "bearish");
+        if (htfAligned) {
+          pts = 1.5;
+          detail = `Daily ${dailyTrend} trend aligned with ${direction} — high conviction`;
+        } else {
+          pts = -0.5;
+          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} trend (penalty)`;
+        }
+      } else {
+        pts = 0.5;
+        detail = `Daily trend ranging — partial credit (no HTF directional bias)`;
+      }
+    } else if (!dailyCandles || dailyCandles.length < 20) {
+      detail = "Daily candles unavailable — HTF bias skipped";
+    } else {
+      detail = "No direction determined — HTF bias skipped";
+    }
+    score += pts;
+    factors.push({ name: "Daily Bias", present: pts > 0, weight: 1.5, detail, group: "Daily Bias" });
+  }
+
+  // ─── Anti-Double-Count Adjustment Pass ────────────────────────────────
+  {
+    const findFactor = (name: string) => factors.find(f => f.name === name);
+    const adjustFactor = (name: string, newWeight: number, reason: string) => {
+      const f = findFactor(name);
+      if (f && f.present) {
+        const diff = f.weight - newWeight;
+        if (diff > 0) {
+          score -= diff;
+          f.weight = newWeight;
+          f.detail += ` [adjusted: ${reason}]`;
+        }
+      }
+    };
+
+    // Rule 1: Unicorn fires → Breaker = 0, FVG = 0
+    const unicorn = findFactor("Unicorn Model");
+    if (unicorn && unicorn.present) {
+      const breaker = findFactor("Breaker Block");
+      const fvg = findFactor("Fair Value Gap");
+      if (breaker && breaker.present) {
+        score -= breaker.weight;
+        breaker.weight = 0;
+        breaker.detail += " [zeroed: absorbed by Unicorn Model]";
+      }
+      if (fvg && fvg.present) {
+        score -= fvg.weight;
+        fvg.weight = 0;
+        fvg.detail += " [zeroed: absorbed by Unicorn Model]";
+      }
+    }
+
+    // Rule 2: Displacement + FVG overlap → Displacement reduced to 0.5
+    const displacementF = findFactor("Displacement");
+    const fvgFactor = findFactor("Fair Value Gap");
+    if (displacementF && displacementF.present && fvgFactor && fvgFactor.present
+        && displacementF.detail.includes("FVG")) {
+      adjustFactor("Displacement", 0.5, "FVG already scored the displacement event");
+    }
+
+    // Rule 3: OB + FVG both inside same zone → cap combined at 3.0
+    if (!(unicorn && unicorn.present)) {
+      const ob = findFactor("Order Block");
+      const fvg2 = findFactor("Fair Value Gap");
+      if (ob && ob.present && fvg2 && fvg2.present) {
+        const combinedZone = ob.weight + fvg2.weight;
+        if (combinedZone > 3.0) {
+          const excess = combinedZone - 3.0;
+          score -= excess;
+          fvg2.weight = Math.max(0, fvg2.weight - excess);
+          fvg2.detail += ` [capped: OB+FVG combined limited to 3.0]`;
+        }
+      }
+    }
+
+    // Rule 4: Silver Bullet fires → absorbs Kill Zone
+    const sb = findFactor("Silver Bullet");
+    const kz = findFactor("Session/Kill Zone");
+    if (sb && sb.present && kz && kz.present) {
+      score -= kz.weight;
+      kz.weight = 0;
+      kz.detail += " [zeroed: absorbed by Silver Bullet]";
+      const sbBoost = 0.5;
+      sb.weight = Math.min(1.5, sb.weight + sbBoost);
+      score += sbBoost;
+      sb.detail += " [boosted: absorbed Kill Zone timing]";
+    }
+
+    // Rule 5: AMD distribution + sweep → absorbs Judas
+    const amdFactor = findFactor("AMD Phase");
+    const judasF = findFactor("Judas Swing");
+    const sweepF = findFactor("Liquidity Sweep");
+    if (amdFactor && amdFactor.present && sweepF && sweepF.present && judasF && judasF.present) {
+      score -= judasF.weight;
+      judasF.weight = 0;
+      judasF.detail += " [zeroed: absorbed by AMD + Sweep sequence]";
+    }
+
+    // Rule 6: Macro during Kill Zone → Macro reduced to 0.25
+    const macro = findFactor("Macro Window");
+    if (macro && macro.present && kz && kz.present && kz.weight > 0) {
+      adjustFactor("Macro Window", 0.25, "Kill Zone already scoring timing");
+    }
+  }
+
+  // ─── Power of 3 Combo Bonus (+1.0) ───────────────────────────────────
+  {
+    const findFactor = (name: string) => factors.find(f => f.name === name);
+    const amdF = findFactor("AMD Phase");
+    const sweepF = findFactor("Liquidity Sweep");
+    const judasF = findFactor("Judas Swing");
+    const trendF = findFactor("Trend Direction");
+
+    const amdPresent = amdF && amdF.present;
+    const sweepOrJudas = (sweepF && sweepF.present) || (judasF && judasF.present);
+    const trendAligned = trendF && trendF.present;
+
+    if (amdPresent && sweepOrJudas && trendAligned) {
+      const po3Bonus = 1.0;
+      score += po3Bonus;
+      factors.push({
+        name: "Power of 3 Combo",
+        present: true,
+        weight: po3Bonus,
+        detail: `Full ICT sequence: Accumulation → Manipulation (${sweepF?.present ? "sweep" : "Judas"}) → Distribution — high-probability setup`,
+        group: "AMD / Power of 3",
+      });
+    } else {
+      factors.push({
+        name: "Power of 3 Combo",
+        present: false,
+        weight: 0,
+        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Trend=${trendAligned ? "✓" : "✗"}`,
+        group: "AMD / Power of 3",
+      });
+    }
+  }
+
+  // ─── Group Caps Enforcement ─────────────────────────────────────────
+  {
+    const GROUP_CAPS: Record<string, number> = {
+      "Market Structure": 3.0,
+      "Daily Bias": 1.5,
+      "Order Flow Zones": 3.0,
+      "Premium/Discount & Fib": 2.5,
+      "Timing": 1.5,
+      "Price Action": 2.0,
+      "AMD / Power of 3": 1.5,
+      "Macro Confirmation": 2.0,
+      "Volume Profile": 1.5,
+    };
+
+    const groupTotals: Record<string, number> = {};
+    for (const f of factors) {
+      if (f.present && f.group) {
+        groupTotals[f.group] = (groupTotals[f.group] || 0) + f.weight;
+      }
+    }
+
+    for (const [group, cap] of Object.entries(GROUP_CAPS)) {
+      const total = groupTotals[group] || 0;
+      if (total > cap) {
+        const excess = total - cap;
+        score -= excess;
+        const groupFactors = factors.filter(f => f.group === group && f.present && f.weight > 0);
+        const scaleFactor = cap / total;
+        for (const f of groupFactors) {
+          const newWeight = Math.round(f.weight * scaleFactor * 100) / 100;
+          f.weight = newWeight;
+          f.detail += ` [group-capped: ${group} limited to ${cap}]`;
+        }
       }
     }
   }
-  factors.push({ name: "Currency Strength", present: f18Present, weight: f18Weight, detail: fotsiAlignment?.label || "N/A" });
-  score += f18Weight;
 
-  // Clamp score to 0-10
-  score = Math.min(10, Math.max(0, score));
+  // Final clamp
+  score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 
-  // ── Direction ──
-  let direction: "long" | "short" | null = null;
-  if (structure.trend === "bullish" && score >= config.minConfluence) direction = "long";
-  else if (structure.trend === "bearish" && score >= config.minConfluence) direction = "short";
-
-  // ── HTF Bias Gate ──
+  // ── HTF Bias Gate (safety gate, separate from Factor 20 scoring) ──
   if (config.htfBiasRequired && direction) {
+    let htfBias: "bullish" | "bearish" | "ranging" = "ranging";
+    if (dailyCandles && dailyCandles.length >= 10) {
+      const htfStructure = analyzeMarketStructure(dailyCandles);
+      htfBias = htfStructure.trend;
+    }
     if (config.htfBiasHardVeto) {
       if (direction === "long" && htfBias !== "bullish") direction = null;
       if (direction === "short" && htfBias !== "bearish") direction = null;
@@ -541,10 +1174,11 @@ function runConfluenceAnalysis(
     smt,
     vwap,
     fotsiAlignment,
+    volumeProfile,
     stopLoss: sltp.stopLoss,
     takeProfit: sltp.takeProfit,
     lastPrice,
-    bias: htfBias,
+    bias: direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral",
     summary: `Score ${score.toFixed(1)} | ${structure.trend} | ${pd.currentZone} | ${session.name}`,
   };
 }
