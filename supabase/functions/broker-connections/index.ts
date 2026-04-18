@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { buildBrokerSymbolMap } from "../_shared/symbolMatcher.ts";
+import { buildBrokerSymbolMapProbed, type TradabilityProbe } from "../_shared/symbolMatcher.ts";
 
 // Canonical pairs the bot scanner cares about — used for auto-mapping.
 const CANONICAL_PAIRS = [
@@ -41,14 +41,65 @@ function unswap(api_key: string, account_id: string): { authToken: string; metaA
   return { authToken: api_key, metaAccountId: account_id };
 }
 
-/** Best-effort auto-mapping. Logs failures, never throws. */
-async function autoMapBrokerSymbols(api_key: string, account_id: string): Promise<{ symbol_suffix: string; symbol_overrides: Record<string, string>; mapped: number; unmapped: string[] } | null> {
+/**
+ * Build a TradabilityProbe for a MetaAPI account in a specific region.
+ * Calls /symbols/{name}/specification and /symbols/{name}/current-price.
+ * Both endpoints are cheap GETs; failures are swallowed (return null).
+ */
+function makeMetaApiProbe(authToken: string, metaAccountId: string, region: string): TradabilityProbe {
+  const base = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols`;
+  const headers = { "auth-token": authToken };
+  const cache = new Map<string, { tradeMode?: string; hasLivePrice?: boolean } | null>();
+
+  return async (sym: string) => {
+    if (cache.has(sym)) return cache.get(sym)!;
+    try {
+      const enc = encodeURIComponent(sym);
+      const [specRes, priceRes] = await Promise.all([
+        fetch(`${base}/${enc}/specification`, { headers }),
+        fetch(`${base}/${enc}/current-price`, { headers }),
+      ]);
+      let tradeMode: string | undefined;
+      let hasLivePrice = false;
+      if (specRes.ok) {
+        const j = await specRes.json().catch(() => null);
+        // MetaAPI returns either tradeMode or trade (depending on platform)
+        tradeMode = j?.tradeMode ?? j?.trade ?? undefined;
+        if (typeof tradeMode === "string") tradeMode = tradeMode.toUpperCase();
+      }
+      if (priceRes.ok) {
+        const j = await priceRes.json().catch(() => null);
+        hasLivePrice = !!(j && (j.bid ?? j.ask));
+      }
+      const out = { tradeMode, hasLivePrice };
+      cache.set(sym, out);
+      return out;
+    } catch {
+      cache.set(sym, null);
+      return null;
+    }
+  };
+}
+
+/** Best-effort auto-mapping with tradability probe. Logs failures, never throws. */
+async function autoMapBrokerSymbols(api_key: string, account_id: string): Promise<{
+  symbol_suffix: string;
+  symbol_overrides: Record<string, string>;
+  mapped: number;
+  unmapped: string[];
+  details?: Record<string, { picked: string; candidates: any[] }>;
+} | null> {
   try {
     const { authToken, metaAccountId } = unswap(api_key, account_id);
-    const { symbols } = await fetchMetaApiSymbols(authToken, metaAccountId);
-    if (!symbols.length) return null;
-    const { overrides, suffix, unmapped } = buildBrokerSymbolMap(CANONICAL_PAIRS, symbols);
-    return { symbol_suffix: suffix, symbol_overrides: overrides, mapped: Object.keys(overrides).length, unmapped };
+    const { symbols, region } = await fetchMetaApiSymbols(authToken, metaAccountId);
+    if (!symbols.length || !region) return null;
+
+    // Use probe-aware mapper to distinguish EURUSD vs EURUSDr vs EURUSDm
+    const probe = makeMetaApiProbe(authToken, metaAccountId, region);
+    const { overrides, suffix, unmapped, details } = await buildBrokerSymbolMapProbed(
+      CANONICAL_PAIRS, symbols, probe, { concurrency: 4 },
+    );
+    return { symbol_suffix: suffix, symbol_overrides: overrides, mapped: Object.keys(overrides).length, unmapped, details };
   } catch (e: any) {
     console.warn(`[broker-connections] auto-map failed: ${e?.message}`);
     return null;
@@ -93,7 +144,7 @@ Deno.serve(async (req) => {
         if (mapped) {
           symbol_suffix = symbol_suffix || mapped.symbol_suffix;
           symbol_overrides = mapped.symbol_overrides;
-          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped };
+          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped, details: mapped.details };
         }
       }
 
@@ -151,6 +202,7 @@ Deno.serve(async (req) => {
         symbol_overrides: mapped.symbol_overrides,
         mapped: mapped.mapped,
         unmapped: mapped.unmapped,
+        details: mapped.details,
       });
     }
 

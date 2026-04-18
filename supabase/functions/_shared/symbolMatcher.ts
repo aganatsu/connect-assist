@@ -53,24 +53,39 @@ export function matchBrokerSymbol(
   canonical: string,
   brokerSymbols: string[],
 ): MatchResult | null {
-  const base = baseOf(canonical);
-  if (!base) return null;
+  const all = matchAllBrokerSymbols(canonical, brokerSymbols);
+  return all[0] ?? null;
+}
 
-  let best: { raw: string; score: number } | null = null;
+/**
+ * Return ALL candidate broker symbols matching the canonical pair,
+ * sorted by static score (best first). Use this when you want to
+ * probe each variant for tradability (Standard vs Raw vs Zero accounts).
+ */
+export function matchAllBrokerSymbols(
+  canonical: string,
+  brokerSymbols: string[],
+): MatchResult[] {
+  const base = baseOf(canonical);
+  if (!base) return [];
+
+  const scored: { raw: string; score: number }[] = [];
   for (const raw of brokerSymbols) {
     const s = scoreCandidate(base, raw);
     if (s < 0) continue;
-    if (!best || s < best.score) best = { raw, score: s };
+    scored.push({ raw, score: s });
   }
-  if (!best) return null;
+  scored.sort((a, b) => a.score - b.score);
 
-  const upper = best.raw.toUpperCase();
-  const idx = upper.indexOf(base);
-  return {
-    brokerSymbol: best.raw,
-    prefix: best.raw.slice(0, idx),
-    suffix: best.raw.slice(idx + base.length),
-  };
+  return scored.map(({ raw }) => {
+    const upper = raw.toUpperCase();
+    const idx = upper.indexOf(base);
+    return {
+      brokerSymbol: raw,
+      prefix: raw.slice(0, idx),
+      suffix: raw.slice(idx + base.length),
+    };
+  });
 }
 
 /**
@@ -109,4 +124,96 @@ export function buildBrokerSymbolMap(
   }
 
   return { overrides, suffix, unmapped };
+}
+
+// ---------------------------------------------------------------------------
+// Tradability probe — distinguishes EURUSD vs EURUSDr vs EURUSDm by asking
+// the broker whether each candidate is actually tradable on THIS account.
+// ---------------------------------------------------------------------------
+
+export interface TradabilityProbe {
+  (brokerSymbol: string): Promise<{
+    tradeMode?: string;       // "FULL", "DISABLED", "CLOSE_ONLY", etc.
+    hasLivePrice?: boolean;   // true if bid/ask returned
+  } | null>;
+}
+
+export interface ProbedMatch extends MatchResult {
+  tradeMode?: string;
+  hasLivePrice?: boolean;
+  score: number;
+}
+
+function scoreProbed(c: { tradeMode?: string; hasLivePrice?: boolean; suffix: string; prefix: string }): number {
+  let score = 0;
+  if (c.tradeMode === "FULL") score += 100;
+  else if (c.tradeMode && c.tradeMode !== "DISABLED") score += 30;
+  if (c.hasLivePrice) score += 50;
+  score -= c.prefix.length * 2;
+  score -= c.suffix.length;
+  return score;
+}
+
+/**
+ * Probe-aware mapper. For each canonical pair, gather candidate variants and
+ * call `probe` to see which is actually tradable; pick the highest scorer.
+ * Falls back to static best when the probe returns nothing useful.
+ */
+export async function buildBrokerSymbolMapProbed(
+  canonicalSymbols: string[],
+  brokerSymbols: string[],
+  probe: TradabilityProbe,
+  opts: { concurrency?: number } = {},
+): Promise<{
+  overrides: Record<string, string>;
+  suffix: string;
+  unmapped: string[];
+  details: Record<string, { picked: string; candidates: ProbedMatch[] }>;
+}> {
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
+  const overrides: Record<string, string> = {};
+  const suffixCounts: Record<string, number> = {};
+  const unmapped: string[] = [];
+  const details: Record<string, { picked: string; candidates: ProbedMatch[] }> = {};
+
+  const tasks = canonicalSymbols.map((sym) => async () => {
+    const candidates = matchAllBrokerSymbols(sym, brokerSymbols).slice(0, 6);
+    if (!candidates.length) {
+      unmapped.push(sym);
+      return;
+    }
+    const probed: ProbedMatch[] = await Promise.all(
+      candidates.map(async (c) => {
+        const info = await probe(c.brokerSymbol).catch(() => null);
+        const merged = { ...c, ...(info ?? {}) };
+        return { ...merged, score: scoreProbed(merged) };
+      }),
+    );
+    probed.sort((a, b) => b.score - a.score);
+    const tradable = probed.find((p) => p.tradeMode === "FULL" || p.hasLivePrice);
+    const pick = tradable ?? probed[0];
+    overrides[sym] = pick.brokerSymbol;
+    details[sym] = { picked: pick.brokerSymbol, candidates: probed };
+    if (pick.prefix === "" && pick.suffix && /^[A-Z0-9]+$/i.test(pick.suffix)) {
+      suffixCounts[pick.suffix] = (suffixCounts[pick.suffix] ?? 0) + 1;
+    }
+  });
+
+  // Run with bounded concurrency
+  let i = 0;
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+    while (i < tasks.length) {
+      const idx = i++;
+      await tasks[idx]();
+    }
+  });
+  await Promise.all(workers);
+
+  let suffix = "";
+  let bestCount = 0;
+  for (const [s, c] of Object.entries(suffixCounts)) {
+    if (c > bestCount) { bestCount = c; suffix = s; }
+  }
+
+  return { overrides, suffix, unmapped, details };
 }
