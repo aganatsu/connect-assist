@@ -606,7 +606,7 @@ Deno.serve(async (req: Request) => {
 // ─── Scan logic ────────────────────────────────────────────────────
 
 async function runScan(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   body: Record<string, unknown>,
   corsHeaders: Record<string, string>,
@@ -984,7 +984,7 @@ async function runScan(
 // ─── Scan log persistence ──────────────────────────────────────────
 
 async function saveScanLog(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   scanId: string,
   startTime: number,
@@ -1010,7 +1010,7 @@ async function saveScanLog(
 // ─── Status endpoint ───────────────────────────────────────────────
 
 async function getStatus(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   corsHeaders: Record<string, string>,
 ) {
@@ -1055,7 +1055,7 @@ async function getStatus(
 // ─── Scan logs endpoint ────────────────────────────────────────────
 
 async function getScanLogs(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SBClient,
   userId: string,
   corsHeaders: Record<string, string>,
 ) {
