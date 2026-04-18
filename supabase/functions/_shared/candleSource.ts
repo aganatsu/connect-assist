@@ -389,6 +389,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
     const brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     const candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
+    console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.metaapi++;
       return { candles: candles.slice(-limit), source: "metaapi" };
