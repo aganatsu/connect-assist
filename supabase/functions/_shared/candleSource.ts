@@ -283,6 +283,33 @@ export interface FetchResult {
   source: "metaapi" | "twelvedata" | "yahoo" | "none";
 }
 
+// ─── Per-scan source tally (opt-in) ──────────────────────────────────
+// Bot scanner can call beginScanSourceTally() at the start of a cycle and
+// endScanSourceTally() at the end to learn which feeds served the candles.
+export interface SourceTally {
+  metaapi: number;
+  twelvedata: number;
+  yahoo: number;
+  none: number;
+  primary: "metaapi" | "twelvedata" | "yahoo" | "none";
+}
+let _activeTally: { metaapi: number; twelvedata: number; yahoo: number; none: number } | null = null;
+
+export function beginScanSourceTally(): void {
+  _activeTally = { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+}
+
+export function endScanSourceTally(): SourceTally {
+  const t = _activeTally ?? { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+  _activeTally = null;
+  // "primary" = the source that served the most candle requests this cycle
+  const entries: ["metaapi" | "twelvedata" | "yahoo" | "none", number][] = [
+    ["metaapi", t.metaapi], ["twelvedata", t.twelvedata], ["yahoo", t.yahoo], ["none", t.none],
+  ];
+  entries.sort((a, b) => b[1] - a[1]);
+  return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
+}
+
 export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<FetchResult> {
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
@@ -291,17 +318,27 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
     const brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     const candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
-    if (candles.length >= 30) return { candles: candles.slice(-limit), source: "metaapi" };
+    if (candles.length >= 30) {
+      if (_activeTally) _activeTally.metaapi++;
+      return { candles: candles.slice(-limit), source: "metaapi" };
+    }
   }
 
   // Try Twelve Data
   const td = await twelveDataCandles(opts.symbol, canon, limit);
-  if (td.length >= 30) return { candles: td.slice(-limit), source: "twelvedata" };
+  if (td.length >= 30) {
+    if (_activeTally) _activeTally.twelvedata++;
+    return { candles: td.slice(-limit), source: "twelvedata" };
+  }
 
   // Yahoo fallback (with 4h aggregation if needed)
   let yc = await yahooCandles(opts.symbol, canon);
   if (canon === "4h" && yc.length > 0) yc = aggregateTo4H(yc);
-  if (yc.length > 0) return { candles: yc.slice(-limit), source: "yahoo" };
+  if (yc.length > 0) {
+    if (_activeTally) _activeTally.yahoo++;
+    return { candles: yc.slice(-limit), source: "yahoo" };
+  }
 
+  if (_activeTally) _activeTally.none++;
   return { candles: [], source: "none" };
 }
