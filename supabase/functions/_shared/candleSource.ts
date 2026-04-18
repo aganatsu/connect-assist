@@ -176,6 +176,12 @@ function resolveBrokerSymbol(symbol: string, conn: BrokerConn): string {
 }
 
 // ─── Twelve Data ──────────────────────────────────────────────────────
+// In-memory cache: free tier = 8 credits/min. Cache for 60s to avoid burning quota.
+const tdCache = new Map<string, { at: number; candles: Candle[] }>();
+const TD_CACHE_MS = 60_000;
+// Track rate-limit cooldown so we don't keep hammering after a 429.
+let tdCooldownUntil = 0;
+
 async function twelveDataCandles(
   symbol: string,
   canon: string,
@@ -186,6 +192,15 @@ async function twelveDataCandles(
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return [];
 
+  const cacheKey = `${symbol}|${canon}|${limit}`;
+  const cached = tdCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < TD_CACHE_MS) {
+    return cached.candles;
+  }
+
+  // Respect cooldown after a rate-limit response.
+  if (Date.now() < tdCooldownUntil) return [];
+
   const interval = twelveDataInterval(canon);
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
   try {
@@ -193,10 +208,15 @@ async function twelveDataCandles(
     if (!res.ok) return [];
     const data = await res.json();
     if (data?.status === "error" || !Array.isArray(data?.values)) {
-      if (data?.message) console.warn(`[candleSource] Twelve Data: ${data.message}`);
+      if (data?.message) {
+        console.warn(`[candleSource] Twelve Data: ${data.message}`);
+        if (data.code === 429 || /credits|rate limit/i.test(data.message)) {
+          tdCooldownUntil = Date.now() + 60_000;
+        }
+      }
       return [];
     }
-    return data.values.map((v: any) => ({
+    const candles: Candle[] = data.values.map((v: any) => ({
       datetime: typeof v.datetime === "string" && v.datetime.length === 10
         ? `${v.datetime}T00:00:00Z`
         : `${v.datetime.replace(" ", "T")}Z`,
@@ -209,6 +229,8 @@ async function twelveDataCandles(
       Number.isFinite(c.open) && Number.isFinite(c.high) &&
       Number.isFinite(c.low) && Number.isFinite(c.close)
     );
+    tdCache.set(cacheKey, { at: Date.now(), candles });
+    return candles;
   } catch (e: any) {
     console.warn(`[candleSource] Twelve Data fetch error: ${e?.message}`);
     return [];
