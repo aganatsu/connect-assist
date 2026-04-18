@@ -1179,7 +1179,7 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
  *  2  | Order Block            | 2.0  | (quality-gated: structure break + body zone)
  *  3  | Fair Value Gap         | 1.5  | CE level check (1.5 at CE, 1.0 inside FVG)
  *  4  | Premium/Discount       | 2.0  | (capped)
- *  5  | Session/Kill Zone      | 1.5  | +0.5 Silver Bullet combo (increased from 1.0)
+ *  5  | Session/Kill Zone      | 1.0  | +0.5 Silver Bullet combo
  *  6  | Judas Swing            | 1.0  | +0.5 OR judas; kill-zone-gated
  *  7  | PD/PW Levels           | 1.0  | +0.5 OR key-level; weekly > daily (was 0.5)
  *  8  | Reversal Candle        | 0.5  | context-aware (full pts only at key level)
@@ -1191,10 +1191,10 @@ function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit:
  * 14  | Macro Window           | 0.5  | +0.5 Silver Bullet overlap combo
  * 15  | SMT Divergence         | 1.0  | swing-point-based (not absolute extremes)
  * 16  | VWAP                   | 0.5  | +0.5 wick rejection at VWAP
- * 17  | AMD Phase              | 0.5  | +0.5 distribution-phase bonus
+ * 17  | AMD Phase              | 1.0  | +0.5 distribution-phase bonus
  * 18  | Currency Strength      | 1.5  | FOTSI alignment (-0.5 to +1.5)
  * ----+------------------------+------+-------------------------------------------
- *  TOTAL MAX RAW              = 24.5  (clamped to 10 for display via Math.min)
+ *  TOTAL MAX RAW              = 24.0  (clamped to 10 for display via Math.min)
  *
  * Recommended thresholds on the 0-10 scale (post-clamp):
  *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
@@ -1321,18 +1321,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Premium/Discount", present: pts > 0, weight: 2.0, detail });
   }
 
-  // ── Factor 5: Kill Zone (max 1.5, +0.5 combo bonus if Silver Bullet overlap) ──
-  // ICT: Kill zones are THE primary timing filter. Increased weight to reflect importance.
+  // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
+  // ICT: Kill zones are a timing filter — base 1.0 pts.
   const silverBullet = detectSilverBullet();
   {
-    let pts = session.isKillZone ? 1.5 : 0;
+    let pts = session.isKillZone ? 1.0 : 0;
     let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
     if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
       pts += 0.5;
       detail += ` + ${silverBullet.window} overlap (combo bonus)`;
     }
     score += pts;
-    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.5, detail });
+    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: 1.0, detail });
   }
 
   // ── Factor 6: Judas Swing (max 1.0) ──
@@ -1683,7 +1683,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     } else if (direction && amd.bias) {
       const aligned = (direction === "long" && amd.bias === "bullish") || (direction === "short" && amd.bias === "bearish");
       if (aligned) {
-        pts = 0.5;
+        pts = 1.0;
         if (amd.phase === "distribution") {
           pts += 0.5;
           detail = `AMD distribution + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
