@@ -580,8 +580,7 @@ export default function BotView() {
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
             <div className="flex-1 overflow-y-auto">
               {(() => {
-                const latestDetails = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
-                const selected = latestDetails[selectedPairIdx];
+                const selected = latestDetailsClean[selectedPairIdx];
                 if (!selected) {
                   return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                 }
