@@ -740,8 +740,9 @@ Deno.serve(async (req) => {
                 : currentPrice + trailDistance;
               // Only move SL in favorable direction (never widen it)
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
                 sl = newSL; // Update local reference for SL check above
+                pos.close_reason = "trail";
                 // FIX 1: Sync trailing SL to broker
                 const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
                 console.log(`Trailing stop broker SL sync [${pos.position_id}]: ${trailModifyResults.join("; ")}`);
