@@ -533,7 +533,8 @@ export default function BotView() {
                   </Badge>
                 )}
                 {logs.length > 0 && (
-                  <span className="text-[9px] text-muted-foreground">
+                  <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                    <DataSourceBadge source={latestSource} />
                     {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
                   </span>
                 )}
