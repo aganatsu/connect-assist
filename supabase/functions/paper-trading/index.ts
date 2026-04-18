@@ -712,8 +712,9 @@ Deno.serve(async (req) => {
               // Move SL to entry (break even)
               const newSL = entryPrice;
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-                await supabase.from("paper_positions").update({ stop_loss: newSL.toString() }).eq("id", pos.id);
+                await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "be" }).eq("id", pos.id);
                 sl = newSL; // Update local reference
+                pos.close_reason = "be"; // keep local in sync for trail check below
                 // FIX 1: Sync break-even SL to broker
                 const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
                 console.log(`Break-even broker SL sync [${pos.position_id}]: ${beModifyResults.join("; ")}`);
