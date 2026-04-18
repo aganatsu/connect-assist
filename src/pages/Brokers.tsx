@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   Plus, Trash2, Wand2, List, Wrench, Activity, CheckCircle2, XCircle,
@@ -350,11 +350,21 @@ function ConnectionDetail({
   const [newSym, setNewSym] = useState("");
   const [newBrokerSym, setNewBrokerSym] = useState("");
   const [dirty, setDirty] = useState(false);
+  // Probe results for manually-typed broker symbols (keyed by broker symbol string).
+  // Auto-populated by validate-on-save; merged with auto-map probe data for badge rendering.
+  const [manualProbes, setManualProbes] = useState<Record<string, { tradeMode?: string; hasLivePrice?: boolean } | null>>({});
+  // Tracks which rows the user manually edited/added since last save (so we know what to validate).
+  const [manuallyTouched, setManuallyTouched] = useState<Set<string>>(new Set());
+  // Confirm dialog state for "save anyway" when probe finds bad symbols.
+  const [warnDialog, setWarnDialog] = useState<{ open: boolean; bad: { sym: string; brokerSym: string; reason: string }[] }>({ open: false, bad: [] });
+  const [validating, setValidating] = useState(false);
 
   // Reset local state when selection changes
   useMemo(() => {
     setEditSuffix(c.symbol_suffix || "");
     setEditOverrides(c.symbol_overrides || {});
+    setManualProbes({});
+    setManuallyTouched(new Set());
     setDirty(false);
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -366,12 +376,86 @@ function ConnectionDetail({
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
       toast.success("Saved");
       setDirty(false);
+      setManuallyTouched(new Set());
     },
     onError: (e: any) => toast.error(e.message),
   });
 
-  const overrideCount = Object.keys(editOverrides).length;
   const isMetaApi = c.broker_type === "metaapi";
+
+  // Build a lookup: broker symbol → probe info (from auto-map probe details OR manual probe).
+  const probeBySymbol = useMemo(() => {
+    const out: Record<string, { tradeMode?: string; hasLivePrice?: boolean }> = {};
+    if (probeDetails) {
+      for (const info of Object.values(probeDetails)) {
+        for (const cand of info.candidates) {
+          out[cand.brokerSymbol] = { tradeMode: cand.tradeMode, hasLivePrice: cand.hasLivePrice };
+        }
+      }
+    }
+    for (const [sym, info] of Object.entries(manualProbes)) {
+      if (info) out[sym] = info;
+    }
+    return out;
+  }, [probeDetails, manualProbes]);
+
+  // Save flow: probe any unprobed/manually-touched rows, warn on bad, then save.
+  async function handleSave() {
+    if (!isMetaApi) { updateMutation.mutate(); return; }
+
+    // Symbols we don't yet have probe data for (or rows the user just edited).
+    const toValidate = Array.from(new Set(
+      Object.entries(editOverrides)
+        .filter(([sym, brokerSym]) =>
+          brokerSym && (manuallyTouched.has(sym) || !probeBySymbol[brokerSym])
+        )
+        .map(([, brokerSym]) => brokerSym)
+    ));
+
+    let freshProbes: Record<string, { tradeMode?: string; hasLivePrice?: boolean } | null> = {};
+    if (toValidate.length) {
+      setValidating(true);
+      try {
+        const res: any = await brokerApi.probeSymbols(c.id, toValidate);
+        if (res?.success) {
+          freshProbes = res.results || {};
+          setManualProbes((prev) => ({ ...prev, ...freshProbes }));
+        } else {
+          toast.warning("Couldn't validate symbols", { description: res?.error || "Saving without validation" });
+        }
+      } catch (e: any) {
+        toast.warning("Validation failed", { description: e.message });
+      } finally {
+        setValidating(false);
+      }
+    }
+
+    // Merge fresh + existing probe data and check for bad symbols across ALL rows.
+    const fullProbeMap = { ...probeBySymbol, ...freshProbes };
+    const bad: { sym: string; brokerSym: string; reason: string }[] = [];
+    for (const [sym, brokerSym] of Object.entries(editOverrides)) {
+      if (!brokerSym) continue;
+      const info = fullProbeMap[brokerSym];
+      if (!info) continue; // unknown — don't block
+      const mode = (info.tradeMode || "").toUpperCase();
+      const modeBad = mode === "DISABLED" || mode === "CLOSE_ONLY";
+      const noQuote = info.hasLivePrice === false;
+      if (modeBad || noQuote) {
+        bad.push({
+          sym, brokerSym,
+          reason: [modeBad && `tradeMode=${mode || "?"}`, noQuote && "no live quote"].filter(Boolean).join(", "),
+        });
+      }
+    }
+
+    if (bad.length) {
+      setWarnDialog({ open: true, bad });
+      return;
+    }
+    updateMutation.mutate();
+  }
+
+  const overrideCount = Object.keys(editOverrides).length;
 
   return (
     <div className="space-y-4">
@@ -539,7 +623,27 @@ function ConnectionDetail({
                             </DropdownMenuContent>
                           </DropdownMenu>
                         ) : (
-                          <span className="font-mono text-primary truncate">{brokerSym}</span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-primary truncate">{brokerSym}</span>
+                            {(() => {
+                              const info = probeBySymbol[brokerSym];
+                              if (!info) return null;
+                              return (
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <TradeModeBadge tradeMode={info.tradeMode} />
+                                  {info.hasLivePrice ? (
+                                    <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 border-success/40 text-success">
+                                      <Zap className="h-2 w-2" /> live
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="h-4 px-1 text-[9px] gap-0.5 text-muted-foreground">
+                                      <Ban className="h-2 w-2" /> no quote
+                                    </Badge>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
                         )}
                         <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
                           const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
@@ -563,7 +667,9 @@ function ConnectionDetail({
                 variant="outline" size="sm" className="h-8"
                 disabled={!newSym.trim() || !newBrokerSym.trim()}
                 onClick={() => {
-                  setEditOverrides((prev) => ({ ...prev, [normalizeOverrideKey(newSym)]: newBrokerSym.trim() }));
+                  const key = normalizeOverrideKey(newSym);
+                  setEditOverrides((prev) => ({ ...prev, [key]: newBrokerSym.trim() }));
+                  setManuallyTouched((prev) => new Set(prev).add(key));
                   setNewSym(""); setNewBrokerSym(""); setDirty(true);
                 }}
               >
@@ -574,18 +680,54 @@ function ConnectionDetail({
 
           {dirty && (
             <div className="flex gap-2 pt-2 border-t border-border">
-              <Button size="sm" onClick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? "Saving…" : "Save changes"}
+              <Button size="sm" onClick={handleSave} disabled={updateMutation.isPending || validating}>
+                {validating ? "Validating…" : updateMutation.isPending ? "Saving…" : isMetaApi ? "Validate & save" : "Save changes"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => {
                 setEditSuffix(c.symbol_suffix || "");
                 setEditOverrides(c.symbol_overrides || {});
+                setManuallyTouched(new Set());
                 setDirty(false);
               }}>Discard</Button>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Warn-confirm dialog: bad symbols detected by tradability probe */}
+      <Dialog open={warnDialog.open} onOpenChange={(o) => setWarnDialog((prev) => ({ ...prev, open: o }))}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Ban className="h-4 w-4 text-destructive" /> Untradable symbols detected
+            </DialogTitle>
+            <DialogDescription>
+              The following broker symbols may not work for live trading. Save anyway, or go back and fix them?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border border-border rounded divide-y divide-border max-h-64 overflow-auto">
+            {warnDialog.bad.map((b) => (
+              <div key={b.sym} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                <div className="min-w-0">
+                  <div className="font-mono font-medium truncate">{b.sym} → <span className="text-primary">{b.brokerSym}</span></div>
+                  <div className="text-[10px] text-destructive mt-0.5">{b.reason}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setWarnDialog({ open: false, bad: [] })}>
+              Go back
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => {
+              setWarnDialog({ open: false, bad: [] });
+              updateMutation.mutate();
+            }} disabled={updateMutation.isPending}>
+              Save anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

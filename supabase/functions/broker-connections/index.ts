@@ -206,6 +206,36 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (action === "probe_symbols") {
+      // Validate a list of broker symbols against MetaAPI: returns tradeMode + live-price for each.
+      // Used by the UI to auto-validate manually-typed symbol mappings on save.
+      const { data: conn, error } = await supabase.from("broker_connections").select("*")
+        .eq("id", payload.id).eq("user_id", user.id).single();
+      if (error || !conn) throw new Error("Connection not found");
+      if (conn.broker_type !== "metaapi") throw new Error("probe_symbols only supported for MetaAPI");
+
+      const symbols: string[] = Array.isArray(payload.symbols) ? payload.symbols.filter(Boolean) : [];
+      if (!symbols.length) return respond({ success: true, results: {} });
+
+      const { authToken, metaAccountId } = unswap(conn.api_key, conn.account_id);
+      // Find a reachable region (use the same approach as fetchMetaApiSymbols)
+      const { region } = await fetchMetaApiSymbols(authToken, metaAccountId);
+      if (!region) return respond({ success: false, error: "No reachable MetaAPI region" });
+
+      const probe = makeMetaApiProbe(authToken, metaAccountId, region);
+      // Probe in parallel (small concurrency to be polite to MetaAPI)
+      const results: Record<string, { tradeMode?: string; hasLivePrice?: boolean } | null> = {};
+      const queue = [...symbols];
+      const workers = Array.from({ length: 4 }, async () => {
+        while (queue.length) {
+          const sym = queue.shift()!;
+          results[sym] = await probe(sym);
+        }
+      });
+      await Promise.all(workers);
+      return respond({ success: true, region, results });
+    }
+
     if (action === "test") {
       const { data: conn, error } = await supabase.from("broker_connections").select("*")
         .eq("id", payload.id).eq("user_id", user.id).single();
