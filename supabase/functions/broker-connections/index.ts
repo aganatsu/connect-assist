@@ -144,7 +144,7 @@ Deno.serve(async (req) => {
         if (mapped) {
           symbol_suffix = symbol_suffix || mapped.symbol_suffix;
           symbol_overrides = mapped.symbol_overrides;
-          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped };
+          auto_map_info = { mapped: mapped.mapped, unmapped: mapped.unmapped, details: mapped.details };
         }
       }
 
