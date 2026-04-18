@@ -171,39 +171,62 @@ async function metaFetchCandles(
   const cached = regionCache.get(metaAccountId);
   const order = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
 
-  for (const region of order) {
+  const fetchHistorical = async (region: string): Promise<{ ok: boolean; status: number; body: string; candles?: Candle[] }> => {
     const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
+    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    const body = await res.text();
+    if (res.ok) {
+      const arr = JSON.parse(body);
+      if (!Array.isArray(arr)) return { ok: true, status: res.status, body, candles: [] };
+      const candles = arr.map((c: any) => ({
+        datetime: typeof c.time === "string" ? c.time : new Date(c.time).toISOString(),
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+        volume: c.tickVolume != null ? Number(c.tickVolume) : undefined,
+      })).filter((c: Candle) =>
+        Number.isFinite(c.open) && Number.isFinite(c.high) &&
+        Number.isFinite(c.low) && Number.isFinite(c.close)
+      );
+      return { ok: true, status: res.status, body, candles };
+    }
+    return { ok: false, status: res.status, body };
+  };
+
+  for (const region of order) {
     try {
-      const res = await fetch(url, { headers: { "auth-token": authToken } });
-      const body = await res.text();
-      if (res.ok) {
-        regionCache.set(metaAccountId, region);
-        const arr = JSON.parse(body);
-        if (!Array.isArray(arr)) return [];
-        return arr.map((c: any) => ({
-          datetime: typeof c.time === "string" ? c.time : new Date(c.time).toISOString(),
-          open: Number(c.open),
-          high: Number(c.high),
-          low: Number(c.low),
-          close: Number(c.close),
-          volume: c.tickVolume != null ? Number(c.tickVolume) : undefined,
-        })).filter((c: Candle) =>
-          Number.isFinite(c.open) && Number.isFinite(c.high) &&
-          Number.isFinite(c.low) && Number.isFinite(c.close)
-        );
+      let result = await fetchHistorical(region);
+      // If historical 404'd, the symbol may need a subscription (HFMarkets-style).
+      // Probe + subscribe via current-candles?keepSubscription=true, then retry once.
+      if (!result.ok && result.status === 404 && /could not find path|notfounderror|symbol/i.test(result.body)) {
+        const cacheKey = `${metaAccountId}:${brokerSymbol}`;
+        if (!subscribedSymbols.has(cacheKey)) {
+          const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, region, brokerSymbol, canon);
+          if (subscribed) {
+            // Brief pause to give MetaAPI a moment to backfill history after subscription
+            await new Promise((r) => setTimeout(r, 1500));
+            result = await fetchHistorical(region);
+          }
+        }
       }
+
+      if (result.ok) {
+        regionCache.set(metaAccountId, region);
+        return result.candles ?? [];
+      }
+
       // 404 / NotFoundError → account isn't deployed in this region, try the next one.
       // Other status codes (auth, rate-limit, etc.) are not region-specific → stop probing.
       const isRegionMiss =
-        res.status === 404 ||
-        /region|not connected to broker|notfounderror|could not find path/i.test(body);
+        result.status === 404 ||
+        /region|not connected to broker|notfounderror|could not find path/i.test(result.body);
       if (!isRegionMiss) {
-        console.warn(`[candleSource] MetaAPI ${region} non-region error ${res.status}: ${body.slice(0, 120)}`);
+        console.warn(`[candleSource] MetaAPI ${region} non-region error ${result.status}: ${result.body.slice(0, 120)}`);
         return [];
       }
-      // Quietly continue to next region on 404 (avoids log spam from the multi-region probe)
       if (region === order[order.length - 1]) {
-        console.warn(`[candleSource] MetaAPI account ${metaAccountId.slice(0, 8)}… not found in any region (${order.join(", ")})`);
+        console.warn(`[candleSource] MetaAPI ${brokerSymbol} not found in any region (${order.join(", ")}) — last body: ${result.body.slice(0, 120)}`);
       }
     } catch (e: any) {
       console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
