@@ -216,9 +216,19 @@ async function metaFetchCandles(
         }
       }
 
-      // CASE B: historical returned 200 OK but empty array. This happens immediately after
-      // subscription before MetaAPI has backfilled history. Retry a few times with backoff.
-      if (result.ok && (result.candles?.length ?? 0) === 0 && subscribedSymbols.has(cacheKey)) {
+      // CASE B: historical returned 200 OK but empty array. Two sub-cases:
+      //   B1: We've already subscribed → MetaAPI is backfilling, just wait.
+      //   B2: We haven't subscribed yet → broker requires subscription before serving history
+      //       (HFMarkets behavior). Subscribe now, then wait for backfill.
+      if (result.ok && (result.candles?.length ?? 0) === 0) {
+        if (!subscribedSymbols.has(cacheKey)) {
+          const subscribed = await metaSubscribeSymbol(authToken, metaAccountId, region, brokerSymbol, canon);
+          if (!subscribed) {
+            // Symbol genuinely doesn't exist on this region — try next region
+            console.warn(`[candleSource] MetaAPI ${brokerSymbol} 200-empty + subscribe failed on ${region}`);
+            continue;
+          }
+        }
         for (const waitMs of [2000, 4000, 6000]) {
           await new Promise((r) => setTimeout(r, waitMs));
           result = await fetchHistorical(region);
