@@ -599,12 +599,9 @@ function runBacktestSafetyGates(
   // (Simplified: use peak balance tracking from caller)
   gates.push({ passed: true, reason: "Drawdown within limits" });
 
-  // Gate 6: Daily loss limit
-  const todayTrades = recentTrades.filter(t => {
-    const tDate = t.exitTime.slice(0, 10);
-    const analysisDate = analysis.lastPrice ? new Date().toISOString().slice(0, 10) : "";
-    return tDate === analysisDate;
-  });
+  // Gate 6: Daily loss limit (use candle date, not wall-clock)
+  const currentDate = new Date(currentCandleMs).toISOString().slice(0, 10);
+  const todayTrades = recentTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
   const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
   const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
   gates.push({
@@ -623,13 +620,12 @@ function runBacktestSafetyGates(
     reason: `Portfolio heat: ${heatPct.toFixed(1)}% (max: ${config.portfolioHeat}%)`,
   });
 
-  // Gate 8: Cooldown
+  // Gate 8: Cooldown (use candle time, not wall-clock)
   const lastTradeOnSymbol = recentTrades.filter(t => t.symbol === symbol).slice(-1)[0];
   let cooldownOk = true;
   if (config.cooldownMinutes > 0 && lastTradeOnSymbol) {
     const lastExitMs = new Date(lastTradeOnSymbol.exitTime).getTime();
-    const nowMs = Date.now();
-    const elapsedMin = (nowMs - lastExitMs) / 60000;
+    const elapsedMin = (currentCandleMs - lastExitMs) / 60000;
     cooldownOk = elapsedMin >= config.cooldownMinutes;
   }
   gates.push({
