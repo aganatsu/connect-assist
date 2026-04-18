@@ -665,15 +665,19 @@ Deno.serve(async (req) => {
           // Check SL hit
           // FIX 3 + FIX 4: Gap-through pricing + slippage simulation
           // If price gaps through SL, use the gap price. Then add simulated slippage.
+          // close_reason on paper_positions is reused as a "sl state" tag:
+          //   null/"" = original SL, "be" = moved to break-even, "trail" = trailing stop active
+          const slState: string = (pos.close_reason || "").toString();
+          const slHitReason = slState === "trail" ? "trail_hit" : slState === "be" ? "be_hit" : "sl_hit";
           const slippagePips = exitFlags.slippagePips ?? 0.5; // default 0.5 pips slippage on SL
           if (sl !== null) {
             if (pos.direction === "long" && currentPrice <= sl) {
-              closeReason = "sl_hit";
+              closeReason = slHitReason;
               const gapPrice = Math.min(sl, currentPrice); // Use worse price (lower for longs)
               const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
               exitPrice = gapPrice - (slippagePips * spec.pipSize); // Slippage worsens the fill
             } else if (pos.direction === "short" && currentPrice >= sl) {
-              closeReason = "sl_hit";
+              closeReason = slHitReason;
               const gapPrice = Math.max(sl, currentPrice); // Use worse price (higher for shorts)
               const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
               exitPrice = gapPrice + (slippagePips * spec.pipSize); // Slippage worsens the fill
