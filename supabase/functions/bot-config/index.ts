@@ -40,6 +40,8 @@ Deno.serve(async (req) => {
       return q;
     }
 
+    // ─── Config CRUD (existing) ───────────────────────────────────────
+
     if (action === "get") {
       let { data, error } = await configQuery(supabase.from("bot_configs").select("config_json")).maybeSingle();
       if (error) throw error;
@@ -82,6 +84,84 @@ Deno.serve(async (req) => {
         await supabase.from("bot_configs").insert(insertData);
       }
       return new Response(JSON.stringify(defaultConfig), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ─── Preset CRUD ──────────────────────────────────────────────────
+
+    if (action === "presets.list") {
+      const { data, error } = await supabase
+        .from("config_presets")
+        .select("id, name, description, config_json, created_at, updated_at")
+        .eq("user_id", user.id)
+        .order("updated_at", { ascending: false });
+      if (error) throw error;
+      return new Response(JSON.stringify(data || []), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (action === "presets.save") {
+      const { name, description, config } = payload;
+      if (!name || typeof name !== "string" || name.trim().length === 0) {
+        return new Response(JSON.stringify({ error: "Preset name is required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!config || typeof config !== "object") {
+        return new Response(JSON.stringify({ error: "Config object is required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const trimmedName = name.trim();
+      const trimmedDesc = (description || "").trim();
+
+      // Upsert: if preset with same name exists, update it
+      const { data: existing } = await supabase
+        .from("config_presets")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("name", trimmedName)
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from("config_presets")
+          .update({ config_json: config, description: trimmedDesc })
+          .eq("id", existing.id);
+        if (error) throw error;
+        return new Response(JSON.stringify({ success: true, id: existing.id, updated: true }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } else {
+        const { data: inserted, error } = await supabase
+          .from("config_presets")
+          .insert({ user_id: user.id, name: trimmedName, description: trimmedDesc, config_json: config })
+          .select("id")
+          .single();
+        if (error) throw error;
+        return new Response(JSON.stringify({ success: true, id: inserted.id, updated: false }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    if (action === "presets.delete") {
+      const { presetId } = payload;
+      if (!presetId) {
+        return new Response(JSON.stringify({ error: "presetId is required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const { error } = await supabase
+        .from("config_presets")
+        .delete()
+        .eq("id", presetId)
+        .eq("user_id", user.id);
+      if (error) throw error;
+      return new Response(JSON.stringify({ success: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

@@ -11,7 +11,10 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { formatBrokerTime } from "@/lib/formatTime";
 
 // Index of every searchable setting in the modal — used by the search bar to filter
 // tabs and to highlight matching fields. Keep keywords broad so users can find
@@ -101,10 +104,100 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
 const HighlightContext = createContext<Set<string>>(new Set());
 
 
-const PRESETS = {
-  conservative: { confluenceThreshold: 6.5, riskPerTrade: 0.5, maxDailyDrawdown: 2, maxConcurrentTrades: 2, tradingStyle: "swing_trader" as const, description: "Low risk, swing trading" },
-  moderate: { confluenceThreshold: 5.5, riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 4, tradingStyle: "day_trader" as const, description: "Balanced day trading" },
-  aggressive: { confluenceThreshold: 4, riskPerTrade: 2, maxDailyDrawdown: 5, maxConcurrentTrades: 6, tradingStyle: "scalper" as const, description: "High frequency scalping" },
+// ─── Full Config Presets ─────────────────────────────────────────────────
+// Each preset is a complete config snapshot. Applying one replaces the entire config.
+const BASE_CONFIG = {
+  strategy: {
+    enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
+    minConfluenceScore: 6.0, minFactorCount: 0, htfBiasRequired: true, obLookbackCandles: 20,
+    fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
+    liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
+    regimeScoringEnabled: true, regimeScoringStrength: 1.0,
+  },
+  risk: {
+    riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
+    fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
+  },
+  entry: {
+    defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
+    trailingEntry: false, trailingEntryPips: 5, maxSlippagePips: 2,
+    pyramidingEnabled: false, maxPyramidAdds: 1, closeOnReverse: true, cooldownMinutes: 15,
+  },
+  exit: {
+    stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
+    takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
+    trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
+    partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
+    breakEvenEnabled: true, breakEvenTriggerPips: 20,
+    timeBasedExitEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
+  },
+  instruments: {
+    allowedInstruments: {
+      "EUR/USD": true, "GBP/USD": true, "USD/JPY": true, "GBP/JPY": true,
+      "AUD/USD": true, "USD/CAD": true, "EUR/GBP": false, "NZD/USD": false,
+      "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
+    },
+    spreadFilterEnabled: true, maxSpreadPips: 3, volatilityFilterEnabled: false,
+    minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8,
+  },
+  sessions: {
+    londonEnabled: true, londonStart: "08:00", londonEnd: "16:00",
+    newYorkEnabled: true, newYorkStart: "13:00", newYorkEnd: "21:00",
+    asianEnabled: false, asianStart: "00:00", asianEnd: "08:00",
+    sydneyEnabled: false, sydneyStart: "22:00", sydneyEnd: "06:00",
+    activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
+    newsFilterEnabled: true, newsFilterPauseMinutes: 30,
+  },
+  notifications: {
+    notifyOnTrade: true, notifyOnSignal: true, notifyOnError: true,
+    notifyDailySummary: true, notifyChannel: "in_app",
+  },
+  protection: {
+    dailyProfitTarget: 0, dailyLossLimit: 0, cumulativeProfitTarget: 0,
+    cumulativeLossLimit: 0, haltOnDailyTarget: false, haltOnDailyLoss: true,
+  },
+  account: { startingBalance: 10000, leverage: 100, mode: "paper" },
+  openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+  factorWeights: {},
+};
+
+const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day_trader" | "scalper"; description: string }> = {
+  conservative: {
+    description: "Low risk, swing trading",
+    tradingStyle: "swing_trader" as const,
+    config: {
+      ...BASE_CONFIG,
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 6.5, minFactorCount: 7, regimeScoringStrength: 1.5 },
+      risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxDailyLoss: 2, maxOpenPositions: 2, minRiskReward: 2.0 },
+      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30 },
+      exit: { ...BASE_CONFIG.exit, tpRRRatio: 3.0, trailingStopEnabled: true, trailingStopPips: 20, breakEvenEnabled: true, breakEvenTriggerPips: 15, maxHoldHours: 120 },
+      tradingStyle: { mode: "swing_trader", autoDetectEnabled: false },
+    },
+  },
+  moderate: {
+    description: "Balanced day trading",
+    tradingStyle: "day_trader" as const,
+    config: {
+      ...BASE_CONFIG,
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 5.5, minFactorCount: 5 },
+      risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxDailyLoss: 3, maxOpenPositions: 4, minRiskReward: 1.5 },
+      exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: true, breakEvenTriggerPips: 20, maxHoldHours: 24 },
+      tradingStyle: { mode: "day_trader", autoDetectEnabled: false },
+    },
+  },
+  aggressive: {
+    description: "High frequency scalping",
+    tradingStyle: "scalper" as const,
+    config: {
+      ...BASE_CONFIG,
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 4.0, minFactorCount: 3, regimeScoringEnabled: false },
+      risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxDailyLoss: 5, maxOpenPositions: 6, minRiskReward: 1.0 },
+      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
+      exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, maxHoldHours: 1 },
+      sessions: { ...BASE_CONFIG.sessions, asianEnabled: true },
+      tradingStyle: { mode: "scalper", autoDetectEnabled: false },
+    },
+  },
 };
 
 interface BotConfigModalProps {
@@ -159,6 +252,48 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
     setConfig((prev: any) => ({ ...prev, [section]: { ...(prev?.[section] || {}), [key]: value } }));
   };
 
+  // ─── Custom Presets ───
+  const [showSavePresetDialog, setShowSavePresetDialog] = useState(false);
+  const [presetName, setPresetName] = useState("");
+  const [presetDescription, setPresetDescription] = useState("");
+  const [showMyPresets, setShowMyPresets] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  const { data: customPresets = [], refetch: refetchPresets } = useQuery({
+    queryKey: ["config-presets"],
+    queryFn: () => botConfigApi.listPresets(),
+    enabled: open,
+  });
+
+  const savePresetMut = useMutation({
+    mutationFn: () => botConfigApi.savePreset(presetName.trim(), config, presetDescription.trim() || undefined),
+    onSuccess: (result: any) => {
+      refetchPresets();
+      setShowSavePresetDialog(false);
+      setPresetName("");
+      setPresetDescription("");
+      toast.success(result.updated ? `Preset "${presetName}" updated` : `Preset "${presetName}" saved`);
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const deletePresetMut = useMutation({
+    mutationFn: (id: string) => botConfigApi.deletePreset(id),
+    onSuccess: () => {
+      refetchPresets();
+      setDeleteConfirmId(null);
+      toast.success("Preset deleted");
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const applyPresetConfig = (presetConfig: any, label: string) => {
+    if (!config) return;
+    // Deep clone to avoid reference sharing
+    setConfig(JSON.parse(JSON.stringify(presetConfig)));
+    toast.info(`Applied preset: ${label}`);
+  };
+
   if (!open) return null;
 
   const tabs = [
@@ -205,6 +340,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
             )}
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
+            <Button variant="outline" size="sm" className="text-xs gap-1" onClick={() => { setPresetName(""); setPresetDescription(""); setShowSavePresetDialog(true); }}>
+              <Bookmark className="h-3 w-3" /> Save as Preset
+            </Button>
             <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()}>Save Config</Button>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2"><X className="h-4 w-4" /></button>
           </div>
@@ -212,18 +350,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
         {/* Presets Bar */}
         <div className="px-6 py-3 border-b border-border bg-secondary/30">
+          {/* Quick Presets (full config snapshots) */}
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><Zap className="h-3 w-3 text-primary" /> Quick Presets</p>
           <div className="grid grid-cols-3 gap-3">
             {Object.entries(PRESETS).map(([key, preset]) => (
               <button key={key} onClick={() => {
-                if (!config) return;
-                setConfig({
-                  ...config,
-                  strategy: { ...(config.strategy || {}), confluenceThreshold: preset.confluenceThreshold },
-                  risk: { ...(config.risk || {}), riskPerTrade: preset.riskPerTrade, maxDailyDrawdown: preset.maxDailyDrawdown, maxConcurrentTrades: preset.maxConcurrentTrades },
-                  tradingStyle: { ...(config.tradingStyle || {}), mode: preset.tradingStyle },
-                });
-                toast.info(`Applied ${key} preset → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
+                applyPresetConfig(preset.config, `${key.charAt(0).toUpperCase() + key.slice(1)} → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
               }} className="p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-bold capitalize">{key}</p>
@@ -233,7 +365,103 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
               </button>
             ))}
           </div>
+
+          {/* My Presets */}
+          {customPresets.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowMyPresets(!showMyPresets)}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors w-full"
+              >
+                <FolderOpen className="h-3 w-3 text-primary" />
+                My Presets ({customPresets.length})
+                {showMyPresets ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
+              </button>
+              {showMyPresets && (
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  {customPresets.map((cp: any) => (
+                    <div key={cp.id} className="group relative p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
+                      <button
+                        onClick={() => applyPresetConfig(cp.config_json, cp.name)}
+                        className="w-full text-left"
+                      >
+                        <p className="text-xs font-bold truncate pr-6">{cp.name}</p>
+                        {cp.description && <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{cp.description}</p>}
+                        <p className="text-[9px] text-muted-foreground/60 mt-1">{formatBrokerTime(cp.updated_at)}</p>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(cp.id); }}
+                        className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
+                        title="Delete preset"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Save Preset Dialog */}
+        <Dialog open={showSavePresetDialog} onOpenChange={setShowSavePresetDialog}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-sm">Save Config as Preset</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                Save the current configuration as a reusable preset. If a preset with the same name exists, it will be updated.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Preset Name</Label>
+                <Input
+                  value={presetName}
+                  onChange={e => setPresetName(e.target.value)}
+                  placeholder="e.g. High Volatility Week, News Day Safe"
+                  className="text-xs h-8"
+                  autoFocus
+                  onKeyDown={e => { if (e.key === "Enter" && presetName.trim()) savePresetMut.mutate(); }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Description (optional)</Label>
+                <Textarea
+                  value={presetDescription}
+                  onChange={e => setPresetDescription(e.target.value)}
+                  placeholder="What is this preset tuned for?"
+                  className="text-xs min-h-[60px] resize-none"
+                  rows={2}
+                />
+              </div>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => setShowSavePresetDialog(false)}>Cancel</Button>
+              <Button size="sm" className="text-xs gap-1" onClick={() => savePresetMut.mutate()} disabled={!presetName.trim() || savePresetMut.isPending}>
+                <Save className="h-3 w-3" /> {savePresetMut.isPending ? "Saving..." : "Save Preset"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Preset Confirmation */}
+        <Dialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="text-sm">Delete Preset</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                This preset will be permanently deleted. This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2">
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => setDeleteConfirmId(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm" className="text-xs gap-1" onClick={() => { if (deleteConfirmId) deletePresetMut.mutate(deleteConfirmId); }} disabled={deletePresetMut.isPending}>
+                <Trash2 className="h-3 w-3" /> {deletePresetMut.isPending ? "Deleting..." : "Delete"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Search Bar */}
         <div className="px-6 py-2.5 border-b border-border bg-background/40">
