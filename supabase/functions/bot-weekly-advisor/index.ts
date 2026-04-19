@@ -901,8 +901,10 @@ Deno.serve(async (req) => {
       };
 
       // Step 9: Build prompt and call LLM
+      const balanceNum = toSafeNumber(account.balance);
+      const peakBalanceNum = toSafeNumber(account.peak_balance, balanceNum);
       const userPrompt = buildWeeklyPrompt(
-        botId, botName, account.balance, account.peak_balance,
+        botId, botName, balanceNum, peakBalanceNum,
         weeklyData, factorSuggestions, regimeAnalysis,
         pastRecs || [], strategyConfig
       );
