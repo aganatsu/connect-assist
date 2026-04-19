@@ -36,6 +36,7 @@ export default function BotView() {
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
+  const [selectedScanIdx, setSelectedScanIdx] = useState(0);
   const [activeBot, setActiveBot] = useState<"smc" | "fotsi">("smc");
   const [fotsiConfigOpen, setFotsiConfigOpen] = useState(false);
 
@@ -153,10 +154,14 @@ export default function BotView() {
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
 
+  // Clamp selected scan index to available logs
+  const safeScanIdx = Math.min(selectedScanIdx, Math.max(0, logs.length - 1));
+  const currentScan = logs[safeScanIdx];
+
   // Pull the candle-source meta entry that the scanner prepends to details_json
-  // (so we can show which feed served the latest scan), and produce a filtered
+  // (so we can show which feed served the selected scan), and produce a filtered
   // list that excludes the meta row from rendering as a fake "pair".
-  const latestRawDetails: any[] = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+  const latestRawDetails: any[] = currentScan && Array.isArray(currentScan.details_json) ? currentScan.details_json : [];
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
@@ -596,11 +601,34 @@ export default function BotView() {
           {/* Left: Latest Scan Pairs (60%) */}
           <div className="w-[60%] flex flex-col min-h-0 border-r border-border pr-2">
             <div className="flex items-center justify-between mb-1 gap-2">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate">
-                {activeBot === "fotsi" ? "FOTSI Scan Logs" : "Latest Scan"}
-                {activeBot === "smc" && logs.length > 0 && logs[0]?.scanned_at && (
-                  <span className="ml-2 text-foreground font-mono">
-                    — {formatTimeOnly(logs[0].scanned_at)}
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
+                {activeBot === "fotsi" ? "FOTSI Scan Logs" : (safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`)}
+                {activeBot === "smc" && currentScan?.scanned_at && (
+                  <span className="ml-1 text-foreground font-mono">
+                    — {formatTimeOnly(currentScan.scanned_at)}
+                  </span>
+                )}
+                {activeBot === "smc" && logs.length > 1 && (
+                  <span className="inline-flex items-center gap-0.5 ml-1">
+                    <button
+                      onClick={() => { setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
+                      disabled={safeScanIdx >= logs.length - 1}
+                      className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="Older scan"
+                    >‹ older</button>
+                    <button
+                      onClick={() => { setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
+                      disabled={safeScanIdx <= 0}
+                      className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      title="Newer scan"
+                    >newer ›</button>
+                    {safeScanIdx > 0 && (
+                      <button
+                        onClick={() => { setSelectedScanIdx(0); setSelectedPairIdx(0); }}
+                        className="px-1 py-0 h-4 text-[9px] rounded border border-primary/40 text-primary hover:bg-primary/10"
+                        title="Jump to latest"
+                      >latest</button>
+                    )}
                   </span>
                 )}
                 {activeBot === "fotsi" && fotsiLogs.length > 0 && fotsiLogs[0]?.created_at && (
@@ -620,10 +648,10 @@ export default function BotView() {
                     {(botConfig.strategy.minFactorCount ?? 0) > 0 && ` · ≥${botConfig.strategy.minFactorCount}/20 factors`}
                   </Badge>
                 )}
-                {activeBot === "smc" && logs.length > 0 && (
+                {activeBot === "smc" && currentScan && (
                   <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
                     <DataSourceBadge source={latestSource} />
-                    {logs[0]?.pairs_scanned || 0} pairs · {logs[0]?.signals_found || 0} signals · {logs[0]?.trades_placed || 0} trades
+                    {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
                   </span>
                 )}
                 {activeBot === "fotsi" && fotsiLogs.length > 0 && (
