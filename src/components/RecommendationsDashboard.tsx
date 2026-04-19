@@ -536,7 +536,14 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
               onClick={() => triggerReviewMutation.mutate("daily")}
               disabled={triggerReviewMutation.isPending}
             >
-              Run First Review Now
+              {triggerReviewMutation.isPending ? (
+                <>
+                  <Clock className="w-3 h-3 mr-1 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                "Run First Review Now"
+              )}
             </Button>
           </CardContent>
         </Card>
