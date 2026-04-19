@@ -426,14 +426,26 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     mutationFn: async (reviewType: "daily" | "weekly") => {
       const funcName = reviewType === "daily" ? "bot-daily-review" : "bot-weekly-advisor";
       const mappedBotId = botId === "fotsi" ? "fotsi_mr" : "smc";
-      const { error } = await supabase.functions.invoke(funcName, {
-        body: { bot_id: mappedBotId },
-      });
-      if (error) throw error;
+      const toastId = toast.loading(
+        `Running ${reviewType} review... AI is analyzing your trades, this may take 30-60s.`
+      );
+      try {
+        const { error } = await supabase.functions.invoke(funcName, {
+          body: { bot_id: mappedBotId },
+        });
+        if (error) throw error;
+        return { reviewType, toastId };
+      } catch (err) {
+        toast.dismiss(toastId);
+        throw err;
+      }
     },
-    onSuccess: (_, reviewType) => {
+    onSuccess: ({ reviewType, toastId }) => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
-      toast.success(`${reviewType === "daily" ? "Daily" : "Weekly"} review triggered. Results will appear shortly.`);
+      toast.success(
+        `${reviewType === "daily" ? "Daily" : "Weekly"} review complete. Results below.`,
+        { id: toastId }
+      );
     },
     onError: (err: any) => {
       toast.error(`Review failed: ${err.message}`);
