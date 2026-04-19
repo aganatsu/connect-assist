@@ -24,6 +24,7 @@ import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
@@ -361,6 +362,7 @@ export default function BotView() {
                 <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
                 <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
                 <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
+                <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -438,6 +440,9 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
+              </TabsContent>
+              <TabsContent value="ai-advisor" className="flex-1 overflow-auto mt-1">
+                <RecommendationsDashboard botId={activeBot} />
               </TabsContent>
             </Tabs>
           </div>
