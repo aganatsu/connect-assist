@@ -2216,21 +2216,26 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Uses dailyCandles to classify the instrument's current regime, then
   // applies a small penalty or bonus based on setup-regime alignment.
   // This runs AFTER group caps but BEFORE the final 0-10 clamp.
+  // Controlled by config.regimeScoringEnabled (default true) and
+  // config.regimeScoringStrength (multiplier, default 1.0).
+  const regimeScoringEnabled = config.regimeScoringEnabled !== false;
+  const regimeScoringStrength = typeof config.regimeScoringStrength === 'number' ? config.regimeScoringStrength : 1.0;
   let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null = null;
   {
-    if (dailyCandles && dailyCandles.length >= 20) {
+    if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
       regimeInfo = classifyInstrumentRegime(dailyCandles);
       const { adjustment, detail } = regimeAlignmentAdjustment(
         regimeInfo.regime, regimeInfo.confidence, direction, factors
       );
-      if (adjustment !== 0) {
-        score += adjustment;
+      const scaledAdjustment = +(adjustment * regimeScoringStrength).toFixed(2);
+      if (scaledAdjustment !== 0) {
+        score += scaledAdjustment;
       }
       factors.push({
         name: "Regime Alignment",
-        present: adjustment !== 0,
-        weight: adjustment,
-        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}`,
+        present: scaledAdjustment !== 0,
+        weight: scaledAdjustment,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}${regimeScoringStrength !== 1.0 ? ` [strength ${regimeScoringStrength}x]` : ''}`,
         group: "Macro Confirmation",
       });
     } else {
@@ -2238,7 +2243,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         name: "Regime Alignment",
         present: false,
         weight: 0,
-        detail: "Insufficient daily candles for regime classification",
+        detail: regimeScoringEnabled ? "Insufficient daily candles for regime classification" : "Regime scoring disabled",
         group: "Macro Confirmation",
       });
     }

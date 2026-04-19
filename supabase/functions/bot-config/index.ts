@@ -108,6 +108,7 @@ function getDefaultConfig() {
       liquiditySweepRequired: false, equalHighsLowsSensitivity: 3, liquidityPoolMinTouches: 2,
       premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
+      regimeScoringEnabled: true, regimeScoringStrength: 1.0,
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
