@@ -107,12 +107,8 @@ export function applyRecommendationToConfig(
       continue;
     }
     let newVal = coerceValue(rawVal);
-    // Toggle paths must be booleans
-    const isToggle =
-      /\.(use[A-Z]|enable[A-Z])/.test(path) || /\.premiumDiscountEnabled$/.test(path);
-    if (isToggle) newVal = !!newVal && newVal !== 0;
 
-    // Read current value at path for audit
+    // Read current value at path for audit + type validation
     const segs = path.split(".");
     let cur: any = patched;
     let from: any = undefined;
@@ -120,6 +116,25 @@ export function applyRecommendationToConfig(
       if (cur == null) { from = undefined; break; }
       if (i === segs.length - 1) from = cur[segs[i]];
       else cur = cur[segs[i]];
+    }
+
+    // Toggle paths must be booleans
+    const isToggle =
+      /\.(use[A-Z]|enable[A-Z])/.test(path) || /\.premiumDiscountEnabled$/.test(path);
+    if (isToggle) newVal = !!newVal && newVal !== 0;
+
+    // Type-safety guard: never overwrite a string config (e.g. time "21:00") with
+    // a boolean/number, and never overwrite a number with a non-numeric string.
+    if (from !== undefined && from !== null) {
+      const fromType = typeof from;
+      const newType = typeof newVal;
+      if (fromType !== newType) {
+        skipped.push({
+          key,
+          reason: `type mismatch: existing ${fromType} (${JSON.stringify(from)}), suggested ${newType} (${JSON.stringify(newVal)})`,
+        });
+        continue;
+      }
     }
 
     setPath(patched, path, newVal);
