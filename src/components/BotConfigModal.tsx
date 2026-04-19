@@ -416,12 +416,25 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 {effectiveActiveTab === "risk" && (
                   <div className="space-y-5">
                     <SectionHeader title="Risk Management" description="Control position sizing and drawdown limits" />
+                    <FieldGroup label="Starting Balance ($)" description="Configured paper-trading bankroll. Used as the base for all % calculations below.">
+                      <Input
+                        type="number"
+                        value={config.account?.startingBalance ?? 10000}
+                        onChange={e => updateField('account', 'startingBalance', parseFloat(e.target.value) || 0)}
+                        step={100}
+                        min={0}
+                        className="h-9 text-sm"
+                      />
+                    </FieldGroup>
                     <div className="grid grid-cols-2 gap-4">
                       <FieldGroup label="Risk per Trade (%)" description="Percentage of balance risked per trade">
                         <Input type="number" value={config.risk?.riskPerTrade ?? 1} onChange={e => updateField('risk', 'riskPerTrade', parseFloat(e.target.value) || 0)} step={0.1} className="h-9 text-sm" />
                       </FieldGroup>
                       <FieldGroup label="Max Daily Drawdown (%)" description="Halt trading if daily loss exceeds this">
                         <Input type="number" value={config.risk?.maxDailyDrawdown ?? 3} onChange={e => updateField('risk', 'maxDailyDrawdown', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
+                        <p className="text-[11px] text-muted-foreground mt-1 font-mono">
+                          ≈ ${(((config.risk?.maxDailyDrawdown ?? 3) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} of ${(config.account?.startingBalance ?? 10000).toLocaleString()}
+                        </p>
                       </FieldGroup>
                       <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
                         <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
