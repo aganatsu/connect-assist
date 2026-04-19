@@ -10,6 +10,7 @@ import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, Lightbulb,
   BarChart3, Shield, Target, Zap, Brain, ArrowRight,
 } from "lucide-react";
+import { applyRecommendationToConfig } from "@/lib/applyRecommendation";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -372,27 +373,73 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     refetchInterval: 60000,
   });
 
-  // Approve mutation
+  // Approve mutation — actually patches bot_configs.config_json
   const approveMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
-      const rec = recommendations?.find(r => r.id === id);
-      if (!rec) throw new Error("Recommendation not found");
+      const review = recommendations?.find(r => r.id === id);
+      if (!review) throw new Error("Recommendation not found");
 
-      // Mark as approved
-      const { error } = await supabase
+      const rec = review.recommendations?.[recIndex];
+      const suggested = rec?.suggested_value;
+      if (!rec || !suggested) {
+        throw new Error("This recommendation has no suggested config change to apply.");
+      }
+
+      // Get current user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not signed in");
+
+      // Load current bot config
+      const { data: cfgRow, error: cfgErr } = await supabase
+        .from("bot_configs")
+        .select("id, config_json")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (cfgErr) throw cfgErr;
+      if (!cfgRow) throw new Error("No bot config found for this user");
+
+      // Apply the patch
+      const { patched, applied, skipped } = applyRecommendationToConfig(
+        (cfgRow.config_json as any) || {},
+        suggested as Record<string, unknown>
+      );
+
+      if (applied.length === 0) {
+        throw new Error(
+          `Could not map recommended keys to config: ${skipped.map(s => s.key).join(", ")}`
+        );
+      }
+
+      // Persist patched config
+      const { error: updateCfgErr } = await supabase
+        .from("bot_configs")
+        .update({ config_json: patched, updated_at: new Date().toISOString() })
+        .eq("id", cfgRow.id);
+      if (updateCfgErr) throw updateCfgErr;
+
+      // Mark recommendation approved + record what changed
+      const { error: markErr } = await supabase
         .from("bot_recommendations")
         .update({
           status: "approved",
           resolved_at: new Date().toISOString(),
           resolved_by: "user",
+          impact_snapshot: { applied, skipped, recIndex } as any,
         } as any)
         .eq("id", id);
+      if (markErr) throw markErr;
 
-      if (error) throw error;
+      return { applied, skipped };
     },
-    onSuccess: () => {
+    onSuccess: ({ applied, skipped }) => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
-      toast.success("Recommendation approved. Config change will be applied on next scan cycle.");
+      const summary = applied
+        .map(a => `${a.path}: ${JSON.stringify(a.from)} → ${JSON.stringify(a.to)}`)
+        .join(", ");
+      toast.success(`Config updated — ${summary}`);
+      if (skipped.length > 0) {
+        toast.warning(`Skipped unmapped keys: ${skipped.map(s => s.key).join(", ")}`);
+      }
     },
     onError: (err: any) => {
       toast.error(`Failed to approve: ${err.message}`);
