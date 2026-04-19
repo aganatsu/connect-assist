@@ -640,7 +640,7 @@ export default function BotView() {
               </p>
               <div className="flex items-center gap-2 shrink-0">
                 {activeBot === "smc" && (
-                  <SessionStatusPill sessions={botConfig?.sessions} />
+                  <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
                 )}
                 {activeBot === "smc" && botConfig?.strategy && (
                   <Badge
