@@ -397,7 +397,7 @@ export default function BotView() {
                               <button
                                 onClick={() => {
                                   if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                    paperApi.closePosition(p.positionId).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
                                   }
                                 }}
                                 className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
@@ -1075,7 +1075,7 @@ function EditSLTPInline({ position, onSaved }: { position: any; onSaved: () => v
       const updates: { stopLoss?: number | null; takeProfit?: number | null } = {};
       if (sl !== initialSl) updates.stopLoss = sl === "" ? null : parseFloat(sl);
       if (tp !== initialTp) updates.takeProfit = tp === "" ? null : parseFloat(tp);
-      await paperApi.updatePosition(position.positionId, updates);
+      await paperApi.updatePosition(position.id, updates);
       toast.success("SL/TP updated");
       onSaved();
     } catch (e: any) {
