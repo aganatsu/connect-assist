@@ -1061,19 +1061,46 @@ async function saveScanLog(
   pairsFetched: number,
   signals: number,
   trades: number,
+  extras?: {
+    fotsi?: FOTSIResult | null;
+    rankedPairs?: RankedPair[];
+    signals?: Array<{ pair: string; direction: "long" | "short"; spread: number; hookScore: number; placed: boolean; reason: string }>;
+    skipReason?: string;
+  },
 ) {
   const duration = Date.now() - startTime;
-  await supabase.from("scan_logs").insert({
+  const details = {
+    bot: BOT_ID,
+    scanId,
+    logs,
+    skipReason: extras?.skipReason ?? null,
+    fotsiStrengths: extras?.fotsi?.strengths ?? null,
+    currency_strengths: extras?.fotsi
+      ? Object.fromEntries(
+          CURRENCIES.map((ccy) => [ccy, { tsi: extras.fotsi?.strengths[ccy] ?? 0 }]),
+        )
+      : {},
+    rankedPairs: (extras?.rankedPairs ?? []).slice(0, 10).map((r) => ({
+      pair: r.pair,
+      direction: r.direction === "BUY" ? "long" : "short",
+      spread: r.spread,
+      hookScore: r.hookScore,
+      reason: r.reason,
+    })),
+    signals: extras?.signals ?? [],
+  };
+
+  const { error } = await supabase.from("scan_logs").insert({
     user_id: userId,
-    scan_id: scanId,
-    bot_id: BOT_ID,
-    status: "completed",
-    instruments_scanned: pairsFetched,
-    signals_generated: signals,
-    positions_opened: trades,
-    duration_ms: duration,
-    details: JSON.stringify({ logs }),
+    pairs_scanned: pairsFetched,
+    signals_found: signals,
+    trades_placed: trades,
+    scanned_at: new Date().toISOString(),
+    details_json: details,
   });
+  if (error) {
+    console.error(`[${BOT_ID}:${scanId.slice(0, 8)}] Failed to save scan log:`, error.message);
+  }
 }
 
 // ─── Status endpoint ───────────────────────────────────────────────
@@ -1132,21 +1159,31 @@ async function getScanLogs(
     .from("scan_logs")
     .select("*")
     .eq("user_id", userId)
-    .order("created_at", { ascending: false })
+    .order("scanned_at", { ascending: false })
     .limit(50);
 
-  // Filter to Bot #2 logs (if bot_id column exists, otherwise return all)
   const botLogs = (logs || []).filter(l => {
-    // If bot_id column exists, filter by it
-    if (l.bot_id) return l.bot_id === BOT_ID;
-    // Otherwise check details JSON
     try {
-      const d = JSON.parse(String((l as Record<string, unknown>).details ?? "{}"));
-      return d.logs?.some((log: string) => log.includes("FOTSI Mean Reversion"));
+      const details = (l.details_json ?? {}) as Record<string, unknown>;
+      const bot = details.bot;
+      if (bot) return bot === BOT_ID;
+      const rawLogs = Array.isArray(details.logs) ? details.logs : [];
+      return rawLogs.some((entry) => String(entry).includes("FOTSI Mean Reversion"));
     } catch { return false; }
   });
 
-  return new Response(JSON.stringify({ logs: botLogs }), {
+  const normalized = botLogs.map((log) => ({
+    ...log,
+    created_at: (log as Record<string, unknown>).created_at ?? log.scanned_at,
+    instruments_scanned: log.pairs_scanned,
+    signals_generated: log.signals_found,
+    positions_opened: log.trades_placed,
+    duration_ms: undefined,
+    status: log.trades_placed > 0 ? "completed" : "completed",
+    details: log.details_json,
+  }));
+
+  return new Response(JSON.stringify({ logs: normalized }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
