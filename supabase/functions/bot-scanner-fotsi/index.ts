@@ -553,6 +553,7 @@ function loadConfig(raw: Record<string, unknown> | null): Config {
     ema50Period: Number(c.ema50Period ?? DEFAULTS.ema50Period),
     ema100Period: Number(c.ema100Period ?? DEFAULTS.ema100Period),
     entryTimeframe: (c.entryTimeframe as Config["entryTimeframe"]) ?? DEFAULTS.entryTimeframe,
+    scanIntervalMinutes: Number(c.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes),
   };
 }
 

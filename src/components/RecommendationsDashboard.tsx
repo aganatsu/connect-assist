@@ -77,7 +77,10 @@ interface BotRecommendation {
   llm_model: string;
   created_at: string;
   resolved_at: string | null;
-  applied_changes: any;
+  applied_changes?: any;
+  resolved_by?: string | null;
+  impact_snapshot?: any;
+  token_usage?: any;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -364,7 +367,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         .limit(20);
 
       if (error) throw error;
-      return (data || []) as BotRecommendation[];
+      return (data || []) as unknown as BotRecommendation[];
     },
     refetchInterval: 60000,
   });
@@ -381,8 +384,8 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         .update({
           status: "approved",
           resolved_at: new Date().toISOString(),
-          applied_changes: rec.recommendations?.[recIndex] || null,
-        })
+          resolved_by: "user",
+        } as any)
         .eq("id", id);
 
       if (error) throw error;
