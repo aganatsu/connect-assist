@@ -1733,7 +1733,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
   // Scores whether the entry timeframe trend aligns with the trade direction.
   // Penalizes counter-trend trades. Separate from BOS/CHoCH (Factor 1).
-  {
+  if (config.useTrendDirection !== false) {
     let pts = 0;
     let detail = "";
     if (direction && structure.trend !== "ranging") {
