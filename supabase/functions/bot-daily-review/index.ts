@@ -484,9 +484,9 @@ function buildUserPrompt(
   config: BotConfig,
   reviewType: "daily" | "weekly"
 ): string {
-  const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance * 100).toFixed(1) : "0.0";
-
-  const drawdown = peakBalance > 0 ? (((peakBalance - balance) / peakBalance) * 100).toFixed(2) : "0.00";
+  const balanceNum = Number(balance);
+  const peakNum = Number(peakBalance);
+  const drawdown = peakNum > 0 ? (((peakNum - balanceNum) / peakNum) * 100).toFixed(2) : "0.00";
 
   let prompt = `Here is the performance data for Bot: ${botId} (${botName})
 Review type: ${reviewType.toUpperCase()}
