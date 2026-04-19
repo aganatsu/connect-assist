@@ -3080,15 +3080,20 @@ async function runScanForUser(supabase: any, userId: string) {
     config.minConfluence = userMinConfluence;
   }
 
-  // Day-of-week check — skip for crypto-only instrument lists
+  // Day-of-week check — skip for crypto-only instrument lists.
+  // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
   const now = new Date();
-  const dayOfWeek = now.getUTCDay(); // 0=Sun
+  const nyHour = toNYTime(now).t;
+  const utcDay = now.getUTCDay(); // 0=Sun
+  const isFxOpenSundayEvening = utcDay === 0 && nyHour >= 17;
+  const isFxClosedFridayEvening = utcDay === 5 && nyHour >= 17;
+  const effectiveDay = isFxOpenSundayEvening ? 1 : utcDay; // pretend Sunday-evening is Monday
   const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
   const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
-  // Only block weekends if there are non-crypto instruments (crypto trades 24/7)
-  if (!config.enabledDays.includes(dayOfWeek) && !hasCrypto) {
+  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
+
   const session = detectSession(config);
   // Session filter: normalize names for comparison
   const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
@@ -3202,9 +3207,10 @@ async function runScanForUser(supabase: any, userId: string) {
       continue;
     }
 
-    // Skip non-crypto instruments on weekends (Fix #2)
-    if (!config.enabledDays.includes(dayOfWeek) && SPECS[pair]?.type !== "crypto") {
-      scanDetails.push({ pair, status: "skipped", reason: "Weekend — non-crypto skipped" });
+    // Skip non-crypto instruments on weekends (Fri 17:00 ET → Sun 17:00 ET).
+    const fxIsClosed = (utcDay === 6) || (utcDay === 0 && nyHour < 17) || (utcDay === 5 && nyHour >= 17);
+    if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
+      scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
     }
 
