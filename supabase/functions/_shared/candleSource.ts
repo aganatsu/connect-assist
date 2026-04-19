@@ -230,7 +230,7 @@ async function metaSubscribeSymbol(
   const tf = metaapiTimeframe(canon);
   const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/current-candles/${tf}?keepSubscription=true`;
   try {
-    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 6000);
     if (res.ok) {
       subscribedSymbols.add(cacheKey);
       console.log(`[candleSource] MetaAPI subscribed ${brokerSymbol} on ${region}`);
@@ -244,7 +244,8 @@ async function metaSubscribeSymbol(
     console.warn(`[candleSource] MetaAPI subscribe ${res.status} for ${brokerSymbol}`);
     return false;
   } catch (e: any) {
-    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol}: ${e?.message}`);
+    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol} on ${region}: ${e?.message}`);
+    noteRegionFailure(region, e?.message ?? "");
     return false;
   }
 }
