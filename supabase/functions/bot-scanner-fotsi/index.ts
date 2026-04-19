@@ -750,36 +750,60 @@ async function runScan(
   }
 
   // ── Step 1: Fetch 28 FOTSI pairs (daily candles) ──
-  log("Fetching 28 FOTSI pairs for currency strength...");
+  log(`Fetching ${FOTSI_PAIRS.length} FOTSI pairs for currency strength (interval=1d, limit=180)...`);
   const candleMap: Record<string, Candle[]> = {};
+  const fetchDiagnostics: Array<{ pair: string; status: "ok" | "empty" | "error"; bars: number; provider?: string; error?: string }> = [];
   let fetchedCount = 0;
+  let attemptedCount = 0;
 
   for (const [pair] of FOTSI_PAIRS) {
+    attemptedCount++;
     try {
       const result = await fetchCandlesWithFallback({
         symbol: pair,
         interval: "1d",
         limit: 180,
       });
-      if (result?.candles && result.candles.length > 0) {
+      const bars = result?.candles?.length ?? 0;
+      const provider = (result as any)?.source ?? (result as any)?.provider ?? "unknown";
+      if (bars > 0) {
         candleMap[pair] = result.candles;
         fetchedCount++;
+        fetchDiagnostics.push({ pair, status: "ok", bars, provider });
+        log(`  ✓ ${pair}: ${bars} bars (${provider})`);
+      } else {
+        fetchDiagnostics.push({ pair, status: "empty", bars: 0, provider });
+        log(`  ✗ ${pair}: 0 bars returned (${provider})`);
       }
     } catch (err) {
-      log(`Failed to fetch ${pair}: ${err}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      fetchDiagnostics.push({ pair, status: "error", bars: 0, error: msg });
+      log(`  ✗ ${pair}: ERROR ${msg}`);
     }
-    // Rate limit: small delay between batches
-    if (fetchedCount % 7 === 0 && fetchedCount > 0) {
+    // Rate limit: small delay every 7 pairs
+    if (attemptedCount % 7 === 0) {
       await new Promise(r => setTimeout(r, 300));
     }
   }
 
-  log(`Fetched ${fetchedCount}/28 FOTSI pairs`);
+  const missingPairs = fetchDiagnostics.filter(d => d.status !== "ok").map(d => d.pair);
+  log(`Fetched ${fetchedCount}/${FOTSI_PAIRS.length} FOTSI pairs. Missing: ${missingPairs.length ? missingPairs.join(", ") : "none"}`);
 
   if (fetchedCount < 20) {
-    log("Insufficient FOTSI data (need at least 20/28 pairs)");
-    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, 0, 0);
-    return new Response(JSON.stringify({ ok: true, message: "Insufficient data", scanId }), {
+    log(`Insufficient FOTSI data (got ${fetchedCount}, need at least 20/28 pairs)`);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, 0, 0, {
+      skipReason: "insufficient_candle_data",
+      fetchDiagnostics,
+      missingPairs,
+    });
+    return new Response(JSON.stringify({
+      ok: true,
+      message: "Insufficient data",
+      scanId,
+      fetchedCount,
+      missingPairs,
+      fetchDiagnostics,
+    }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
