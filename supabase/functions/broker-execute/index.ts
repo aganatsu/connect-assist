@@ -63,6 +63,58 @@ async function metaFetch(accountId: string, authToken: string, pathBuilder: (bas
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
 
+// H10: OANDA price precision — round SL/TP/entry to correct decimal places
+function getOandaPrecision(symbol: string): number {
+  const s = (symbol || "").toUpperCase().replace(/[\s/_-]/g, "");
+  // JPY pairs: 3 decimals
+  if (s.includes("JPY")) return 3;
+  // Gold: 2 decimals
+  if (s.includes("XAU") || s.includes("GOLD")) return 2;
+  // Silver: 4 decimals
+  if (s.includes("XAG") || s.includes("SILVER")) return 4;
+  // Indices: 1 decimal
+  if (/^(US30|US500|NAS100|SPX500|UK100|DE30|JP225|AU200|HK50|USTEC)/i.test(s)) return 1;
+  // BTC/crypto: 1 decimal
+  if (s.includes("BTC") || s.includes("ETH")) return 1;
+  // Default forex: 5 decimals
+  return 5;
+}
+
+function roundOandaPrice(symbol: string, price: number): string {
+  const precision = getOandaPrecision(symbol);
+  return price.toFixed(precision);
+}
+
+// H9: Retry helper with exponential backoff for broker execution
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  shouldRetry: (err: any) => boolean,
+  maxAttempts = 3,
+  baseDelayMs = 1000,
+): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt >= maxAttempts || !shouldRetry(err)) throw err;
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      console.warn(`Broker execute retry ${attempt}/${maxAttempts} after ${delay}ms: ${err?.message || err}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
+// Determine if an error is retryable (5xx, connection issues — NOT 4xx)
+function isRetryableError(err: any): boolean {
+  const msg = String(err?.message || err || "").toLowerCase();
+  if (msg.includes("5") && /50[0-9]|5[1-9][0-9]/.test(msg)) return true;
+  if (msg.includes("not connected") || msg.includes("timeout") || msg.includes("econnreset") || msg.includes("network")) return true;
+  return false;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -134,18 +186,30 @@ Deno.serve(async (req) => {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
         const units = direction === "long" ? Math.round(size * 100000) : -Math.round(size * 100000);
         const oandaInstrument = resolveOandaSymbol(symbol, conn);
+        // H10: Round prices to correct OANDA precision
+        const slPrice = stopLoss ? roundOandaPrice(symbol, stopLoss) : null;
+        const tpPrice = takeProfit ? roundOandaPrice(symbol, takeProfit) : null;
         const orderBody: any = {
           order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
         };
-        if (stopLoss) orderBody.order.stopLossOnFill = { price: stopLoss.toString(), timeInForce: "GTC" };
-        if (takeProfit) orderBody.order.takeProfitOnFill = { price: takeProfit.toString() };
+        if (slPrice) orderBody.order.stopLossOnFill = { price: slPrice, timeInForce: "GTC" };
+        if (tpPrice) orderBody.order.takeProfitOnFill = { price: tpPrice };
 
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
-          method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-          body: JSON.stringify(orderBody),
-        });
-        if (!res.ok) { const err = await res.json(); throw new Error(`OANDA order failed: ${JSON.stringify(err)}`); }
-        return respond(await res.json());
+        // H9: Retry with backoff on 5xx/connection errors
+        const result = await retryWithBackoff(async () => {
+          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
+            method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+            body: JSON.stringify(orderBody),
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            const errMsg = `OANDA order failed: ${JSON.stringify(err)}`;
+            if (res.status >= 500) throw new Error(errMsg); // retryable
+            throw Object.assign(new Error(errMsg), { nonRetryable: true }); // 4xx — don't retry
+          }
+          return await res.json();
+        }, (err) => !err.nonRetryable && isRetryableError(err));
+        return respond(result);
       }
 
       if (conn.broker_type === "metaapi") {
@@ -155,11 +219,22 @@ Deno.serve(async (req) => {
         };
         if (stopLoss) tradeBody.stopLoss = stopLoss;
         if (takeProfit) tradeBody.takeProfit = takeProfit;
-        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
-        });
-        if (!res.ok) return respond({ error: `MetaAPI order failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
-        return respond(JSON.parse(body));
+
+        // H9: Retry with backoff on 5xx/connection errors
+        const result = await retryWithBackoff(async () => {
+          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
+          });
+          if (!res.ok) {
+            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
+              throw new Error(`MetaAPI order failed: ${res.status} — ${body.slice(0, 200)}`);
+            }
+            // 4xx — don't retry, return error response
+            return { _noRetry: true, error: `MetaAPI order failed: ${res.status}`, details: body, fallback: false };
+          }
+          return JSON.parse(body);
+        }, isRetryableError);
+        return respond(result);
       }
     }
 
@@ -296,20 +371,37 @@ Deno.serve(async (req) => {
     if (action === "close_trade") {
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
-          method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        });
-        if (!res.ok) throw new Error(`OANDA close failed: ${res.status}`);
-        return respond(await res.json());
+        // H9: Retry with backoff
+        const result = await retryWithBackoff(async () => {
+          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
+            method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          if (!res.ok) {
+            const errMsg = `OANDA close failed: ${res.status}`;
+            if (res.status >= 500) throw new Error(errMsg);
+            throw Object.assign(new Error(errMsg), { nonRetryable: true });
+          }
+          return await res.json();
+        }, (err) => !err.nonRetryable && isRetryableError(err));
+        return respond(result);
       }
       if (conn.broker_type === "metaapi") {
-        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
-        });
-        if (!res.ok) return respond({ error: `MetaAPI close failed: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
-        return respond(JSON.parse(body));
+        // H9: Retry with backoff
+        const result = await retryWithBackoff(async () => {
+          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: payload.tradeId }),
+          });
+          if (!res.ok) {
+            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
+              throw new Error(`MetaAPI close failed: ${res.status} — ${body.slice(0, 200)}`);
+            }
+            return { _noRetry: true, error: `MetaAPI close failed: ${res.status}`, details: body, fallback: false };
+          }
+          return JSON.parse(body);
+        }, isRetryableError);
+        return respond(result);
       }
     }
 

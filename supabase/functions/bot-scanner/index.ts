@@ -2461,14 +2461,32 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 }
 
 // ─── Position sizing ────────────────────────────────────────────────
-function calculatePositionSize(balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string): number {
+function calculatePositionSize(
+  balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number }
+): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  const method = config?.positionSizingMethod || "percent_risk";
+
+  if (method === "fixed_lot") {
+    const fixed = config?.fixedLotSize ?? 0.01;
+    return Math.max(0.01, Math.min(maxLot, Math.round(fixed * 100) / 100));
+  }
+
+  if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
+    const riskAmount = balance * (riskPercent / 100);
+    const atrDistance = config.atrValue * 1.5;
+    if (atrDistance === 0) return 0.01;
+    const lots = riskAmount / (atrDistance * spec.lotUnits);
+    return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
+  }
+
+  // Default: percent_risk (risk-based)
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
   const lots = riskAmount / (slDistance * spec.lotUnits);
-  // Scale max lot by asset type
-  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
@@ -2561,6 +2579,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
 
     // ── Risk mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
+    positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? "percent_risk",
+    fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? 0.1,
     // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
     maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
     // UI writes: maxConcurrentTrades; legacy DB: maxOpenPositions
@@ -3311,7 +3331,11 @@ async function runScanForUser(supabase: any, userId: string) {
           }
         }
 
-        const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair);
+        const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
+          positionSizingMethod: pairConfig.positionSizingMethod,
+          fixedLotSize: pairConfig.fixedLotSize,
+          atrValue: analysis.atrValue,
+        });
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
@@ -3618,7 +3642,11 @@ async function runScanForUser(supabase: any, userId: string) {
                        continue;
                      }
                      const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
-                     brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair);
+                     brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair, {
+                       positionSizingMethod: pairConfig.positionSizingMethod,
+                       fixedLotSize: pairConfig.fixedLotSize,
+                       atrValue: analysis.atrValue,
+                     });
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
                    } catch (balErr: any) {
                      console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);

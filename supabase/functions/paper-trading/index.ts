@@ -189,30 +189,68 @@ async function mirrorToMT5(supabase: any, userId: string, params: {
     }
 
     if (params.action === "close") {
-      // Close action: use the first connection (close fan-out is handled by closeBrokerPositions)
-      const conn = connections[0];
-      let authToken = conn.api_key;
-      let metaAccountId = conn.account_id;
-      if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-        authToken = conn.account_id;
-        metaAccountId = conn.api_key;
+      // H5 fix: Fan out close to ALL active connections (was only connections[0])
+      let anySuccess = false;
+      let lastResult: any = null;
+      let lastError: string | null = null;
+
+      for (const conn of connections) {
+        try {
+          let authToken = conn.api_key;
+          let metaAccountId = conn.account_id;
+          if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+            authToken = conn.account_id;
+            metaAccountId = conn.api_key;
+          }
+
+          const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+          if (!posRes.ok) {
+            console.warn(`MT5 close [${conn.display_name}]: positions fetch failed ${posRes.status}`);
+            lastError = `${conn.display_name}: positions fetch failed ${posRes.status}`;
+            continue;
+          }
+          const mt5Positions = JSON.parse(posBody);
+          const commentTag = `paper:${params.positionId}`;
+          const shortTag = commentTag.slice(0, 28);
+          let mt5Pos = mt5Positions.find((p: any) =>
+            p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+          );
+          if (!mt5Pos) {
+            // Fallback: match by symbol
+            const base = params.symbol?.replace("/", "") || "";
+            const overrides = conn.symbol_overrides || {};
+            const brokerSymbol = overrides[base] || (base + (conn.symbol_suffix || ""));
+            mt5Pos = mt5Positions.find((p: any) =>
+              p.symbol === brokerSymbol || p.symbol === base ||
+              p.symbol?.replace(/[._\-]/g, "").toUpperCase() === base.toUpperCase()
+            );
+          }
+          if (!mt5Pos) {
+            console.warn(`MT5 close [${conn.display_name}]: position not found`);
+            lastError = `${conn.display_name}: position not found`;
+            continue;
+          }
+
+          const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: mt5Pos.id };
+          const { res: closeRes, body: closeResBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody),
+          });
+          if (closeRes.ok) {
+            lastResult = JSON.parse(closeResBody);
+            anySuccess = true;
+            console.log(`MT5 close [${conn.display_name}]: SUCCESS`);
+          } else {
+            lastError = `${conn.display_name}: close failed ${closeRes.status}`;
+            console.warn(`MT5 close [${conn.display_name}] failed [${closeRes.status}]: ${closeResBody.slice(0, 300)}`);
+          }
+        } catch (connErr: any) {
+          lastError = `${conn.display_name}: ${connErr?.message || String(connErr)}`;
+          console.warn(`MT5 close [${conn.display_name}] error: ${lastError}`);
+        }
       }
 
-      const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-      if (!posRes.ok) return { success: false, error: `MT5 positions fetch failed: ${posRes.status}` };
-      const mt5Positions = JSON.parse(posBody);
-      const mt5Pos = mt5Positions.find((p: any) =>
-        p.comment?.includes(`paper:${params.positionId}`) ||
-        p.symbol === params.symbol?.replace("/", "")
-      );
-      if (!mt5Pos) return { success: false, error: "MT5 position not found" };
-
-      const closeBody = { actionType: "POSITION_CLOSE_ID", positionId: mt5Pos.id };
-      const { res: closeRes, body: closeResBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(closeBody),
-      });
-      if (!closeRes.ok) return { success: false, error: `MT5 close failed: ${closeRes.status}` };
-      return { success: true, mt5Result: JSON.parse(closeResBody) };
+      if (anySuccess) return { success: true, mt5Result: lastResult };
+      return { success: false, error: lastError || "all connections failed" };
     }
 
     return { success: false, error: "unknown action" };
@@ -312,6 +350,7 @@ async function modifyBrokerSL(
   direction: string,
   newSL: number,
   mirroredConnectionIds: string[] | null | undefined,
+  existingTP?: number | null,
 ): Promise<string[]> {
   const results: string[] = [];
   try {
@@ -365,11 +404,15 @@ async function modifyBrokerSL(
           adjustedSL = direction === "long" ? newSL - safetyBuffer : newSL + safetyBuffer;
         }
 
-        const modifyBody = {
+        // H4 fix: Include TP in modify payload to prevent broker from dropping it
+        const modifyBody: any = {
           actionType: "POSITION_MODIFY",
           positionId: brokerPos.id,
           stopLoss: adjustedSL,
         };
+        if (existingTP != null && existingTP > 0) {
+          modifyBody.takeProfit = existingTP;
+        }
         const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
         });
@@ -716,7 +759,7 @@ Deno.serve(async (req) => {
                 sl = newSL; // Update local reference
                 pos.close_reason = "be"; // keep local in sync for trail check below
                 // FIX 1: Sync break-even SL to broker
-                const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
+                const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
                 console.log(`Break-even broker SL sync [${pos.position_id}]: ${beModifyResults.join("; ")}`);
               }
             }
@@ -744,7 +787,7 @@ Deno.serve(async (req) => {
                 sl = newSL; // Update local reference for SL check above
                 pos.close_reason = "trail";
                 // FIX 1: Sync trailing SL to broker
-                const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids);
+                const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
                 console.log(`Trailing stop broker SL sync [${pos.position_id}]: ${trailModifyResults.join("; ")}`);
               }
             }

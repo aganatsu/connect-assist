@@ -981,13 +981,34 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
 }
 
 // ─── Position Sizing ────────────────────────────────────────────────
-export function calculatePositionSize(balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string): number {
+export function calculatePositionSize(
+  balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number }
+): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  const method = config?.positionSizingMethod || "percent_risk";
+
+  if (method === "fixed_lot") {
+    const fixed = config?.fixedLotSize ?? 0.01;
+    return Math.max(0.01, Math.min(maxLot, Math.round(fixed * 100) / 100));
+  }
+
+  if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
+    // Volatility-adjusted: scale risk inversely with ATR
+    // Base risk amount, then divide by ATR-normalized SL distance
+    const riskAmount = balance * (riskPercent / 100);
+    const atrDistance = config.atrValue * 1.5; // Use 1.5x ATR as reference SL distance
+    if (atrDistance === 0) return 0.01;
+    const lots = riskAmount / (atrDistance * spec.lotUnits);
+    return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
+  }
+
+  // Default: percent_risk (risk-based)
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
   const lots = riskAmount / (slDistance * spec.lotUnits);
-  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 

@@ -323,6 +323,8 @@ function mapConfig(raw: any): any {
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
     riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
+    positionSizingMethod: risk.positionSizingMethod ?? raw?.positionSizingMethod ?? "percent_risk",
+    fixedLotSize: risk.fixedLotSize ?? raw?.fixedLotSize ?? 0.1,
     maxDailyLoss: risk.maxDailyDrawdown ?? DEFAULTS.maxDailyLoss,
     maxOpenPositions: risk.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
     minRiskReward: risk.minRR ?? DEFAULTS.minRiskReward,
@@ -2038,8 +2040,12 @@ Deno.serve(async (req) => {
           ? analysis.lastPrice + spreadCost / 2
           : analysis.lastPrice - spreadCost / 2;
 
-        // ── Position Sizing ──
-        const size = calculatePositionSize(balance, config.riskPerTrade, entryPrice, sl, symbol);
+        // ── Position Sizing ── (H1: supports percent_risk, fixed_lot, volatility_adjusted)
+        const size = calculatePositionSize(balance, config.riskPerTrade, entryPrice, sl, symbol, {
+          positionSizingMethod: config.positionSizingMethod,
+          fixedLotSize: config.fixedLotSize,
+          atrValue: analysis.atrValue ?? calculateATR(candles, config.slATRPeriod || 14),
+        });
 
         // ── Open Position ──
         const posId = `bt_${++tradeCounter}`;
