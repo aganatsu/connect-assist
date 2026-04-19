@@ -2786,6 +2786,7 @@ async function runScanForUser(supabase: any, userId: string) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
   }
 
+  let account: any = null;
   try {
   const config = await loadConfig(supabase, userId);
 
@@ -2817,7 +2818,6 @@ async function runScanForUser(supabase: any, userId: string) {
   const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
   // Session gate is now checked per-instrument inside the loop, not globally
   // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
-  let account: any = null;
   {
     const { data: botAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
     if (botAccount) {
