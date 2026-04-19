@@ -10,6 +10,7 @@ import {
   TrendingUp, TrendingDown, Minus, AlertTriangle, Lightbulb,
   BarChart3, Shield, Target, Zap, Brain, ArrowRight,
 } from "lucide-react";
+import { applyRecommendationToConfig } from "@/lib/applyRecommendation";
 
 // ─── Types ───────────────────────────────────────────────────
 
