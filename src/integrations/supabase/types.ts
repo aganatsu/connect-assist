@@ -196,12 +196,45 @@ export type Database = {
         }
         Relationships: []
       }
+      config_presets: {
+        Row: {
+          config_json: Json
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          config_json?: Json
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          config_json?: Json
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       paper_accounts: {
         Row: {
-          balance: string
+          balance: number | null
+          balance_old: string
           bot_id: string | null
           created_at: string
-          daily_pnl_base: string
+          daily_pnl_base: number | null
+          daily_pnl_base_date: string | null
+          daily_pnl_base_old: string
           daily_pnl_date: string
           enable_orphan_close: boolean
           execution_mode: string
@@ -209,7 +242,8 @@ export type Database = {
           is_paused: boolean
           is_running: boolean
           kill_switch_active: boolean
-          peak_balance: string
+          peak_balance: number | null
+          peak_balance_old: string
           rejected_count: number
           scan_count: number
           scan_lock_until: string | null
@@ -219,10 +253,13 @@ export type Database = {
           user_id: string
         }
         Insert: {
-          balance?: string
+          balance?: number | null
+          balance_old?: string
           bot_id?: string | null
           created_at?: string
-          daily_pnl_base?: string
+          daily_pnl_base?: number | null
+          daily_pnl_base_date?: string | null
+          daily_pnl_base_old?: string
           daily_pnl_date?: string
           enable_orphan_close?: boolean
           execution_mode?: string
@@ -230,7 +267,8 @@ export type Database = {
           is_paused?: boolean
           is_running?: boolean
           kill_switch_active?: boolean
-          peak_balance?: string
+          peak_balance?: number | null
+          peak_balance_old?: string
           rejected_count?: number
           scan_count?: number
           scan_lock_until?: string | null
@@ -240,10 +278,13 @@ export type Database = {
           user_id: string
         }
         Update: {
-          balance?: string
+          balance?: number | null
+          balance_old?: string
           bot_id?: string | null
           created_at?: string
-          daily_pnl_base?: string
+          daily_pnl_base?: number | null
+          daily_pnl_base_date?: string | null
+          daily_pnl_base_old?: string
           daily_pnl_date?: string
           enable_orphan_close?: boolean
           execution_mode?: string
@@ -251,7 +292,8 @@ export type Database = {
           is_paused?: boolean
           is_running?: boolean
           kill_switch_active?: boolean
-          peak_balance?: string
+          peak_balance?: number | null
+          peak_balance_old?: string
           rejected_count?: number
           scan_count?: number
           scan_lock_until?: string | null
@@ -267,9 +309,11 @@ export type Database = {
           bot_id: string | null
           close_reason: string | null
           created_at: string
-          current_price: string
+          current_price: number | null
+          current_price_old: string
           direction: string
-          entry_price: string
+          entry_price: number | null
+          entry_price_old: string
           id: string
           mirrored_connection_ids: string[]
           open_time: string
@@ -280,10 +324,13 @@ export type Database = {
           position_status: string
           signal_reason: string | null
           signal_score: string
-          size: string
-          stop_loss: string | null
+          size: number | null
+          size_old: string
+          stop_loss: number | null
+          stop_loss_old: string | null
           symbol: string
-          take_profit: string | null
+          take_profit: number | null
+          take_profit_old: string | null
           trigger_price: string | null
           user_id: string
         }
@@ -291,9 +338,11 @@ export type Database = {
           bot_id?: string | null
           close_reason?: string | null
           created_at?: string
-          current_price: string
+          current_price?: number | null
+          current_price_old: string
           direction: string
-          entry_price: string
+          entry_price?: number | null
+          entry_price_old: string
           id?: string
           mirrored_connection_ids?: string[]
           open_time: string
@@ -304,10 +353,13 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
-          size: string
-          stop_loss?: string | null
+          size?: number | null
+          size_old: string
+          stop_loss?: number | null
+          stop_loss_old?: string | null
           symbol: string
-          take_profit?: string | null
+          take_profit?: number | null
+          take_profit_old?: string | null
           trigger_price?: string | null
           user_id: string
         }
@@ -315,9 +367,11 @@ export type Database = {
           bot_id?: string | null
           close_reason?: string | null
           created_at?: string
-          current_price?: string
+          current_price?: number | null
+          current_price_old?: string
           direction?: string
-          entry_price?: string
+          entry_price?: number | null
+          entry_price_old?: string
           id?: string
           mirrored_connection_ids?: string[]
           open_time?: string
@@ -328,10 +382,13 @@ export type Database = {
           position_status?: string
           signal_reason?: string | null
           signal_score?: string
-          size?: string
-          stop_loss?: string | null
+          size?: number | null
+          size_old?: string
+          stop_loss?: number | null
+          stop_loss_old?: string | null
           symbol?: string
-          take_profit?: string | null
+          take_profit?: number | null
+          take_profit_old?: string | null
           trigger_price?: string | null
           user_id?: string
         }
@@ -344,17 +401,22 @@ export type Database = {
           closed_at: string
           created_at: string
           direction: string
-          entry_price: string
-          exit_price: string
+          entry_price: number | null
+          entry_price_old: string
+          exit_price: number | null
+          exit_price_old: string
           id: string
           open_time: string
           order_id: string
-          pnl: string
-          pnl_pips: string
+          pnl: number | null
+          pnl_old: string
+          pnl_pips: number | null
+          pnl_pips_old: string
           position_id: string
           signal_reason: string | null
           signal_score: string
-          size: string
+          size: number | null
+          size_old: string
           stop_loss: string | null
           symbol: string
           take_profit: string | null
@@ -366,17 +428,22 @@ export type Database = {
           closed_at: string
           created_at?: string
           direction: string
-          entry_price: string
-          exit_price: string
+          entry_price?: number | null
+          entry_price_old: string
+          exit_price?: number | null
+          exit_price_old: string
           id?: string
           open_time: string
           order_id: string
-          pnl: string
-          pnl_pips: string
+          pnl?: number | null
+          pnl_old: string
+          pnl_pips?: number | null
+          pnl_pips_old: string
           position_id: string
           signal_reason?: string | null
           signal_score?: string
-          size: string
+          size?: number | null
+          size_old: string
           stop_loss?: string | null
           symbol: string
           take_profit?: string | null
@@ -388,17 +455,22 @@ export type Database = {
           closed_at?: string
           created_at?: string
           direction?: string
-          entry_price?: string
-          exit_price?: string
+          entry_price?: number | null
+          entry_price_old?: string
+          exit_price?: number | null
+          exit_price_old?: string
           id?: string
           open_time?: string
           order_id?: string
-          pnl?: string
-          pnl_pips?: string
+          pnl?: number | null
+          pnl_old?: string
+          pnl_pips?: number | null
+          pnl_pips_old?: string
           position_id?: string
           signal_reason?: string | null
           signal_score?: string
-          size?: string
+          size?: number | null
+          size_old?: string
           stop_loss?: string | null
           symbol?: string
           take_profit?: string | null
@@ -435,6 +507,69 @@ export type Database = {
           scanned_at?: string
           signals_found?: number
           trades_placed?: number
+          user_id?: string
+        }
+        Relationships: []
+      }
+      trade_archive: {
+        Row: {
+          archived_at: string | null
+          bot_id: string | null
+          close_reason: string | null
+          closed_at: string | null
+          created_at: string | null
+          direction: string
+          entry_price: string | null
+          exit_price: string | null
+          id: string
+          open_time: string | null
+          order_id: string | null
+          pnl: string | null
+          pnl_pips: string | null
+          signal_reason: string | null
+          signal_score: string | null
+          size: string | null
+          symbol: string
+          user_id: string
+        }
+        Insert: {
+          archived_at?: string | null
+          bot_id?: string | null
+          close_reason?: string | null
+          closed_at?: string | null
+          created_at?: string | null
+          direction: string
+          entry_price?: string | null
+          exit_price?: string | null
+          id: string
+          open_time?: string | null
+          order_id?: string | null
+          pnl?: string | null
+          pnl_pips?: string | null
+          signal_reason?: string | null
+          signal_score?: string | null
+          size?: string | null
+          symbol: string
+          user_id: string
+        }
+        Update: {
+          archived_at?: string | null
+          bot_id?: string | null
+          close_reason?: string | null
+          closed_at?: string | null
+          created_at?: string | null
+          direction?: string
+          entry_price?: string | null
+          exit_price?: string | null
+          id?: string
+          open_time?: string | null
+          order_id?: string | null
+          pnl?: string | null
+          pnl_pips?: string | null
+          signal_reason?: string | null
+          signal_score?: string | null
+          size?: string | null
+          symbol?: string
           user_id?: string
         }
         Relationships: []
@@ -557,27 +692,36 @@ export type Database = {
           created_at: string
           deviations: string | null
           direction: string
-          entry_price: string
+          entry_price: number | null
+          entry_price_old: string
           entry_time: string
-          exit_price: string | null
+          exit_price: number | null
+          exit_price_old: string | null
           exit_time: string | null
           followed_strategy: boolean | null
           id: string
           improvements: string | null
           notes: string | null
-          pnl_amount: string | null
-          pnl_pips: string | null
-          position_size: string | null
+          pnl_amount: number | null
+          pnl_amount_old: string | null
+          pnl_pips: number | null
+          pnl_pips_old: string | null
+          position_size: number | null
+          position_size_old: string | null
           post_mortem_json: Json | null
           reasoning_json: Json | null
-          risk_percent: string | null
-          risk_reward: string | null
+          risk_percent: number | null
+          risk_percent_old: string | null
+          risk_reward: number | null
+          risk_reward_old: string | null
           screenshot_url: string | null
           setup_type: string | null
           status: string
-          stop_loss: string | null
+          stop_loss: number | null
+          stop_loss_old: string | null
           symbol: string
-          take_profit: string | null
+          take_profit: number | null
+          take_profit_old: string | null
           timeframe: string | null
           updated_at: string
           user_id: string
@@ -587,27 +731,36 @@ export type Database = {
           created_at?: string
           deviations?: string | null
           direction: string
-          entry_price: string
+          entry_price?: number | null
+          entry_price_old: string
           entry_time: string
-          exit_price?: string | null
+          exit_price?: number | null
+          exit_price_old?: string | null
           exit_time?: string | null
           followed_strategy?: boolean | null
           id?: string
           improvements?: string | null
           notes?: string | null
-          pnl_amount?: string | null
-          pnl_pips?: string | null
-          position_size?: string | null
+          pnl_amount?: number | null
+          pnl_amount_old?: string | null
+          pnl_pips?: number | null
+          pnl_pips_old?: string | null
+          position_size?: number | null
+          position_size_old?: string | null
           post_mortem_json?: Json | null
           reasoning_json?: Json | null
-          risk_percent?: string | null
-          risk_reward?: string | null
+          risk_percent?: number | null
+          risk_percent_old?: string | null
+          risk_reward?: number | null
+          risk_reward_old?: string | null
           screenshot_url?: string | null
           setup_type?: string | null
           status?: string
-          stop_loss?: string | null
+          stop_loss?: number | null
+          stop_loss_old?: string | null
           symbol: string
-          take_profit?: string | null
+          take_profit?: number | null
+          take_profit_old?: string | null
           timeframe?: string | null
           updated_at?: string
           user_id: string
@@ -617,27 +770,36 @@ export type Database = {
           created_at?: string
           deviations?: string | null
           direction?: string
-          entry_price?: string
+          entry_price?: number | null
+          entry_price_old?: string
           entry_time?: string
-          exit_price?: string | null
+          exit_price?: number | null
+          exit_price_old?: string | null
           exit_time?: string | null
           followed_strategy?: boolean | null
           id?: string
           improvements?: string | null
           notes?: string | null
-          pnl_amount?: string | null
-          pnl_pips?: string | null
-          position_size?: string | null
+          pnl_amount?: number | null
+          pnl_amount_old?: string | null
+          pnl_pips?: number | null
+          pnl_pips_old?: string | null
+          position_size?: number | null
+          position_size_old?: string | null
           post_mortem_json?: Json | null
           reasoning_json?: Json | null
-          risk_percent?: string | null
-          risk_reward?: string | null
+          risk_percent?: number | null
+          risk_percent_old?: string | null
+          risk_reward?: number | null
+          risk_reward_old?: string | null
           screenshot_url?: string | null
           setup_type?: string | null
           status?: string
-          stop_loss?: string | null
+          stop_loss?: number | null
+          stop_loss_old?: string | null
           symbol?: string
-          take_profit?: string | null
+          take_profit?: number | null
+          take_profit_old?: string | null
           timeframe?: string | null
           updated_at?: string
           user_id?: string
