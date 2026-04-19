@@ -874,15 +874,19 @@ async function runScan(
   let tradesOpened = 0;
   const slotsAvailable = config.maxConcurrent - botPositions.length;
 
-  // Check daily trade count
+  // Check daily trade count — only count FOTSI bot trades (C5 fix: was counting all bots)
   const todayStr = now.toISOString().slice(0, 10);
   const { data: todayTrades } = await supabase
     .from("paper_trade_history")
-    .select("id")
+    .select("id, bot_id, signal_reason")
     .eq("user_id", userId)
     .gte("created_at", todayStr + "T00:00:00Z");
 
-  const botTodayTrades = (todayTrades || []).length; // Approximate — includes both bots
+  // Filter to only FOTSI trades: bot_id = 'fotsi' OR signal_reason contains 'FOTSI'
+  const fotsiTodayTrades = (todayTrades || []).filter(
+    (t: any) => t.bot_id === "fotsi" || (t.signal_reason && String(t.signal_reason).includes("FOTSI"))
+  );
+  const botTodayTrades = fotsiTodayTrades.length;
   if (botTodayTrades >= config.maxDailyTrades) {
     log(`Daily trade limit reached: ${botTodayTrades}/${config.maxDailyTrades}`);
     await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, ranked.length, 0, {

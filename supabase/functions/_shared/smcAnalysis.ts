@@ -294,6 +294,18 @@ export const DEFAULTS = {
   protectionMaxDailyLossDollar: 0,
   minFactorCount: 0,
   useSMT: true,
+  useVolumeProfile: true,
+  useTrendDirection: true,
+  useDailyBias: true,
+  useAMD: true,
+  useFOTSI: true,
+  regimeScoringEnabled: true,
+  regimeScoringStrength: 1.0,
+  obLookbackCandles: 50,
+  fvgMinSizePips: 0,
+  fvgOnlyUnfilled: true,
+  structureLookback: 50,
+  liquidityPoolMinTouches: 2,
   _currentSymbol: "" as string,
   _smtResult: null as any,
 };
@@ -515,8 +527,8 @@ export function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[]
   return swings;
 }
 
-export function analyzeMarketStructure(candles: Candle[]) {
-  const swings = detectSwingPoints(candles);
+export function analyzeMarketStructure(candles: Candle[], structureLookback?: number) {
+  const swings = detectSwingPoints(candles, structureLookback && structureLookback > 0 ? structureLookback : 3);
   const highs = swings.filter(s => s.type === "high"), lows = swings.filter(s => s.type === "low");
   let currentTrend = "ranging";
   const bos: any[] = [], choch: any[] = [];
@@ -545,8 +557,8 @@ export function analyzeMarketStructure(candles: Candle[]) {
   return { trend, swingPoints: swings, bos, choch };
 }
 
-export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[]): OrderBlock[] {
-  const OB_RECENCY = 50;
+export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {
+  const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0) ? obLookbackOverride : 50;
   const OB_CAP = 5;
   const BREAK_LOOKAHEAD = 10;
   const recencyStart = Math.max(2, candles.length - OB_RECENCY);
@@ -621,7 +633,7 @@ export function detectFVGs(candles: Candle[]): FairValueGap[] {
   return fvgs;
 }
 
-export function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPool[] {
+export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTouches = 2): LiquidityPool[] {
   const pools: LiquidityPool[] = [];
   const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
   const tol = priceRange * tolerance;
@@ -635,7 +647,7 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001): Liqu
       if (usedH.has(j)) continue;
       if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
     }
-    if (count >= 2) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
+    if (count >= minTouches) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
   }
   for (let i = 0; i < candles.length; i++) {
     if (usedL.has(i)) continue;
@@ -644,7 +656,7 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001): Liqu
       if (usedL.has(j)) continue;
       if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
     }
-    if (count >= 2) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
+    if (count >= minTouches) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
   }
   return pools.sort((a, b) => b.strength - a.strength);
 }

@@ -360,6 +360,21 @@ function mapConfig(raw: any): any {
     spreadFilterEnabled: instruments.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
     maxSpreadPips: instruments.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
     newsFilterEnabled: false, // Disabled in backtest — no live news feed
+    // --- P0: Factor toggles (mirror scanner loadConfig) ---
+    useVolumeProfile: strategy.useVolumeProfile ?? raw?.useVolumeProfile ?? DEFAULTS.useVolumeProfile,
+    useTrendDirection: strategy.useTrendDirection ?? raw?.useTrendDirection ?? DEFAULTS.useTrendDirection,
+    useDailyBias: strategy.useDailyBias ?? raw?.useDailyBias ?? DEFAULTS.useDailyBias,
+    useAMD: strategy.useAMD ?? raw?.useAMD ?? DEFAULTS.useAMD,
+    useFOTSI: strategy.useFOTSI ?? raw?.useFOTSI ?? DEFAULTS.useFOTSI,
+    // --- P0: Regime scoring (mirror scanner loadConfig) ---
+    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw?.regimeScoringEnabled ?? DEFAULTS.regimeScoringEnabled,
+    regimeScoringStrength: strategy.regimeScoringStrength ?? raw?.regimeScoringStrength ?? DEFAULTS.regimeScoringStrength,
+    // --- P1: Advanced tuning (mirror scanner loadConfig) ---
+    obLookbackCandles: strategy.obLookbackCandles ?? raw?.obLookbackCandles ?? DEFAULTS.obLookbackCandles,
+    fvgMinSizePips: strategy.fvgMinSizePips ?? raw?.fvgMinSizePips ?? DEFAULTS.fvgMinSizePips,
+    fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw?.fvgOnlyUnfilled ?? DEFAULTS.fvgOnlyUnfilled,
+    structureLookback: strategy.structureLookback ?? raw?.structureLookback ?? DEFAULTS.structureLookback,
+    liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw?.liquidityPoolMinTouches ?? DEFAULTS.liquidityPoolMinTouches,
     _currentSymbol: "",
     _smtResult: null as any,
   };
@@ -473,11 +488,11 @@ function runConfluenceAnalysis(
   const pipSize = spec.pipSize;
 
   // ── SMC Detection ──
-  const structure = analyzeMarketStructure(candles);
+  const structure = analyzeMarketStructure(candles, config.structureLookback);
   const allBreaks = [...structure.bos, ...structure.choch];
-  let orderBlocks = config.enableOB ? detectOrderBlocks(candles, allBreaks) : [];
+  let orderBlocks = config.enableOB ? detectOrderBlocks(candles, allBreaks, config.obLookbackCandles) : [];
   const fvgs = config.enableFVG ? detectFVGs(candles) : [];
-  const liquidityPools = config.enableLiquiditySweep ? detectLiquidityPools(candles) : [];
+  const liquidityPools = config.enableLiquiditySweep ? detectLiquidityPools(candles, 0.001, config.liquidityPoolMinTouches) : [];
   const displacement = detectDisplacement(candles);
   if (displacement.isDisplacement) tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
@@ -566,7 +581,15 @@ function runConfluenceAnalysis(
     let pts = 0;
     let detail = "";
     if (config.enableFVG !== false) {
-      const activeFVGs = fvgs.filter(f => !f.mitigated);
+      // Apply FVG filters: fvgOnlyUnfilled (skip mitigated) and fvgMinSizePips (skip tiny FVGs)
+      let filteredFVGs = config.fvgOnlyUnfilled !== false ? fvgs.filter(f => !f.mitigated) : [...fvgs];
+      if (config.fvgMinSizePips && config.fvgMinSizePips > 0) {
+        filteredFVGs = filteredFVGs.filter(f => {
+          const fvgSizePips = (f.high - f.low) / pipSize;
+          return fvgSizePips >= config.fvgMinSizePips;
+        });
+      }
+      const activeFVGs = filteredFVGs;
       const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
       if (insideFVG) {
         const ce = (insideFVG.high + insideFVG.low) / 2;
