@@ -154,10 +154,14 @@ export default function BotView() {
 
   const logs = Array.isArray(scanLogs) ? scanLogs : [];
 
+  // Clamp selected scan index to available logs
+  const safeScanIdx = Math.min(selectedScanIdx, Math.max(0, logs.length - 1));
+  const currentScan = logs[safeScanIdx];
+
   // Pull the candle-source meta entry that the scanner prepends to details_json
-  // (so we can show which feed served the latest scan), and produce a filtered
+  // (so we can show which feed served the selected scan), and produce a filtered
   // list that excludes the meta row from rendering as a fake "pair".
-  const latestRawDetails: any[] = logs.length > 0 && Array.isArray(logs[0]?.details_json) ? logs[0].details_json : [];
+  const latestRawDetails: any[] = currentScan && Array.isArray(currentScan.details_json) ? currentScan.details_json : [];
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
