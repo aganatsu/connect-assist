@@ -706,6 +706,57 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     },
   });
 
+  // Mark-as-done mutation — records that the user handled this recommendation manually
+  // (no config patch is written; just flips per-rec status to 'approved' with manual=true)
+  const markDoneMutation = useMutation({
+    mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
+      await updateRecStatus(id, recIndex, "approved", {
+        impact_snapshot: { manual: true, recIndex },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
+      toast.success("Marked as done — no config change applied.");
+    },
+    onError: (err: any) => {
+      toast.error(`Failed to mark as done: ${err.message}`);
+    },
+  });
+
+  // Fetch current bot config so we can dry-run each recommendation and decide
+  // whether the Approve button (auto-apply) or the Mark-as-done button (manual) should show.
+  const { data: currentBotConfig } = useQuery({
+    queryKey: ["bot-config-for-recs"],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return {};
+      const { data } = await supabase
+        .from("bot_configs")
+        .select("config_json")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      return (data?.config_json as any) || {};
+    },
+    staleTime: 30_000,
+  });
+
+  // Decide whether a recommendation can be auto-applied via the existing approve flows.
+  // factor_weights and regime_adaptation always have dedicated handlers in approveMutation;
+  // for everything else, dry-run applyRecommendationToConfig and check applied.length > 0.
+  function isRecAutoApplicable(rec: Recommendation): boolean {
+    if (!rec.suggested_value || typeof rec.suggested_value !== "object") return false;
+    if (rec.category === "factor_weights" || rec.category === "regime_adaptation") return true;
+    try {
+      const { applied } = applyRecommendationToConfig(
+        currentBotConfig || {},
+        rec.suggested_value
+      );
+      return applied.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   // Dismiss mutation — dismisses a SINGLE recommendation by index
   const dismissMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
