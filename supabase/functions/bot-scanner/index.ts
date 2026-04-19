@@ -2956,7 +2956,8 @@ async function runSafetyGates(
   return gates;
 }
 
-// ─── Main Handler ───────────────────────────────────────────────────────────o.serve(async (req) => {
+// ─── Main Handler ───────────────────────────────────────────────────────────
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
