@@ -430,10 +430,18 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         `Running ${reviewType} review... AI is analyzing your trades, this may take 30-60s.`
       );
       try {
-        const { error } = await supabase.functions.invoke(funcName, {
+        const { data, error } = await supabase.functions.invoke(funcName, {
           body: { bot_id: mappedBotId },
         });
         if (error) throw error;
+        // Function returns 200 even when LLM fails internally — inspect results
+        const results: Array<{ status?: string }> = data?.results || [];
+        const failed = results.find(r =>
+          r.status && r.status !== "success" && r.status !== "completed"
+        );
+        if (failed) {
+          throw new Error(`Review could not complete: ${failed.status}`);
+        }
         return { reviewType, toastId };
       } catch (err) {
         toast.dismiss(toastId);
