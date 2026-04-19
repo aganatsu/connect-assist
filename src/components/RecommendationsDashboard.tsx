@@ -1044,7 +1044,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                         return (
                           <div key={i} className="relative">
                             {!isRecPending && (
-                              <div className="absolute top-1 right-1 z-10">
+                              <div className="absolute top-2 right-7 z-10 pointer-events-none">
                                 <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${
                                   recStatus === "approved"
                                     ? "bg-green-500/20 text-green-400 border-green-500/30"
