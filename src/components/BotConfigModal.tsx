@@ -44,6 +44,11 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
   { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
   { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
+  { tab: "strategy", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "history", "advanced", "tuning"] },
+  { tab: "strategy", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "advanced", "tuning"] },
+  { tab: "strategy", label: "FVG Min Size", keywords: ["fvg", "min", "size", "pips", "filter", "advanced", "tuning"] },
+  { tab: "strategy", label: "FVG Only Unfilled", keywords: ["fvg", "unfilled", "mitigated", "advanced", "tuning"] },
+  { tab: "strategy", label: "Liquidity Pool Min Touches", keywords: ["liquidity", "pool", "touches", "equal highs", "advanced", "tuning"] },
   // Risk
   { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
   { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
@@ -409,6 +414,25 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                           </div>
                         </FieldGroup>
                       )}
+                    </div>
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Advanced Tuning</p>
+                      <p className="text-[11px] text-muted-foreground -mt-2">Fine-tune detection sensitivity. Defaults are sensible — only change if you know what you're doing.</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="OB Lookback Candles" description="How far back to scan for valid Order Blocks. Higher = more historical OBs considered, but older zones may be stale.">
+                          <Input type="number" value={config.strategy?.obLookbackCandles ?? 50} onChange={e => updateField('strategy', 'obLookbackCandles', parseInt(e.target.value) || 0)} min={10} max={500} step={10} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Structure Lookback" description="Number of recent candles passed to BOS/CHoCH analysis. Higher = more context, but slower to react to regime shifts.">
+                          <Input type="number" value={config.strategy?.structureLookback ?? 50} onChange={e => updateField('strategy', 'structureLookback', parseInt(e.target.value) || 0)} min={20} max={500} step={10} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="FVG Min Size (pips)" description="Skip Fair Value Gaps smaller than this. 0 = no filter. Try 5-20 to filter out tiny noise gaps.">
+                          <Input type="number" value={config.strategy?.fvgMinSizePips ?? 0} onChange={e => updateField('strategy', 'fvgMinSizePips', parseFloat(e.target.value) || 0)} min={0} step={1} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Liquidity Pool Min Touches" description="Minimum equal highs/lows required to qualify as a liquidity pool. Higher = stricter, fewer but higher-quality pools.">
+                          <Input type="number" value={config.strategy?.liquidityPoolMinTouches ?? 2} onChange={e => updateField('strategy', 'liquidityPoolMinTouches', parseInt(e.target.value) || 0)} min={2} max={10} step={1} className="h-9 text-sm" />
+                        </FieldGroup>
+                      </div>
+                      <ToggleField label="FVG Only Unfilled" description="Score only Fair Value Gaps that haven't been mitigated/filled yet. Recommended on." checked={config.strategy?.fvgOnlyUnfilled ?? true} onChange={v => updateField('strategy', 'fvgOnlyUnfilled', v)} />
                     </div>
                   </div>
                 )}
