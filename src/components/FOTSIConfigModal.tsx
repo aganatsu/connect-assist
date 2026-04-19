@@ -239,7 +239,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 />
 
                 <FieldRow label="Min Divergence Spread" hint="Minimum TSI spread between base and quote currencies to consider a pair">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.minDivergenceSpread]}
                       onValueChange={([v]) => update("minDivergenceSpread", v)}
@@ -268,7 +268,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 </FieldRow>
 
                 <FieldRow label="Min Extreme Level" hint="Currency must be outside ±this value to qualify as extreme">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.minExtremeLevel]}
                       onValueChange={([v]) => update("minExtremeLevel", v)}
@@ -303,7 +303,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 />
 
                 <FieldRow label="Risk per Trade (%)" hint="Percentage of account balance risked per trade">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.riskPerTrade]}
                       onValueChange={([v]) => update("riskPerTrade", v)}
@@ -339,7 +339,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 </FieldRow>
 
                 <FieldRow label="Max Daily Loss (%)" hint="Stop trading if daily loss exceeds this percentage">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.maxDailyLoss]}
                       onValueChange={([v]) => update("maxDailyLoss", v)}
@@ -364,7 +364,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 </FieldRow>
 
                 <FieldRow label="Min Risk:Reward Ratio" hint="Minimum R:R required to take a trade">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.minRR]}
                       onValueChange={([v]) => update("minRR", v)}
@@ -401,7 +401,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
 
                 {config.slMethod === "atr" && (
                   <FieldRow label="ATR Multiplier" hint="SL = ATR × this multiplier">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 w-64">
                       <Slider
                         value={[config.slATRMultiplier]}
                         onValueChange={([v]) => update("slATRMultiplier", v)}
@@ -457,7 +457,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
 
                 {config.tp1Method === "fixed_rr" && (
                   <FieldRow label="TP1 R:R" hint="Risk:Reward ratio for TP1">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 w-64">
                       <Slider
                         value={[config.tp1RR]}
                         onValueChange={([v]) => update("tp1RR", v)}
@@ -485,7 +485,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
 
                 {config.tp2Method === "fixed_rr" && (
                   <FieldRow label="TP2 R:R" hint="Risk:Reward ratio for TP2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 w-64">
                       <Slider
                         value={[config.tp2RR]}
                         onValueChange={([v]) => update("tp2RR", v)}
@@ -500,7 +500,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 )}
 
                 <FieldRow label="Partial Close at TP1 (%)" hint="Percentage of position to close at TP1">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 w-64">
                     <Slider
                       value={[config.partialClosePercent]}
                       onValueChange={([v]) => update("partialClosePercent", v)}
