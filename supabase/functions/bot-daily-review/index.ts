@@ -484,11 +484,13 @@ function buildUserPrompt(
   config: BotConfig,
   reviewType: "daily" | "weekly"
 ): string {
-  const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance * 100).toFixed(1) : "0.0";
+  const balanceNum = Number(balance);
+  const peakNum = Number(peakBalance);
+  const drawdown = peakNum > 0 ? (((peakNum - balanceNum) / peakNum) * 100).toFixed(2) : "0.00";
 
   let prompt = `Here is the performance data for Bot: ${botId} (${botName})
 Review type: ${reviewType.toUpperCase()}
-Current account balance: $${balance.toFixed(2)} (peak: $${peakBalance.toFixed(2)}, drawdown: ${drawdown}%)
+Current account balance: $${Number(balance).toFixed(2)} (peak: $${Number(peakBalance).toFixed(2)}, drawdown: ${drawdown}%)
 
 === CORE METRICS (Last 24 hours) ===
 Total trades: ${dailyMetrics.totalTrades}
@@ -601,7 +603,7 @@ async function sendTelegramNotification(
   message += `Date: ${new Date().toISOString().split("T")[0]}\n\n`;
   message += `${emoji} *Overall: ${diagnosis.overall_assessment.toUpperCase()}*\n`;
   message += `Win Rate: ${dailyMetrics.winRate.toFixed(0)}% (${dailyMetrics.wins}/${dailyMetrics.totalTrades})\n`;
-  message += `P&L: ${pnlSign}$${dailyMetrics.totalPnl.toFixed(2)} | Balance: $${balance.toFixed(2)}\n\n`;
+  message += `P&L: ${pnlSign}$${dailyMetrics.totalPnl.toFixed(2)} | Balance: $${Number(balance).toFixed(2)}\n\n`;
 
   message += `🔍 *Diagnosis:*\n${diagnosis.diagnosis}\n\n`;
 
