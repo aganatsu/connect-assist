@@ -36,6 +36,7 @@ export default function BotView() {
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
+  const [selectedScanIdx, setSelectedScanIdx] = useState(0);
   const [activeBot, setActiveBot] = useState<"smc" | "fotsi">("smc");
   const [fotsiConfigOpen, setFotsiConfigOpen] = useState(false);
 
