@@ -553,6 +553,7 @@ function loadConfig(raw: Record<string, unknown> | null): Config {
     ema50Period: Number(c.ema50Period ?? DEFAULTS.ema50Period),
     ema100Period: Number(c.ema100Period ?? DEFAULTS.ema100Period),
     entryTimeframe: (c.entryTimeframe as Config["entryTimeframe"]) ?? DEFAULTS.entryTimeframe,
+    scanIntervalMinutes: Number(c.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes),
   };
 }
 
@@ -967,9 +968,9 @@ async function runScan(
     }
 
     signalsGenerated++;
-    const signalSummary = {
+    const signalSummary: { pair: string; direction: "long" | "short"; spread: number; hookScore: number; placed: boolean; reason: string } = {
       pair,
-      direction: direction === "BUY" ? "long" : "short",
+      direction: (direction === "BUY" ? "long" : "short") as "long" | "short",
       spread,
       hookScore,
       placed: false,
@@ -1125,6 +1126,9 @@ async function saveScanLog(
     rankedPairs?: RankedPair[];
     signals?: Array<{ pair: string; direction: "long" | "short"; spread: number; hookScore: number; placed: boolean; reason: string }>;
     skipReason?: string;
+    elapsedMin?: number;
+    fetchDiagnostics?: Array<{ pair: string; status: string; error?: string }>;
+    missingPairs?: string[];
   },
 ) {
   const duration = Date.now() - startTime;
