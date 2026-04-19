@@ -33,6 +33,34 @@ interface TradeRecord {
   signal_reason?: any;
 }
 
+// ─── Number coercion helpers ────────────────────────────────
+function toSafeNumber(v: unknown, fallback = 0): number {
+  if (v === null || v === undefined || v === "") return fallback;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeTradeRecord(raw: any): TradeRecord {
+  return {
+    id: raw.id,
+    user_id: raw.user_id,
+    symbol: raw.symbol,
+    direction: raw.direction,
+    entry_price: toSafeNumber(raw.entry_price),
+    exit_price: toSafeNumber(raw.exit_price),
+    sl: toSafeNumber(raw.sl ?? raw.stop_loss),
+    tp: toSafeNumber(raw.tp ?? raw.take_profit),
+    pnl: toSafeNumber(raw.pnl ?? raw.pnl_amount),
+    pnl_percent: toSafeNumber(raw.pnl_percent ?? raw.pnl_pips),
+    close_reason: raw.close_reason ?? "",
+    opened_at: raw.opened_at ?? raw.open_time ?? raw.created_at ?? "",
+    closed_at: raw.closed_at ?? "",
+    lot_size: toSafeNumber(raw.lot_size ?? raw.size),
+    bot_id: raw.bot_id,
+    signal_reason: raw.signal_reason,
+  };
+}
+
 interface TradeReasoning {
   id: string;
   user_id: string;
@@ -791,6 +819,28 @@ Deno.serve(async (req) => {
         weeklyData.push(computeWeeklyMetrics(weekTrades, label, weekStart.toISOString(), weekEnd.toISOString()));
       }
 
+      // Normalize trade records (DB stores numeric fields as text)
+      const normalizedBotTrades: TradeRecord[] = botTrades.map(normalizeTradeRecord);
+
+      if (normalizedBotTrades.length < 5) {
+        console.log(`[Weekly Advisor] ${botName}: Only ${normalizedBotTrades.length} trades after normalization — skipping.`);
+        results.push({ botId, userId, status: "insufficient_trades" });
+        continue;
+      }
+
+      // Step 3.5: Split into weekly buckets (overwrite weeklyData using normalized trades)
+      weeklyData.length = 0;
+      for (let w = 3; w >= 0; w--) {
+        const weekStart = new Date(now.getTime() - (w + 1) * 7 * 24 * 60 * 60 * 1000);
+        const weekEnd = new Date(now.getTime() - w * 7 * 24 * 60 * 60 * 1000);
+        const weekTrades = normalizedBotTrades.filter(t => {
+          const closedAt = new Date(t.closed_at).getTime();
+          return closedAt >= weekStart.getTime() && closedAt < weekEnd.getTime();
+        });
+        const label = `Week ${4 - w} (${weekStart.toISOString().split("T")[0]})`;
+        weeklyData.push(computeWeeklyMetrics(weekTrades, label, weekStart.toISOString(), weekEnd.toISOString()));
+      }
+
       // Step 4: Fetch reasonings for factor analysis
       const { data: reasonings } = await supabase
         .from("trade_reasonings")
@@ -811,10 +861,10 @@ Deno.serve(async (req) => {
       }
 
       // Step 5: Compute factor weight suggestions
-      const factorSuggestions = computeFactorWeightSuggestions(botTrades, botReasonings);
+      const factorSuggestions = computeFactorWeightSuggestions(normalizedBotTrades, botReasonings);
 
       // Step 6: Detect market regime
-      const regimeAnalysis = detectMarketRegime(botTrades);
+      const regimeAnalysis = detectMarketRegime(normalizedBotTrades);
 
       // Step 7: Fetch past recommendations
       const { data: pastRecs } = await supabase
@@ -851,8 +901,10 @@ Deno.serve(async (req) => {
       };
 
       // Step 9: Build prompt and call LLM
+      const balanceNum = toSafeNumber(account.balance);
+      const peakBalanceNum = toSafeNumber(account.peak_balance, balanceNum);
       const userPrompt = buildWeeklyPrompt(
-        botId, botName, account.balance, account.peak_balance,
+        botId, botName, balanceNum, peakBalanceNum,
         weeklyData, factorSuggestions, regimeAnalysis,
         pastRecs || [], strategyConfig
       );
@@ -878,8 +930,8 @@ Deno.serve(async (req) => {
             weeklyData,
             factorSuggestions: factorSuggestions.slice(0, 20),
             regimeAnalysis,
-            balance: account.balance,
-            peakBalance: account.peak_balance,
+            balance: balanceNum,
+            peakBalance: peakBalanceNum,
           },
           diagnosis: diagnosis.diagnosis,
           recommendations: [
@@ -908,7 +960,7 @@ Deno.serve(async (req) => {
       // Step 11: Send Telegram notification
       await sendTelegramNotification(
         supabase, userId, diagnosis, botId, botName,
-        account.balance, weeklyData
+        balanceNum, weeklyData
       );
 
       results.push({
