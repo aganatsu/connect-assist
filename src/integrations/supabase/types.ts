@@ -142,6 +142,7 @@ export type Database = {
       paper_accounts: {
         Row: {
           balance: string
+          bot_id: string | null
           created_at: string
           daily_pnl_base: string
           daily_pnl_date: string
@@ -162,6 +163,7 @@ export type Database = {
         }
         Insert: {
           balance?: string
+          bot_id?: string | null
           created_at?: string
           daily_pnl_base?: string
           daily_pnl_date?: string
@@ -182,6 +184,7 @@ export type Database = {
         }
         Update: {
           balance?: string
+          bot_id?: string | null
           created_at?: string
           daily_pnl_base?: string
           daily_pnl_date?: string
@@ -204,6 +207,7 @@ export type Database = {
       }
       paper_positions: {
         Row: {
+          bot_id: string | null
           close_reason: string | null
           created_at: string
           current_price: string
@@ -227,6 +231,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          bot_id?: string | null
           close_reason?: string | null
           created_at?: string
           current_price: string
@@ -250,6 +255,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          bot_id?: string | null
           close_reason?: string | null
           created_at?: string
           current_price?: string
@@ -276,6 +282,7 @@ export type Database = {
       }
       paper_trade_history: {
         Row: {
+          bot_id: string | null
           close_reason: string
           closed_at: string
           created_at: string
@@ -295,6 +302,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          bot_id?: string | null
           close_reason: string
           closed_at: string
           created_at?: string
@@ -314,6 +322,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          bot_id?: string | null
           close_reason?: string
           closed_at?: string
           created_at?: string
