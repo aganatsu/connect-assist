@@ -47,6 +47,7 @@ const DEFAULTS = {
   ema50Period: 50,
   ema100Period: 100,
   entryTimeframe: "4h" as "1h" | "4h",
+  scanIntervalMinutes: 60,
 };
 
 type Config = typeof DEFAULTS;
