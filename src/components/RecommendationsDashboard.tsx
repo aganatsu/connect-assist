@@ -1148,7 +1148,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                   {isExpanded && (
                     <div className="space-y-1.5 pt-1 border-t border-border">
                       {review.recommendations?.map((rec, i) => (
-                        <RecommendationCard key={i} rec={rec} index={i} isPending={false} />
+                        <RecommendationCard key={i} rec={rec} index={i} isPending={false} isAutoApplicable={false} />
                       ))}
                     </div>
                   )}
