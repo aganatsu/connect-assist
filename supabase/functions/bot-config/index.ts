@@ -88,6 +88,13 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ─── Defaults (C4: canonical defaults endpoint for backtest page) ─────
+    if (action === "defaults") {
+      return new Response(JSON.stringify(getDefaultConfig()), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // ─── Preset CRUD ──────────────────────────────────────────────────
 
     if (action === "presets.list") {

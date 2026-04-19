@@ -142,10 +142,14 @@ export default function IctAnalysis() {
             <div>
               <h1 className="text-xl font-bold">ICT Analysis — {selectedSymbol}</h1>
               {analysis && (
-                <p className="text-xs text-muted-foreground">
-                  Confluence: <span className="text-primary font-mono font-bold">{analysis.confluenceScore}/10</span>
-                  {" · "}Bias: <span className={analysis.bias === "bullish" ? "text-success" : analysis.bias === "bearish" ? "text-destructive" : ""}>{analysis.bias}</span>
-                </p>
+                <div>
+                  <p className="text-xs text-muted-foreground">
+                    Confluence: <span className="text-primary font-mono font-bold">{analysis.confluenceScore}/10</span>
+                    {" · "}Bias: <span className={analysis.bias === "bullish" ? "text-success" : analysis.bias === "bearish" ? "text-destructive" : ""}>{analysis.bias}</span>
+                    {analysis.direction && <span className="ml-2 text-[10px] font-bold uppercase px-1.5 py-0.5 border border-primary/30 bg-primary/10 text-primary">{analysis.direction === "long" ? "BUY" : "SELL"}</span>}
+                  </p>
+                  {analysis.summary && <p className="text-[10px] text-muted-foreground mt-0.5">{analysis.summary}</p>}
+                </div>
               )}
             </div>
           </div>
@@ -348,6 +352,34 @@ export default function IctAnalysis() {
               </AccordionContent>
             </AccordionItem>
 
+            {/* Factor Breakdown (C1: unified with scanner scoring) */}
+            {analysis?.factors && analysis.factors.length > 0 && (
+              <AccordionItem value="factors">
+                <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Confluence Factors ({analysis.factors.filter((f: any) => f.present).length}/{analysis.factors.length})</span></AccordionTrigger>
+                <AccordionContent>
+                  <div className="bg-secondary/30 border border-border p-3 space-y-1">
+                    {analysis.factors.map((f: any, i: number) => (
+                      <div key={i} className={`flex items-center justify-between px-2 py-1.5 text-[11px] border-l-2 ${
+                        f.present ? "border-l-primary bg-primary/5" : "border-l-border bg-card/30"
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 rounded-full ${f.present ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                          <span className={`font-medium ${f.present ? "text-foreground" : "text-muted-foreground"}`}>{f.name}</span>
+                          {f.group && <span className="text-[9px] text-muted-foreground/60 px-1 py-0.5 bg-muted/30 rounded">{f.group}</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-muted-foreground max-w-[300px] truncate text-right">{f.detail}</span>
+                          <span className={`font-mono text-[10px] font-bold min-w-[32px] text-right ${f.present ? "text-primary" : "text-muted-foreground/40"}`}>
+                            +{typeof f.weight === "number" ? f.weight.toFixed(1) : "0.0"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            )}
+
             {/* Judas Swing */}
             {analysis?.judasSwing?.detected && (
               <AccordionItem value="judas">
@@ -355,7 +387,7 @@ export default function IctAnalysis() {
                 <AccordionContent>
                   <div className="bg-primary/5 border border-primary/20 p-3 text-[11px]">
                     <p>{analysis.judasSwing.description}</p>
-                    <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>
+                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>}
                   </div>
                 </AccordionContent>
               </AccordionItem>

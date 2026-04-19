@@ -90,47 +90,9 @@ const CLOSE_REASONS: Record<string, { label: string; color: string; icon: any }>
   circuit_breaker: { label: "Circuit Breaker", color: "text-destructive", icon: Shield },
 };
 
-// ── Default nested config (matches BotConfigModal) ─────────────────────
-function getDefaultConfig() {
-  return {
-    strategy: {
-      useOrderBlocks: true, useFVG: true, useLiquiditySweep: true,
-      useStructureBreak: true, useDisplacement: true, useBreakerBlocks: true,
-      useUnicornModel: true, useSilverBullet: true, useMacroWindows: true,
-      useSMT: true, useVolumeProfile: true, useAMD: true, useFOTSI: true,
-      useTrendDirection: true, useDailyBias: true,
-      requireHTFBias: true, htfBiasHardVeto: false,
-      onlyBuyInDiscount: true, onlySellInPremium: true,
-      confluenceThreshold: 3.5,
-    },
-    risk: {
-      riskPerTrade: 1, maxDailyDrawdown: 3, maxConcurrentTrades: 5,
-      minRR: 1.5, maxPortfolioHeat: 10, maxPositionsPerSymbol: 2, maxDrawdown: 15,
-    },
-    entry: {
-      cooldownMinutes: 30, slBufferPips: 2, closeOnReverse: false,
-    },
-    exit: {
-      stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
-      takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
-      trailingStop: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
-      breakEven: false, breakEvenTriggerPips: 10,
-      partialTP: false, partialTPPercent: 50, partialTPLevel: 1.0,
-      timeExitHours: 0,
-    },
-    sessions: {
-      filter: ["asian", "london", "newyork", "sydney"],
-      killZoneOnly: false,
-    },
-    protection: {
-      maxDailyLoss: 500, maxConsecutiveLosses: 3, circuitBreakerPct: 20,
-    },
-    openingRange: {
-      enabled: false, candleCount: 24, useBias: true, useJudasSwing: true,
-      useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true,
-    },
-  };
-}
+// C4: Local defaults removed. Config is now loaded from the canonical
+// bot-config Edge Function defaults endpoint on page load.
+// This ensures the backtest page always uses the same defaults as the scanner.
 
 // ── Helper components ──────────────────────────────────────────────────
 function SectionHeader({ title, description, icon: Icon }: { title: string; description: string; icon?: any }) {
@@ -172,10 +134,12 @@ function Toggle({ label, description, checked, onChange }: { label: string; desc
 
 // ── Main Component ─────────────────────────────────────────────────────
 export default function Backtest() {
-  // Config state
-  const [config, setConfig] = useState(getDefaultConfig);
-  const [useCurrentConfig, setUseCurrentConfig] = useState(false);
+  // Config state — C4: initialized from live config, falls back to canonical defaults
+  const [config, setConfig] = useState<any>(null);
+  const [canonicalDefaults, setCanonicalDefaults] = useState<any>(null);
+  const [useCurrentConfig, setUseCurrentConfig] = useState(true);
   const [botConfig, setBotConfig] = useState<any>(null);
+  const [configLoading, setConfigLoading] = useState(true);
 
   // Simulation params
   const [startDate, setStartDate] = useState("2025-01-01");
@@ -196,28 +160,50 @@ export default function Backtest() {
   const [activeTab, setActiveTab] = useState("overview");
   const [expandedTrade, setExpandedTrade] = useState<string | null>(null);
 
-  // Load bot config
+  // C4: Load live config + canonical defaults on mount
   useEffect(() => {
-    botConfigApi.get().then(data => {
-      if (data?.config_json) setBotConfig(data.config_json);
-    }).catch(() => {});
+    let cancelled = false;
+    async function load() {
+      try {
+        const [liveData, defaults] = await Promise.all([
+          botConfigApi.get().catch(() => null),
+          botConfigApi.getDefaults().catch(() => null),
+        ]);
+        if (cancelled) return;
+        const liveConfig = liveData?.config_json || liveData;
+        if (defaults) setCanonicalDefaults(defaults);
+        // Start with live config ("Use Current Config" is ON by default)
+        const startConfig = liveConfig || defaults;
+        if (startConfig) {
+          setConfig(startConfig);
+          setBotConfig(liveConfig || null);
+          if (liveConfig?.instruments?.allowedInstruments) {
+            const enabled = Object.entries(liveConfig.instruments.allowedInstruments)
+              .filter(([, v]) => v).map(([k]) => k);
+            if (enabled.length > 0) setSelectedSymbols(enabled);
+          }
+        }
+      } catch { /* ignore */ }
+      if (!cancelled) setConfigLoading(false);
+    }
+    load();
+    return () => { cancelled = true; };
   }, []);
 
-  // Sync with current bot config
+  // Sync with current bot config toggle
   useEffect(() => {
+    if (!config || !canonicalDefaults) return;
     if (useCurrentConfig && botConfig) {
-      setConfig(prev => ({
-        strategy: { ...prev.strategy, ...botConfig.strategy },
-        risk: { ...prev.risk, ...botConfig.risk },
-        entry: { ...prev.entry, ...botConfig.entry },
-        exit: { ...prev.exit, ...botConfig.exit },
-        sessions: { ...prev.sessions, ...botConfig.sessions },
-        protection: { ...prev.protection, ...botConfig.protection },
-        openingRange: { ...prev.openingRange, ...botConfig.openingRange },
-      }));
-      if (botConfig.instruments?.enabled) setSelectedSymbols(botConfig.instruments.enabled);
+      setConfig(botConfig);
+      if (botConfig.instruments?.allowedInstruments) {
+        const enabled = Object.entries(botConfig.instruments.allowedInstruments)
+          .filter(([, v]) => v).map(([k]) => k);
+        if (enabled.length > 0) setSelectedSymbols(enabled);
+      }
+    } else if (!useCurrentConfig && canonicalDefaults) {
+      setConfig(canonicalDefaults);
     }
-  }, [useCurrentConfig, botConfig]);
+  }, [useCurrentConfig, botConfig, canonicalDefaults]);
 
   // Config update helper
   const updateConfig = useCallback((section: string, field: string, value: any) => {
@@ -341,6 +327,13 @@ export default function Backtest() {
           </CardHeader>
           {showConfig && (
             <CardContent className="space-y-4">
+              {/* C4: Loading guard — config may be null while fetching from server */}
+              {(configLoading || !config) ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <span className="ml-2 text-xs text-muted-foreground">Loading config...</span>
+                </div>
+              ) : (<>
               {/* Row 1: Date Range + Balance + Style + Run */}
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
@@ -717,6 +710,7 @@ export default function Backtest() {
                   ))}
                 </TabsContent>
               </Tabs>
+              </>)}
             </CardContent>
           )}
         </Card>

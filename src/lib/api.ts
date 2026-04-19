@@ -86,6 +86,7 @@ export const marketApi = {
 // ── Bot Config ──
 export const botConfigApi = {
   get: (connectionId?: string) => invokeFunction("bot-config", { action: "get", connectionId }),
+  getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
   reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),
   // Preset CRUD
