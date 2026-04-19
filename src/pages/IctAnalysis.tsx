@@ -13,6 +13,9 @@ import {
 const SYMBOLS = INSTRUMENTS.map(i => i.symbol);
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
 
+// Safe formatter — guards against undefined/null/NaN
+const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "—");
+
 export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
   const currentHour = new Date().getUTCHours();
@@ -309,14 +312,14 @@ export default function IctAnalysis() {
                       <div className="relative h-24 border border-border overflow-hidden">
                         <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2"><span className="text-[9px] text-destructive font-medium">PREMIUM — Sell Zone</span></div>
                         <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                          <span className="text-[9px] text-muted-foreground font-mono">{analysis.premiumDiscount.equilibrium.toFixed(5)}</span></div>
+                          <span className="text-[9px] text-muted-foreground font-mono">{fx(analysis.premiumDiscount?.equilibrium)}</span></div>
                         <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2"><span className="text-[9px] text-success font-medium">DISCOUNT — Buy Zone</span></div>
                         <div className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10" style={{ top: `${100 - analysis.premiumDiscount.zonePercent}%` }} />
                       </div>
                       <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                        <span>H: {analysis.premiumDiscount.swingHigh.toFixed(5)}</span>
-                        <span className="text-primary">{analysis.premiumDiscount.currentZone} ({analysis.premiumDiscount.zonePercent.toFixed(0)}%)</span>
-                        <span>L: {analysis.premiumDiscount.swingLow.toFixed(5)}</span>
+                        <span>H: {fx(analysis.premiumDiscount?.swingHigh)}</span>
+                        <span className="text-primary">{analysis.premiumDiscount?.currentZone ?? "—"} ({fx(analysis.premiumDiscount?.zonePercent, 0)}%)</span>
+                        <span>L: {fx(analysis.premiumDiscount?.swingLow)}</span>
                       </div>
                       {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
                     </div>
@@ -334,17 +337,17 @@ export default function IctAnalysis() {
                     <div className="space-y-3">
                       <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Day</p>
                         <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{analysis.pdLevels.pdh.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{analysis.pdLevels.pdl.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{analysis.pdLevels.pdo.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{analysis.pdLevels.pdc.toFixed(5)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{fx(analysis.pdLevels?.pdh)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{fx(analysis.pdLevels?.pdl)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{fx(analysis.pdLevels?.pdo)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{fx(analysis.pdLevels?.pdc)}</span></div>
                         </div></div>
                       <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Week</p>
                         <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{analysis.pdLevels.pwh.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{analysis.pdLevels.pwl.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{analysis.pdLevels.pwo.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{analysis.pdLevels.pwc.toFixed(5)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{fx(analysis.pdLevels?.pwh)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{fx(analysis.pdLevels?.pwl)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{fx(analysis.pdLevels?.pwo)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{fx(analysis.pdLevels?.pwc)}</span></div>
                         </div></div>
                     </div>
                   ) : <p className="text-muted-foreground">No data</p>}
@@ -387,7 +390,7 @@ export default function IctAnalysis() {
                 <AccordionContent>
                   <div className="bg-primary/5 border border-primary/20 p-3 text-[11px]">
                     <p>{analysis.judasSwing.description}</p>
-                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>}
+                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {fx(analysis.judasSwing.midnightOpen)}</p>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
