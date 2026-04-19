@@ -146,13 +146,17 @@ function RecommendationCard({
   index,
   onApprove,
   onDismiss,
+  onMarkDone,
   isPending,
+  isAutoApplicable,
 }: {
   rec: Recommendation;
   index: number;
   onApprove?: () => void;
   onDismiss?: () => void;
+  onMarkDone?: () => void;
   isPending: boolean;
+  isAutoApplicable: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -172,6 +176,11 @@ function RecommendationCard({
               <span className={`text-[9px] font-medium ${riskColors[rec.risk_level] || ""}`}>
                 {rec.risk_level.toUpperCase()} RISK
               </span>
+            )}
+            {isPending && !isAutoApplicable && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-amber-500/10 text-amber-400 border-amber-500/30">
+                MANUAL
+              </Badge>
             )}
           </div>
           <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
@@ -206,17 +215,37 @@ function RecommendationCard({
             </p>
           )}
 
+          {/* Manual-action notice */}
+          {isPending && !isAutoApplicable && (
+            <p className="text-[10px] text-amber-400/90 leading-relaxed border-l-2 border-amber-500/40 pl-2">
+              💡 Manual action required — this recommendation can&apos;t be auto-applied.
+              Apply the change yourself in the relevant config tab, then click <span className="font-semibold">Mark as done</span>.
+            </p>
+          )}
+
           {/* Action buttons */}
-          {isPending && onApprove && onDismiss && (
+          {isPending && onDismiss && (
             <div className="flex gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 text-[10px] px-3"
-                onClick={onApprove}
-              >
-                <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
-              </Button>
+              {isAutoApplicable && onApprove && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-3"
+                  onClick={onApprove}
+                >
+                  <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
+                </Button>
+              )}
+              {!isAutoApplicable && onMarkDone && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-3"
+                  onClick={onMarkDone}
+                >
+                  <CheckCircle2 className="w-3 h-3 mr-1" /> Mark as done
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
