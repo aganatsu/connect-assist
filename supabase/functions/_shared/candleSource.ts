@@ -180,6 +180,38 @@ const regionCache = new Map<string, string>();
 // Key: `${accountId}:${symbol}` → true
 const subscribedSymbols = new Set<string>();
 
+// Region circuit-breaker: skip a region for the rest of this cold start once
+// it has hit a hard infra failure (DNS error, repeated timeouts). Prevents
+// the singapore endpoint (which currently DNS-fails) from adding 5-10s of
+// latency to every single symbol/timeframe fetch and blowing the 150s budget.
+const deadRegions = new Set<string>();
+const REGION_FAIL_THRESHOLD = 2;
+const regionFailCounts = new Map<string, number>();
+function noteRegionFailure(region: string, err: string) {
+  const isInfra = /dns error|failed to lookup|timeout|connect/i.test(err);
+  if (!isInfra) return;
+  const n = (regionFailCounts.get(region) ?? 0) + 1;
+  regionFailCounts.set(region, n);
+  if (n >= REGION_FAIL_THRESHOLD) {
+    deadRegions.add(region);
+    console.warn(`[candleSource] MetaAPI region ${region} marked DEAD after ${n} infra failures`);
+  }
+}
+function activeRegions(order: string[]): string[] {
+  return order.filter((r) => !deadRegions.has(r));
+}
+
+// Bounded fetch — abort instead of letting a stuck connection eat the budget.
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // Probe + subscribe a symbol via current-candles?keepSubscription=true.
 // This both validates that the broker recognizes the symbol AND triggers a
 // long-term market data subscription, which is required on some brokers
@@ -198,7 +230,7 @@ async function metaSubscribeSymbol(
   const tf = metaapiTimeframe(canon);
   const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/${encodeURIComponent(brokerSymbol)}/current-candles/${tf}?keepSubscription=true`;
   try {
-    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 6000);
     if (res.ok) {
       subscribedSymbols.add(cacheKey);
       console.log(`[candleSource] MetaAPI subscribed ${brokerSymbol} on ${region}`);
@@ -212,7 +244,8 @@ async function metaSubscribeSymbol(
     console.warn(`[candleSource] MetaAPI subscribe ${res.status} for ${brokerSymbol}`);
     return false;
   } catch (e: any) {
-    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol}: ${e?.message}`);
+    console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol} on ${region}: ${e?.message}`);
+    noteRegionFailure(region, e?.message ?? "");
     return false;
   }
 }
@@ -233,11 +266,16 @@ async function metaFetchCandles(
 
   const tf = metaapiTimeframe(canon);
   const cached = regionCache.get(metaAccountId);
-  const order = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
+  const baseOrder = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
+  const order = activeRegions(baseOrder);
+  if (order.length === 0) {
+    console.warn(`[candleSource] all MetaAPI regions marked dead — skipping broker fetch for ${brokerSymbol}`);
+    return [];
+  }
 
   const fetchHistorical = async (region: string): Promise<{ ok: boolean; status: number; body: string; candles?: Candle[] }> => {
     const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
-    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 8000);
     const body = await res.text();
     if (res.ok) {
       const arr = JSON.parse(body);
@@ -259,6 +297,7 @@ async function metaFetchCandles(
   };
 
   for (const region of order) {
+    if (deadRegions.has(region)) continue;
     try {
       let result = await fetchHistorical(region);
 
@@ -322,6 +361,7 @@ async function metaFetchCandles(
       }
     } catch (e: any) {
       console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
+      noteRegionFailure(region, e?.message ?? "");
     }
   }
   return [];
