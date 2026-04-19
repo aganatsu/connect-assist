@@ -171,7 +171,7 @@ export const scannerApi = {
 
 // ── Bot Scanner (Bot #2 — FOTSI Mean Reversion) ──
 export const fotsiScannerApi = {
-  scan: () => invokeFunction("bot-scanner-fotsi", { action: "scan" }),
+  scan: () => invokeFunction("bot-scanner-fotsi", { action: "scan", manual: true, source: "ui" }),
   status: () => invokeFunction("bot-scanner-fotsi", { action: "status" }),
   scanLogs: () => invokeFunction("bot-scanner-fotsi", { action: "scan_logs" }),
 };
