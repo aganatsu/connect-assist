@@ -213,6 +213,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
               const isActive = activeTab === tab.id;
               return (
                 <button
+                  type="button"
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${
