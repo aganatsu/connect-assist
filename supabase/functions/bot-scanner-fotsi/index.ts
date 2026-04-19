@@ -87,6 +87,9 @@ const DEFAULTS = {
 
   // Candle timeframe
   entryTimeframe: "4h" as "1h" | "4h",
+
+  // Auto-scan interval (minutes between automated scans; manual scans always run)
+  scanIntervalMinutes: 60,
 };
 
 type Config = typeof DEFAULTS;
@@ -730,6 +733,33 @@ async function runScan(
   // ── Session filter ──
   const now = new Date();
   const manualScan = body.manual === true || body.manual === "true" || body.source === "ui";
+
+  // ── Auto-scan interval guard (skip if last auto-scan ran too recently) ──
+  if (!manualScan && config.scanIntervalMinutes > 0) {
+    const { data: lastLog } = await supabase
+      .from("scan_logs")
+      .select("scanned_at, details_json")
+      .eq("user_id", userId)
+      .order("scanned_at", { ascending: false })
+      .limit(20);
+    const lastBot2 = (lastLog || []).find((l: any) => {
+      try {
+        const dj = typeof l.details_json === "string" ? JSON.parse(l.details_json) : l.details_json;
+        return dj?.bot === BOT_ID || dj?.botId === BOT_ID;
+      } catch { return false; }
+    });
+    if (lastBot2?.scanned_at) {
+      const elapsedMin = (now.getTime() - new Date(lastBot2.scanned_at).getTime()) / 60000;
+      if (elapsedMin < config.scanIntervalMinutes) {
+        log(`Auto-scan throttled: ${elapsedMin.toFixed(1)}min since last scan < ${config.scanIntervalMinutes}min interval`);
+        await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "interval_throttle", elapsedMin });
+        return new Response(JSON.stringify({ ok: true, message: "Throttled by interval", scanId }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+  }
+
   const session = detectSession(now);
   const inActiveSession =
     (config.sessions.london && session.london) ||
