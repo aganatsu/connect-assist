@@ -861,10 +861,10 @@ Deno.serve(async (req) => {
       }
 
       // Step 5: Compute factor weight suggestions
-      const factorSuggestions = computeFactorWeightSuggestions(botTrades, botReasonings);
+      const factorSuggestions = computeFactorWeightSuggestions(normalizedBotTrades, botReasonings);
 
       // Step 6: Detect market regime
-      const regimeAnalysis = detectMarketRegime(botTrades);
+      const regimeAnalysis = detectMarketRegime(normalizedBotTrades);
 
       // Step 7: Fetch past recommendations
       const { data: pastRecs } = await supabase
