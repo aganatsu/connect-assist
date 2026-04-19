@@ -729,6 +729,7 @@ async function runScan(
 
   // ── Session filter ──
   const now = new Date();
+  const manualScan = body.manual === true || body.manual === "true" || body.source === "ui";
   const session = detectSession(now);
   const inActiveSession =
     (config.sessions.london && session.london) ||
@@ -736,12 +737,16 @@ async function runScan(
     (config.sessions.asian && session.asian) ||
     (config.sessions.sydney && session.sydney);
 
-  if (!inActiveSession) {
+  if (!manualScan && !inActiveSession) {
     log("Outside active sessions — skipping scan");
     await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "outside_session" });
     return new Response(JSON.stringify({ ok: true, message: "Outside session", scanId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+  }
+
+  if (manualScan && !inActiveSession) {
+    log("Manual scan override: outside active sessions, continuing anyway");
   }
 
   // ── Step 1: Fetch 28 FOTSI pairs (daily candles) ──
