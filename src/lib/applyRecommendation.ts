@@ -106,7 +106,11 @@ export function applyRecommendationToConfig(
       skipped.push({ key, reason: "unknown config key" });
       continue;
     }
-    const newVal = coerceValue(rawVal);
+    let newVal = coerceValue(rawVal);
+    // Toggle paths must be booleans
+    const isToggle =
+      /\.(use[A-Z]|enable[A-Z])/.test(path) || /\.premiumDiscountEnabled$/.test(path);
+    if (isToggle) newVal = !!newVal && newVal !== 0;
 
     // Read current value at path for audit
     const segs = path.split(".");
