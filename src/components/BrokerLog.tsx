@@ -223,7 +223,9 @@ export function BrokerLog() {
       }
       return rows;
     },
-    refetchInterval: 15000,
+    refetchInterval: 10000,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
   });
 
   const rows = data || [];
