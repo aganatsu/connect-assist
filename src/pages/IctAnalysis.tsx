@@ -312,14 +312,14 @@ export default function IctAnalysis() {
                       <div className="relative h-24 border border-border overflow-hidden">
                         <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2"><span className="text-[9px] text-destructive font-medium">PREMIUM — Sell Zone</span></div>
                         <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                          <span className="text-[9px] text-muted-foreground font-mono">{analysis.premiumDiscount.equilibrium.toFixed(5)}</span></div>
+                          <span className="text-[9px] text-muted-foreground font-mono">{fx(analysis.premiumDiscount?.equilibrium)}</span></div>
                         <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2"><span className="text-[9px] text-success font-medium">DISCOUNT — Buy Zone</span></div>
                         <div className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10" style={{ top: `${100 - analysis.premiumDiscount.zonePercent}%` }} />
                       </div>
                       <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                        <span>H: {analysis.premiumDiscount.swingHigh.toFixed(5)}</span>
-                        <span className="text-primary">{analysis.premiumDiscount.currentZone} ({analysis.premiumDiscount.zonePercent.toFixed(0)}%)</span>
-                        <span>L: {analysis.premiumDiscount.swingLow.toFixed(5)}</span>
+                        <span>H: {fx(analysis.premiumDiscount?.swingHigh)}</span>
+                        <span className="text-primary">{analysis.premiumDiscount?.currentZone ?? "—"} ({fx(analysis.premiumDiscount?.zonePercent, 0)}%)</span>
+                        <span>L: {fx(analysis.premiumDiscount?.swingLow)}</span>
                       </div>
                       {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
                     </div>
@@ -390,7 +390,7 @@ export default function IctAnalysis() {
                 <AccordionContent>
                   <div className="bg-primary/5 border border-primary/20 p-3 text-[11px]">
                     <p>{analysis.judasSwing.description}</p>
-                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {analysis.judasSwing.midnightOpen.toFixed(5)}</p>}
+                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {fx(analysis.judasSwing.midnightOpen)}</p>}
                   </div>
                 </AccordionContent>
               </AccordionItem>
