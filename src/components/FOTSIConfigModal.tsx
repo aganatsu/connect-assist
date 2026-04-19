@@ -159,13 +159,13 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>
+            <Button type="button" variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()} disabled={resetMut.isPending}>
               Reset Defaults
             </Button>
-            <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+            <Button type="button" size="sm" className="text-xs" onClick={() => config && saveMut.mutate(config)} disabled={saveMut.isPending || !config}>
               {saveMut.isPending ? "Saving..." : "Save Config"}
             </Button>
-            <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2">
+            <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2">
               <X className="h-4 w-4" />
             </button>
           </div>
