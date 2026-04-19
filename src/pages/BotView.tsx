@@ -407,7 +407,7 @@ export default function BotView() {
                           {expandedPosition === p.id && (
                             <tr>
                               <td colSpan={11} className="bg-secondary/20 border-b border-border p-2">
-                                <div className="space-y-1 text-[10px]">
+                                <div className="space-y-2 text-[10px]">
                                   <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                                   <SignalReasoningCard signalReason={p.signalReason || ""} />
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
@@ -416,6 +416,7 @@ export default function BotView() {
                                     <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(p.openTime)}</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
                                   </div>
+                                  <EditSLTPInline position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                                 </div>
                               </td>
                             </tr>
@@ -1054,6 +1055,78 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Summary */}
       {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+    </div>
+  );
+}
+
+// ── Inline SL/TP editor for an open paper position ──
+function EditSLTPInline({ position, onSaved }: { position: any; onSaved: () => void }) {
+  const [sl, setSl] = useState(position.stopLoss ? String(parseFloat(position.stopLoss)) : "");
+  const [tp, setTp] = useState(position.takeProfit ? String(parseFloat(position.takeProfit)) : "");
+  const [saving, setSaving] = useState(false);
+
+  const initialSl = position.stopLoss ? String(parseFloat(position.stopLoss)) : "";
+  const initialTp = position.takeProfit ? String(parseFloat(position.takeProfit)) : "";
+  const dirty = sl !== initialSl || tp !== initialTp;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const updates: { stopLoss?: number | null; takeProfit?: number | null } = {};
+      if (sl !== initialSl) updates.stopLoss = sl === "" ? null : parseFloat(sl);
+      if (tp !== initialTp) updates.takeProfit = tp === "" ? null : parseFloat(tp);
+      await paperApi.updatePosition(position.positionId, updates);
+      toast.success("SL/TP updated");
+      onSaved();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update SL/TP");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-end gap-2 pt-2 border-t border-border/40">
+      <div className="space-y-0.5">
+        <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Stop Loss</Label>
+        <Input
+          type="number"
+          step="0.00001"
+          value={sl}
+          onChange={(e) => setSl(e.target.value)}
+          placeholder="—"
+          className="h-7 w-24 text-[10px] font-mono px-1.5"
+        />
+      </div>
+      <div className="space-y-0.5">
+        <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Take Profit</Label>
+        <Input
+          type="number"
+          step="0.00001"
+          value={tp}
+          onChange={(e) => setTp(e.target.value)}
+          placeholder="—"
+          className="h-7 w-24 text-[10px] font-mono px-1.5"
+        />
+      </div>
+      <Button
+        size="sm"
+        className="h-7 text-[10px]"
+        disabled={!dirty || saving}
+        onClick={handleSave}
+      >
+        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+      </Button>
+      {dirty && !saving && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-[10px]"
+          onClick={() => { setSl(initialSl); setTp(initialTp); }}
+        >
+          Reset
+        </Button>
+      )}
     </div>
   );
 }
