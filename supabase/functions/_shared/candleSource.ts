@@ -16,6 +16,66 @@ export interface Candle {
   volume?: number;
 }
 
+// ─── H8: TwelveData Rate Limiter ────────────────────────────────────
+// TwelveData free tier: 8 requests/minute. Track timestamps and throttle.
+const _tdRequestTimestamps: number[] = [];
+const TD_RATE_LIMIT = 8;
+const TD_RATE_WINDOW_MS = 60_000;
+
+async function waitForTwelveDataSlot(): Promise<boolean> {
+  const now = Date.now();
+  // Remove timestamps older than 1 minute
+  while (_tdRequestTimestamps.length > 0 && _tdRequestTimestamps[0] < now - TD_RATE_WINDOW_MS) {
+    _tdRequestTimestamps.shift();
+  }
+  if (_tdRequestTimestamps.length >= TD_RATE_LIMIT) {
+    // Calculate wait time until oldest request expires
+    const waitMs = _tdRequestTimestamps[0] + TD_RATE_WINDOW_MS - now + 100; // +100ms buffer
+    if (waitMs > 10_000) {
+      // If wait is >10s, skip to Yahoo fallback instead of blocking
+      console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms, skipping to Yahoo`);
+      return false;
+    }
+    console.log(`[candleSource] TwelveData rate limit: waiting ${waitMs}ms`);
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+  _tdRequestTimestamps.push(Date.now());
+  return true;
+}
+
+// ─── M1: In-Memory Candle Cache ─────────────────────────────────────
+// Per-invocation cache (Edge Functions are stateless, but within a single
+// scan cycle the same symbol may be fetched multiple times for different analysis).
+interface CacheEntry {
+  candles: Candle[];
+  source: string;
+  timestamp: number;
+}
+const _candleCache = new Map<string, CacheEntry>();
+const CACHE_TTL_INTRADAY_MS = 30_000;  // 30 seconds for intraday
+const CACHE_TTL_DAILY_MS = 300_000;    // 5 minutes for daily
+
+function getCacheKey(symbol: string, interval: string): string {
+  return `${symbol}:${interval}`;
+}
+
+function getCachedCandles(symbol: string, interval: string): CacheEntry | null {
+  const key = getCacheKey(symbol, interval);
+  const entry = _candleCache.get(key);
+  if (!entry) return null;
+  const ttl = interval.includes("d") || interval.includes("w") ? CACHE_TTL_DAILY_MS : CACHE_TTL_INTRADAY_MS;
+  if (Date.now() - entry.timestamp > ttl) {
+    _candleCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedCandles(symbol: string, interval: string, candles: Candle[], source: string): void {
+  const key = getCacheKey(symbol, interval);
+  _candleCache.set(key, { candles, source, timestamp: Date.now() });
+}
+
 export interface BrokerConn {
   api_key: string;
   account_id: string;
@@ -337,10 +397,33 @@ async function twelveDataCandles(
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return [];
 
+  // H8: Check rate limit before making request
+  const hasSlot = await waitForTwelveDataSlot();
+  if (!hasSlot) return []; // Skip to Yahoo fallback
+
   const interval = twelveDataInterval(canon);
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
   try {
     const res = await fetch(url);
+    // H8: Handle 429 with exponential backoff
+    if (res.status === 429) {
+      console.warn(`[candleSource] TwelveData 429 rate limited for ${symbol}, backing off`);
+      await new Promise(r => setTimeout(r, 5000)); // 5s backoff
+      const retryRes = await fetch(url);
+      if (!retryRes.ok) return [];
+      const retryData = await retryRes.json();
+      if (retryData?.status === "error" || !Array.isArray(retryData?.values)) return [];
+      return retryData.values.map((v: any) => ({
+        datetime: typeof v.datetime === "string" && v.datetime.length === 10
+          ? `${v.datetime}T00:00:00Z`
+          : `${v.datetime.replace(" ", "T")}Z`,
+        open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close),
+        volume: v.volume != null ? Number(v.volume) : undefined,
+      })).filter((c: Candle) =>
+        Number.isFinite(c.open) && Number.isFinite(c.high) &&
+        Number.isFinite(c.low) && Number.isFinite(c.close)
+      );
+    }
     if (!res.ok) return [];
     const data = await res.json();
     if (data?.status === "error" || !Array.isArray(data?.values)) {
@@ -466,6 +549,13 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
 
+  // M1: Check cache first
+  const cached = getCachedCandles(opts.symbol, canon);
+  if (cached && cached.candles.length >= 30) {
+    if (_activeTally) (_activeTally as any)[cached.source]++;
+    return { candles: cached.candles.slice(-limit), source: cached.source as any };
+  }
+
   // Try MetaAPI first if we have a broker connection
   if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
@@ -492,6 +582,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
     if (candles.length >= 30) {
       if (_activeTally) _activeTally.metaapi++;
+      setCachedCandles(opts.symbol, canon, candles, "metaapi");
       return { candles: candles.slice(-limit), source: "metaapi" };
     }
   }
@@ -501,6 +592,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   const td = await twelveDataCandles(opts.symbol, canon, limit);
   if (td.length >= 30) {
     if (_activeTally) _activeTally.twelvedata++;
+    setCachedCandles(opts.symbol, canon, td, "twelvedata");
     return { candles: td.slice(-limit), source: "twelvedata" };
   }
 
@@ -509,9 +601,32 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   if (canon === "4h" && yc.length > 0) yc = aggregateTo4H(yc);
   if (yc.length > 0) {
     if (_activeTally) _activeTally.yahoo++;
+    setCachedCandles(opts.symbol, canon, yc, "yahoo");
     return { candles: yc.slice(-limit), source: "yahoo" };
   }
 
+  // M3: Retry once after 2 seconds if all sources failed
+  console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Retry TwelveData
+  const tdRetry = await twelveDataCandles(opts.symbol, canon, limit);
+  if (tdRetry.length >= 30) {
+    if (_activeTally) _activeTally.twelvedata++;
+    setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
+    return { candles: tdRetry.slice(-limit), source: "twelvedata" };
+  }
+
+  // Retry Yahoo
+  let ycRetry = await yahooCandles(opts.symbol, canon);
+  if (canon === "4h" && ycRetry.length > 0) ycRetry = aggregateTo4H(ycRetry);
+  if (ycRetry.length > 0) {
+    if (_activeTally) _activeTally.yahoo++;
+    setCachedCandles(opts.symbol, canon, ycRetry, "yahoo");
+    return { candles: ycRetry.slice(-limit), source: "yahoo" };
+  }
+
+  console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon} after retry`);
   if (_activeTally) _activeTally.none++;
   return { candles: [], source: "none" };
 }
