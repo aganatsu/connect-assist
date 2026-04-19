@@ -1898,7 +1898,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Replaces VWAP. Uses Time-at-Price (TPO) histogram to identify POC, HVN, LVN.
   // Validates OBs and FVGs with price-time data.
   const volumeProfile = computeVolumeProfile(candles);
-  {
+  if (config.useVolumeProfile !== false) {
     let pts = 0;
     let detail = "";
     if (!volumeProfile) {
@@ -2015,7 +2015,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // ── Factor 20: Daily Bias / HTF Trend (max 1.5) ──
   // Scores whether the daily timeframe trend aligns with the trade direction.
   // Promoted from safety gate to scored factor — trend alignment is a core confluence.
-  {
+  if (config.useDailyBias !== false) {
     let pts = 0;
     let detail = "";
     if (dailyCandles && dailyCandles.length >= 20 && direction) {
