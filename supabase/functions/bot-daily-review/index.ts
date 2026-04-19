@@ -29,6 +29,7 @@ interface TradeRecord {
   opened_at: string;
   closed_at: string;
   lot_size: number;
+  signal_reason?: unknown;
   bot_id?: string;
 }
 
@@ -141,6 +142,32 @@ interface LLMDiagnosis {
 
 // ─── Helpers ─────────────────────────────────────────────────
 
+function toSafeNumber(value: unknown, fallback = 0): number {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function normalizeTradeRecord(raw: any): TradeRecord {
+  return {
+    id: String(raw.id ?? raw.position_id ?? ""),
+    user_id: String(raw.user_id ?? ""),
+    symbol: String(raw.symbol ?? ""),
+    direction: String(raw.direction ?? ""),
+    entry_price: toSafeNumber(raw.entry_price),
+    exit_price: toSafeNumber(raw.exit_price),
+    sl: toSafeNumber(raw.stop_loss ?? raw.sl),
+    tp: toSafeNumber(raw.take_profit ?? raw.tp),
+    pnl: toSafeNumber(raw.pnl ?? raw.pnl_amount),
+    pnl_percent: toSafeNumber(raw.pnl_percent),
+    close_reason: String(raw.close_reason ?? "unknown"),
+    opened_at: String(raw.open_time ?? raw.opened_at ?? raw.created_at ?? ""),
+    closed_at: String(raw.closed_at ?? raw.exit_time ?? raw.created_at ?? ""),
+    lot_size: toSafeNumber(raw.size ?? raw.lot_size),
+    signal_reason: raw.signal_reason,
+    bot_id: raw.bot_id ? String(raw.bot_id) : undefined,
+  };
+}
+
 function computePerformanceMetrics(trades: TradeRecord[]): PerformanceMetrics {
   if (trades.length === 0) {
     return {
@@ -155,7 +182,6 @@ function computePerformanceMetrics(trades: TradeRecord[]): PerformanceMetrics {
   const grossProfit = wins.reduce((s, t) => s + t.pnl, 0);
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
 
-  // Max consecutive losses
   let maxConsec = 0;
   let currentConsec = 0;
   for (const t of trades.sort((a, b) => new Date(a.closed_at).getTime() - new Date(b.closed_at).getTime())) {
@@ -167,7 +193,6 @@ function computePerformanceMetrics(trades: TradeRecord[]): PerformanceMetrics {
     }
   }
 
-  // Average RR achieved for winners
   const rrValues = wins.map(t => {
     const risk = Math.abs(t.entry_price - t.sl);
     if (risk === 0) return 0;
@@ -740,20 +765,21 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      const normalizedTrades = (weeklyTrades || []).map((t: any) => normalizeTradeRecord(t));
+
       // Filter by bot_id if column exists
-      const botTrades = (weeklyTrades || []).filter((t: any) => {
+      const botTrades = normalizedTrades.filter((t: TradeRecord) => {
         if (t.bot_id) return t.bot_id === botId;
-        // Fallback: check signal_reason for bot tag
         try {
           const reason = typeof t.signal_reason === "string" ? JSON.parse(t.signal_reason) : t.signal_reason;
           if (reason?.bot === "fotsi_mr") return botId === "fotsi_mr";
-          return botId === "smc"; // Default to SMC
+          return botId === "smc";
         } catch {
           return botId === "smc";
         }
       });
 
-      const dailyTrades = botTrades.filter((t: any) =>
+      const dailyTrades = botTrades.filter((t: TradeRecord) =>
         new Date(t.closed_at).getTime() >= new Date(dailyCutoff).getTime()
       );
 
