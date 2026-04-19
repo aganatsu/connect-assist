@@ -25,6 +25,7 @@ import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
+import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 
@@ -638,6 +639,9 @@ export default function BotView() {
                 )}
               </p>
               <div className="flex items-center gap-2 shrink-0">
+                {activeBot === "smc" && (
+                  <SessionStatusPill sessions={botConfig?.sessions} />
+                )}
                 {activeBot === "smc" && botConfig?.strategy && (
                   <Badge
                     variant="outline"
