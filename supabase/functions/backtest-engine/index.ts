@@ -379,6 +379,88 @@ function mapConfig(raw: any): any {
 // GROUP 7: AMD / Power of 3 (cap 1.5) — AMD (1.0) + Po3 Combo (+1.0)
 // GROUP 8: Macro Confirmation (cap 2.0)— SMT (1.0) + Currency Strength (1.5)
 // GROUP 9: Volume Profile (cap 1.5)   — Volume Profile (1.5)
+
+// ─── Lightweight Regime Classification (for real-time scoring) ──────
+function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
+  if (!dailyCandles || dailyCandles.length < 20) {
+    return { regime: "unknown", confidence: 0, atrTrend: "unknown", bias: "neutral" };
+  }
+  const atrPeriod = Math.min(14, dailyCandles.length - 1);
+  const trs: number[] = [];
+  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
+    const prev = dailyCandles[i - 1];
+    const curr = dailyCandles[i];
+    trs.push(Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close)));
+  }
+  const recentTrs = trs.slice(-5);
+  const olderTrs = trs.slice(0, Math.max(1, trs.length - 5));
+  const recentAtr = recentTrs.reduce((a, b) => a + b, 0) / recentTrs.length;
+  const olderAtr = olderTrs.reduce((a, b) => a + b, 0) / olderTrs.length;
+  const atrRatio = olderAtr > 0 ? recentAtr / olderAtr : 1;
+  const atrTrend = atrRatio > 1.15 ? "expanding" : atrRatio < 0.85 ? "contracting" : "stable";
+  const last7 = dailyCandles.slice(-7);
+  const last20 = dailyCandles.slice(-20);
+  const sma7 = last7.reduce((s, c) => s + c.close, 0) / last7.length;
+  const sma20 = last20.reduce((s, c) => s + c.close, 0) / last20.length;
+  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
+  const smaDiff = avgPrice > 0 ? (sma7 - sma20) / avgPrice : 0;
+  const bias = Math.abs(smaDiff) > 0.005 ? (smaDiff > 0 ? "bullish" : "bearish") : "neutral";
+  const highs20 = last20.map(c => c.high);
+  const lows20 = last20.map(c => c.low);
+  const rangeHigh = Math.max(...highs20);
+  const rangeLow = Math.min(...lows20);
+  const rangePct = avgPrice > 0 ? ((rangeHigh - rangeLow) / avgPrice) * 100 : 0;
+  let regime = "transitional";
+  let confidence = 0.5;
+  if (atrTrend === "expanding" && Math.abs(smaDiff) > 0.008 && rangePct > 3) {
+    regime = "strong_trend"; confidence = Math.min(0.95, 0.6 + Math.abs(smaDiff) * 10 + (atrRatio - 1) * 0.5);
+  } else if (Math.abs(smaDiff) > 0.005 && rangePct > 2) {
+    regime = "mild_trend"; confidence = Math.min(0.85, 0.5 + Math.abs(smaDiff) * 8);
+  } else if (atrTrend === "contracting" && rangePct < 2 && Math.abs(smaDiff) < 0.003) {
+    regime = "choppy_range"; confidence = Math.min(0.9, 0.6 + (1 - atrRatio) * 0.5 + (2 - rangePct) * 0.1);
+  } else if (Math.abs(smaDiff) < 0.005 && rangePct < 3) {
+    regime = "mild_range"; confidence = Math.min(0.8, 0.5 + (3 - rangePct) * 0.1);
+  }
+  return { regime, confidence: Math.round(confidence * 100) / 100, atrTrend, bias };
+}
+
+function regimeAlignmentAdjustment(
+  regime: string, confidence: number, direction: string | null,
+  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group: string }>
+): { adjustment: number; detail: string } {
+  if (!direction || confidence < 0.5) return { adjustment: 0, detail: "Regime unknown or low confidence" };
+  const trendFactors = ["Market Structure", "Trend Direction", "Displacement"];
+  const rangeFactors = ["Premium/Discount", "Order Block", "Fair Value Gap", "Breaker Block"];
+  let trendScore = 0, rangeScore = 0;
+  for (const f of factors) {
+    if (!f.present) continue;
+    if (trendFactors.includes(f.name)) trendScore += f.weight;
+    if (rangeFactors.includes(f.name)) rangeScore += f.weight;
+  }
+  const isTrendSetup = trendScore > rangeScore;
+  const isRangeSetup = rangeScore > trendScore;
+  const scaleFactor = Math.min(1.0, confidence);
+  if (regime === "strong_trend" || regime === "mild_trend") {
+    if (isTrendSetup) {
+      const bonus = regime === "strong_trend" ? 0.5 : 0.25;
+      return { adjustment: +(bonus * scaleFactor).toFixed(2), detail: `Trend setup in ${regime.replace("_", " ")} → +${(bonus * scaleFactor).toFixed(1)} bonus` };
+    } else if (isRangeSetup) {
+      const penalty = regime === "strong_trend" ? -1.5 : -0.75;
+      return { adjustment: +(penalty * scaleFactor).toFixed(2), detail: `Range setup in ${regime.replace("_", " ")} → ${(penalty * scaleFactor).toFixed(1)} penalty` };
+    }
+  }
+  if (regime === "choppy_range" || regime === "mild_range") {
+    if (isRangeSetup) {
+      const bonus = regime === "choppy_range" ? 0.5 : 0.25;
+      return { adjustment: +(bonus * scaleFactor).toFixed(2), detail: `Range setup in ${regime.replace("_", " ")} → +${(bonus * scaleFactor).toFixed(1)} bonus` };
+    } else if (isTrendSetup) {
+      const penalty = regime === "choppy_range" ? -1.5 : -0.75;
+      return { adjustment: +(penalty * scaleFactor).toFixed(2), detail: `Trend setup in ${regime.replace("_", " ")} → ${(penalty * scaleFactor).toFixed(1)} penalty` };
+    }
+  }
+  return { adjustment: 0, detail: "Transitional regime — no adjustment" };
+}
+
 function runConfluenceAnalysis(
   candles: Candle[],
   dailyCandles: Candle[] | null,
@@ -1165,6 +1247,34 @@ function runConfluenceAnalysis(
           f.detail += ` [group-capped: ${group} limited to ${cap}]`;
         }
       }
+    }
+  }
+
+  // ─── Regime-Aware Scoring (Factor 21: Market Regime Alignment) ──────
+  {
+    if (dailyCandles && dailyCandles.length >= 20) {
+      const regimeInfo = classifyInstrumentRegime(dailyCandles);
+      const { adjustment, detail } = regimeAlignmentAdjustment(
+        regimeInfo.regime, regimeInfo.confidence, direction, factors
+      );
+      if (adjustment !== 0) {
+        score += adjustment;
+      }
+      factors.push({
+        name: "Regime Alignment",
+        present: adjustment !== 0,
+        weight: adjustment,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}`,
+        group: "Macro Confirmation",
+      });
+    } else {
+      factors.push({
+        name: "Regime Alignment",
+        present: false,
+        weight: 0,
+        detail: "Insufficient daily candles for regime classification",
+        group: "Macro Confirmation",
+      });
     }
   }
 

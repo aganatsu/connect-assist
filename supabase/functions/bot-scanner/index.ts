@@ -2212,6 +2212,38 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
+  // ─── Regime-Aware Scoring (Factor 21: Market Regime Alignment) ──────
+  // Uses dailyCandles to classify the instrument's current regime, then
+  // applies a small penalty or bonus based on setup-regime alignment.
+  // This runs AFTER group caps but BEFORE the final 0-10 clamp.
+  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null = null;
+  {
+    if (dailyCandles && dailyCandles.length >= 20) {
+      regimeInfo = classifyInstrumentRegime(dailyCandles);
+      const { adjustment, detail } = regimeAlignmentAdjustment(
+        regimeInfo.regime, regimeInfo.confidence, direction, factors
+      );
+      if (adjustment !== 0) {
+        score += adjustment;
+      }
+      factors.push({
+        name: "Regime Alignment",
+        present: adjustment !== 0,
+        weight: adjustment,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}`,
+        group: "Macro Confirmation",
+      });
+    } else {
+      factors.push({
+        name: "Regime Alignment",
+        present: false,
+        weight: 0,
+        detail: "Insufficient daily candles for regime classification",
+        group: "Macro Confirmation",
+      });
+    }
+  }
+
   score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 
   // Calculate SL/TP using configurable methods
@@ -2247,8 +2279,140 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     score, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
-    fotsiAlignment: _fotsiAlignment, volumeProfile,
+    fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
   };
+}
+
+// ─── Lightweight Regime Classification (for real-time scoring) ──────
+// Uses dailyCandles already available in the scoring function.
+// Returns a regime label + confidence so the scorer can apply a penalty/bonus.
+function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
+  if (!dailyCandles || dailyCandles.length < 20) {
+    return { regime: "unknown", confidence: 0, atrTrend: "unknown", bias: "neutral" };
+  }
+
+  // ATR-14 calculation
+  const atrPeriod = Math.min(14, dailyCandles.length - 1);
+  const trs: number[] = [];
+  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
+    const prev = dailyCandles[i - 1];
+    const curr = dailyCandles[i];
+    trs.push(Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close)));
+  }
+  const atr = trs.reduce((a, b) => a + b, 0) / trs.length;
+
+  // Recent vs older ATR to detect expansion/contraction
+  const recentTrs = trs.slice(-5);
+  const olderTrs = trs.slice(0, Math.max(1, trs.length - 5));
+  const recentAtr = recentTrs.reduce((a, b) => a + b, 0) / recentTrs.length;
+  const olderAtr = olderTrs.reduce((a, b) => a + b, 0) / olderTrs.length;
+  const atrRatio = olderAtr > 0 ? recentAtr / olderAtr : 1;
+  const atrTrend = atrRatio > 1.15 ? "expanding" : atrRatio < 0.85 ? "contracting" : "stable";
+
+  // Directional movement: compare 7-day SMA vs 20-day SMA
+  const last7 = dailyCandles.slice(-7);
+  const last20 = dailyCandles.slice(-20);
+  const sma7 = last7.reduce((s, c) => s + c.close, 0) / last7.length;
+  const sma20 = last20.reduce((s, c) => s + c.close, 0) / last20.length;
+  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
+  const smaDiff = avgPrice > 0 ? (sma7 - sma20) / avgPrice : 0;
+  const bias = Math.abs(smaDiff) > 0.005 ? (smaDiff > 0 ? "bullish" : "bearish") : "neutral";
+
+  // Range analysis: 20-day high-low range as % of price
+  const highs20 = last20.map(c => c.high);
+  const lows20 = last20.map(c => c.low);
+  const rangeHigh = Math.max(...highs20);
+  const rangeLow = Math.min(...lows20);
+  const rangePct = avgPrice > 0 ? ((rangeHigh - rangeLow) / avgPrice) * 100 : 0;
+
+  // Classify regime
+  let regime = "transitional";
+  let confidence = 0.5;
+
+  if (atrTrend === "expanding" && Math.abs(smaDiff) > 0.008 && rangePct > 3) {
+    regime = "strong_trend";
+    confidence = Math.min(0.95, 0.6 + Math.abs(smaDiff) * 10 + (atrRatio - 1) * 0.5);
+  } else if (Math.abs(smaDiff) > 0.005 && rangePct > 2) {
+    regime = "mild_trend";
+    confidence = Math.min(0.85, 0.5 + Math.abs(smaDiff) * 8);
+  } else if (atrTrend === "contracting" && rangePct < 2 && Math.abs(smaDiff) < 0.003) {
+    regime = "choppy_range";
+    confidence = Math.min(0.9, 0.6 + (1 - atrRatio) * 0.5 + (2 - rangePct) * 0.1);
+  } else if (Math.abs(smaDiff) < 0.005 && rangePct < 3) {
+    regime = "mild_range";
+    confidence = Math.min(0.8, 0.5 + (3 - rangePct) * 0.1);
+  }
+
+  return { regime, confidence: Math.round(confidence * 100) / 100, atrTrend, bias };
+}
+
+// Determine if the trade direction aligns with the instrument's regime
+// Returns a score adjustment: positive = bonus, negative = penalty
+function regimeAlignmentAdjustment(
+  regime: string,
+  confidence: number,
+  direction: string | null,
+  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group: string }>
+): { adjustment: number; detail: string } {
+  if (!direction || confidence < 0.5) {
+    return { adjustment: 0, detail: "Regime unknown or low confidence — no adjustment" };
+  }
+
+  // Determine if this is a trend-following or mean-reversion setup
+  const trendFactors = ["Market Structure", "Trend Direction", "Displacement"];
+  const rangeFactors = ["Premium/Discount", "Order Block", "Fair Value Gap", "Breaker Block"];
+
+  let trendScore = 0;
+  let rangeScore = 0;
+  for (const f of factors) {
+    if (!f.present) continue;
+    if (trendFactors.includes(f.name)) trendScore += f.weight;
+    if (rangeFactors.includes(f.name)) rangeScore += f.weight;
+  }
+
+  const isTrendSetup = trendScore > rangeScore;
+  const isRangeSetup = rangeScore > trendScore;
+
+  // Scale penalty/bonus by confidence (higher confidence = stronger effect)
+  const scaleFactor = Math.min(1.0, confidence);
+
+  if (regime === "strong_trend" || regime === "mild_trend") {
+    if (isTrendSetup) {
+      // Trend setup in trending market = small bonus
+      const bonus = regime === "strong_trend" ? 0.5 : 0.25;
+      return {
+        adjustment: +(bonus * scaleFactor).toFixed(2),
+        detail: `Trend setup in ${regime.replace("_", " ")} market → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`
+      };
+    } else if (isRangeSetup) {
+      // Range/reversal setup in trending market = penalty
+      const penalty = regime === "strong_trend" ? -1.5 : -0.75;
+      return {
+        adjustment: +(penalty * scaleFactor).toFixed(2),
+        detail: `Range setup in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`
+      };
+    }
+  }
+
+  if (regime === "choppy_range" || regime === "mild_range") {
+    if (isRangeSetup) {
+      // Range setup in ranging market = small bonus
+      const bonus = regime === "choppy_range" ? 0.5 : 0.25;
+      return {
+        adjustment: +(bonus * scaleFactor).toFixed(2),
+        detail: `Range setup in ${regime.replace("_", " ")} market → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`
+      };
+    } else if (isTrendSetup) {
+      // Trend setup in choppy market = penalty
+      const penalty = regime === "choppy_range" ? -1.5 : -0.75;
+      return {
+        adjustment: +(penalty * scaleFactor).toFixed(2),
+        detail: `Trend setup in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`
+      };
+    }
+  }
+
+  return { adjustment: 0, detail: `Transitional regime — no adjustment` };
 }
 
 // ─── Fetch candles via shared multi-source helper ────────────────────
