@@ -1058,3 +1058,75 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
     </div>
   );
 }
+
+// ── Inline SL/TP editor for an open paper position ──
+function EditSLTPInline({ position, onSaved }: { position: any; onSaved: () => void }) {
+  const [sl, setSl] = useState(position.stopLoss ? String(parseFloat(position.stopLoss)) : "");
+  const [tp, setTp] = useState(position.takeProfit ? String(parseFloat(position.takeProfit)) : "");
+  const [saving, setSaving] = useState(false);
+
+  const initialSl = position.stopLoss ? String(parseFloat(position.stopLoss)) : "";
+  const initialTp = position.takeProfit ? String(parseFloat(position.takeProfit)) : "";
+  const dirty = sl !== initialSl || tp !== initialTp;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const updates: { stopLoss?: number | null; takeProfit?: number | null } = {};
+      if (sl !== initialSl) updates.stopLoss = sl === "" ? null : parseFloat(sl);
+      if (tp !== initialTp) updates.takeProfit = tp === "" ? null : parseFloat(tp);
+      await paperApi.updatePosition(position.positionId, updates);
+      toast.success("SL/TP updated");
+      onSaved();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update SL/TP");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-end gap-2 pt-2 border-t border-border/40">
+      <div className="space-y-0.5">
+        <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Stop Loss</Label>
+        <Input
+          type="number"
+          step="0.00001"
+          value={sl}
+          onChange={(e) => setSl(e.target.value)}
+          placeholder="—"
+          className="h-7 w-24 text-[10px] font-mono px-1.5"
+        />
+      </div>
+      <div className="space-y-0.5">
+        <Label className="text-[9px] text-muted-foreground uppercase tracking-wider">Take Profit</Label>
+        <Input
+          type="number"
+          step="0.00001"
+          value={tp}
+          onChange={(e) => setTp(e.target.value)}
+          placeholder="—"
+          className="h-7 w-24 text-[10px] font-mono px-1.5"
+        />
+      </div>
+      <Button
+        size="sm"
+        className="h-7 text-[10px]"
+        disabled={!dirty || saving}
+        onClick={handleSave}
+      >
+        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+      </Button>
+      {dirty && !saving && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-[10px]"
+          onClick={() => { setSl(initialSl); setTp(initialTp); }}
+        >
+          Reset
+        </Button>
+      )}
+    </div>
+  );
+}
