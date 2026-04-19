@@ -75,25 +75,33 @@ function resolveConfigPath(key: string): string | null {
   const toggle = FACTOR_TOGGLE_MAP[key];
   if (toggle) return toggle.includes(".") ? toggle : `strategy.${toggle}`;
 
-  // "<Factor>_weight" — now config-driven via factorWeights
+  // Display-name → camelCase config key map for factor weights
+  const WEIGHT_KEY_MAP: Record<string, string> = {
+    "Market Structure": "marketStructure", "Order Block": "orderBlock",
+    "Fair Value Gap": "fairValueGap", "Premium/Discount & Fib": "premiumDiscountFib",
+    "Premium/Discount": "premiumDiscountFib", "Session/Kill Zone": "sessionKillZone",
+    "Judas Swing": "judasSwing", "PD/PW Levels": "pdPwLevels",
+    "Reversal Candle": "reversalCandle", "Liquidity Sweep": "liquiditySweep",
+    "Displacement": "displacement", "Breaker Block": "breakerBlock",
+    "Unicorn Model": "unicornModel", "Silver Bullet": "silverBullet",
+    "Macro Window": "macroWindow", "SMT Divergence": "smtDivergence",
+    "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
+    "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
+    "Daily Bias": "dailyBias",
+  };
+  // Set of valid camelCase factor keys (the values of WEIGHT_KEY_MAP)
+  const KNOWN_FACTOR_KEYS = new Set(Object.values(WEIGHT_KEY_MAP));
+
+  // "<Factor>_weight" — display-name or camelCase with explicit suffix
   if (/_weight$/.test(key)) {
     const factorName = key.replace(/_weight$/, "");
-    // Map display-style names to camelCase config keys
-    const WEIGHT_KEY_MAP: Record<string, string> = {
-      "Market Structure": "marketStructure", "Order Block": "orderBlock",
-      "Fair Value Gap": "fairValueGap", "Premium/Discount & Fib": "premiumDiscountFib",
-      "Premium/Discount": "premiumDiscountFib", "Session/Kill Zone": "sessionKillZone",
-      "Judas Swing": "judasSwing", "PD/PW Levels": "pdPwLevels",
-      "Reversal Candle": "reversalCandle", "Liquidity Sweep": "liquiditySweep",
-      "Displacement": "displacement", "Breaker Block": "breakerBlock",
-      "Unicorn Model": "unicornModel", "Silver Bullet": "silverBullet",
-      "Macro Window": "macroWindow", "SMT Divergence": "smtDivergence",
-      "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
-      "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
-      "Daily Bias": "dailyBias",
-    };
     const configKey = WEIGHT_KEY_MAP[factorName] || factorName;
     return `factorWeights.${configKey}`;
+  }
+
+  // Bare camelCase factor key (e.g. "breakerBlock") → factorWeights.<key>
+  if (KNOWN_FACTOR_KEYS.has(key)) {
+    return `factorWeights.${key}`;
   }
 
   return null;
