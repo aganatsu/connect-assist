@@ -42,6 +42,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
   { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
+  { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
+  { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
   // Risk
   { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
   { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
@@ -399,6 +401,23 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         <ToggleField label="Only Buy in Discount" description="Only enter longs when price is in discount zone" checked={config.strategy?.onlyBuyInDiscount ?? true} onChange={v => updateField('strategy', 'onlyBuyInDiscount', v)} />
                         <ToggleField label="Only Sell in Premium" description="Only enter shorts when price is in premium zone" checked={config.strategy?.onlySellInPremium ?? true} onChange={v => updateField('strategy', 'onlySellInPremium', v)} />
                       </div>
+                    </div>
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Regime-Aware Scoring</p>
+                      <ToggleField label="Enable Regime Scoring" description="Adjust confluence score based on market regime alignment. Bonus when setup matches regime (e.g. trend setup in trending market), penalty when mismatched" checked={config.strategy?.regimeScoringEnabled ?? true} onChange={v => updateField('strategy', 'regimeScoringEnabled', v)} />
+                      {(config.strategy?.regimeScoringEnabled ?? true) && (
+                        <FieldGroup label="Regime Strength" description="Scales the bonus/penalty multiplier. 0.25x = subtle adjustments, 1.0x = default, 2.0x = aggressive filtering">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.regimeScoringStrength ?? 1.0]} onValueChange={v => updateField('strategy', 'regimeScoringStrength', v[0])} min={0.25} max={2.0} step={0.25} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-12 text-right">{(config.strategy?.regimeScoringStrength ?? 1.0).toFixed(2)}x</span>
+                          </div>
+                          <div className="mt-2 rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
+                            <div><span className="text-emerald-500 font-medium">Aligned:</span> Trend setup in trending market → +0.25 to +0.5 bonus</div>
+                            <div><span className="text-red-500 font-medium">Mismatched:</span> Trend setup in choppy market → -0.75 to -1.5 penalty</div>
+                            <div className="text-muted-foreground/70">Range setups get the inverse. All values scaled by the multiplier above.</div>
+                          </div>
+                        </FieldGroup>
+                      )}
                     </div>
                   </div>
                 )}
