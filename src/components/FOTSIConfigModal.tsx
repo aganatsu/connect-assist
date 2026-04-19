@@ -565,6 +565,29 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                 </FieldRow>
 
                 <div className="border-t border-border pt-4 mt-4">
+                  <p className="text-xs font-bold mb-3">Auto-Scan Schedule</p>
+                </div>
+
+                <FieldRow label="Auto-Scan Interval" hint="Minimum time between automated scans (manual scans always run immediately)">
+                  <Select
+                    value={String(config.scanIntervalMinutes)}
+                    onValueChange={(v) => update("scanIntervalMinutes", parseInt(v))}
+                  >
+                    <SelectTrigger className="w-36 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="15">Every 15 min</SelectItem>
+                      <SelectItem value="30">Every 30 min</SelectItem>
+                      <SelectItem value="60">Every 1 hour</SelectItem>
+                      <SelectItem value="120">Every 2 hours</SelectItem>
+                      <SelectItem value="240">Every 4 hours</SelectItem>
+                      <SelectItem value="0">Disabled (manual only)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FieldRow>
+
+                <div className="border-t border-border pt-4 mt-4">
                   <p className="text-xs font-bold mb-3">EMA Periods (for TP calculation)</p>
                 </div>
 
