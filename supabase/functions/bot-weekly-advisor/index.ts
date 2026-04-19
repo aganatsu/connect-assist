@@ -6,6 +6,7 @@
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -115,6 +116,7 @@ interface RegimeAnalysis {
   regimeConfidence: number;
   regimeIndicators: string[];
   regimeImpact: string;
+  instrumentRegimes?: InstrumentRegime[];
 }
 
 interface PreviousRecommendation {
@@ -325,6 +327,217 @@ function computeFactorWeightSuggestions(
     return impactB - impactA;
   });
 }
+
+// ─── Per-Instrument Regime Detection (Price-Based) ──────────
+
+interface InstrumentRegime {
+  symbol: string;
+  regime: string;
+  confidence: number;
+  indicators: string[];
+  atr14: number;
+  atrTrend: string; // "expanding" | "contracting" | "stable"
+  directionalBias: string; // "bullish" | "bearish" | "neutral"
+  rangePercent: number; // high-low range as % of price
+}
+
+function detectInstrumentRegime(candles: Array<{ open: number; high: number; low: number; close: number; datetime: string }>): Omit<InstrumentRegime, "symbol"> {
+  if (candles.length < 20) {
+    return { regime: "unknown", confidence: 0, indicators: ["Insufficient candle data"], atr14: 0, atrTrend: "stable", directionalBias: "neutral", rangePercent: 0 };
+  }
+
+  // Sort oldest to newest
+  const sorted = [...candles].sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
+  const indicators: string[] = [];
+  let regimeScore = 0; // Positive = trending, negative = ranging
+
+  // 1. ATR analysis — volatility and its trend
+  const trueRanges: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const high = sorted[i].high;
+    const low = sorted[i].low;
+    const prevClose = sorted[i - 1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+
+  const atr14 = trueRanges.slice(-14).reduce((s, v) => s + v, 0) / Math.min(14, trueRanges.length);
+  const atr7Recent = trueRanges.slice(-7).reduce((s, v) => s + v, 0) / Math.min(7, trueRanges.length);
+  const atr7Prior = trueRanges.slice(-14, -7).reduce((s, v) => s + v, 0) / Math.min(7, trueRanges.slice(-14, -7).length || 1);
+
+  let atrTrend: string;
+  if (atr7Recent > atr7Prior * 1.2) {
+    atrTrend = "expanding";
+    regimeScore += 1;
+    indicators.push(`ATR expanding: recent ${atr7Recent.toFixed(5)} vs prior ${atr7Prior.toFixed(5)} (+${((atr7Recent / atr7Prior - 1) * 100).toFixed(0)}%)`);
+  } else if (atr7Recent < atr7Prior * 0.8) {
+    atrTrend = "contracting";
+    regimeScore -= 1;
+    indicators.push(`ATR contracting: recent ${atr7Recent.toFixed(5)} vs prior ${atr7Prior.toFixed(5)} (${((atr7Recent / atr7Prior - 1) * 100).toFixed(0)}%)`);
+  } else {
+    atrTrend = "stable";
+  }
+
+  // 2. Directional Movement — ADX-like analysis
+  const plusDMs: number[] = [];
+  const minusDMs: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const upMove = sorted[i].high - sorted[i - 1].high;
+    const downMove = sorted[i - 1].low - sorted[i].low;
+    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  }
+
+  const period = Math.min(14, plusDMs.length);
+  const avgPlusDM = plusDMs.slice(-period).reduce((s, v) => s + v, 0) / period;
+  const avgMinusDM = minusDMs.slice(-period).reduce((s, v) => s + v, 0) / period;
+  const avgTR = trueRanges.slice(-period).reduce((s, v) => s + v, 0) / period;
+
+  const plusDI = avgTR > 0 ? (avgPlusDM / avgTR) * 100 : 0;
+  const minusDI = avgTR > 0 ? (avgMinusDM / avgTR) * 100 : 0;
+  const diSum = plusDI + minusDI;
+  const dx = diSum > 0 ? Math.abs(plusDI - minusDI) / diSum * 100 : 0;
+
+  if (dx > 30) {
+    regimeScore += 2;
+    indicators.push(`Strong directional movement (DX: ${dx.toFixed(1)}) — ${plusDI > minusDI ? "bullish" : "bearish"} dominant`);
+  } else if (dx < 15) {
+    regimeScore -= 2;
+    indicators.push(`Weak directional movement (DX: ${dx.toFixed(1)}) — no clear trend`);
+  }
+
+  // 3. Price position relative to moving averages
+  const closes = sorted.map(c => c.close);
+  const sma20 = closes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, closes.length);
+  const currentPrice = closes[closes.length - 1];
+  const priceVsSma = ((currentPrice - sma20) / sma20) * 100;
+
+  if (Math.abs(priceVsSma) > 2) {
+    regimeScore += 1;
+    indicators.push(`Price ${priceVsSma > 0 ? "above" : "below"} SMA20 by ${Math.abs(priceVsSma).toFixed(2)}% — trending`);
+  } else {
+    regimeScore -= 1;
+    indicators.push(`Price near SMA20 (${priceVsSma.toFixed(2)}%) — ranging/consolidating`);
+  }
+
+  // 4. Higher highs / lower lows analysis (last 10 candles)
+  const recent10 = sorted.slice(-10);
+  let hhCount = 0, llCount = 0;
+  for (let i = 1; i < recent10.length; i++) {
+    if (recent10[i].high > recent10[i - 1].high) hhCount++;
+    if (recent10[i].low < recent10[i - 1].low) llCount++;
+  }
+  const hhRatio = hhCount / (recent10.length - 1);
+  const llRatio = llCount / (recent10.length - 1);
+
+  if (hhRatio > 0.6 && llRatio < 0.3) {
+    regimeScore += 2;
+    indicators.push(`Consistent higher highs (${(hhRatio * 100).toFixed(0)}%) — uptrend structure`);
+  } else if (llRatio > 0.6 && hhRatio < 0.3) {
+    regimeScore += 2;
+    indicators.push(`Consistent lower lows (${(llRatio * 100).toFixed(0)}%) — downtrend structure`);
+  } else if (hhRatio > 0.4 && llRatio > 0.4) {
+    regimeScore -= 2;
+    indicators.push(`Mixed HH/LL (HH: ${(hhRatio * 100).toFixed(0)}%, LL: ${(llRatio * 100).toFixed(0)}%) — choppy/ranging`);
+  }
+
+  // 5. Range analysis — how wide is the price range relative to ATR?
+  const highestHigh = Math.max(...sorted.slice(-20).map(c => c.high));
+  const lowestLow = Math.min(...sorted.slice(-20).map(c => c.low));
+  const rangePercent = ((highestHigh - lowestLow) / lowestLow) * 100;
+  const expectedRange = (atr14 * 20 / lowestLow) * 100;
+
+  if (rangePercent > expectedRange * 1.3) {
+    regimeScore += 1;
+    indicators.push(`Wide 20-day range (${rangePercent.toFixed(2)}% vs expected ${expectedRange.toFixed(2)}%) — breakout/trending`);
+  } else if (rangePercent < expectedRange * 0.7) {
+    regimeScore -= 1;
+    indicators.push(`Tight 20-day range (${rangePercent.toFixed(2)}% vs expected ${expectedRange.toFixed(2)}%) — compressed/ranging`);
+  }
+
+  // Determine directional bias
+  let directionalBias: string;
+  if (plusDI > minusDI * 1.3) directionalBias = "bullish";
+  else if (minusDI > plusDI * 1.3) directionalBias = "bearish";
+  else directionalBias = "neutral";
+
+  // Determine regime
+  let regime: string;
+  let confidence: number;
+  if (regimeScore >= 4) {
+    regime = "strong_trend";
+    confidence = Math.min(regimeScore / 7, 0.95);
+  } else if (regimeScore >= 2) {
+    regime = "mild_trend";
+    confidence = 0.5 + regimeScore * 0.08;
+  } else if (regimeScore <= -4) {
+    regime = "choppy_range";
+    confidence = Math.min(Math.abs(regimeScore) / 7, 0.95);
+  } else if (regimeScore <= -2) {
+    regime = "mild_range";
+    confidence = 0.5 + Math.abs(regimeScore) * 0.08;
+  } else {
+    regime = "transitional";
+    confidence = 0.3;
+  }
+
+  return { regime, confidence, indicators, atr14, atrTrend, directionalBias, rangePercent };
+}
+
+async function detectPerInstrumentRegimes(
+  instruments: string[],
+  brokerConn: BrokerConn | null
+): Promise<InstrumentRegime[]> {
+  const results: InstrumentRegime[] = [];
+
+  // Fetch daily candles for each instrument (batched to avoid rate limits)
+  const batchSize = 4;
+  for (let i = 0; i < instruments.length; i += batchSize) {
+    const batch = instruments.slice(i, i + batchSize);
+    const batchResults = await Promise.allSettled(
+      batch.map(async (symbol) => {
+        try {
+          const result = await fetchCandlesWithFallback({
+            symbol,
+            interval: "1d",
+            limit: 30,
+            brokerConn,
+          });
+          return { symbol, candles: result.candles };
+        } catch (e) {
+          console.warn(`[Regime] Failed to fetch candles for ${symbol}:`, e);
+          return { symbol, candles: [] as any[] };
+        }
+      })
+    );
+
+    for (const r of batchResults) {
+      if (r.status === "fulfilled" && r.value.candles.length >= 10) {
+        const analysis = detectInstrumentRegime(r.value.candles);
+        results.push({ symbol: r.value.symbol, ...analysis });
+      } else if (r.status === "fulfilled") {
+        results.push({
+          symbol: r.value.symbol,
+          regime: "unknown",
+          confidence: 0,
+          indicators: ["Insufficient candle data"],
+          atr14: 0,
+          atrTrend: "stable",
+          directionalBias: "neutral",
+          rangePercent: 0,
+        });
+      }
+    }
+
+    // Small delay between batches to avoid rate limits
+    if (i + batchSize < instruments.length) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  return results;
+}
+
+// ─── Overall Regime Detection (Trade-Based, Legacy) ─────────
 
 function detectMarketRegime(trades: TradeRecord[]): RegimeAnalysis {
   if (trades.length < 5) {
@@ -571,6 +784,75 @@ function generateRegimeRecommendation(
         confidence: regime.regimeConfidence >= 0.7 ? "high" : "medium",
         evidence: regime.regimeIndicators.join("; "),
         risk_level: "medium",
+      });
+    }
+  }
+
+  // Per-instrument regime recommendations
+  if (regime.instrumentRegimes && regime.instrumentRegimes.length > 0) {
+    // Group instruments by regime
+    const regimeGroups: Record<string, InstrumentRegime[]> = {};
+    for (const ir of regime.instrumentRegimes) {
+      if (ir.regime === "unknown") continue;
+      if (!regimeGroups[ir.regime]) regimeGroups[ir.regime] = [];
+      regimeGroups[ir.regime].push(ir);
+    }
+
+    // Find instruments whose regime differs from the overall
+    const overallRegime = regime.currentRegime;
+    const divergent = regime.instrumentRegimes.filter(
+      ir => ir.regime !== "unknown" && ir.regime !== overallRegime && ir.confidence >= 0.4
+    );
+
+    if (divergent.length > 0) {
+      // Group divergent instruments by their regime
+      const divergentByRegime: Record<string, string[]> = {};
+      for (const ir of divergent) {
+        if (!divergentByRegime[ir.regime]) divergentByRegime[ir.regime] = [];
+        divergentByRegime[ir.regime].push(ir.symbol);
+      }
+
+      for (const [instrRegime, symbols] of Object.entries(divergentByRegime)) {
+        const instrPreset = REGIME_PRESETS[instrRegime];
+        if (!instrPreset) continue;
+
+        recs.push({
+          category: "regime_adaptation",
+          title: `Per-Instrument: ${symbols.join(", ")} in ${instrRegime.replace(/_/g, " ")} (differs from overall ${overallRegime.replace(/_/g, " ")})`,
+          description: `While the overall market is ${overallRegime.replace(/_/g, " ")}, these instruments show ${instrRegime.replace(/_/g, " ")} conditions: ${instrPreset.description}. Consider adjusting your approach for these specific pairs.`,
+          current_value: { instruments: symbols, overallRegime },
+          suggested_value: {
+            instruments: symbols,
+            regime: instrRegime,
+            factorWeightOverrides: instrPreset.factorWeightOverrides,
+            note: "These are per-instrument suggestions — review each pair individually",
+          },
+          confidence: "medium",
+          evidence: divergent
+            .filter(ir => symbols.includes(ir.symbol))
+            .map(ir => `${ir.symbol}: ${ir.indicators.slice(0, 2).join("; ")}`)
+            .join(" | "),
+          risk_level: "low",
+        });
+      }
+    }
+
+    // Summary recommendation showing the full instrument breakdown
+    const summaryLines = regime.instrumentRegimes
+      .filter(ir => ir.regime !== "unknown")
+      .map(ir => `${ir.symbol}: ${ir.regime.replace(/_/g, " ")} (${ir.directionalBias}, ATR ${ir.atrTrend}, conf: ${(ir.confidence * 100).toFixed(0)}%)`)
+      .join("; ");
+
+    if (summaryLines) {
+      recs.push({
+        category: "regime_adaptation",
+        title: "Instrument Regime Breakdown (Informational)",
+        description: `Per-instrument price-based regime analysis using ATR, directional movement, and price structure. This is informational — no config changes needed.`,
+        current_value: { breakdown: summaryLines },
+        suggested_value: { breakdown: summaryLines, type: "informational" },
+        confidence: "high",
+        evidence: `Analyzed ${regime.instrumentRegimes.length} instruments using 30-day daily candles`,
+        risk_level: "low",
       });
     }
   }
@@ -1022,8 +1304,71 @@ Deno.serve(async (req) => {
       // Step 5: Compute factor weight suggestions
       const factorSuggestions = computeFactorWeightSuggestions(normalizedBotTrades, botReasonings);
 
-      // Step 6: Detect market regime
+      // Step 5.5: Fetch bot config (needed for instrument list in regime detection)
+      const { data: configRow } = await supabase
+        .from("bot_configs")
+        .select("config_json")
+        .eq("user_id", userId)
+        .single();
+
+      const rawConfig = configRow?.config_json || {};
+      const configObj = typeof rawConfig === "string" ? JSON.parse(rawConfig) : rawConfig;
+
+      // Step 6: Detect market regime (trade-based overall)
       const regimeAnalysis = detectMarketRegime(normalizedBotTrades);
+
+      // Step 6.5: Per-instrument regime detection (price-based)
+      try {
+        // Get broker connection for candle fetching
+        const { data: brokerConns } = await supabase.from("broker_connections")
+          .select("id, api_key, account_id, symbol_suffix, symbol_overrides, created_at")
+          .eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true)
+          .order("created_at", { ascending: false });
+
+        let brokerConn: BrokerConn | null = null;
+        if (brokerConns && brokerConns.length > 0) {
+          const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const picked = (brokerConns.find((r: any) => uuidRe.test(r.account_id)) || brokerConns[0]) as any;
+          brokerConn = { ...picked, user_id: userId } as BrokerConn;
+        }
+
+        // Get enabled instruments from config (or use defaults)
+        const enabledInstruments: string[] = configObj?.instruments?.enabled
+          || ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP", "XAU/USD", "BTC/USD"];
+
+        console.log(`[Weekly Advisor] ${botName}: Running per-instrument regime detection for ${enabledInstruments.length} instruments...`);
+        const instrumentRegimes = await detectPerInstrumentRegimes(enabledInstruments, brokerConn);
+
+        // Merge into regimeAnalysis
+        regimeAnalysis.instrumentRegimes = instrumentRegimes;
+
+        // Derive overall regime from instrument consensus (weighted by confidence)
+        const validRegimes = instrumentRegimes.filter(r => r.regime !== "unknown" && r.confidence > 0.3);
+        if (validRegimes.length >= 3) {
+          const regimeCounts: Record<string, { count: number; totalConf: number }> = {};
+          for (const ir of validRegimes) {
+            if (!regimeCounts[ir.regime]) regimeCounts[ir.regime] = { count: 0, totalConf: 0 };
+            regimeCounts[ir.regime].count++;
+            regimeCounts[ir.regime].totalConf += ir.confidence;
+          }
+          const dominant = Object.entries(regimeCounts).sort((a, b) => b[1].totalConf - a[1].totalConf)[0];
+          if (dominant) {
+            const prevRegime = regimeAnalysis.currentRegime;
+            regimeAnalysis.currentRegime = dominant[0];
+            regimeAnalysis.regimeConfidence = dominant[1].totalConf / dominant[1].count;
+            regimeAnalysis.regimeIndicators.push(
+              `Price-based consensus: ${dominant[1].count}/${validRegimes.length} instruments in ${dominant[0]} (overrides trade-based: ${prevRegime})`
+            );
+          }
+        }
+
+        const trendingCount = instrumentRegimes.filter(r => r.regime.includes("trend")).length;
+        const rangingCount = instrumentRegimes.filter(r => r.regime.includes("range") || r.regime === "choppy_range").length;
+        console.log(`[Weekly Advisor] ${botName}: Instrument regimes — ${trendingCount} trending, ${rangingCount} ranging, ${instrumentRegimes.length - trendingCount - rangingCount} other`);
+      } catch (regimeErr) {
+        console.warn(`[Weekly Advisor] ${botName}: Per-instrument regime detection failed (non-fatal):`, regimeErr);
+        // Continue with trade-based regime only
+      }
 
       // Step 7: Fetch past recommendations
       const { data: pastRecs } = await supabase
@@ -1035,15 +1380,7 @@ Deno.serve(async (req) => {
         .order("created_at", { ascending: false })
         .limit(10);
 
-      // Step 8: Fetch bot config
-      const { data: configRow } = await supabase
-        .from("bot_configs")
-        .select("config_json")
-        .eq("user_id", userId)
-        .single();
-
-      const rawConfig = configRow?.config_json || {};
-      const configObj = typeof rawConfig === "string" ? JSON.parse(rawConfig) : rawConfig;
+      // Step 8: Build strategy config from already-fetched configObj
       const strategyConfig = {
         slMethod: configObj.strategy?.slMethod || "atr",
         slATRMultiple: configObj.strategy?.slATRMultiple || 2.0,

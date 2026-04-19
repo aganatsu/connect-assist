@@ -54,6 +54,16 @@ interface PerformanceSummary {
     regimeConfidence: number;
     regimeIndicators: string[];
     regimeImpact: string;
+    instrumentRegimes?: Array<{
+      symbol: string;
+      regime: string;
+      confidence: number;
+      indicators: string[];
+      atr14: number;
+      atrTrend: string;
+      directionalBias: string;
+      rangePercent: number;
+    }>;
   };
   balance?: number;
   peakBalance?: number;
@@ -261,18 +271,23 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
 }
 
 function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysis"] }) {
+  const [showInstruments, setShowInstruments] = React.useState(false);
   if (!regime) return null;
 
-  const regimeLabels: Record<string, { label: string; color: string }> = {
-    strong_trend: { label: "Strong Trend", color: "text-green-400" },
-    mild_trend: { label: "Mild Trend", color: "text-blue-400" },
-    transitional: { label: "Transitional", color: "text-yellow-400" },
-    mild_range: { label: "Mild Range", color: "text-orange-400" },
-    choppy_range: { label: "Choppy Range", color: "text-red-400" },
-    unknown: { label: "Unknown", color: "text-muted-foreground" },
+  const regimeLabels: Record<string, { label: string; color: string; bg: string }> = {
+    strong_trend: { label: "Strong Trend", color: "text-green-400", bg: "bg-green-400/10" },
+    mild_trend: { label: "Mild Trend", color: "text-blue-400", bg: "bg-blue-400/10" },
+    transitional: { label: "Transitional", color: "text-yellow-400", bg: "bg-yellow-400/10" },
+    mild_range: { label: "Mild Range", color: "text-orange-400", bg: "bg-orange-400/10" },
+    choppy_range: { label: "Choppy Range", color: "text-red-400", bg: "bg-red-400/10" },
+    unknown: { label: "Unknown", color: "text-muted-foreground", bg: "bg-muted/30" },
   };
 
   const config = regimeLabels[regime.currentRegime] || regimeLabels.unknown;
+  const instrumentRegimes = regime.instrumentRegimes?.filter(ir => ir.regime !== "unknown") || [];
+  const trendingCount = instrumentRegimes.filter(ir => ir.regime.includes("trend")).length;
+  const rangingCount = instrumentRegimes.filter(ir => ir.regime.includes("range")).length;
+  const otherCount = instrumentRegimes.length - trendingCount - rangingCount;
 
   return (
     <div className="border border-border rounded-md p-2 bg-card/50">
@@ -285,6 +300,83 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
         <span className="text-[10px] text-muted-foreground">({(regime.regimeConfidence * 100).toFixed(0)}% confidence)</span>
       </div>
       <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">{regime.regimeImpact}</p>
+
+      {/* Per-instrument summary badges */}
+      {instrumentRegimes.length > 0 && (
+        <div className="mt-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {trendingCount > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-400/10 text-green-400 font-medium">
+                {trendingCount} Trending
+              </span>
+            )}
+            {rangingCount > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-400/10 text-red-400 font-medium">
+                {rangingCount} Ranging
+              </span>
+            )}
+            {otherCount > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-yellow-400/10 text-yellow-400 font-medium">
+                {otherCount} Transitional
+              </span>
+            )}
+            <button
+              onClick={() => setShowInstruments(!showInstruments)}
+              className="text-[9px] text-primary hover:underline ml-1"
+            >
+              {showInstruments ? "Hide" : "Show"} breakdown
+            </button>
+          </div>
+
+          {/* Collapsible per-instrument table */}
+          {showInstruments && (
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-[10px] font-mono">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th className="text-left py-1 px-1">Instrument</th>
+                    <th className="text-left py-1 px-1">Regime</th>
+                    <th className="text-left py-1 px-1">Bias</th>
+                    <th className="text-right py-1 px-1">ATR Trend</th>
+                    <th className="text-right py-1 px-1">Range%</th>
+                    <th className="text-right py-1 px-1">Conf</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {instrumentRegimes
+                    .sort((a, b) => b.confidence - a.confidence)
+                    .map((ir, i) => {
+                      const irConfig = regimeLabels[ir.regime] || regimeLabels.unknown;
+                      return (
+                        <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
+                          <td className="py-1 px-1 text-foreground font-medium">{ir.symbol}</td>
+                          <td className="py-1 px-1">
+                            <span className={`${irConfig.color} font-medium`}>
+                              {irConfig.label}
+                            </span>
+                          </td>
+                          <td className="py-1 px-1">
+                            <span className={ir.directionalBias === "bullish" ? "text-green-400" : ir.directionalBias === "bearish" ? "text-red-400" : "text-muted-foreground"}>
+                              {ir.directionalBias}
+                            </span>
+                          </td>
+                          <td className="text-right py-1 px-1">
+                            <span className={ir.atrTrend === "expanding" ? "text-yellow-400" : ir.atrTrend === "contracting" ? "text-blue-400" : "text-muted-foreground"}>
+                              {ir.atrTrend}
+                            </span>
+                          </td>
+                          <td className="text-right py-1 px-1">{ir.rangePercent?.toFixed(1)}%</td>
+                          <td className="text-right py-1 px-1">{(ir.confidence * 100).toFixed(0)}%</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {regime.regimeIndicators?.length > 0 && (
         <div className="mt-1.5 space-y-0.5">
           {regime.regimeIndicators.map((ind, i) => (
