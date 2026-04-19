@@ -260,7 +260,18 @@ export default function Chart() {
                 </AccordionContent>
               </AccordionItem>
 
-              // ... keep existing code
+              {/* Premium / Discount */}
+              {analysis?.premiumDiscount && (
+                <AccordionItem value="premium">
+                  <AccordionTrigger className="text-xs px-3 py-2">
+                    <span className="flex items-center gap-2">
+                      <Target className="h-3.5 w-3.5 text-primary" />
+                      Premium / Discount
+                      <span className="text-[10px] font-medium ml-auto">{analysis.premiumDiscount.currentZone ?? '—'}</span>
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="px-3 pb-2">
+                    <div className="bg-secondary/30 border border-border p-2 space-y-2">
                       <div className="relative h-20 border border-border overflow-hidden">
                         <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2">
                           <span className="text-[10px] text-destructive font-medium">PREMIUM</span>
@@ -271,8 +282,10 @@ export default function Chart() {
                         <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2">
                           <span className="text-[10px] text-success font-medium">DISCOUNT</span>
                         </div>
-                        <div className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
-                          style={{ top: `${100 - (typeof analysis.premiumDiscount.zonePercent === 'number' ? analysis.premiumDiscount.zonePercent : 50)}%` }} />
+                        <div
+                          className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
+                          style={{ top: `${100 - (typeof analysis.premiumDiscount.zonePercent === 'number' ? analysis.premiumDiscount.zonePercent : 50)}%` }}
+                        />
                       </div>
                       <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
                         <span>H: {fx(analysis.premiumDiscount.swingHigh)}</span>
