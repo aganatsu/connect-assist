@@ -146,13 +146,17 @@ function RecommendationCard({
   index,
   onApprove,
   onDismiss,
+  onMarkDone,
   isPending,
+  isAutoApplicable,
 }: {
   rec: Recommendation;
   index: number;
   onApprove?: () => void;
   onDismiss?: () => void;
+  onMarkDone?: () => void;
   isPending: boolean;
+  isAutoApplicable: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -172,6 +176,11 @@ function RecommendationCard({
               <span className={`text-[9px] font-medium ${riskColors[rec.risk_level] || ""}`}>
                 {rec.risk_level.toUpperCase()} RISK
               </span>
+            )}
+            {isPending && !isAutoApplicable && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-amber-500/10 text-amber-400 border-amber-500/30">
+                MANUAL
+              </Badge>
             )}
           </div>
           <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
@@ -206,17 +215,37 @@ function RecommendationCard({
             </p>
           )}
 
+          {/* Manual-action notice */}
+          {isPending && !isAutoApplicable && (
+            <p className="text-[10px] text-amber-400/90 leading-relaxed border-l-2 border-amber-500/40 pl-2">
+              💡 Manual action required — this recommendation can&apos;t be auto-applied.
+              Apply the change yourself in the relevant config tab, then click <span className="font-semibold">Mark as done</span>.
+            </p>
+          )}
+
           {/* Action buttons */}
-          {isPending && onApprove && onDismiss && (
+          {isPending && onDismiss && (
             <div className="flex gap-2 pt-1">
-              <Button
-                size="sm"
-                variant="default"
-                className="h-6 text-[10px] px-3"
-                onClick={onApprove}
-              >
-                <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
-              </Button>
+              {isAutoApplicable && onApprove && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-3"
+                  onClick={onApprove}
+                >
+                  <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
+                </Button>
+              )}
+              {!isAutoApplicable && onMarkDone && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-3"
+                  onClick={onMarkDone}
+                >
+                  <CheckCircle2 className="w-3 h-3 mr-1" /> Mark as done
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
@@ -677,6 +706,57 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     },
   });
 
+  // Mark-as-done mutation — records that the user handled this recommendation manually
+  // (no config patch is written; just flips per-rec status to 'approved' with manual=true)
+  const markDoneMutation = useMutation({
+    mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
+      await updateRecStatus(id, recIndex, "approved", {
+        impact_snapshot: { manual: true, recIndex },
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
+      toast.success("Marked as done — no config change applied.");
+    },
+    onError: (err: any) => {
+      toast.error(`Failed to mark as done: ${err.message}`);
+    },
+  });
+
+  // Fetch current bot config so we can dry-run each recommendation and decide
+  // whether the Approve button (auto-apply) or the Mark-as-done button (manual) should show.
+  const { data: currentBotConfig } = useQuery({
+    queryKey: ["bot-config-for-recs"],
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return {};
+      const { data } = await supabase
+        .from("bot_configs")
+        .select("config_json")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      return (data?.config_json as any) || {};
+    },
+    staleTime: 30_000,
+  });
+
+  // Decide whether a recommendation can be auto-applied via the existing approve flows.
+  // factor_weights and regime_adaptation always have dedicated handlers in approveMutation;
+  // for everything else, dry-run applyRecommendationToConfig and check applied.length > 0.
+  function isRecAutoApplicable(rec: Recommendation): boolean {
+    if (!rec.suggested_value || typeof rec.suggested_value !== "object") return false;
+    if (rec.category === "factor_weights" || rec.category === "regime_adaptation") return true;
+    try {
+      const { applied } = applyRecommendationToConfig(
+        currentBotConfig || {},
+        rec.suggested_value
+      );
+      return applied.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   // Dismiss mutation — dismisses a SINGLE recommendation by index
   const dismissMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
@@ -978,7 +1058,9 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                               rec={rec}
                               index={i}
                               isPending={isRecPending}
+                              isAutoApplicable={isRecAutoApplicable(rec)}
                               onApprove={isRecPending ? () => approveMutation.mutate({ id: review.id, recIndex: i }) : undefined}
+                              onMarkDone={isRecPending ? () => markDoneMutation.mutate({ id: review.id, recIndex: i }) : undefined}
                               onDismiss={isRecPending ? () => dismissMutation.mutate({ id: review.id, recIndex: i }) : undefined}
                             />
                           </div>
@@ -1066,7 +1148,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                   {isExpanded && (
                     <div className="space-y-1.5 pt-1 border-t border-border">
                       {review.recommendations?.map((rec, i) => (
-                        <RecommendationCard key={i} rec={rec} index={i} isPending={false} />
+                        <RecommendationCard key={i} rec={rec} index={i} isPending={false} isAutoApplicable={false} />
                       ))}
                     </div>
                   )}
