@@ -423,7 +423,8 @@ function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; i
 // Default session windows in NY local decimal hours (ICT convention).
 // Users can override via config.sessions.{london,newYork,asian,sydney}{Start,End}.
 const DEFAULT_SESSION_WINDOWS = {
-  asian:   { start: 20, end: 26 },   // 20:00 → 02:00 next day (wraps; encoded as 26)
+  sydney:  { start: 17, end: 26 },   // 17:00 → 02:00 next day (FX market open)
+  asian:   { start: 20, end: 26 },   // 20:00 → 02:00 (Tokyo)
   london:  { start: 2,  end: 8.5 },
   newYork: { start: 8.5, end: 16 },
 };
@@ -438,7 +439,6 @@ function parseHHMM(s: any, fallback: number): number {
 // Returns true if NY decimal hour `t` is inside [start,end), supporting overnight wrap (end > 24).
 function inWindow(t: number, start: number, end: number): boolean {
   if (end > 24) {
-    // wraps midnight: e.g. 20 → 26 (02:00)
     return t >= start || t < (end - 24);
   }
   return t >= start && t < end;
@@ -449,27 +449,28 @@ function detectSession(config?: any): { name: string; isKillZone: boolean } {
   const t = ny.t;
   const s = config?.sessions ?? {};
 
-  // London window (default 02:00–08:30 NY)
   const lonStart = parseHHMM(s.londonStart, DEFAULT_SESSION_WINDOWS.london.start);
   const lonEnd   = parseHHMM(s.londonEnd,   DEFAULT_SESSION_WINDOWS.london.end);
-  // New York window (default 08:30–16:00 NY)
   const nyStart  = parseHHMM(s.newYorkStart, DEFAULT_SESSION_WINDOWS.newYork.start);
   const nyEnd    = parseHHMM(s.newYorkEnd,   DEFAULT_SESSION_WINDOWS.newYork.end);
-  // Asian window (default 20:00 prev → 02:00; wraps midnight)
-  const asiaStartRaw = parseHHMM(s.asianStart, DEFAULT_SESSION_WINDOWS.asian.start);
-  const asiaEndRaw   = parseHHMM(s.asianEnd,   2);
-  // If asian end <= start, treat end as next-day (add 24).
-  const asiaEnd = asiaEndRaw <= asiaStartRaw ? asiaEndRaw + 24 : asiaEndRaw;
+  const asiaStart = parseHHMM(s.asianStart, DEFAULT_SESSION_WINDOWS.asian.start);
+  const asiaEndRaw = parseHHMM(s.asianEnd, 2);
+  const asiaEnd = asiaEndRaw <= asiaStart ? asiaEndRaw + 24 : asiaEndRaw;
+  const sydStart = parseHHMM(s.sydneyStart, DEFAULT_SESSION_WINDOWS.sydney.start);
+  const sydEndRaw = parseHHMM(s.sydneyEnd, 2);
+  const sydEnd = sydEndRaw <= sydStart ? sydEndRaw + 24 : sydEndRaw;
 
-  // Kill zones (hardcoded ICT — used only for analytics; user-configurable windows above own gating)
   const inLondonKZ = t >= 2 && t < 5;
   const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
 
-  if (inWindow(t, lonStart, lonEnd))  return { name: "London",   isKillZone: inLondonKZ };
-  if (inWindow(t, nyStart,  nyEnd))   return { name: "New York", isKillZone: inNYKZ };
-  if (inWindow(t, asiaStartRaw, asiaEnd)) return { name: "Asian", isKillZone: false };
+  // Order matters: prefer more specific / kill-zone sessions first.
+  if (inWindow(t, lonStart, lonEnd))   return { name: "London",   isKillZone: inLondonKZ };
+  if (inWindow(t, nyStart,  nyEnd))    return { name: "New York", isKillZone: inNYKZ };
+  if (inWindow(t, asiaStart, asiaEnd)) return { name: "Asian",    isKillZone: false };
+  if (inWindow(t, sydStart, sydEnd))   return { name: "Sydney",   isKillZone: false };
   return { name: "Off-Hours", isKillZone: false };
 }
+
 
 
 // ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
