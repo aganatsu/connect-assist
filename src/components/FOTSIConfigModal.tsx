@@ -115,13 +115,13 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
   }, [rawConfig, open]);
 
   const saveMut = useMutation({
-    mutationFn: () => fotsiConfigApi.update(config),
+    mutationFn: (cfg: Config) => fotsiConfigApi.update(cfg),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["fotsi-config"] });
       toast.success("FOTSI config saved");
       onClose();
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => toast.error(e?.message || "Failed to save FOTSI config"),
   });
 
   const resetMut = useMutation({
@@ -131,6 +131,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
       setConfig({ ...DEFAULTS });
       toast.success("FOTSI config reset to defaults");
     },
+    onError: (e: any) => toast.error(e?.message || "Failed to reset FOTSI config"),
   });
 
   const update = (key: string, value: any) => {
