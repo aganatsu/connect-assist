@@ -419,45 +419,58 @@ function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; i
   return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
 }
 
-// ─── Session Detection (DST-aware) ─────────────────────────────────
-function detectSession(): { name: string; isKillZone: boolean } {
-  const ny = toNYTime(new Date());
-  const t = ny.t; // NY local decimal hours
+// ─── Session Detection (DST-aware, config-driven) ─────────────────
+// Default session windows in NY local decimal hours (ICT convention).
+// Users can override via config.sessions.{london,newYork,asian,sydney}{Start,End}.
+const DEFAULT_SESSION_WINDOWS = {
+  asian:   { start: 20, end: 26 },   // 20:00 → 02:00 next day (wraps; encoded as 26)
+  london:  { start: 2,  end: 8.5 },
+  newYork: { start: 8.5, end: 16 },
+};
 
-  // All times below are in New York local time (auto-adjusts for EST/EDT).
-  // Asian session: 20:00-00:00 NY (previous day evening in NY = Asian morning)
-  if (t >= 20 || t < 0) {
-    return { name: "Asian", isKillZone: false };
+function parseHHMM(s: any, fallback: number): number {
+  if (typeof s !== "string") return fallback;
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallback;
+  return Number(m[1]) + Number(m[2]) / 60;
+}
+
+// Returns true if NY decimal hour `t` is inside [start,end), supporting overnight wrap (end > 24).
+function inWindow(t: number, start: number, end: number): boolean {
+  if (end > 24) {
+    // wraps midnight: e.g. 20 → 26 (02:00)
+    return t >= start || t < (end - 24);
   }
-  // Asian / Sydney overlap: 00:00-02:00 NY
-  if (t >= 0 && t < 2) {
-    return { name: "Asian", isKillZone: false };
-  }
-  // London session: 02:00-05:00 NY (London open = 7am GMT = 2am EST / 3am EDT)
-  // London Kill Zone: 02:00-05:00 NY — this is the HIGH PROBABILITY window
-  if (t >= 2 && t < 5) {
-    return { name: "London", isKillZone: true };
-  }
-  // London continuation: 05:00-08:30 NY (London still open, but lower probability)
-  if (t >= 5 && t < 8.5) {
-    return { name: "London", isKillZone: false };
-  }
-  // New York Kill Zone: 08:30-11:00 NY (NY open, highest volume)
-  if (t >= 8.5 && t < 11) {
-    return { name: "New York", isKillZone: true };
-  }
-  // NY continuation / London close overlap: 11:00-12:00 NY
-  // London Close Kill Zone: 10:00-12:00 NY (ICT London close)
-  if (t >= 11 && t < 12) {
-    return { name: "New York", isKillZone: true };
-  }
-  // NY afternoon: 12:00-16:00 NY (lower probability, PM session)
-  if (t >= 12 && t < 16) {
-    return { name: "New York", isKillZone: false };
-  }
-  // After hours: 16:00-20:00 NY
+  return t >= start && t < end;
+}
+
+function detectSession(config?: any): { name: string; isKillZone: boolean } {
+  const ny = toNYTime(new Date());
+  const t = ny.t;
+  const s = config?.sessions ?? {};
+
+  // London window (default 02:00–08:30 NY)
+  const lonStart = parseHHMM(s.londonStart, DEFAULT_SESSION_WINDOWS.london.start);
+  const lonEnd   = parseHHMM(s.londonEnd,   DEFAULT_SESSION_WINDOWS.london.end);
+  // New York window (default 08:30–16:00 NY)
+  const nyStart  = parseHHMM(s.newYorkStart, DEFAULT_SESSION_WINDOWS.newYork.start);
+  const nyEnd    = parseHHMM(s.newYorkEnd,   DEFAULT_SESSION_WINDOWS.newYork.end);
+  // Asian window (default 20:00 prev → 02:00; wraps midnight)
+  const asiaStartRaw = parseHHMM(s.asianStart, DEFAULT_SESSION_WINDOWS.asian.start);
+  const asiaEndRaw   = parseHHMM(s.asianEnd,   2);
+  // If asian end <= start, treat end as next-day (add 24).
+  const asiaEnd = asiaEndRaw <= asiaStartRaw ? asiaEndRaw + 24 : asiaEndRaw;
+
+  // Kill zones (hardcoded ICT — used only for analytics; user-configurable windows above own gating)
+  const inLondonKZ = t >= 2 && t < 5;
+  const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
+
+  if (inWindow(t, lonStart, lonEnd))  return { name: "London",   isKillZone: inLondonKZ };
+  if (inWindow(t, nyStart,  nyEnd))   return { name: "New York", isKillZone: inNYKZ };
+  if (inWindow(t, asiaStartRaw, asiaEnd)) return { name: "Asian", isKillZone: false };
   return { name: "Off-Hours", isKillZone: false };
 }
+
 
 // ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
 // ICT Silver Bullet: 1-hour windows where FVG forms and fills.
