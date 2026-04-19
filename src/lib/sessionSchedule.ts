@@ -2,7 +2,7 @@
 // Honors custom session windows from bot config (interpreted as NY/ET time, DST-aware).
 // Source of truth: supabase/functions/bot-scanner/index.ts detectSession().
 
-export type SessionName = "Asian" | "London" | "New York" | "Off-Hours";
+export type SessionName = "Sydney" | "Asian" | "London" | "New York" | "Off-Hours";
 
 // Returns NY local decimal hours for a given Date (DST-aware).
 function nyDecimalHour(date: Date): number {
@@ -37,6 +37,8 @@ export interface SessionsConfig {
   asianStart?: string;
   asianEnd?: string;
   sydneyEnabled?: boolean;
+  sydneyStart?: string;
+  sydneyEnd?: string;
   offHoursEnabled?: boolean;
 }
 
@@ -56,11 +58,15 @@ function resolveWindows(cfg: SessionsConfig | null | undefined): ResolvedWindow[
   const asiaStart = parseHHMM(s.asianStart, 20);
   const asiaEndRaw = parseHHMM(s.asianEnd, 2);
   const asiaEnd = asiaEndRaw <= asiaStart ? asiaEndRaw + 24 : asiaEndRaw;
+  const sydStart = parseHHMM(s.sydneyStart, 17);
+  const sydEndRaw = parseHHMM(s.sydneyEnd, 2);
+  const sydEnd = sydEndRaw <= sydStart ? sydEndRaw + 24 : sydEndRaw;
 
   return [
     { name: "London",   startNY: lonStart, endNY: lonEnd, enabled: s.londonEnabled !== false },
     { name: "New York", startNY: nyStart,  endNY: nyEnd,  enabled: s.newYorkEnabled !== false },
-    { name: "Asian",    startNY: asiaStart, endNY: asiaEnd, enabled: s.asianEnabled === true || s.sydneyEnabled === true },
+    { name: "Asian",    startNY: asiaStart, endNY: asiaEnd, enabled: s.asianEnabled === true },
+    { name: "Sydney",   startNY: sydStart, endNY: sydEnd, enabled: s.sydneyEnabled === true },
   ];
 }
 
