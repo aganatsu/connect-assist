@@ -355,7 +355,9 @@ export type Database = {
           signal_reason: string | null
           signal_score: string
           size: string
+          stop_loss: string | null
           symbol: string
+          take_profit: string | null
           user_id: string
         }
         Insert: {
@@ -375,7 +377,9 @@ export type Database = {
           signal_reason?: string | null
           signal_score?: string
           size: string
+          stop_loss?: string | null
           symbol: string
+          take_profit?: string | null
           user_id: string
         }
         Update: {
@@ -395,7 +399,9 @@ export type Database = {
           signal_reason?: string | null
           signal_score?: string
           size?: string
+          stop_loss?: string | null
           symbol?: string
+          take_profit?: string | null
           user_id?: string
         }
         Relationships: []
