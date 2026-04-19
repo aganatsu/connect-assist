@@ -17,9 +17,9 @@ export interface Candle {
 }
 
 // ─── H8: TwelveData Rate Limiter ────────────────────────────────────
-// TwelveData free tier: 8 requests/minute. Track timestamps and throttle.
+// TwelveData Grow plan: 55 requests/minute. Track timestamps and throttle.
 const _tdRequestTimestamps: number[] = [];
-const TD_RATE_LIMIT = 8;
+const TD_RATE_LIMIT = 55;
 const TD_RATE_WINDOW_MS = 60_000;
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
