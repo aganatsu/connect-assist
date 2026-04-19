@@ -1406,6 +1406,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "marketStructure", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
+  }
 
   // Displacement detection (used by OB/FVG bonus + new factor below)
   const displacement = detectDisplacement(candles);
@@ -1440,6 +1441,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "orderBlock", 2.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Order Block", present: pts > 0, weight: s.displayWeight, detail: detail || "No active order blocks", group: "Order Flow Zones" }); }
+  }
 
   // ── Factor 3: Fair Value Gap (max 2.0) ──
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
@@ -1474,6 +1476,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "fairValueGap", 2.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Fair Value Gap", present: pts > 0, weight: s.displayWeight, detail: detail || "No active FVGs", group: "Order Flow Zones" }); }
+  }
 
   // ── Factor 4: Premium/Discount & Fibonacci (max 2.5, group-capped) ──
   // Merged: P/D zone + Fibonacci retracement levels + PD/PW levels.
@@ -1544,6 +1547,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
     { const s = applyWeightScale(pts, "premiumDiscountFib", 2.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
+  }
 
   // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
   // ICT: Kill zones are a timing filter — base 1.0 pts.
@@ -1557,6 +1561,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "sessionKillZone", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
+  }
 
   // ── Factor 6: Judas Swing (max 0.5) ──
   // ICT: Judas Swing is a confirmation signal, not a primary entry trigger.
@@ -1577,6 +1582,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "judasSwing", 0.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Judas Swing", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+  }
 
   // ── Factor 7: PD/PW Levels (max 1.0) ──
   // ICT: PD/PW levels are primary draw-on-liquidity targets. Increased weight per audit.
@@ -1600,6 +1606,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "pdPwLevels", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
+  }
 
   // ── Factor 8: Reversal Candle (max 0.5) ──
   // ICT: reversal candles matter when they form at a key level (OB, FVG, PD/PW).
@@ -1633,6 +1640,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "reversalCandle", 0.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+  }
 
   // ── Factor 9: Liquidity Sweep (max 1.0) ──
   // ICT: Liquidity sweeps are a cornerstone entry trigger. Increased weight per audit.
@@ -1653,6 +1661,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "liquiditySweep", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+  }
 
   // ── Opening Range Enhancements ──
   const or = config.openingRange?.enabled && hourlyCandles
@@ -1745,6 +1754,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "trendDirection", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Trend Direction", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
+  }
 
   // ── Factor 10: Displacement (max 1.0) ──
   // ICT: True displacement should create an FVG (institutional footprint).
@@ -1777,6 +1787,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "displacement", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Displacement", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+  }
 
   // ── Factor 11: Breaker Block (max 1.0) ──
   {
@@ -1800,6 +1811,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "breakerBlock", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Breaker Block", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+  }
 
   // ── Factor 12: Unicorn Model (max 1.5) ──
   {
@@ -1823,6 +1835,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "unicornModel", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Unicorn Model", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+  }
 
   // ── Factor 13: Silver Bullet Window (max 1.0) ──
   {
@@ -1836,6 +1849,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "silverBullet", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Silver Bullet", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
+  }
 
   // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
   const macroWindow = detectMacroWindow();
@@ -1854,6 +1868,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "macroWindow", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Macro Window", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
+  }
 
   // ── Factor 15: SMT Divergence (max 1.0) ──
   // Reads precomputed SMT result injected by scan loop via config._smtResult.
@@ -1877,6 +1892,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "smtDivergence", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "SMT Divergence", present: pts > 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
+  }
 
   // ── Factor 16: Volume Profile (max 1.5) ──
   // Replaces VWAP. Uses Time-at-Price (TPO) histogram to identify POC, HVN, LVN.
@@ -1935,6 +1951,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "volumeProfile", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
+  }
 
   // Retain VWAP calculation for backward compatibility (not scored)
   const _vwapSymbol = config._currentSymbol || "EUR/USD";
@@ -1964,6 +1981,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "amdPhase", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "AMD Phase", present: pts > 0, weight: s.displayWeight, detail, group: "AMD / Power of 3" }); }
+  }
 
   // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
   // Uses pre-computed FOTSI strengths from the scan cycle (module-scoped _fotsiResult).
@@ -1992,6 +2010,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "currencyStrength", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Currency Strength", present: pts !== 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
+  }
 
   // ── Factor 20: Daily Bias / HTF Trend (max 1.5) ──
   // Scores whether the daily timeframe trend aligns with the trade direction.
@@ -2023,6 +2042,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
+  }
 
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.

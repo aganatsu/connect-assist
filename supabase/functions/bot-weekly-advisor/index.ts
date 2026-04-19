@@ -523,6 +523,14 @@ RULES:
 - Be specific about numbers: "increase from 2.0 to 2.5" not "increase slightly"
 - If the bot is profitable and improving, say so — don't fix what isn't broken
 - Rate overall weekly_trend as: "improving" | "degrading" | "stable" | "volatile" | "insufficient_data"
+- For factor_weights recommendations, suggested_value keys MUST use camelCase config keys, NOT display names.
+  Mapping: Market Structure=marketStructure, Order Block=orderBlock, Fair Value Gap=fairValueGap,
+  Premium/Discount & Fib=premiumDiscountFib, Session/Kill Zone=sessionKillZone, Judas Swing=judasSwing,
+  PD/PW Levels=pdPwLevels, Reversal Candle=reversalCandle, Liquidity Sweep=liquiditySweep,
+  Displacement=displacement, Breaker Block=breakerBlock, Unicorn Model=unicornModel,
+  Silver Bullet=silverBullet, Macro Window=macroWindow, SMT Divergence=smtDivergence,
+  Volume Profile=volumeProfile, AMD Phase=amdPhase, Currency Strength=currencyStrength,
+  Trend Direction=trendDirection, Daily Bias=dailyBias
 
 Respond with valid JSON:
 {
@@ -554,7 +562,7 @@ Respond with valid JSON:
       "title": "Short actionable title",
       "description": "Detailed explanation",
       "current_value": {},
-      "suggested_value": {},
+      "suggested_value": {"camelCaseKey": numericValue},
       "confidence": "high|medium|low",
       "evidence": "Cross-week data supporting this",
       "risk_level": "low|medium|high"

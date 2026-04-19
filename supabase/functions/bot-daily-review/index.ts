@@ -480,6 +480,14 @@ RULES:
 - Focus on the most impactful changes first — max 3 recommendations per review
 - For factor weight suggestions, only suggest changes for factors with 10+ appearances
 - Consider market regime — if the bot is losing in ranging markets, suggest regime-aware changes
+- For factor_weights recommendations, suggested_value keys MUST use camelCase config keys, NOT display names.
+  Mapping: Market Structure=marketStructure, Order Block=orderBlock, Fair Value Gap=fairValueGap,
+  Premium/Discount & Fib=premiumDiscountFib, Session/Kill Zone=sessionKillZone, Judas Swing=judasSwing,
+  PD/PW Levels=pdPwLevels, Reversal Candle=reversalCandle, Liquidity Sweep=liquiditySweep,
+  Displacement=displacement, Breaker Block=breakerBlock, Unicorn Model=unicornModel,
+  Silver Bullet=silverBullet, Macro Window=macroWindow, SMT Divergence=smtDivergence,
+  Volume Profile=volumeProfile, AMD Phase=amdPhase, Currency Strength=currencyStrength,
+  Trend Direction=trendDirection, Daily Bias=dailyBias
 
 You MUST respond with valid JSON in this exact format:
 {
@@ -494,7 +502,7 @@ You MUST respond with valid JSON in this exact format:
       "title": "Short actionable title",
       "description": "Detailed explanation with numbers from the data",
       "current_value": { "config_key": "current_value" },
-      "suggested_value": { "config_key": "new_value" },
+      "suggested_value": { "camelCaseConfigKey": numericValue },
       "confidence": "high|medium|low",
       "evidence": "Specific data points supporting this recommendation",
       "risk_level": "low|medium|high"

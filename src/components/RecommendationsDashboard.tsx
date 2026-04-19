@@ -403,8 +403,43 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
 
       // Factor weights recommendations: merge directly into factorWeights
       if (rec.category === "factor_weights") {
+        // Map display names (AI output) → camelCase config keys (scanner expects)
+        const DISPLAY_TO_CONFIG_KEY: Record<string, string> = {
+          "Market Structure": "marketStructure",
+          "Order Block": "orderBlock",
+          "Fair Value Gap": "fairValueGap",
+          "Premium/Discount & Fib": "premiumDiscountFib",
+          "Premium/Discount": "premiumDiscountFib",
+          "Session/Kill Zone": "sessionKillZone",
+          "Judas Swing": "judasSwing",
+          "PD/PW Levels": "pdPwLevels",
+          "Reversal Candle": "reversalCandle",
+          "Liquidity Sweep": "liquiditySweep",
+          "Displacement": "displacement",
+          "Breaker Block": "breakerBlock",
+          "Unicorn Model": "unicornModel",
+          "Silver Bullet": "silverBullet",
+          "Macro Window": "macroWindow",
+          "SMT Divergence": "smtDivergence",
+          "Volume Profile": "volumeProfile",
+          "AMD Phase": "amdPhase",
+          "Currency Strength": "currencyStrength",
+          "Trend Direction": "trendDirection",
+          "Daily Bias": "dailyBias",
+        };
+
         const existingWeights = currentConfig.factorWeights || {};
-        const suggestedWeights = suggested as Record<string, number>;
+        const rawSuggested = suggested as Record<string, number>;
+
+        // Normalize keys: accept both display names and camelCase config keys
+        const suggestedWeights: Record<string, number> = {};
+        for (const [key, val] of Object.entries(rawSuggested)) {
+          const configKey = DISPLAY_TO_CONFIG_KEY[key] || key;
+          if (typeof val === "number") {
+            suggestedWeights[configKey] = val;
+          }
+        }
+
         const mergedWeights = { ...existingWeights, ...suggestedWeights };
         const patched = { ...currentConfig, factorWeights: mergedWeights };
 

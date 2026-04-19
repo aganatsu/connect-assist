@@ -75,8 +75,26 @@ function resolveConfigPath(key: string): string | null {
   const toggle = FACTOR_TOGGLE_MAP[key];
   if (toggle) return toggle.includes(".") ? toggle : `strategy.${toggle}`;
 
-  // "<Factor>_weight" — bot factor weights are hardcoded in scanner; cannot apply via config.
-  if (/_weight$/.test(key)) return null;
+  // "<Factor>_weight" — now config-driven via factorWeights
+  if (/_weight$/.test(key)) {
+    const factorName = key.replace(/_weight$/, "");
+    // Map display-style names to camelCase config keys
+    const WEIGHT_KEY_MAP: Record<string, string> = {
+      "Market Structure": "marketStructure", "Order Block": "orderBlock",
+      "Fair Value Gap": "fairValueGap", "Premium/Discount & Fib": "premiumDiscountFib",
+      "Premium/Discount": "premiumDiscountFib", "Session/Kill Zone": "sessionKillZone",
+      "Judas Swing": "judasSwing", "PD/PW Levels": "pdPwLevels",
+      "Reversal Candle": "reversalCandle", "Liquidity Sweep": "liquiditySweep",
+      "Displacement": "displacement", "Breaker Block": "breakerBlock",
+      "Unicorn Model": "unicornModel", "Silver Bullet": "silverBullet",
+      "Macro Window": "macroWindow", "SMT Divergence": "smtDivergence",
+      "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
+      "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
+      "Daily Bias": "dailyBias",
+    };
+    const configKey = WEIGHT_KEY_MAP[factorName] || factorName;
+    return `factorWeights.${configKey}`;
+  }
 
   return null;
 }
@@ -125,10 +143,13 @@ export function applyRecommendationToConfig(
 
     // Type-safety guard: never overwrite a string config (e.g. time "21:00") with
     // a boolean/number, and never overwrite a number with a non-numeric string.
+    // Exception: factorWeights paths allow "default" (string sentinel) → number replacement.
     if (from !== undefined && from !== null) {
       const fromType = typeof from;
       const newType = typeof newVal;
-      if (fromType !== newType) {
+      const isFactorWeightPath = path.startsWith("factorWeights.");
+      const isSentinelReplacement = isFactorWeightPath && from === "default" && newType === "number";
+      if (fromType !== newType && !isSentinelReplacement) {
         skipped.push({
           key,
           reason: `type mismatch: existing ${fromType} (${JSON.stringify(from)}), suggested ${newType} (${JSON.stringify(newVal)})`,
