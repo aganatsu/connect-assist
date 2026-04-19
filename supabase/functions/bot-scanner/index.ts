@@ -1408,7 +1408,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
   const pd = calculatePremiumDiscount(candles);
-  const session = detectSession();
+  const session = detectSession(config);
   const pdLevels = dailyCandles ? calculatePDLevels(dailyCandles) : null;
 
   const lastPrice = candles[candles.length - 1].close;
@@ -2812,7 +2812,7 @@ async function runSafetyGates(
   if (config.killZoneOnly) {
     const assetProfile = getAssetProfile(symbol);
     if (!assetProfile.skipSessionGate) {
-      const sess = detectSession();
+      const sess = detectSession(config);
       if (!sess.isKillZone) {
         gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
       } else {
@@ -3086,7 +3086,7 @@ async function runScanForUser(supabase: any, userId: string) {
   if (!config.enabledDays.includes(dayOfWeek) && !hasCrypto) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
-  const session = detectSession();
+  const session = detectSession(config);
   // Session filter: normalize names for comparison
   const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
   const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
