@@ -622,6 +622,16 @@ async function runScan(
   const scanId = crypto.randomUUID();
   const startTime = Date.now();
   const logs: string[] = [];
+  const signalSummaries: Array<{
+    pair: string;
+    direction: "long" | "short";
+    spread: number;
+    hookScore: number;
+    placed: boolean;
+    reason: string;
+  }> = [];
+  let latestFotsi: FOTSIResult | null = null;
+  let latestRanked: RankedPair[] = [];
   const log = (msg: string) => {
     console.log(`[${BOT_ID}:${scanId.slice(0, 8)}] ${msg}`);
     logs.push(msg);
@@ -700,7 +710,7 @@ async function runScan(
 
   if (botPositions.length >= config.maxConcurrent) {
     log("Max concurrent positions reached — skipping scan");
-    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "max_concurrent" });
     return new Response(JSON.stringify({ ok: true, message: "Max positions reached", scanId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -711,7 +721,7 @@ async function runScan(
   const dailyLoss = ((dailyPnlBase - balance) / dailyPnlBase) * 100;
   if (dailyLoss >= config.maxDailyLoss) {
     log(`Daily loss limit hit: ${dailyLoss.toFixed(2)}% >= ${config.maxDailyLoss}%`);
-    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "daily_loss_limit" });
     return new Response(JSON.stringify({ ok: true, message: "Daily loss limit", scanId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -728,7 +738,7 @@ async function runScan(
 
   if (!inActiveSession) {
     log("Outside active sessions — skipping scan");
-    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "outside_session" });
     return new Response(JSON.stringify({ ok: true, message: "Outside session", scanId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -771,17 +781,24 @@ async function runScan(
 
   // ── Step 2: Compute FOTSI ──
   const fotsi = computeFOTSI(candleMap);
+  latestFotsi = fotsi;
   log(`FOTSI computed: ${JSON.stringify(
     Object.fromEntries(CURRENCIES.map(c => [c, fotsi.strengths[c].toFixed(1)])),
   )}`);
 
   // ── Step 3: Rank pairs by divergence + hook ──
   const ranked = rankPairsByDivergence(fotsi, config);
+  latestRanked = ranked;
   log(`Ranked pairs: ${ranked.length} qualifying (min spread ${config.minDivergenceSpread})`);
 
   if (ranked.length === 0) {
     log("No qualifying pairs found");
-    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, 0, 0);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, 0, 0, {
+      fotsi: latestFotsi,
+      rankedPairs: latestRanked,
+      signals: signalSummaries,
+      skipReason: "no_qualifying_pairs",
+    });
     return new Response(JSON.stringify({ ok: true, message: "No qualifying pairs", scanId, fotsi: fotsi.strengths }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -808,7 +825,12 @@ async function runScan(
   const botTodayTrades = (todayTrades || []).length; // Approximate — includes both bots
   if (botTodayTrades >= config.maxDailyTrades) {
     log(`Daily trade limit reached: ${botTodayTrades}/${config.maxDailyTrades}`);
-    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, ranked.length, 0);
+    await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, ranked.length, 0, {
+      fotsi: latestFotsi,
+      rankedPairs: latestRanked,
+      signals: signalSummaries,
+      skipReason: "daily_trade_limit",
+    });
     return new Response(JSON.stringify({ ok: true, message: "Daily trade limit", scanId }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -886,6 +908,15 @@ async function runScan(
     }
 
     signalsGenerated++;
+    const signalSummary = {
+      pair,
+      direction: direction === "BUY" ? "long" : "short",
+      spread,
+      hookScore,
+      placed: false,
+      reason: opportunity.reason,
+    };
+    signalSummaries.push(signalSummary);
 
     // ── Calculate position size ──
     const size = calculatePositionSize(
@@ -960,7 +991,16 @@ async function runScan(
     await supabase.from("trade_reasonings").insert({
       user_id: userId,
       position_id: positionId,
-      reasoning_text: signalReason.summary,
+      symbol: pair,
+      direction,
+      confluence_score: Math.round((hookScore / 4) * 10),
+      session: Object.entries(session)
+        .filter(([, active]) => active)
+        .map(([name]) => name)
+        .join(", ") || "none",
+      timeframe: tf,
+      bias: direction,
+      summary: signalReason.summary,
       factors_json: {
         bot: BOT_ID,
         baseTSI,
@@ -971,21 +1011,24 @@ async function runScan(
         quoteHook: quoteHook.direction,
         slMethod: config.slMethod,
         rr: sltp.rr2,
-      },
-      analysis_snapshot: {
         fotsiStrengths: fotsi.strengths,
         ema50: ema50Val,
         ema100: ema100Val,
         atr: calculateATR(entryCandles, 14),
-        session: session,
+        session,
       },
     });
+    signalSummary.placed = true;
   }
 
   log(`═══ Scan Complete: ${signalsGenerated} signals, ${tradesOpened} trades opened ═══`);
 
   // ── Save scan log ──
-  await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, signalsGenerated, tradesOpened);
+  await saveScanLog(supabase, userId, scanId, startTime, logs, fetchedCount, signalsGenerated, tradesOpened, {
+    fotsi: latestFotsi,
+    rankedPairs: latestRanked,
+    signals: signalSummaries,
+  });
 
   return new Response(JSON.stringify({
     ok: true,
@@ -999,6 +1042,7 @@ async function runScan(
       reason: r.reason,
     })),
     signalsGenerated,
+    tradesPlaced: tradesOpened,
     tradesOpened,
     logs,
   }), {
@@ -1017,19 +1061,46 @@ async function saveScanLog(
   pairsFetched: number,
   signals: number,
   trades: number,
+  extras?: {
+    fotsi?: FOTSIResult | null;
+    rankedPairs?: RankedPair[];
+    signals?: Array<{ pair: string; direction: "long" | "short"; spread: number; hookScore: number; placed: boolean; reason: string }>;
+    skipReason?: string;
+  },
 ) {
   const duration = Date.now() - startTime;
-  await supabase.from("scan_logs").insert({
+  const details = {
+    bot: BOT_ID,
+    scanId,
+    logs,
+    skipReason: extras?.skipReason ?? null,
+    fotsiStrengths: extras?.fotsi?.strengths ?? null,
+    currency_strengths: extras?.fotsi
+      ? Object.fromEntries(
+          CURRENCIES.map((ccy) => [ccy, { tsi: extras.fotsi?.strengths[ccy] ?? 0 }]),
+        )
+      : {},
+    rankedPairs: (extras?.rankedPairs ?? []).slice(0, 10).map((r) => ({
+      pair: r.pair,
+      direction: r.direction === "BUY" ? "long" : "short",
+      spread: r.spread,
+      hookScore: r.hookScore,
+      reason: r.reason,
+    })),
+    signals: extras?.signals ?? [],
+  };
+
+  const { error } = await supabase.from("scan_logs").insert({
     user_id: userId,
-    scan_id: scanId,
-    bot_id: BOT_ID,
-    status: "completed",
-    instruments_scanned: pairsFetched,
-    signals_generated: signals,
-    positions_opened: trades,
-    duration_ms: duration,
-    details: JSON.stringify({ logs }),
+    pairs_scanned: pairsFetched,
+    signals_found: signals,
+    trades_placed: trades,
+    scanned_at: new Date().toISOString(),
+    details_json: details,
   });
+  if (error) {
+    console.error(`[${BOT_ID}:${scanId.slice(0, 8)}] Failed to save scan log:`, error.message);
+  }
 }
 
 // ─── Status endpoint ───────────────────────────────────────────────
@@ -1088,21 +1159,31 @@ async function getScanLogs(
     .from("scan_logs")
     .select("*")
     .eq("user_id", userId)
-    .order("created_at", { ascending: false })
+    .order("scanned_at", { ascending: false })
     .limit(50);
 
-  // Filter to Bot #2 logs (if bot_id column exists, otherwise return all)
   const botLogs = (logs || []).filter(l => {
-    // If bot_id column exists, filter by it
-    if (l.bot_id) return l.bot_id === BOT_ID;
-    // Otherwise check details JSON
     try {
-      const d = JSON.parse(String((l as Record<string, unknown>).details ?? "{}"));
-      return d.logs?.some((log: string) => log.includes("FOTSI Mean Reversion"));
+      const details = (l.details_json ?? {}) as Record<string, unknown>;
+      const bot = details.bot;
+      if (bot) return bot === BOT_ID;
+      const rawLogs = Array.isArray(details.logs) ? details.logs : [];
+      return rawLogs.some((entry) => String(entry).includes("FOTSI Mean Reversion"));
     } catch { return false; }
   });
 
-  return new Response(JSON.stringify({ logs: botLogs }), {
+  const normalized = botLogs.map((log) => ({
+    ...log,
+    created_at: (log as Record<string, unknown>).created_at ?? log.scanned_at,
+    instruments_scanned: log.pairs_scanned,
+    signals_generated: log.signals_found,
+    positions_opened: log.trades_placed,
+    duration_ms: undefined,
+    status: log.trades_placed > 0 ? "completed" : "completed",
+    details: log.details_json,
+  }));
+
+  return new Response(JSON.stringify({ logs: normalized }), {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
