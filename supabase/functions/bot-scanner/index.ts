@@ -860,8 +860,11 @@ function analyzeMarketStructure(candles: Candle[]) {
 function detectOrderBlocks(
   candles: Candle[],
   structureBreaks?: { index: number; type: string }[],
+  obLookbackOverride?: number,
 ): OrderBlock[] {
-  const OB_RECENCY = 50; // only keep OBs from the last N candles
+  const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0)
+    ? obLookbackOverride
+    : 50; // only keep OBs from the last N candles (config-driven, default 50)
   const OB_CAP = 5;      // max OBs to return
   const BREAK_LOOKAHEAD = 10; // structure break must occur within N candles after OB
   const recencyStart = Math.max(2, candles.length - OB_RECENCY);
@@ -1054,12 +1057,13 @@ function detectFVGs(candles: Candle[]): FairValueGap[] {
   return fvgs;
 }
 
-function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPool[] {
+function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTouches = 2): LiquidityPool[] {
   const pools: LiquidityPool[] = [];
   const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
   const tol = priceRange * tolerance;
   const last = candles[candles.length - 1];
   const usedH = new Set<number>(), usedL = new Set<number>();
+  const minT = Math.max(2, minTouches | 0);
 
   for (let i = 0; i < candles.length; i++) {
     if (usedH.has(i)) continue;
@@ -1068,7 +1072,7 @@ function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPo
       if (usedH.has(j)) continue;
       if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
     }
-    if (count >= 2) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
+    if (count >= minT) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
   }
   for (let i = 0; i < candles.length; i++) {
     if (usedL.has(i)) continue;
@@ -1077,7 +1081,7 @@ function detectLiquidityPools(candles: Candle[], tolerance = 0.001): LiquidityPo
       if (usedL.has(j)) continue;
       if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
     }
-    if (count >= 2) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
+    if (count >= minT) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
   }
   return pools.sort((a, b) => b.strength - a.strength);
 }
@@ -1364,9 +1368,15 @@ return { stopLoss: sl, takeProfit: tp };
  *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
  */
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
-  const structure = analyzeMarketStructure(candles);
+  // P1: structure lookback — limit candles fed into structure analysis (config-driven, default 50)
+  const structureLookback = (typeof config.structureLookback === "number" && config.structureLookback > 0)
+    ? config.structureLookback
+    : 50;
+  const structureCandles = candles.length > structureLookback ? candles.slice(-structureLookback) : candles;
+  const structure = analyzeMarketStructure(structureCandles);
   const structureBreaks = [...structure.bos, ...structure.choch];
-  let orderBlocks = detectOrderBlocks(candles, structureBreaks);
+  // P1: OB lookback — pass config-driven recency window
+  let orderBlocks = detectOrderBlocks(candles, structureBreaks, config.obLookbackCandles);
   const fvgs = detectFVGs(candles);
 
   // FVG adjacency bonus: tag OBs that have an FVG within 5 candles
@@ -1375,7 +1385,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     const hasFVGNearby = fvgs.some(f => Math.abs(f.index - ob.index) <= 5);
     (ob as any).hasFVGAdjacency = hasFVGNearby;
   }
-  const liquidityPools = detectLiquidityPools(candles);
+  // P1: liquidity pool min touches — pass config-driven threshold
+  const liquidityPools = detectLiquidityPools(candles, 0.001, config.liquidityPoolMinTouches);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
   const pd = calculatePremiumDiscount(candles);
@@ -1450,7 +1461,22 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let pts = 0;
     let detail = "";
     if (config.enableFVG !== false) {
-      const activeFVGs = fvgs.filter(f => !f.mitigated);
+      // P1: pip-size lookup for FVG min-size filter (default 0.0001 if symbol unknown)
+      const _sym = (config as any)._currentSymbol as string | undefined;
+      const _spec = _sym ? SPECS[_sym] : undefined;
+      const _pipSize = _spec?.pipSize ?? 0.0001;
+      const _minPips = typeof config.fvgMinSizePips === "number" ? config.fvgMinSizePips : 0;
+      const _onlyUnfilled = config.fvgOnlyUnfilled !== false;
+
+      // P1: filter FVGs by config — unfilled-only and minimum size
+      const activeFVGs = fvgs.filter(f => {
+        if (_onlyUnfilled && f.mitigated) return false;
+        if (_minPips > 0) {
+          const sizePips = (f.high - f.low) / _pipSize;
+          if (sizePips < _minPips) return false;
+        }
+        return true;
+      });
       const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
       if (insideFVG) {
         const ce = (insideFVG.high + insideFVG.low) / 2; // Consequent Encroachment
@@ -1469,7 +1495,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         }
       } else if (activeFVGs.length > 0) {
         pts = 0.5;
-        detail = `${activeFVGs.length} unfilled FVGs in range`;
+        detail = `${activeFVGs.length} qualifying FVGs in range${_minPips > 0 ? ` (≥${_minPips} pips)` : ""}`;
       }
     } else {
       detail = "FVGs disabled";
@@ -2523,6 +2549,12 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // Regime scoring (UI writes under strategy.*; scanner reads at top level)
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
     regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
+    // ── P1 tuning fields (now wired to scanner) ──
+    obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
+    fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
+    fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw.fvgOnlyUnfilled ?? true,
+    structureLookback: strategy.structureLookback ?? raw.structureLookback ?? 50,
+    liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? 2,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
