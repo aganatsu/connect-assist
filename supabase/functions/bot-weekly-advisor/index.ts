@@ -960,7 +960,7 @@ Deno.serve(async (req) => {
       // Step 11: Send Telegram notification
       await sendTelegramNotification(
         supabase, userId, diagnosis, botId, botName,
-        account.balance, weeklyData
+        balanceNum, weeklyData
       );
 
       results.push({
