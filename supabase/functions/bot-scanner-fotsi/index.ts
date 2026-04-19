@@ -629,12 +629,28 @@ async function runScan(
 
   log("═══ FOTSI Mean Reversion Scan Started ═══");
 
-  // ── Load account ──
-  const { data: account } = await supabase
-    .from("paper_accounts")
-    .select("*")
-    .eq("user_id", userId)
-    .maybeSingle();
+  // ── Load account (prefer bot-specific row, fall back to legacy) ──
+  let account: any = null;
+  {
+    const { data: botAccount } = await supabase
+      .from("paper_accounts")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("bot_id", BOT_ID)
+      .maybeSingle();
+    if (botAccount) {
+      account = botAccount;
+    } else {
+      // Fallback: legacy single-row account (before bot_id column was added)
+      const { data: legacyAccount } = await supabase
+        .from("paper_accounts")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
+      account = legacyAccount;
+      if (account) log("WARNING: Using shared legacy account — bot_id column not yet added");
+    }
+  }
 
   if (!account) {
     log("No paper account found");
@@ -934,6 +950,7 @@ async function runScan(
       signal_score: hookScore.toString(),
       order_id: orderId,
       position_status: "open",
+      bot_id: BOT_ID,
     });
 
     tradesOpened++;

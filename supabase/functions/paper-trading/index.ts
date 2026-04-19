@@ -778,12 +778,19 @@ Deno.serve(async (req) => {
                 size: remainSize.toString(),
                 partial_tp_fired: true,
               }).eq("id", pos.id);
-              const curBal = parseFloat(account?.balance || "10000");
+              // Determine which bot's account to update based on position's bot_id
+              const posBotId = pos.bot_id || "smc";
+              const acctQuery = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
+              if (account?.bot_id) acctQuery.eq("bot_id", posBotId);
+              const { data: posAcct } = await acctQuery.maybeSingle();
+              const curBal = parseFloat(posAcct?.balance || account?.balance || "10000");
               const newBal = curBal + partialPnl;
-              const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
-              await supabase.from("paper_accounts").update({
+              const newPeak = Math.max(parseFloat(posAcct?.peak_balance || account?.peak_balance || "10000"), newBal);
+              const balUpd = supabase.from("paper_accounts").update({
                 balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
               }).eq("user_id", user.id);
+              if (account?.bot_id) balUpd.eq("bot_id", posBotId);
+              await balUpd;
               console.log(`Partial TP: closed ${closeSize.toFixed(4)} of ${pos.symbol} at ${currentPrice}, PnL: $${partialPnl.toFixed(2)} (flag set, won't re-fire)`);
               // FIX 2: Mirror partial close to broker
               const partialBrokerResults = await partialCloseBroker(supabase, user.id, pos.position_id, pos.symbol, exitFlags.partialTPPercent / 100, pos.mirrored_connection_ids);
@@ -794,6 +801,7 @@ Deno.serve(async (req) => {
           // Close position if SL/TP/time triggered
           if (closeReason) {
             const { pnl, pnlPips } = calcPnl(pos.direction, entryPrice, exitPrice, size, pos.symbol);
+            const closeBotId = pos.bot_id || "smc";
             await supabase.from("paper_trade_history").insert({
               user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
               direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
@@ -801,14 +809,20 @@ Deno.serve(async (req) => {
               open_time: pos.open_time, closed_at: new Date().toISOString(),
               close_reason: closeReason, signal_reason: pos.signal_reason || "",
               signal_score: pos.signal_score, order_id: pos.order_id,
+              bot_id: closeBotId,
             });
-            // Update balance
-            const curBal = parseFloat(account?.balance || "10000");
+            // Update balance — route to the correct bot's account
+            const closeAcctQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
+            if (account?.bot_id) closeAcctQ.eq("bot_id", closeBotId);
+            const { data: closeAcct } = await closeAcctQ.maybeSingle();
+            const curBal = parseFloat(closeAcct?.balance || account?.balance || "10000");
             const newBal = curBal + pnl;
-            const newPeak = Math.max(parseFloat(account?.peak_balance || "10000"), newBal);
-            await supabase.from("paper_accounts").update({
+            const newPeak = Math.max(parseFloat(closeAcct?.peak_balance || account?.peak_balance || "10000"), newBal);
+            const closeBalUpd = supabase.from("paper_accounts").update({
               balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
             }).eq("user_id", user.id);
+            if (account?.bot_id) closeBalUpd.eq("bot_id", closeBotId);
+            await closeBalUpd;
 
             // Generate post-mortem
             const postMortem = generatePostMortem(pos, exitPrice, pnl, pnlPips, closeReason);
@@ -854,6 +868,7 @@ Deno.serve(async (req) => {
         takeProfit: p.take_profit ? parseFloat(p.take_profit) : null,
         openTime: p.open_time, signalReason: p.signal_reason || "",
         signalScore: parseFloat(p.signal_score || "0"), orderId: p.order_id,
+        botId: p.bot_id || "smc",
       }));
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);
       const histArr = (history || []).map((t: any) => ({
@@ -864,6 +879,7 @@ Deno.serve(async (req) => {
         closedAt: t.closed_at, closeReason: t.close_reason,
         signalReason: t.signal_reason || "", signalScore: parseFloat(t.signal_score || "0"),
         orderId: t.order_id,
+        botId: t.bot_id || "smc",
       }));
       const wins = histArr.filter((t: any) => t.pnl > 0).length;
       const losses = histArr.filter((t: any) => t.pnl <= 0).length;

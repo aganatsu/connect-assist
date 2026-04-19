@@ -160,7 +160,13 @@ export default function BotView() {
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
 
-  const closedToday = (d.tradeHistory || []).filter((t: any) => {
+  // Filter positions and trades by active bot tab
+  const allPositions = d.positions || [];
+  const allTradeHistory = d.tradeHistory || [];
+  const botPositions = allPositions.filter((p: any) => (p.botId || "smc") === activeBot);
+  const botTradeHistory = allTradeHistory.filter((t: any) => (t.botId || "smc") === activeBot);
+
+  const closedToday = botTradeHistory.filter((t: any) => {
     const today = new Date().toISOString().split('T')[0];
     return t.closedAt?.startsWith(today);
   });
@@ -350,14 +356,14 @@ export default function BotView() {
           <div className="flex-[2] flex flex-col min-h-0">
             <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
               <TabsList className="h-7 shrink-0">
-                <TabsTrigger value="open" className="text-[11px] h-6">Open ({d.positions?.length || 0})</TabsTrigger>
+                <TabsTrigger value="open" className="text-[11px] h-6">Open ({botPositions.length})</TabsTrigger>
                 <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
                 <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
                 <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
                 <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
-                {(!d.positions || d.positions.length === 0) ? (
+                {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
                     <p className="text-xs font-medium text-muted-foreground">No open positions</p>
@@ -373,7 +379,7 @@ export default function BotView() {
                       <th className="text-left py-1 px-1">Signal</th><th className="py-1 px-1"></th>
                     </tr></thead>
                     <tbody>
-                      {d.positions.map((p: any, idx: number) => (
+                      {botPositions.map((p: any, idx: number) => (
                         <React.Fragment key={p.id}>
                           <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
@@ -424,7 +430,7 @@ export default function BotView() {
                 <TradeHistoryTable trades={closedToday} />
               </TabsContent>
               <TabsContent value="history" className="flex-1 overflow-auto mt-1">
-                <TradeHistoryTable trades={d.tradeHistory || []} />
+                <TradeHistoryTable trades={botTradeHistory} />
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
                 <CloseAuditLog brokerConns={Array.isArray(brokerConns) ? brokerConns : []} />
@@ -443,7 +449,7 @@ export default function BotView() {
             )}
             {/* Account Summary */}
             {(() => {
-              const positions = d.positions || [];
+              const positions = botPositions;
               const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
               const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
               const longCount = positions.filter((p: any) => p.direction === "long").length;
@@ -452,7 +458,7 @@ export default function BotView() {
               const worstPos = positions.length > 0 ? positions.reduce((worst: any, p: any) => (p.pnl || 0) < (worst.pnl || 0) ? p : worst, positions[0]) : null;
               const equity = parseFloat(d.balance) + unrealizedPnl;
               const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
-              const history = d.tradeHistory || [];
+              const history = botTradeHistory;
               const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
               const avgWin = d.wins > 0 ? history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.wins : 0;
               const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;

@@ -8,6 +8,9 @@ import {
 } from "../_shared/fotsi.ts";
 
 
+// ─── Bot Identity ────────────────────────────────────────────────────
+const BOT_ID = "smc";
+
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 // Confluence is normalized to 0-10 (raw max ~23.0 across 20 factors, clamped).
 // Recommended: 5.0-5.5 for balanced, 6.5+ for A+ only, <4.0 looser/scalp.
@@ -2734,11 +2737,12 @@ Deno.serve(async (req) => {
       return respond(result);
     }
 
-    if (action === "scan" || action === "cron") {
-      const { data: accounts } = await adminClient.from("paper_accounts").select("*")
+     if (action === "scan" || action === "cron") {
+      const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
         .eq("is_running", true).eq("kill_switch_active", false);
+      // Filter to SMC bot accounts only (or legacy accounts without bot_id)
+      const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", scanned: 0 });
-
       const results = [];
       for (const account of accounts) {
         try {
@@ -2812,7 +2816,17 @@ async function runScanForUser(supabase: any, userId: string) {
   const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
   const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
   // Session gate is now checked per-instrument inside the loop, not globally
-  const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
+  // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
+  let account: any = null;
+  {
+    const { data: botAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
+    if (botAccount) {
+      account = botAccount;
+    } else {
+      const { data: legacyAccount } = await supabase.from("paper_accounts").select("*").eq("user_id", userId).maybeSingle();
+      account = legacyAccount;
+    }
+  }
   if (!account) return { error: "No paper account" };
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
@@ -2847,15 +2861,19 @@ async function runScanForUser(supabase: any, userId: string) {
 
   const { data: openPositions } = await supabase.from("paper_positions").select("*")
     .eq("user_id", userId).eq("position_status", "open");
-  const openPosArr = openPositions || [];
+  // Filter to only this bot's positions (bot_id column or legacy without it)
+  const openPosArr = (openPositions || []).filter((p: any) => !p.bot_id || p.bot_id === BOT_ID);
 
   // Update daily PnL base if new day
   const todayStr = now.toISOString().slice(0, 10);
   if (account.daily_pnl_date !== todayStr) {
-    await supabase.from("paper_accounts").update({
+    const pnlUpdate = supabase.from("paper_accounts").update({
       daily_pnl_date: todayStr,
       daily_pnl_base: account.balance,
     }).eq("user_id", userId);
+    // If account has bot_id, scope the update to this bot only
+    if (account.bot_id) pnlUpdate.eq("bot_id", BOT_ID);
+    await pnlUpdate;
   }
 
   const scanDetails: any[] = [];
@@ -3057,12 +3075,16 @@ async function runScanForUser(supabase: any, userId: string) {
               close_reason: "reverse_signal",
               pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
               signal_score: opp.signal_score || "0",
+              bot_id: BOT_ID,
             });
-
-            // Update balance with actual PnL
-            const curBal = parseFloat((await supabase.from("paper_accounts").select("balance").eq("user_id", userId).single()).data?.balance || "10000");
+            // Update balance with actual PnL — scope to this bot's account
+            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
+            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
+            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
             const newBal = curBal + oppPnl;
-            await supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
+            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
+            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
+            await balUpdate;;
 
             // Audit log entry for the reverse-signal close
             const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
@@ -3152,10 +3174,11 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
+          bot_id: BOT_ID,
         });
 
         // Store trade reasoning
@@ -3485,12 +3508,14 @@ async function runScanForUser(supabase: any, userId: string) {
     scanDetails.push(detail);
   }
 
-  // Update counters
-  await supabase.from("paper_accounts").update({
+  // Update counters — scope to this bot's account
+  const counterUpdate = supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
     signal_count: (account.signal_count || 0) + signalsFound,
     rejected_count: (account.rejected_count || 0) + rejectedCount,
   }).eq("user_id", userId);
+  if (account.bot_id) counterUpdate.eq("bot_id", BOT_ID);
+  await counterUpdate;
 
   // End source tally and prepend a __meta entry so the UI can display
   // which feed served this scan cycle.
@@ -3525,7 +3550,9 @@ async function runScanForUser(supabase: any, userId: string) {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
     try {
-      await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+      const lockRelease = supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+      if (account?.bot_id) lockRelease.eq("bot_id", BOT_ID);
+      await lockRelease;
     } catch (e: any) {
       console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
     }
