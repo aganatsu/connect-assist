@@ -23,6 +23,9 @@ import {
   type ReasoningFactor,
 } from "../_shared/smcAnalysis.ts";
 
+// Safe number formatter — guards against undefined/null/NaN
+const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "n/a");
+
 // ─── Currency Strength (standalone, not in shared) ──────────────────
 function calculateCurrencyStrength(pairData: Record<string, { change: number }>): any[] {
   const currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
@@ -119,7 +122,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
       const tags: string[] = [];
       if ((insideOB as any).hasDisplacement) tags.push("displacement");
       if ((insideOB as any).hasFVGAdjacency) tags.push("FVG adjacent");
-      detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)}`;
+      detail = `Price inside ${insideOB.type} OB at ${fx(insideOB.low)}-${fx(insideOB.high)}`;
       if (tags.length > 0) detail += ` [${tags.join(", ")}]`;
     } else if (activeOBs.length > 0) {
       pts = 0.5;
@@ -144,10 +147,10 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
       const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15;
       if (nearCE) {
         pts = 2.0;
-        detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG — optimal entry`;
+        detail = `Price at CE (${fx(ce)}) of ${insideFVG.type} FVG — optimal entry`;
       } else {
         pts = 1.5;
-        detail = `Price inside ${insideFVG.type} FVG (CE: ${ce.toFixed(5)})`;
+        detail = `Price inside ${insideFVG.type} FVG (CE: ${fx(ce)})`;
       }
     } else if (activeFVGs.length > 0) {
       pts = 0.5;
@@ -165,7 +168,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     let detail = "";
     if (pd.currentZone !== "equilibrium") {
       pts = pd.oteZone ? 1.5 : 1.0;
-      detail = `Price in ${pd.currentZone} zone (${pd.zonePercent.toFixed(0)}%)${pd.oteZone ? " — OTE zone" : ""}`;
+      detail = `Price in ${pd.currentZone} zone (${fx(pd.zonePercent, 0)}%)${pd.oteZone ? " — OTE zone" : ""}`;
     } else {
       detail = "Price at equilibrium";
     }
@@ -180,7 +183,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     const sweptPool = liquidityPools.find(lp => lp.swept);
     if (sweptPool) {
       pts = 1.5;
-      detail = `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)}`;
+      detail = `${sweptPool.type} liquidity swept at ${fx(sweptPool.price)}`;
     } else if (liquidityPools.length > 0) {
       pts = 0.3;
       detail = `${liquidityPools.length} liquidity pools identified`;
@@ -343,7 +346,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     if (vwap.vwap !== null) {
       pts = 0.5;
       const position = lastPrice > vwap.vwap ? "above" : "below";
-      detail = `Price ${position} VWAP (${vwap.vwap.toFixed(5)})`;
+      detail = `Price ${position} VWAP (${fx(vwap.vwap)})`;
     } else {
       detail = "VWAP not available";
     }
