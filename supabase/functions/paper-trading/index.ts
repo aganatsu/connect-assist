@@ -983,6 +983,58 @@ Deno.serve(async (req) => {
       return respond({ success: true, positionId, orderId, mt5Mirror });
     }
 
+    // ── Update SL/TP on an open position ──
+    if (action === "update_position") {
+      const { positionId } = payload;
+      const slRaw = payload.stopLoss;
+      const tpRaw = payload.takeProfit;
+      const { data: pos } = await supabase.from("paper_positions").select("*")
+        .eq("user_id", user.id).eq("position_id", positionId).maybeSingle();
+      if (!pos) throw new Error("Position not found");
+
+      const updates: Record<string, any> = {};
+      const parseLevel = (v: any) => {
+        if (v === null || v === "" || v === undefined) return null;
+        const n = parseFloat(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      if (slRaw !== undefined) {
+        const v = parseLevel(slRaw);
+        if (v === undefined) throw new Error("Invalid stopLoss");
+        updates.stop_loss = v === null ? null : v.toString();
+      }
+      if (tpRaw !== undefined) {
+        const v = parseLevel(tpRaw);
+        if (v === undefined) throw new Error("Invalid takeProfit");
+        updates.take_profit = v === null ? null : v.toString();
+      }
+
+      // Sanity check vs entry/direction (warn-but-allow via error for clearly invalid)
+      const entry = parseFloat(pos.entry_price);
+      const isLong = pos.direction === "long";
+      if (updates.stop_loss && updates.stop_loss !== null) {
+        const sl = parseFloat(updates.stop_loss);
+        if (isLong && sl >= entry) throw new Error("Stop loss must be below entry for long");
+        if (!isLong && sl <= entry) throw new Error("Stop loss must be above entry for short");
+      }
+      if (updates.take_profit && updates.take_profit !== null) {
+        const tp = parseFloat(updates.take_profit);
+        if (isLong && tp <= entry) throw new Error("Take profit must be above entry for long");
+        if (!isLong && tp >= entry) throw new Error("Take profit must be below entry for short");
+      }
+
+      if (Object.keys(updates).length === 0) return respond({ success: true, unchanged: true });
+
+      const { data: updated, error: updErr } = await supabase
+        .from("paper_positions")
+        .update(updates)
+        .eq("id", pos.id)
+        .select()
+        .single();
+      if (updErr) throw updErr;
+      return respond({ success: true, position: updated });
+    }
+
     // ── Close position ──
     if (action === "close_position") {
       const { positionId, exitPrice } = payload;
