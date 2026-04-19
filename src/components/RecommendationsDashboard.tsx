@@ -481,10 +481,13 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
           body: { bot_id: mappedBotId },
         });
         if (error) throw error;
-        // Function returns 200 even when LLM fails internally — inspect results
+        // Function returns 200 even when LLM fails internally — only treat
+        // explicit error/failure statuses as failures. Values like
+        // "losing"/"winning"/"breakeven" are assessment labels, not errors.
         const results: Array<{ status?: string }> = data?.results || [];
         const failed = results.find(r =>
-          r.status && r.status !== "success" && r.status !== "completed"
+          typeof r.status === "string" &&
+          /^(error|failed|failure|llm_error|exception)$/i.test(r.status)
         );
         if (failed) {
           throw new Error(`Review could not complete: ${failed.status}`);
