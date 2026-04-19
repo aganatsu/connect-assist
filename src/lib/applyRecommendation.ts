@@ -43,7 +43,23 @@ function setPath(root: Json, path: string, value: any): Json {
   return root;
 }
 
-/** Map an AI-emitted key to a config dot-path. */
+/** Factor display name → strategy.use<Name> toggle key. */
+const FACTOR_TOGGLE_MAP: Record<string, string> = {
+  "Breaker Block": "useBreakerBlocks",
+  "Unicorn Model": "useUnicornModel",
+  "Silver Bullet": "useSilverBullet",
+  "Session/Kill Zone": "useKillZones",
+  "Judas Swing": "useJudasSwing",
+  "AMD Phase": "useAMDPhase",
+  "Reversal Candle": "useReversalCandle",
+  "Premium/Discount": "strategy.premiumDiscountEnabled",
+  "Displacement": "useDisplacement",
+  "Liquidity Sweep": "enableLiquiditySweep",
+  "Order Block": "enableOB",
+  "Fair Value Gap": "enableFVG",
+};
+
+/** Map an AI-emitted key to a config dot-path. Returns null to skip safely. */
 function resolveConfigPath(key: string): string | null {
   const direct: Record<string, string> = {
     "Risk/Trade": "risk.riskPerTrade",
@@ -55,12 +71,13 @@ function resolveConfigPath(key: string): string | null {
   };
   if (direct[key]) return direct[key];
 
-  // Factor weight keys: "Silver Bullet_weight" → factorWeights["Silver Bullet"]
-  const wm = key.match(/^(.+)_weight$/);
-  if (wm) return `factorWeights.${wm[1]}`;
+  // Bare factor name → strategy toggle. If map already includes "strategy.", use as-is.
+  const toggle = FACTOR_TOGGLE_MAP[key];
+  if (toggle) return toggle.includes(".") ? toggle : `strategy.${toggle}`;
 
-  // Bare factor names (not weight) → enable/select map; keep as factorWeights too
-  // Conservative: skip unknown keys so we don't corrupt config.
+  // "<Factor>_weight" — bot factor weights are hardcoded in scanner; cannot apply via config.
+  if (/_weight$/.test(key)) return null;
+
   return null;
 }
 
