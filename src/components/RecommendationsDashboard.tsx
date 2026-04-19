@@ -1058,7 +1058,9 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                               rec={rec}
                               index={i}
                               isPending={isRecPending}
+                              isAutoApplicable={isRecAutoApplicable(rec)}
                               onApprove={isRecPending ? () => approveMutation.mutate({ id: review.id, recIndex: i }) : undefined}
+                              onMarkDone={isRecPending ? () => markDoneMutation.mutate({ id: review.id, recIndex: i }) : undefined}
                               onDismiss={isRecPending ? () => dismissMutation.mutate({ id: review.id, recIndex: i }) : undefined}
                             />
                           </div>
