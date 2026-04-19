@@ -29,6 +29,7 @@ interface TradeRecord {
   opened_at: string;
   closed_at: string;
   lot_size: number;
+  signal_reason?: unknown;
   bot_id?: string;
 }
 
@@ -162,6 +163,7 @@ function normalizeTradeRecord(raw: any): TradeRecord {
     opened_at: String(raw.open_time ?? raw.opened_at ?? raw.created_at ?? ""),
     closed_at: String(raw.closed_at ?? raw.exit_time ?? raw.created_at ?? ""),
     lot_size: toSafeNumber(raw.size ?? raw.lot_size),
+    signal_reason: raw.signal_reason,
     bot_id: raw.bot_id ? String(raw.bot_id) : undefined,
   };
 }
