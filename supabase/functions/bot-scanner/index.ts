@@ -2609,6 +2609,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
           ]
         : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
     killZoneOnly: sessions.killZoneOnly ?? false,
+    // Pass through raw sessions block so detectSession() can read custom HH:MM windows.
+    sessions: sessions,
 
     // ── Active Days (convert {mon:true,...} to day-of-week numbers) ──
     enabledDays: sessions.activeDays
