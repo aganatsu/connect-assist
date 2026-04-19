@@ -310,10 +310,10 @@ export type Database = {
           close_reason: string | null
           created_at: string
           current_price: number | null
-          current_price_old: string
+          current_price_old: string | null
           direction: string
           entry_price: number | null
-          entry_price_old: string
+          entry_price_old: string | null
           id: string
           mirrored_connection_ids: string[]
           open_time: string
@@ -325,7 +325,7 @@ export type Database = {
           signal_reason: string | null
           signal_score: string
           size: number | null
-          size_old: string
+          size_old: string | null
           stop_loss: number | null
           stop_loss_old: string | null
           symbol: string
@@ -339,10 +339,10 @@ export type Database = {
           close_reason?: string | null
           created_at?: string
           current_price?: number | null
-          current_price_old: string
+          current_price_old?: string | null
           direction: string
           entry_price?: number | null
-          entry_price_old: string
+          entry_price_old?: string | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time: string
@@ -354,7 +354,7 @@ export type Database = {
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
-          size_old: string
+          size_old?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol: string
@@ -368,10 +368,10 @@ export type Database = {
           close_reason?: string | null
           created_at?: string
           current_price?: number | null
-          current_price_old?: string
+          current_price_old?: string | null
           direction?: string
           entry_price?: number | null
-          entry_price_old?: string
+          entry_price_old?: string | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time?: string
@@ -383,7 +383,7 @@ export type Database = {
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
-          size_old?: string
+          size_old?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol?: string
@@ -402,21 +402,21 @@ export type Database = {
           created_at: string
           direction: string
           entry_price: number | null
-          entry_price_old: string
+          entry_price_old: string | null
           exit_price: number | null
-          exit_price_old: string
+          exit_price_old: string | null
           id: string
           open_time: string
           order_id: string
           pnl: number | null
-          pnl_old: string
+          pnl_old: string | null
           pnl_pips: number | null
-          pnl_pips_old: string
+          pnl_pips_old: string | null
           position_id: string
           signal_reason: string | null
           signal_score: string
           size: number | null
-          size_old: string
+          size_old: string | null
           stop_loss: string | null
           symbol: string
           take_profit: string | null
@@ -429,21 +429,21 @@ export type Database = {
           created_at?: string
           direction: string
           entry_price?: number | null
-          entry_price_old: string
+          entry_price_old?: string | null
           exit_price?: number | null
-          exit_price_old: string
+          exit_price_old?: string | null
           id?: string
           open_time: string
           order_id: string
           pnl?: number | null
-          pnl_old: string
+          pnl_old?: string | null
           pnl_pips?: number | null
-          pnl_pips_old: string
+          pnl_pips_old?: string | null
           position_id: string
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
-          size_old: string
+          size_old?: string | null
           stop_loss?: string | null
           symbol: string
           take_profit?: string | null
@@ -456,21 +456,21 @@ export type Database = {
           created_at?: string
           direction?: string
           entry_price?: number | null
-          entry_price_old?: string
+          entry_price_old?: string | null
           exit_price?: number | null
-          exit_price_old?: string
+          exit_price_old?: string | null
           id?: string
           open_time?: string
           order_id?: string
           pnl?: number | null
-          pnl_old?: string
+          pnl_old?: string | null
           pnl_pips?: number | null
-          pnl_pips_old?: string
+          pnl_pips_old?: string | null
           position_id?: string
           signal_reason?: string | null
           signal_score?: string
           size?: number | null
-          size_old?: string
+          size_old?: string | null
           stop_loss?: string | null
           symbol?: string
           take_profit?: string | null
