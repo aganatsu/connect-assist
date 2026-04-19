@@ -397,7 +397,7 @@ export default function BotView() {
                               <button
                                 onClick={() => {
                                   if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
-                                    paperApi.closePosition(p.id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                                    paperApi.closePosition(p.positionId).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
                                   }
                                 }}
                                 className="text-destructive hover:bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium transition-colors"
