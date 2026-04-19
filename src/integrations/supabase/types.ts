@@ -49,6 +49,63 @@ export type Database = {
           },
         ]
       }
+      bot_recommendations: {
+        Row: {
+          bot_id: string
+          created_at: string
+          diagnosis: string
+          feature_gaps: Json
+          id: string
+          impact_snapshot: Json | null
+          llm_model: string | null
+          overall_assessment: string | null
+          performance_summary: Json
+          recommendations: Json
+          resolved_at: string | null
+          resolved_by: string | null
+          review_type: string
+          status: string
+          token_usage: Json | null
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          created_at?: string
+          diagnosis?: string
+          feature_gaps?: Json
+          id?: string
+          impact_snapshot?: Json | null
+          llm_model?: string | null
+          overall_assessment?: string | null
+          performance_summary?: Json
+          recommendations?: Json
+          resolved_at?: string | null
+          resolved_by?: string | null
+          review_type?: string
+          status?: string
+          token_usage?: Json | null
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          created_at?: string
+          diagnosis?: string
+          feature_gaps?: Json
+          id?: string
+          impact_snapshot?: Json | null
+          llm_model?: string | null
+          overall_assessment?: string | null
+          performance_summary?: Json
+          recommendations?: Json
+          resolved_at?: string | null
+          resolved_by?: string | null
+          review_type?: string
+          status?: string
+          token_usage?: Json | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       broker_connections: {
         Row: {
           account_id: string
