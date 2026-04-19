@@ -1052,13 +1052,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
                 {effectiveActiveTab === "sessions" && (
                   <div className="space-y-5">
-                    <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during" />
+                    <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during. Times shown are New York / ET (DST-aware)." />
                     <div className="grid grid-cols-2 gap-3">
                       {[
-                        { id: "asian", label: "Asian", time: "00:00 – 09:00 UTC" },
-                        { id: "london", label: "London", time: "07:00 – 16:00 UTC" },
-                        { id: "newyork", label: "New York", time: "12:00 – 21:00 UTC" },
-                        { id: "sydney", label: "Sydney", time: "21:00 – 06:00 UTC" },
+                        { id: "asian", label: "Asian", time: "20:00 – 02:00 ET" },
+                        { id: "london", label: "London", time: "02:00 – 08:30 ET" },
+                        { id: "newyork", label: "New York", time: "08:30 – 16:00 ET" },
+                        { id: "sydney", label: "Sydney", time: "17:00 – 02:00 ET" },
                       ].map(session => {
                         const filterArr = config.sessions?.filter;
                         const boolKey = `${session.id}Enabled` as string;
