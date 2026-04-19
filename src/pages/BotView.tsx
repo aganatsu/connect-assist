@@ -407,7 +407,7 @@ export default function BotView() {
                           {expandedPosition === p.id && (
                             <tr>
                               <td colSpan={11} className="bg-secondary/20 border-b border-border p-2">
-                                <div className="space-y-1 text-[10px]">
+                                <div className="space-y-2 text-[10px]">
                                   <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
                                   <SignalReasoningCard signalReason={p.signalReason || ""} />
                                   <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
@@ -416,6 +416,7 @@ export default function BotView() {
                                     <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(p.openTime)}</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
                                   </div>
+                                  <EditSLTPInline position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                                 </div>
                               </td>
                             </tr>
