@@ -266,11 +266,16 @@ async function metaFetchCandles(
 
   const tf = metaapiTimeframe(canon);
   const cached = regionCache.get(metaAccountId);
-  const order = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
+  const baseOrder = cached ? [cached, ...META_REGIONS.filter((r) => r !== cached)] : META_REGIONS;
+  const order = activeRegions(baseOrder);
+  if (order.length === 0) {
+    console.warn(`[candleSource] all MetaAPI regions marked dead — skipping broker fetch for ${brokerSymbol}`);
+    return [];
+  }
 
   const fetchHistorical = async (region: string): Promise<{ ok: boolean; status: number; body: string; candles?: Candle[] }> => {
     const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/${encodeURIComponent(brokerSymbol)}/timeframes/${tf}/candles?limit=${limit}`;
-    const res = await fetch(url, { headers: { "auth-token": authToken } });
+    const res = await fetchWithTimeout(url, { headers: { "auth-token": authToken } }, 8000);
     const body = await res.text();
     if (res.ok) {
       const arr = JSON.parse(body);
@@ -292,6 +297,7 @@ async function metaFetchCandles(
   };
 
   for (const region of order) {
+    if (deadRegions.has(region)) continue;
     try {
       let result = await fetchHistorical(region);
 
@@ -355,6 +361,7 @@ async function metaFetchCandles(
       }
     } catch (e: any) {
       console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
+      noteRegionFailure(region, e?.message ?? "");
     }
   }
   return [];
