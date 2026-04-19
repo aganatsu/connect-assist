@@ -1018,3 +1018,161 @@ export function calcPnl(dir: string, entry: number, current: number, size: numbe
   const diff = dir === "long" ? current - entry : entry - current;
   return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
 }
+
+// ─── Instrument Regime Classification (H7: shared across scanner + weekly advisor) ──
+export interface InstrumentRegime {
+  symbol?: string;
+  regime: string;       // "strong_trend" | "mild_trend" | "choppy_range" | "mild_range" | "transitional" | "unknown"
+  confidence: number;   // 0-1
+  indicators: string[];
+  atr14: number;
+  atrTrend: string;     // "expanding" | "contracting" | "stable"
+  directionalBias: string; // "bullish" | "bearish" | "neutral"
+  rangePercent: number;
+}
+
+export function classifyInstrumentRegime(
+  candles: Array<{ open: number; high: number; low: number; close: number; datetime?: string }>,
+): Omit<InstrumentRegime, "symbol"> {
+  if (!candles || candles.length < 20) {
+    return { regime: "unknown", confidence: 0, indicators: ["Insufficient candle data"], atr14: 0, atrTrend: "stable", directionalBias: "neutral", rangePercent: 0 };
+  }
+
+  // Sort oldest to newest if datetime is available
+  const sorted = candles[0].datetime
+    ? [...candles].sort((a, b) => new Date(a.datetime!).getTime() - new Date(b.datetime!).getTime())
+    : candles;
+  const indicators: string[] = [];
+  let regimeScore = 0;
+
+  // 1. ATR analysis — volatility and its trend
+  const trueRanges: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const high = sorted[i].high;
+    const low = sorted[i].low;
+    const prevClose = sorted[i - 1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+
+  const atr14 = trueRanges.slice(-14).reduce((s, v) => s + v, 0) / Math.min(14, trueRanges.length);
+  const atr7Recent = trueRanges.slice(-7).reduce((s, v) => s + v, 0) / Math.min(7, trueRanges.length);
+  const atr7Prior = trueRanges.slice(-14, -7).reduce((s, v) => s + v, 0) / Math.min(7, trueRanges.slice(-14, -7).length || 1);
+
+  let atrTrend: string;
+  if (atr7Recent > atr7Prior * 1.2) {
+    atrTrend = "expanding";
+    regimeScore += 1;
+    indicators.push(`ATR expanding: recent ${atr7Recent.toFixed(5)} vs prior ${atr7Prior.toFixed(5)} (+${((atr7Recent / atr7Prior - 1) * 100).toFixed(0)}%)`);
+  } else if (atr7Recent < atr7Prior * 0.8) {
+    atrTrend = "contracting";
+    regimeScore -= 1;
+    indicators.push(`ATR contracting: recent ${atr7Recent.toFixed(5)} vs prior ${atr7Prior.toFixed(5)} (${((atr7Recent / atr7Prior - 1) * 100).toFixed(0)}%)`);
+  } else {
+    atrTrend = "stable";
+  }
+
+  // 2. Directional Movement — ADX-like analysis
+  const plusDMs: number[] = [];
+  const minusDMs: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const upMove = sorted[i].high - sorted[i - 1].high;
+    const downMove = sorted[i - 1].low - sorted[i].low;
+    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  }
+
+  const period = Math.min(14, plusDMs.length);
+  const avgPlusDM = plusDMs.slice(-period).reduce((s, v) => s + v, 0) / period;
+  const avgMinusDM = minusDMs.slice(-period).reduce((s, v) => s + v, 0) / period;
+  const avgTR = trueRanges.slice(-period).reduce((s, v) => s + v, 0) / period;
+
+  const plusDI = avgTR > 0 ? (avgPlusDM / avgTR) * 100 : 0;
+  const minusDI = avgTR > 0 ? (avgMinusDM / avgTR) * 100 : 0;
+  const diSum = plusDI + minusDI;
+  const dx = diSum > 0 ? Math.abs(plusDI - minusDI) / diSum * 100 : 0;
+
+  if (dx > 30) {
+    regimeScore += 2;
+    indicators.push(`Strong directional movement (DX: ${dx.toFixed(1)}) — ${plusDI > minusDI ? "bullish" : "bearish"} dominant`);
+  } else if (dx < 15) {
+    regimeScore -= 2;
+    indicators.push(`Weak directional movement (DX: ${dx.toFixed(1)}) — no clear trend`);
+  }
+
+  // 3. Price position relative to SMA20
+  const closes = sorted.map(c => c.close);
+  const sma20 = closes.slice(-20).reduce((s, v) => s + v, 0) / Math.min(20, closes.length);
+  const currentPrice = closes[closes.length - 1];
+  const priceVsSma = ((currentPrice - sma20) / sma20) * 100;
+
+  if (Math.abs(priceVsSma) > 2) {
+    regimeScore += 1;
+    indicators.push(`Price ${priceVsSma > 0 ? "above" : "below"} SMA20 by ${Math.abs(priceVsSma).toFixed(2)}% — trending`);
+  } else {
+    regimeScore -= 1;
+    indicators.push(`Price near SMA20 (${priceVsSma.toFixed(2)}%) — ranging/consolidating`);
+  }
+
+  // 4. Higher highs / lower lows analysis (last 10 candles)
+  const recent10 = sorted.slice(-10);
+  let hhCount = 0, llCount = 0;
+  for (let i = 1; i < recent10.length; i++) {
+    if (recent10[i].high > recent10[i - 1].high) hhCount++;
+    if (recent10[i].low < recent10[i - 1].low) llCount++;
+  }
+  const hhRatio = hhCount / (recent10.length - 1);
+  const llRatio = llCount / (recent10.length - 1);
+
+  if (hhRatio > 0.6 && llRatio < 0.3) {
+    regimeScore += 2;
+    indicators.push(`Consistent higher highs (${(hhRatio * 100).toFixed(0)}%) — uptrend structure`);
+  } else if (llRatio > 0.6 && hhRatio < 0.3) {
+    regimeScore += 2;
+    indicators.push(`Consistent lower lows (${(llRatio * 100).toFixed(0)}%) — downtrend structure`);
+  } else if (hhRatio > 0.4 && llRatio > 0.4) {
+    regimeScore -= 2;
+    indicators.push(`Mixed HH/LL (HH: ${(hhRatio * 100).toFixed(0)}%, LL: ${(llRatio * 100).toFixed(0)}%) — choppy/ranging`);
+  }
+
+  // 5. Range analysis — how wide is the price range relative to ATR?
+  const highestHigh = Math.max(...sorted.slice(-20).map(c => c.high));
+  const lowestLow = Math.min(...sorted.slice(-20).map(c => c.low));
+  const rangePercent = ((highestHigh - lowestLow) / lowestLow) * 100;
+  const expectedRange = (atr14 * 20 / lowestLow) * 100;
+
+  if (rangePercent > expectedRange * 1.3) {
+    regimeScore += 1;
+    indicators.push(`Wide 20-day range (${rangePercent.toFixed(2)}% vs expected ${expectedRange.toFixed(2)}%) — breakout/trending`);
+  } else if (rangePercent < expectedRange * 0.7) {
+    regimeScore -= 1;
+    indicators.push(`Tight 20-day range (${rangePercent.toFixed(2)}% vs expected ${expectedRange.toFixed(2)}%) — compressed/ranging`);
+  }
+
+  // Determine directional bias
+  let directionalBias: string;
+  if (plusDI > minusDI * 1.3) directionalBias = "bullish";
+  else if (minusDI > plusDI * 1.3) directionalBias = "bearish";
+  else directionalBias = "neutral";
+
+  // Determine regime
+  let regime: string;
+  let confidence: number;
+  if (regimeScore >= 4) {
+    regime = "strong_trend";
+    confidence = Math.min(regimeScore / 7, 0.95);
+  } else if (regimeScore >= 2) {
+    regime = "mild_trend";
+    confidence = 0.5 + regimeScore * 0.08;
+  } else if (regimeScore <= -4) {
+    regime = "choppy_range";
+    confidence = Math.min(Math.abs(regimeScore) / 7, 0.95);
+  } else if (regimeScore <= -2) {
+    regime = "mild_range";
+    confidence = 0.5 + Math.abs(regimeScore) * 0.08;
+  } else {
+    regime = "transitional";
+    confidence = 0.3;
+  }
+
+  return { regime, confidence, indicators, atr14, atrTrend, directionalBias, rangePercent };
+}

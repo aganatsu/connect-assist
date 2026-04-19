@@ -6,6 +6,7 @@ import {
   parsePairCurrencies, getFOTSIPairNames,
   type FOTSIResult, type Currency,
 } from "../_shared/fotsi.ts";
+import { classifyInstrumentRegime } from "../_shared/smcAnalysis.ts";
 
 
 // ─── Bot Identity ────────────────────────────────────────────────────
@@ -64,6 +65,10 @@ const DEFAULTS = {
   // ── Spread Filter ──
   spreadFilterEnabled: true,
   maxSpreadPips: 3,
+  // ── ATR Volatility Filter (H2) ──
+  atrFilterEnabled: false,
+  atrFilterMin: 0,   // min ATR in pips (0 = no min)
+  atrFilterMax: 0,   // max ATR in pips (0 = no max)
   // ── News Event Filter ──
   newsFilterEnabled: true,
   newsFilterPauseMinutes: 30,
@@ -2249,7 +2254,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null = null;
   {
     if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
-      regimeInfo = classifyInstrumentRegime(dailyCandles);
+      regimeInfo = classifyInstrumentRegimeLocal(dailyCandles);
       const { adjustment, detail } = regimeAlignmentAdjustment(
         regimeInfo.regime, regimeInfo.confidence, direction, factors
       );
@@ -2317,64 +2322,16 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 // ─── Lightweight Regime Classification (for real-time scoring) ──────
 // Uses dailyCandles already available in the scoring function.
 // Returns a regime label + confidence so the scorer can apply a penalty/bonus.
-function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
-  if (!dailyCandles || dailyCandles.length < 20) {
-    return { regime: "unknown", confidence: 0, atrTrend: "unknown", bias: "neutral" };
-  }
-
-  // ATR-14 calculation
-  const atrPeriod = Math.min(14, dailyCandles.length - 1);
-  const trs: number[] = [];
-  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
-    const prev = dailyCandles[i - 1];
-    const curr = dailyCandles[i];
-    trs.push(Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close)));
-  }
-  const atr = trs.reduce((a, b) => a + b, 0) / trs.length;
-
-  // Recent vs older ATR to detect expansion/contraction
-  const recentTrs = trs.slice(-5);
-  const olderTrs = trs.slice(0, Math.max(1, trs.length - 5));
-  const recentAtr = recentTrs.reduce((a, b) => a + b, 0) / recentTrs.length;
-  const olderAtr = olderTrs.reduce((a, b) => a + b, 0) / olderTrs.length;
-  const atrRatio = olderAtr > 0 ? recentAtr / olderAtr : 1;
-  const atrTrend = atrRatio > 1.15 ? "expanding" : atrRatio < 0.85 ? "contracting" : "stable";
-
-  // Directional movement: compare 7-day SMA vs 20-day SMA
-  const last7 = dailyCandles.slice(-7);
-  const last20 = dailyCandles.slice(-20);
-  const sma7 = last7.reduce((s, c) => s + c.close, 0) / last7.length;
-  const sma20 = last20.reduce((s, c) => s + c.close, 0) / last20.length;
-  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
-  const smaDiff = avgPrice > 0 ? (sma7 - sma20) / avgPrice : 0;
-  const bias = Math.abs(smaDiff) > 0.005 ? (smaDiff > 0 ? "bullish" : "bearish") : "neutral";
-
-  // Range analysis: 20-day high-low range as % of price
-  const highs20 = last20.map(c => c.high);
-  const lows20 = last20.map(c => c.low);
-  const rangeHigh = Math.max(...highs20);
-  const rangeLow = Math.min(...lows20);
-  const rangePct = avgPrice > 0 ? ((rangeHigh - rangeLow) / avgPrice) * 100 : 0;
-
-  // Classify regime
-  let regime = "transitional";
-  let confidence = 0.5;
-
-  if (atrTrend === "expanding" && Math.abs(smaDiff) > 0.008 && rangePct > 3) {
-    regime = "strong_trend";
-    confidence = Math.min(0.95, 0.6 + Math.abs(smaDiff) * 10 + (atrRatio - 1) * 0.5);
-  } else if (Math.abs(smaDiff) > 0.005 && rangePct > 2) {
-    regime = "mild_trend";
-    confidence = Math.min(0.85, 0.5 + Math.abs(smaDiff) * 8);
-  } else if (atrTrend === "contracting" && rangePct < 2 && Math.abs(smaDiff) < 0.003) {
-    regime = "choppy_range";
-    confidence = Math.min(0.9, 0.6 + (1 - atrRatio) * 0.5 + (2 - rangePct) * 0.1);
-  } else if (Math.abs(smaDiff) < 0.005 && rangePct < 3) {
-    regime = "mild_range";
-    confidence = Math.min(0.8, 0.5 + (3 - rangePct) * 0.1);
-  }
-
-  return { regime, confidence: Math.round(confidence * 100) / 100, atrTrend, bias };
+// H7: classifyInstrumentRegime is now imported from _shared/smcAnalysis.ts
+// Thin wrapper to preserve the scanner's existing return shape { regime, confidence, atrTrend, bias }
+function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
+  const result = classifyInstrumentRegime(dailyCandles);
+  return {
+    regime: result.regime,
+    confidence: result.confidence,
+    atrTrend: result.atrTrend,
+    bias: result.directionalBias,
+  };
 }
 
 // Determine if the trade direction aligns with the instrument's regime
@@ -2677,6 +2634,11 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // ── News Event Filter ──
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
     newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? DEFAULTS.newsFilterPauseMinutes,
+
+    // ── ATR Volatility Filter (H2) ──
+    atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? DEFAULTS.atrFilterEnabled,
+    atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? DEFAULTS.atrFilterMin,
+    atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? DEFAULTS.atrFilterMax,
   };
 
   return merged;
@@ -2974,11 +2936,27 @@ async function runSafetyGates(
     }
   }
 
+  // Gate 18: ATR Volatility Filter (H2)
+  // Blocks trades when ATR is outside the configured min/max range.
+  if (config.atrFilterEnabled) {
+    const spec = SPECS[symbol] || SPECS["EUR/USD"];
+    const atrValue = analysis.atrValue ?? calculateATR(analysis._candles || [], 14);
+    const atrPips = atrValue / spec.pipSize;
+    const minPips = typeof config.atrFilterMin === "number" ? config.atrFilterMin : 0;
+    const maxPips = typeof config.atrFilterMax === "number" ? config.atrFilterMax : 0;
+    if (minPips > 0 && atrPips < minPips) {
+      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips below minimum ${minPips}` });
+    } else if (maxPips > 0 && atrPips > maxPips) {
+      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips above maximum ${maxPips}` });
+    } else {
+      gates.push({ passed: true, reason: `ATR ${atrPips.toFixed(1)} pips within range` });
+    }
+  }
+
   return gates;
 }
 
-// ─── Main Handler ───────────────────────────────────────────────────
-Deno.serve(async (req) => {
+// ─── Main Handler ───────────────────────────────────────────────────────────o.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {

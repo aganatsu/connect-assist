@@ -1051,6 +1051,105 @@ async function runScan(
     tradesOpened++;
     log(`  ✅ OPENED: ${direction} ${pair} @ ${entryPrice} | Size ${size} | SL ${sltp.sl.toFixed(5)} | TP1 ${sltp.tp1.toFixed(5)} | TP2 ${sltp.tp2.toFixed(5)} | R:R ${sltp.rr2.toFixed(1)}`);
 
+    // H3: Mirror to live brokers when execution_mode is "live"
+    if (account.execution_mode === "live") {
+      try {
+        const { data: connections } = await supabase.from("broker_connections")
+          .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+        if (connections && connections.length > 0) {
+          const mirroredConnIds: string[] = [];
+          const fotsiDir = direction === "BUY" ? "long" : "short";
+          for (const conn of connections) {
+            try {
+              if (conn.broker_type === "oanda") {
+                // Mirror via broker-execute Edge Function
+                const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                  },
+                  body: JSON.stringify({
+                    action: "place_order", connectionId: conn.id,
+                    symbol: pair, direction: fotsiDir, size,
+                    stopLoss: sltp.sl, takeProfit: sltp.tp2, userId,
+                  }),
+                });
+                const exBody = await exRes.text();
+                let parsedEx: any = null;
+                try { parsedEx = JSON.parse(exBody); } catch {}
+                if (exRes.ok && !(parsedEx?.error)) {
+                  log(`  Broker mirror [${conn.display_name}] (oanda): SUCCESS`);
+                  mirroredConnIds.push(conn.id);
+                } else {
+                  log(`  Broker mirror [${conn.display_name}] (oanda): FAILED — ${parsedEx?.error || exBody.slice(0, 200)}`);
+                }
+              } else {
+                // MetaAPI mirror
+                let authToken = conn.api_key;
+                let metaAccountId = conn.account_id;
+                if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                  authToken = conn.account_id;
+                  metaAccountId = conn.api_key;
+                }
+                // Resolve broker symbol
+                let brokerSymbol = pair.replace("/", "");
+                const rawOverrides = conn.symbol_overrides || {};
+                const normKey = pair.trim().replace(/[\s/._-]/g, "").toUpperCase();
+                for (const [k, v] of Object.entries(rawOverrides)) {
+                  if (k.trim().replace(/[\s/._-]/g, "").toUpperCase() === normKey && v) { brokerSymbol = String(v); break; }
+                }
+                const suffix = conn.symbol_suffix || "";
+                if (suffix && !brokerSymbol.endsWith(suffix)) brokerSymbol += suffix;
+
+                const mt5Body: any = {
+                  actionType: fotsiDir === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                  symbol: brokerSymbol, volume: size,
+                  comment: `paper:${positionId}`,
+                };
+                if (sltp.sl) mt5Body.stopLoss = sltp.sl;
+                if (sltp.tp2) mt5Body.takeProfit = sltp.tp2;
+
+                const regions = ["london", "new-york", "singapore"];
+                let mirrorOk = false;
+                for (const region of regions) {
+                  try {
+                    const base = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+                    const res = await fetch(`${base}/trade`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "auth-token": authToken },
+                      body: JSON.stringify(mt5Body),
+                    });
+                    if (res.ok) {
+                      log(`  Broker mirror [${conn.display_name}] (metaapi/${region}): SUCCESS`);
+                      mirroredConnIds.push(conn.id);
+                      mirrorOk = true;
+                      break;
+                    }
+                    if (res.status !== 502 && res.status !== 503) break; // non-transient
+                  } catch { /* try next region */ }
+                }
+                if (!mirrorOk) log(`  Broker mirror [${conn.display_name}] (metaapi): FAILED all regions`);
+              }
+            } catch (connErr: any) {
+              log(`  Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
+            }
+          }
+          // Persist mirrored connection IDs
+          if (mirroredConnIds.length > 0) {
+            await supabase.from("paper_positions")
+              .update({ mirrored_connection_ids: mirroredConnIds })
+              .eq("position_id", positionId).eq("user_id", userId);
+            log(`  Mirrored to ${mirroredConnIds.length} broker(s)`);
+          }
+        } else {
+          log(`  Live mode but no active broker connections`);
+        }
+      } catch (mirrorErr: any) {
+        log(`  Broker mirror error: ${mirrorErr?.message || mirrorErr}`);
+      }
+    }
+
     // Store trade reasoning
     await supabase.from("trade_reasonings").insert({
       user_id: userId,

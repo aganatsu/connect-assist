@@ -7,6 +7,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import { classifyInstrumentRegime as classifyInstrumentRegimeShared, type InstrumentRegime } from "../_shared/smcAnalysis.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -330,18 +331,14 @@ function computeFactorWeightSuggestions(
 
 // ─── Per-Instrument Regime Detection (Price-Based) ──────────
 
-interface InstrumentRegime {
-  symbol: string;
-  regime: string;
-  confidence: number;
-  indicators: string[];
-  atr14: number;
-  atrTrend: string; // "expanding" | "contracting" | "stable"
-  directionalBias: string; // "bullish" | "bearish" | "neutral"
-  rangePercent: number; // high-low range as % of price
+// H7: InstrumentRegime type and classifyInstrumentRegime are now imported from _shared/smcAnalysis.ts
+// Local wrapper to preserve the existing function name used by detectPerInstrumentRegimes
+function detectInstrumentRegime(candles: Array<{ open: number; high: number; low: number; close: number; datetime: string }>): Omit<InstrumentRegime, "symbol"> {
+  return classifyInstrumentRegimeShared(candles);
 }
 
-function detectInstrumentRegime(candles: Array<{ open: number; high: number; low: number; close: number; datetime: string }>): Omit<InstrumentRegime, "symbol"> {
+// Original local implementation (kept as dead code for reference, replaced by shared module)
+function _detectInstrumentRegime_DEPRECATED(candles: Array<{ open: number; high: number; low: number; close: number; datetime: string }>): Omit<InstrumentRegime, "symbol"> {
   if (candles.length < 20) {
     return { regime: "unknown", confidence: 0, indicators: ["Insufficient candle data"], atr14: 0, atrTrend: "stable", directionalBias: "neutral", rangePercent: 0 };
   }
