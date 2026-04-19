@@ -49,7 +49,7 @@ export function StatusBar() {
         )}
       </div>
       <div className="flex items-center gap-4">
-        <span>Yahoo Finance</span>
+        <span>Market Data</span>
         <span className="font-mono">
           {time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>

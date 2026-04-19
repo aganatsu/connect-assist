@@ -679,6 +679,22 @@ Deno.serve(async (req) => {
     // ── Get account state ──
     if (action === "status") {
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
+
+      // H17: Daily PnL base reset — if the day has changed, reset daily_pnl_base to current balance
+      if (account) {
+        const todayDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+        const lastResetDate = account.daily_pnl_base_date || "";
+        if (lastResetDate !== todayDate) {
+          const currentBalance = parseFloat(String(account.balance ?? "10000"));
+          await supabase.from("paper_accounts")
+            .update({ daily_pnl_base: currentBalance.toString(), daily_pnl_base_date: todayDate })
+            .eq("user_id", user.id);
+          account.daily_pnl_base = currentBalance.toString();
+          account.daily_pnl_base_date = todayDate;
+          console.log(`[PnL Reset] User ${user.id}: daily_pnl_base reset to ${currentBalance} for ${todayDate}`);
+        }
+      }
+
       let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
       // Update current prices from live market data
       if (positions && positions.length > 0) {

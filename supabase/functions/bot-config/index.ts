@@ -58,6 +58,13 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update") {
+      // H12: Validate config before saving
+      const validationErrors = validateConfig(payload.config);
+      if (validationErrors.length > 0) {
+        return new Response(JSON.stringify({ error: "Config validation failed", details: validationErrors }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
       if (existing) {
         const { error } = await supabase.from("bot_configs").update({ config_json: payload.config }).eq("id", existing.id);
@@ -122,6 +129,14 @@ Deno.serve(async (req) => {
         });
       }
 
+      // H12: Validate preset config before saving
+      const presetValidation = validateConfig(config);
+      if (presetValidation.length > 0) {
+        return new Response(JSON.stringify({ error: "Preset config validation failed", details: presetValidation }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const trimmedName = name.trim();
       const trimmedDesc = (description || "").trim();
 
@@ -143,6 +158,17 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       } else {
+        // M16: Enforce max 20 presets per user
+        const { count, error: countErr } = await supabase
+          .from("config_presets")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id);
+        if (countErr) throw countErr;
+        if (typeof count === "number" && count >= 20) {
+          return new Response(JSON.stringify({ error: "Maximum 20 presets allowed. Delete an existing preset first." }), {
+            status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
         const { data: inserted, error } = await supabase
           .from("config_presets")
           .insert({ user_id: user.id, name: trimmedName, description: trimmedDesc, config_json: config })
@@ -182,6 +208,88 @@ Deno.serve(async (req) => {
     });
   }
 });
+
+// H12: Config schema validation
+function validateConfig(config: any): string[] {
+  const errors: string[] = [];
+  if (!config || typeof config !== "object") {
+    errors.push("Config must be a non-null object");
+    return errors;
+  }
+
+  // Required top-level sections
+  const requiredSections = ["strategy", "risk", "entry", "instruments", "sessions"];
+  for (const section of requiredSections) {
+    if (!config[section] || typeof config[section] !== "object") {
+      errors.push(`Missing or invalid section: ${section}`);
+    }
+  }
+  if (errors.length > 0) return errors; // Can't validate fields if sections are missing
+
+  // Strategy validations
+  const s = config.strategy;
+  if (s) {
+    if (typeof s.minConfluenceScore === "number" && (s.minConfluenceScore < 0 || s.minConfluenceScore > 10)) {
+      errors.push("strategy.minConfluenceScore must be between 0 and 10");
+    }
+    if (typeof s.structureLookback === "number" && (s.structureLookback < 5 || s.structureLookback > 200)) {
+      errors.push("strategy.structureLookback must be between 5 and 200");
+    }
+    if (typeof s.obLookbackCandles === "number" && (s.obLookbackCandles < 5 || s.obLookbackCandles > 200)) {
+      errors.push("strategy.obLookbackCandles must be between 5 and 200");
+    }
+    if (typeof s.fvgMinSizePips === "number" && (s.fvgMinSizePips < 0 || s.fvgMinSizePips > 100)) {
+      errors.push("strategy.fvgMinSizePips must be between 0 and 100");
+    }
+    if (typeof s.fvgFillPercentInvalidate === "number" && (s.fvgFillPercentInvalidate < 0 || s.fvgFillPercentInvalidate > 100)) {
+      errors.push("strategy.fvgFillPercentInvalidate must be between 0 and 100");
+    }
+  }
+
+  // Risk validations
+  const r = config.risk;
+  if (r) {
+    if (typeof r.riskPerTrade === "number" && (r.riskPerTrade < 0.01 || r.riskPerTrade > 10)) {
+      errors.push("risk.riskPerTrade must be between 0.01 and 10");
+    }
+    if (typeof r.maxDailyLoss === "number" && (r.maxDailyLoss < 0 || r.maxDailyLoss > 100)) {
+      errors.push("risk.maxDailyLoss must be between 0 and 100");
+    }
+    if (typeof r.maxDrawdown === "number" && (r.maxDrawdown < 0 || r.maxDrawdown > 100)) {
+      errors.push("risk.maxDrawdown must be between 0 and 100");
+    }
+    if (typeof r.maxOpenPositions === "number" && (r.maxOpenPositions < 1 || r.maxOpenPositions > 50)) {
+      errors.push("risk.maxOpenPositions must be between 1 and 50");
+    }
+    if (typeof r.minRiskReward === "number" && (r.minRiskReward < 0.1 || r.minRiskReward > 20)) {
+      errors.push("risk.minRiskReward must be between 0.1 and 20");
+    }
+  }
+
+  // Instruments validations
+  const i = config.instruments;
+  if (i) {
+    if (i.allowedInstruments && typeof i.allowedInstruments !== "object") {
+      errors.push("instruments.allowedInstruments must be an object");
+    }
+    if (typeof i.maxSpreadPips === "number" && (i.maxSpreadPips < 0 || i.maxSpreadPips > 100)) {
+      errors.push("instruments.maxSpreadPips must be between 0 and 100");
+    }
+  }
+
+  // Sessions validations
+  const sess = config.sessions;
+  if (sess) {
+    if (sess.activeDays && typeof sess.activeDays !== "object") {
+      errors.push("sessions.activeDays must be an object");
+    }
+    if (typeof sess.newsFilterPauseMinutes === "number" && (sess.newsFilterPauseMinutes < 0 || sess.newsFilterPauseMinutes > 240)) {
+      errors.push("sessions.newsFilterPauseMinutes must be between 0 and 240");
+    }
+  }
+
+  return errors;
+}
 
 function getDefaultConfig() {
   return {

@@ -19,6 +19,7 @@ import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 import Fundamentals from "./pages/Fundamentals";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient();
 
@@ -30,21 +31,23 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route path="/signup" element={<Signup />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
-              <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
-              <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
-              <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
-              <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
-              <Route path="/bot" element={<ProtectedRoute><BotView /></ProtectedRoute>} />
-              <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
-              <Route path="/backtest" element={<ProtectedRoute><Backtest /></ProtectedRoute>} />
-              <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
-              <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/signup" element={<Signup />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+                <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
+                <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
+                <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
+                <Route path="/bot" element={<ProtectedRoute><BotView /></ProtectedRoute>} />
+                <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
+                <Route path="/backtest" element={<ProtectedRoute><Backtest /></ProtectedRoute>} />
+                <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
+                <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
           </BrowserRouter>
         </TooltipProvider>
       </AuthProvider>
