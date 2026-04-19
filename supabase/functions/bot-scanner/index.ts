@@ -2516,6 +2516,13 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useAMD: strategy.useAMD ?? true,
     // FOTSI Currency Strength (defaults true)
     useFOTSI: strategy.useFOTSI ?? true,
+    // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
+    useVolumeProfile: strategy.useVolumeProfile ?? true,
+    useTrendDirection: strategy.useTrendDirection ?? true,
+    useDailyBias: strategy.useDailyBias ?? true,
+    // Regime scoring (UI writes under strategy.*; scanner reads at top level)
+    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
+    regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
