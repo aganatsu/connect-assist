@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { botConfigApi } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -373,7 +374,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     refetchInterval: 60000,
   });
 
-  // Approve mutation — actually patches bot_configs.config_json
+  // Approve mutation — patches bot_configs.config_json (general + factor_weights)
   const approveMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
       const review = recommendations?.find(r => r.id === id);
@@ -398,9 +399,44 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
       if (cfgErr) throw cfgErr;
       if (!cfgRow) throw new Error("No bot config found for this user");
 
-      // Apply the patch
+      const currentConfig = (cfgRow.config_json as any) || {};
+
+      // Factor weights recommendations: merge directly into factorWeights
+      if (rec.category === "factor_weights") {
+        const existingWeights = currentConfig.factorWeights || {};
+        const suggestedWeights = suggested as Record<string, number>;
+        const mergedWeights = { ...existingWeights, ...suggestedWeights };
+        const patched = { ...currentConfig, factorWeights: mergedWeights };
+
+        const { error: updateCfgErr } = await supabase
+          .from("bot_configs")
+          .update({ config_json: patched, updated_at: new Date().toISOString() })
+          .eq("id", cfgRow.id);
+        if (updateCfgErr) throw updateCfgErr;
+        queryClient.invalidateQueries({ queryKey: ["bot-config"] });
+
+        const applied = Object.entries(suggestedWeights).map(([key, val]) => ({
+          key, path: `factorWeights.${key}`, from: existingWeights[key] ?? "default", to: val,
+        }));
+
+        // Mark recommendation approved
+        const { error: markErr } = await supabase
+          .from("bot_recommendations")
+          .update({
+            status: "approved",
+            resolved_at: new Date().toISOString(),
+            resolved_by: "user",
+            impact_snapshot: { applied, recIndex } as any,
+          } as any)
+          .eq("id", id);
+        if (markErr) throw markErr;
+
+        return { applied, skipped: [] };
+      }
+
+      // General recommendations: use applyRecommendationToConfig
       const { patched, applied, skipped } = applyRecommendationToConfig(
-        (cfgRow.config_json as any) || {},
+        currentConfig,
         suggested as Record<string, unknown>
       );
 

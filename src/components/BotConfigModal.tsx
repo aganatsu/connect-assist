@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw } from "lucide-react";
 
 // Index of every searchable setting in the modal — used by the search bar to filter
 // tabs and to highlight matching fields. Keep keywords broad so users can find
@@ -79,6 +79,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "protection", label: "Max Daily Loss ($)", keywords: ["daily loss", "kill switch", "dollar", "limit"] },
   { tab: "protection", label: "Max Consecutive Losses", keywords: ["consecutive", "losses", "streak", "pause"] },
   { tab: "protection", label: "Equity Circuit Breaker (%)", keywords: ["circuit breaker", "equity", "emergency", "stop"] },
+  // Factor Weights
+  { tab: "factorWeights", label: "Factor Weights", keywords: ["factor", "weight", "weights", "importance", "scoring", "tune", "ai", "advisor"] },
   // Opening Range
   { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
   { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
@@ -160,6 +162,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
     { id: "instruments", label: "Instruments", icon: Globe },
     { id: "sessions", label: "Sessions", icon: Clock },
     { id: "protection", label: "Protection", icon: ShieldAlert },
+    { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
   ];
 
@@ -670,6 +673,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   </div>
                 )}
 
+                {effectiveActiveTab === "factorWeights" && (
+                  <FactorWeightsTab config={config} setConfig={setConfig} />
+                )}
+
                 {effectiveActiveTab === "openingRange" && (
                   <div className="space-y-5">
                     <SectionHeader title="Opening Range" description="Use the first N hourly candles of the trading day to derive bias, levels, and filters" />
@@ -707,6 +714,127 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Factor Weights Tab ───────────────────────────────────────────────────
+const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; group: string; description: string }[] = [
+  { key: "marketStructure", name: "Market Structure", defaultWeight: 1.5, group: "Market Structure", description: "BOS/CHoCH detection" },
+  { key: "trendDirection", name: "Trend Direction", defaultWeight: 1.5, group: "Market Structure", description: "Entry TF trend alignment" },
+  { key: "orderBlock", name: "Order Block", defaultWeight: 2.0, group: "Order Flow Zones", description: "Institutional order blocks" },
+  { key: "fairValueGap", name: "Fair Value Gap", defaultWeight: 2.0, group: "Order Flow Zones", description: "FVG imbalances" },
+  { key: "breakerBlock", name: "Breaker Block", defaultWeight: 1.0, group: "Order Flow Zones", description: "Failed OB flip zones" },
+  { key: "unicornModel", name: "Unicorn Model", defaultWeight: 1.5, group: "Order Flow Zones", description: "Breaker + FVG overlap" },
+  { key: "premiumDiscountFib", name: "Premium/Discount & Fib", defaultWeight: 2.0, group: "Premium/Discount", description: "Fibonacci OTE zones" },
+  { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, group: "Premium/Discount", description: "Previous day/week levels" },
+  { key: "sessionKillZone", name: "Session/Kill Zone", defaultWeight: 1.0, group: "Timing", description: "Kill zone timing filter" },
+  { key: "silverBullet", name: "Silver Bullet", defaultWeight: 1.0, group: "Timing", description: "ICT macro windows" },
+  { key: "macroWindow", name: "Macro Window", defaultWeight: 1.0, group: "Timing", description: "Institutional reprice windows" },
+  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.5, group: "Price Action", description: "Fake breakout confirmation" },
+  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 0.5, group: "Price Action", description: "Reversal at key levels" },
+  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.0, group: "Price Action", description: "Liquidity pool sweeps" },
+  { key: "displacement", name: "Displacement", defaultWeight: 1.0, group: "Price Action", description: "Strong institutional candles" },
+  { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, group: "AMD / Power of 3", description: "Accumulation→Manipulation→Distribution" },
+  { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, group: "Macro Confirmation", description: "Correlated pair divergence" },
+  { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, group: "Macro Confirmation", description: "FOTSI alignment" },
+  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 1.5, group: "Volume Profile", description: "TPO-based POC/HVN/LVN" },
+  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.5, group: "Daily Bias", description: "HTF daily trend alignment" },
+];
+
+const FACTOR_GROUPS = [...new Set(FACTOR_WEIGHT_DEFS.map(f => f.group))];
+
+function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
+  const fw: Record<string, number> = config.factorWeights || {};
+  const hasOverrides = Object.keys(fw).length > 0;
+
+  const updateWeight = (key: string, value: number) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      factorWeights: { ...(prev.factorWeights || {}), [key]: Math.round(value * 100) / 100 },
+    }));
+  };
+
+  const resetAllWeights = () => {
+    setConfig((prev: any) => ({ ...prev, factorWeights: {} }));
+    toast.info("All factor weights reset to defaults");
+  };
+
+  const resetSingleWeight = (key: string) => {
+    setConfig((prev: any) => {
+      const next = { ...(prev.factorWeights || {}) };
+      delete next[key];
+      return { ...prev, factorWeights: next };
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <SectionHeader title="Factor Weights" description="Fine-tune how much each confluence factor contributes to the overall score. AI Advisor recommendations can auto-apply here." />
+        {hasOverrides && (
+          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={resetAllWeights}>
+            <RotateCcw className="h-3 w-3" /> Reset All
+          </Button>
+        )}
+      </div>
+
+      <p className="text-[10px] text-muted-foreground">
+        Weights scale each factor's score proportionally. Default values match the hardcoded scoring model.
+        Increasing a weight amplifies that factor's contribution; decreasing it reduces it. Set to 0 to effectively disable a factor's score contribution.
+      </p>
+
+      {FACTOR_GROUPS.map(group => {
+        const groupFactors = FACTOR_WEIGHT_DEFS.filter(f => f.group === group);
+        return (
+          <div key={group} className="border border-border p-4 space-y-3">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{group}</p>
+            {groupFactors.map(factor => {
+              const currentValue = fw[factor.key] ?? factor.defaultWeight;
+              const isOverridden = fw[factor.key] !== undefined;
+              const maxSlider = Math.max(factor.defaultWeight * 2, 3);
+              return (
+                <div key={factor.key} className={`space-y-1 p-2 -mx-2 transition-colors ${isOverridden ? "bg-primary/5 border border-primary/20" : ""}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{factor.name}</span>
+                      {isOverridden && (
+                        <Badge variant="secondary" className="h-4 px-1.5 text-[9px] font-mono">custom</Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-mono font-bold text-primary w-12 text-right">{currentValue.toFixed(2)}</span>
+                      {isOverridden && (
+                        <button
+                          onClick={() => resetSingleWeight(factor.key)}
+                          className="text-muted-foreground hover:text-foreground"
+                          title={`Reset to default (${factor.defaultWeight})`}
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">{factor.description} (default: {factor.defaultWeight})</p>
+                  <Slider
+                    value={[currentValue]}
+                    onValueChange={v => updateWeight(factor.key, v[0])}
+                    min={0}
+                    max={maxSlider}
+                    step={0.25}
+                    className="mt-1"
+                  />
+                  <div className="flex justify-between text-[9px] text-muted-foreground">
+                    <span>0 (disabled)</span>
+                    <span>{factor.defaultWeight} (default)</span>
+                    <span>{maxSlider} (max)</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }

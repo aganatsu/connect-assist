@@ -165,5 +165,13 @@ function getDefaultConfig() {
       mode: "day_trader",
       autoDetectEnabled: false,
     },
+    // Factor Weights — config-driven, AI-tunable.
+    // Empty object = use hardcoded defaults. Override individual keys to tune.
+    // Keys: marketStructure, orderBlock, fairValueGap, premiumDiscountFib,
+    //       sessionKillZone, judasSwing, pdPwLevels, reversalCandle,
+    //       liquiditySweep, displacement, breakerBlock, unicornModel,
+    //       silverBullet, macroWindow, smtDivergence, volumeProfile,
+    //       amdPhase, currencyStrength, trendDirection, dailyBias
+    factorWeights: {},
   };
 }
