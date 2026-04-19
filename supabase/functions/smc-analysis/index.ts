@@ -23,6 +23,9 @@ import {
   type ReasoningFactor,
 } from "../_shared/smcAnalysis.ts";
 
+// Safe number formatter — guards against undefined/null/NaN
+const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "n/a");
+
 // ─── Currency Strength (standalone, not in shared) ──────────────────
 function calculateCurrencyStrength(pairData: Record<string, { change: number }>): any[] {
   const currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
