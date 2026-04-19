@@ -772,6 +772,7 @@ Deno.serve(async (req) => {
                 open_time: pos.open_time, closed_at: new Date().toISOString(),
                 close_reason: "partial_tp", signal_reason: pos.signal_reason || "",
                 signal_score: pos.signal_score, order_id: pos.order_id,
+                stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
               });
               // Update position size and set fired flag, then update balance
               await supabase.from("paper_positions").update({
@@ -810,6 +811,7 @@ Deno.serve(async (req) => {
               close_reason: closeReason, signal_reason: pos.signal_reason || "",
               signal_score: pos.signal_score, order_id: pos.order_id,
               bot_id: closeBotId,
+              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
             });
             // Update balance — route to the correct bot's account
             const closeAcctQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
@@ -1054,6 +1056,7 @@ Deno.serve(async (req) => {
         open_time: pos.open_time, closed_at: new Date().toISOString(),
         close_reason: closeReason, signal_reason: pos.signal_reason || "",
         signal_score: pos.signal_score, order_id: pos.order_id,
+        stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
       });
 
       // Update balance
@@ -1129,6 +1132,7 @@ Deno.serve(async (req) => {
               open_time: pos.open_time, closed_at: new Date().toISOString(),
               close_reason: "kill_switch", signal_reason: pos.signal_reason || "",
               signal_score: pos.signal_score, order_id: pos.order_id,
+              stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
             });
 
             const postMortem = generatePostMortem(pos, ep, pnl, pnlPips, "kill_switch");

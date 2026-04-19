@@ -435,6 +435,149 @@ function detectMarketRegime(trades: TradeRecord[]): RegimeAnalysis {
   return { currentRegime, regimeConfidence, regimeIndicators: indicators, regimeImpact };
 }
 
+// ─── Regime Presets & Auto-Adaptation ────────────────────────
+
+const REGIME_PRESETS: Record<string, { description: string; factorWeightOverrides: Record<string, number>; configOverrides: Record<string, any> }> = {
+  strong_trend: {
+    description: "Strong trending market — favor trend-following factors, widen TP targets",
+    factorWeightOverrides: {
+      marketStructure: 2.0,
+      trendDirection: 2.0,
+      displacement: 1.5,
+      premiumDiscount: 1.0,
+      orderBlock: 1.5,
+      fvg: 1.5,
+      breaker: 0.5,
+      silverBullet: 1.0,
+      amd: 1.0,
+    },
+    configOverrides: {
+      "strategy.tpRatio": 4.0,
+      "exit.trailingStopEnabled": true,
+    },
+  },
+  mild_trend: {
+    description: "Mild trending market — standard weights, slightly favor trend factors",
+    factorWeightOverrides: {
+      marketStructure: 1.8,
+      trendDirection: 1.5,
+      displacement: 1.2,
+    },
+    configOverrides: {
+      "strategy.tpRatio": 3.5,
+    },
+  },
+  choppy_range: {
+    description: "Choppy/ranging market — reduce trend-following, tighten SL, favor reversal setups",
+    factorWeightOverrides: {
+      marketStructure: 0.8,
+      trendDirection: 0.5,
+      premiumDiscount: 2.0,
+      orderBlock: 1.8,
+      breaker: 1.5,
+      fvg: 0.8,
+      displacement: 0.5,
+      silverBullet: 1.5,
+      amd: 1.5,
+    },
+    configOverrides: {
+      "strategy.tpRatio": 2.0,
+      "strategy.slATRMultiple": 1.5,
+      "risk.riskPerTrade": 0.75,
+    },
+  },
+  mild_range: {
+    description: "Mild ranging market — slightly reduce trend factors, tighten risk",
+    factorWeightOverrides: {
+      marketStructure: 1.0,
+      trendDirection: 0.8,
+      premiumDiscount: 1.5,
+      orderBlock: 1.5,
+    },
+    configOverrides: {
+      "strategy.tpRatio": 2.5,
+      "risk.riskPerTrade": 0.85,
+    },
+  },
+  transitional: {
+    description: "Market transitioning — reduce exposure, use conservative settings",
+    factorWeightOverrides: {},
+    configOverrides: {
+      "risk.riskPerTrade": 0.5,
+      "risk.maxConcurrent": 2,
+    },
+  },
+};
+
+function generateRegimeRecommendation(
+  regime: RegimeAnalysis,
+  currentConfig: Record<string, any>
+): Array<{ category: string; title: string; description: string; current_value: Record<string, any>; suggested_value: Record<string, any>; confidence: string; evidence: string; risk_level: string }> {
+  const preset = REGIME_PRESETS[regime.currentRegime];
+  if (!preset || regime.currentRegime === "unknown" || regime.regimeConfidence < 0.4) return [];
+
+  const recs: Array<{ category: string; title: string; description: string; current_value: Record<string, any>; suggested_value: Record<string, any>; confidence: string; evidence: string; risk_level: string }> = [];
+
+  // Factor weight adjustments for this regime
+  if (Object.keys(preset.factorWeightOverrides).length > 0) {
+    const currentWeights: Record<string, any> = {};
+    const suggestedWeights: Record<string, number> = {};
+    const currentFactorWeights = currentConfig?.factorWeights || {};
+
+    for (const [key, suggested] of Object.entries(preset.factorWeightOverrides)) {
+      const current = currentFactorWeights[key] ?? "default";
+      if (current !== suggested) {
+        currentWeights[key] = current;
+        suggestedWeights[key] = suggested;
+      }
+    }
+
+    if (Object.keys(suggestedWeights).length > 0) {
+      recs.push({
+        category: "regime_adaptation",
+        title: `Regime Shift: Adjust Factor Weights for ${regime.currentRegime.replace(/_/g, " ")} Market`,
+        description: `${preset.description}. Detected with ${(regime.regimeConfidence * 100).toFixed(0)}% confidence. ${regime.regimeIndicators.slice(0, 2).join(". ")}.`,
+        current_value: currentWeights,
+        suggested_value: suggestedWeights,
+        confidence: regime.regimeConfidence >= 0.7 ? "high" : "medium",
+        evidence: regime.regimeIndicators.join("; "),
+        risk_level: regime.regimeConfidence >= 0.7 ? "low" : "medium",
+      });
+    }
+  }
+
+  // Config overrides for this regime (SL, TP, risk)
+  if (Object.keys(preset.configOverrides).length > 0) {
+    const currentVals: Record<string, any> = {};
+    const suggestedVals: Record<string, any> = {};
+
+    for (const [path, suggested] of Object.entries(preset.configOverrides)) {
+      const parts = path.split(".");
+      let current: any = currentConfig;
+      for (const p of parts) current = current?.[p];
+      if (current !== suggested) {
+        currentVals[path] = current ?? "default";
+        suggestedVals[path] = suggested;
+      }
+    }
+
+    if (Object.keys(suggestedVals).length > 0) {
+      recs.push({
+        category: "regime_adaptation",
+        title: `Regime Shift: Adjust Risk/Exit Settings for ${regime.currentRegime.replace(/_/g, " ")} Market`,
+        description: `${preset.description}. Adjusting risk and exit parameters to match current market conditions.`,
+        current_value: currentVals,
+        suggested_value: suggestedVals,
+        confidence: regime.regimeConfidence >= 0.7 ? "high" : "medium",
+        evidence: regime.regimeIndicators.join("; "),
+        risk_level: "medium",
+      });
+    }
+  }
+
+  return recs;
+}
+
 // ─── LLM Integration ────────────────────────────────────────
 
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<WeeklyDiagnosis | null> {
@@ -935,6 +1078,12 @@ Deno.serve(async (req) => {
 
       console.log(`[Weekly Advisor] ${botName}: ${diagnosis.overall_assessment}, trend: ${diagnosis.weekly_trend}, ${diagnosis.recommendations?.length || 0} recommendations`);
 
+      // Step 9.5: Generate regime-based recommendations
+      const regimeRecs = generateRegimeRecommendation(regimeAnalysis, configObj);
+      if (regimeRecs.length > 0) {
+        console.log(`[Weekly Advisor] ${botName}: Generated ${regimeRecs.length} regime adaptation recommendations for ${regimeAnalysis.currentRegime}`);
+      }
+
       // Step 10: Store in database
       const { error: insertErr } = await supabase
         .from("bot_recommendations")
@@ -962,6 +1111,7 @@ Deno.serve(async (req) => {
               evidence: `Win rate when present: ${f.winRateWhenPresent?.toFixed(1)}%, absent: ${f.winRateWhenAbsent?.toFixed(1)}%`,
               risk_level: "medium",
             })),
+            ...regimeRecs,
           ],
           feature_gaps: diagnosis.feature_gaps || [],
           status: "pending",

@@ -24,6 +24,7 @@ interface Recommendation {
   confidence: string;
   evidence: string;
   risk_level: string;
+  status?: "pending" | "approved" | "dismissed"; // per-recommendation status
 }
 
 interface PerformanceSummary {
@@ -374,7 +375,69 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     refetchInterval: 60000,
   });
 
-  // Approve mutation — patches bot_configs.config_json (general + factor_weights)
+  // Helper: update per-rec status in the recommendations JSONB array, and
+  // resolve the row-level status only when ALL recs are handled.
+  async function updateRecStatus(
+    reviewId: string,
+    recIndex: number,
+    newStatus: "approved" | "dismissed",
+    extraFields?: Record<string, any>
+  ) {
+    const review = recommendations?.find(r => r.id === reviewId);
+    if (!review) return;
+    const updatedRecs = [...(review.recommendations || [])];
+    updatedRecs[recIndex] = { ...updatedRecs[recIndex], status: newStatus };
+
+    const allResolved = updatedRecs.every(
+      r => r.status === "approved" || r.status === "dismissed"
+    );
+    const anyApproved = updatedRecs.some(r => r.status === "approved");
+
+    const updatePayload: any = {
+      recommendations: updatedRecs,
+      ...(extraFields || {}),
+    };
+
+    // Only mark the row as fully resolved when every recommendation has been acted on
+    if (allResolved) {
+      updatePayload.status = anyApproved ? "approved" : "dismissed";
+      updatePayload.resolved_at = new Date().toISOString();
+      updatePayload.resolved_by = "user";
+    }
+
+    const { error } = await supabase
+      .from("bot_recommendations")
+      .update(updatePayload as any)
+      .eq("id", reviewId);
+    if (error) throw error;
+  }
+
+  // Display-name → camelCase config key mapping (shared by approve flows)
+  const DISPLAY_TO_CONFIG_KEY: Record<string, string> = {
+    "Market Structure": "marketStructure",
+    "Order Block": "orderBlock",
+    "Fair Value Gap": "fairValueGap",
+    "Premium/Discount & Fib": "premiumDiscountFib",
+    "Premium/Discount": "premiumDiscountFib",
+    "Session/Kill Zone": "sessionKillZone",
+    "Judas Swing": "judasSwing",
+    "PD/PW Levels": "pdPwLevels",
+    "Reversal Candle": "reversalCandle",
+    "Liquidity Sweep": "liquiditySweep",
+    "Displacement": "displacement",
+    "Breaker Block": "breakerBlock",
+    "Unicorn Model": "unicornModel",
+    "Silver Bullet": "silverBullet",
+    "Macro Window": "macroWindow",
+    "SMT Divergence": "smtDivergence",
+    "Volume Profile": "volumeProfile",
+    "AMD Phase": "amdPhase",
+    "Currency Strength": "currencyStrength",
+    "Trend Direction": "trendDirection",
+    "Daily Bias": "dailyBias",
+  };
+
+  // Approve mutation — patches bot_configs.config_json for ONE recommendation at a time
   const approveMutation = useMutation({
     mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
       const review = recommendations?.find(r => r.id === id);
@@ -403,35 +466,9 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
 
       // Factor weights recommendations: merge directly into factorWeights
       if (rec.category === "factor_weights") {
-        // Map display names (AI output) → camelCase config keys (scanner expects)
-        const DISPLAY_TO_CONFIG_KEY: Record<string, string> = {
-          "Market Structure": "marketStructure",
-          "Order Block": "orderBlock",
-          "Fair Value Gap": "fairValueGap",
-          "Premium/Discount & Fib": "premiumDiscountFib",
-          "Premium/Discount": "premiumDiscountFib",
-          "Session/Kill Zone": "sessionKillZone",
-          "Judas Swing": "judasSwing",
-          "PD/PW Levels": "pdPwLevels",
-          "Reversal Candle": "reversalCandle",
-          "Liquidity Sweep": "liquiditySweep",
-          "Displacement": "displacement",
-          "Breaker Block": "breakerBlock",
-          "Unicorn Model": "unicornModel",
-          "Silver Bullet": "silverBullet",
-          "Macro Window": "macroWindow",
-          "SMT Divergence": "smtDivergence",
-          "Volume Profile": "volumeProfile",
-          "AMD Phase": "amdPhase",
-          "Currency Strength": "currencyStrength",
-          "Trend Direction": "trendDirection",
-          "Daily Bias": "dailyBias",
-        };
-
         const existingWeights = currentConfig.factorWeights || {};
         const rawSuggested = suggested as Record<string, number>;
 
-        // Normalize keys: accept both display names and camelCase config keys
         const suggestedWeights: Record<string, number> = {};
         for (const [key, val] of Object.entries(rawSuggested)) {
           const configKey = DISPLAY_TO_CONFIG_KEY[key] || key;
@@ -454,17 +491,55 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
           key, path: `factorWeights.${key}`, from: existingWeights[key] ?? "default", to: val,
         }));
 
-        // Mark recommendation approved
-        const { error: markErr } = await supabase
-          .from("bot_recommendations")
-          .update({
-            status: "approved",
-            resolved_at: new Date().toISOString(),
-            resolved_by: "user",
-            impact_snapshot: { applied, recIndex } as any,
-          } as any)
-          .eq("id", id);
-        if (markErr) throw markErr;
+        // Mark only THIS recommendation as approved (per-rec status)
+        await updateRecStatus(id, recIndex, "approved", {
+          impact_snapshot: { applied, recIndex },
+        });
+
+        return { applied, skipped: [] };
+      }
+
+      // Regime adaptation recommendations: handle both factorWeights and config path overrides
+      if (rec.category === "regime_adaptation") {
+        const rawSuggested = suggested as Record<string, any>;
+        let patched = { ...currentConfig };
+        const applied: Array<{ key: string; path: string; from: any; to: any }> = [];
+
+        for (const [key, val] of Object.entries(rawSuggested)) {
+          // Check if it's a dotted config path (e.g., "strategy.tpRatio")
+          if (key.includes(".")) {
+            const parts = key.split(".");
+            let target: any = patched;
+            for (let i = 0; i < parts.length - 1; i++) {
+              if (!target[parts[i]]) target[parts[i]] = {};
+              target = target[parts[i]];
+            }
+            const lastKey = parts[parts.length - 1];
+            const oldVal = target[lastKey];
+            target[lastKey] = val;
+            applied.push({ key, path: key, from: oldVal ?? "default", to: val });
+          } else {
+            // It's a factorWeight key
+            const configKey = DISPLAY_TO_CONFIG_KEY[key] || key;
+            if (!patched.factorWeights) patched.factorWeights = {};
+            const oldVal = patched.factorWeights[configKey];
+            patched.factorWeights[configKey] = val;
+            applied.push({ key: configKey, path: `factorWeights.${configKey}`, from: oldVal ?? "default", to: val });
+          }
+        }
+
+        if (applied.length > 0) {
+          const { error: updateCfgErr } = await supabase
+            .from("bot_configs")
+            .update({ config_json: patched, updated_at: new Date().toISOString() })
+            .eq("id", cfgRow.id);
+          if (updateCfgErr) throw updateCfgErr;
+          queryClient.invalidateQueries({ queryKey: ["bot-config"] });
+        }
+
+        await updateRecStatus(id, recIndex, "approved", {
+          impact_snapshot: { applied, recIndex },
+        });
 
         return { applied, skipped: [] };
       }
@@ -488,17 +563,10 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         .eq("id", cfgRow.id);
       if (updateCfgErr) throw updateCfgErr;
 
-      // Mark recommendation approved + record what changed
-      const { error: markErr } = await supabase
-        .from("bot_recommendations")
-        .update({
-          status: "approved",
-          resolved_at: new Date().toISOString(),
-          resolved_by: "user",
-          impact_snapshot: { applied, skipped, recIndex } as any,
-        } as any)
-        .eq("id", id);
-      if (markErr) throw markErr;
+      // Mark only THIS recommendation as approved (per-rec status)
+      await updateRecStatus(id, recIndex, "approved", {
+        impact_snapshot: { applied, skipped, recIndex },
+      });
 
       return { applied, skipped };
     },
@@ -517,22 +585,36 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     },
   });
 
-  // Dismiss mutation
+  // Dismiss mutation — dismisses a SINGLE recommendation by index
   const dismissMutation = useMutation({
+    mutationFn: async ({ id, recIndex }: { id: string; recIndex: number }) => {
+      await updateRecStatus(id, recIndex, "dismissed");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
+      toast.success("Recommendation dismissed.");
+    },
+    onError: (err: any) => {
+      toast.error(`Failed to dismiss: ${err.message}`);
+    },
+  });
+
+  // Dismiss ALL remaining pending recommendations in a review
+  const dismissAllMutation = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase
         .from("bot_recommendations")
         .update({
           status: "dismissed",
           resolved_at: new Date().toISOString(),
+          resolved_by: "user",
         })
         .eq("id", id);
-
       if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
-      toast.success("Recommendation dismissed.");
+      toast.success("All recommendations dismissed.");
     },
     onError: (err: any) => {
       toast.error(`Failed to dismiss: ${err.message}`);
@@ -647,6 +729,56 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         </div>
       </div>
 
+      {/* Regime Status Card */}
+      {(() => {
+        // Find the latest weekly review with regime data
+        const latestWeekly = recommendations?.find(r => r.review_type === "weekly" && r.performance_summary?.regimeAnalysis);
+        const regime = latestWeekly?.performance_summary?.regimeAnalysis;
+        if (!regime || regime.currentRegime === "unknown") return null;
+
+        const regimeStyles: Record<string, { bg: string; border: string; icon: string; label: string }> = {
+          strong_trend: { bg: "bg-green-500/10", border: "border-green-500/30", icon: "↑↑", label: "Strong Trend" },
+          mild_trend: { bg: "bg-green-500/5", border: "border-green-500/20", icon: "↑", label: "Mild Trend" },
+          choppy_range: { bg: "bg-red-500/10", border: "border-red-500/30", icon: "⇆", label: "Choppy / Range" },
+          mild_range: { bg: "bg-yellow-500/10", border: "border-yellow-500/30", icon: "↔", label: "Mild Range" },
+          transitional: { bg: "bg-orange-500/10", border: "border-orange-500/30", icon: "?", label: "Transitional" },
+        };
+        const style = regimeStyles[regime.currentRegime] || regimeStyles.transitional;
+
+        return (
+          <Card className={`${style.bg} ${style.border} border`}>
+            <CardContent className="py-2.5 px-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{style.icon}</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-foreground">
+                    Market Regime: {style.label}
+                  </span>
+                </div>
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4">
+                  {(regime.regimeConfidence * 100).toFixed(0)}% confidence
+                </Badge>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                {regime.regimeImpact}
+              </p>
+              {regime.regimeIndicators.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {regime.regimeIndicators.slice(0, 3).map((ind, i) => (
+                    <span key={i} className="text-[9px] text-muted-foreground bg-muted/50 px-1.5 py-0.5 rounded">
+                      {ind.length > 60 ? ind.slice(0, 57) + "..." : ind}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1.5 text-[9px] text-muted-foreground">
+                Detected {timeAgo(latestWeekly!.created_at)}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* No recommendations state */}
       {(!recommendations || recommendations.length === 0) && (
         <Card>
@@ -734,16 +866,32 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                       )}
 
                       {/* Individual recommendations */}
-                      {review.recommendations?.map((rec, i) => (
-                        <RecommendationCard
-                          key={i}
-                          rec={rec}
-                          index={i}
-                          isPending={true}
-                          onApprove={() => approveMutation.mutate({ id: review.id, recIndex: i })}
-                          onDismiss={() => dismissMutation.mutate(review.id)}
-                        />
-                      ))}
+                      {review.recommendations?.map((rec, i) => {
+                        const recStatus = rec.status || "pending";
+                        const isRecPending = recStatus === "pending";
+                        return (
+                          <div key={i} className="relative">
+                            {!isRecPending && (
+                              <div className="absolute top-1 right-1 z-10">
+                                <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${
+                                  recStatus === "approved"
+                                    ? "bg-green-500/20 text-green-400 border-green-500/30"
+                                    : "bg-muted text-muted-foreground border-border"
+                                }`}>
+                                  {recStatus.toUpperCase()}
+                                </Badge>
+                              </div>
+                            )}
+                            <RecommendationCard
+                              rec={rec}
+                              index={i}
+                              isPending={isRecPending}
+                              onApprove={isRecPending ? () => approveMutation.mutate({ id: review.id, recIndex: i }) : undefined}
+                              onDismiss={isRecPending ? () => dismissMutation.mutate({ id: review.id, recIndex: i }) : undefined}
+                            />
+                          </div>
+                        );
+                      })}
 
                       {/* Feature gaps */}
                       {review.feature_gaps?.length > 0 && (
@@ -760,27 +908,20 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                         </div>
                       )}
 
-                      {/* Bulk actions */}
-                      <div className="flex gap-2 pt-1">
-                        <Button
-                          size="sm"
-                          variant="default"
-                          className="h-6 text-[10px] px-3"
-                          onClick={() => approveMutation.mutate({ id: review.id, recIndex: 0 })}
-                          disabled={approveMutation.isPending}
-                        >
-                          <CheckCircle2 className="w-3 h-3 mr-1" /> Approve All
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 text-[10px] px-3"
-                          onClick={() => dismissMutation.mutate(review.id)}
-                          disabled={dismissMutation.isPending}
-                        >
-                          <XCircle className="w-3 h-3 mr-1" /> Dismiss All
-                        </Button>
-                      </div>
+                      {/* Bulk actions — only show if there are still pending recs */}
+                      {review.recommendations?.some(r => !r.status || r.status === "pending") && (
+                        <div className="flex gap-2 pt-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-[10px] px-3"
+                            onClick={() => dismissAllMutation.mutate(review.id)}
+                            disabled={dismissAllMutation.isPending}
+                          >
+                            <XCircle className="w-3 h-3 mr-1" /> Dismiss All Remaining
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
