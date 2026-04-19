@@ -60,6 +60,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Portfolio Heat (%)", keywords: ["portfolio", "heat", "exposure", "total"] },
   { tab: "risk", label: "Max Per Symbol", keywords: ["per symbol", "instrument", "max", "duplicate"] },
   { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
+  { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
+  { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
   { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
@@ -79,6 +81,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   // Instruments
   { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
+  { tab: "instruments", label: "Volatility Filter (ATR)", keywords: ["atr", "volatility", "filter", "min", "max"] },
   { tab: "instruments", label: "Max Spread (pips)", keywords: ["spread", "max", "pips"] },
   // Sessions
   { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "sydney"] },
@@ -232,7 +235,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
   const saveMut = useMutation({
     mutationFn: () => botConfigApi.update(config, connectionId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Config saved"); onClose(); },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => {
+      const msg = e?.message || "Failed to save config";
+      if (msg.toLowerCase().includes("validation") || msg.toLowerCase().includes("invalid") || msg.toLowerCase().includes("must be")) {
+        toast.error("Config Validation Error", { description: msg, duration: 8000 });
+      } else {
+        toast.error(msg);
+      }
+    },
   });
 
   const resetMut = useMutation({
@@ -274,7 +284,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
       setPresetDescription("");
       toast.success(result.updated ? `Preset "${presetName}" updated` : `Preset "${presetName}" saved`);
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => {
+      const msg = e?.message || "Failed to save preset";
+      if (msg.toLowerCase().includes("maximum") || msg.toLowerCase().includes("limit")) {
+        toast.error("Preset limit reached", { description: "You can save up to 20 presets. Delete an existing preset to make room." });
+      } else {
+        toast.error(msg);
+      }
+    },
   });
 
   const deletePresetMut = useMutation({
@@ -678,34 +695,174 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         className="h-9 text-sm"
                       />
                     </FieldGroup>
-                    <div className="grid grid-cols-2 gap-4">
-                      <FieldGroup label="Risk per Trade (%)" description="Percentage of balance risked per trade">
-                        <Input type="number" value={config.risk?.riskPerTrade ?? 1} onChange={e => updateField('risk', 'riskPerTrade', parseFloat(e.target.value) || 0)} step={0.1} className="h-9 text-sm" />
+
+                    {/* ── Position Sizing Method ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Position Sizing</p>
+                      <FieldGroup label="Sizing Method" description="How lot size is calculated for each trade">
+                        <Select value={config.risk?.positionSizingMethod ?? "percent_risk"} onValueChange={v => updateField('risk', 'positionSizingMethod', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="percent_risk">Risk-Based (%)</SelectItem>
+                            <SelectItem value="fixed_lot">Fixed Lot Size</SelectItem>
+                            <SelectItem value="volatility_adjusted">Volatility-Adjusted (ATR)</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </FieldGroup>
-                      <FieldGroup label="Max Daily Drawdown (%)" description="Halt trading if daily loss exceeds this">
-                        <Input type="number" value={config.risk?.maxDailyDrawdown ?? 3} onChange={e => updateField('risk', 'maxDailyDrawdown', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
+                      {(config.risk?.positionSizingMethod === "percent_risk" || !config.risk?.positionSizingMethod) && (
+                        <p className="text-[10px] text-muted-foreground italic">Lot size = (Balance × Risk%) ÷ SL distance. Adjusts automatically with account growth.</p>
+                      )}
+                      {config.risk?.positionSizingMethod === "fixed_lot" && (
+                        <FieldGroup label="Fixed Lot Size" description="Use this exact lot size for every trade regardless of SL distance">
+                          <Input type="number" value={config.risk?.fixedLotSize ?? 0.1} onChange={e => updateField('risk', 'fixedLotSize', parseFloat(e.target.value) || 0.01)} step={0.01} min={0.01} max={100} className="h-9 text-sm" />
+                        </FieldGroup>
+                      )}
+                      {config.risk?.positionSizingMethod === "volatility_adjusted" && (
+                        <p className="text-[10px] text-muted-foreground italic">Lot size scales inversely with ATR — smaller positions in volatile markets, larger in calm markets. Uses Risk% as the base.</p>
+                      )}
+                    </div>
+
+                    {/* ── Risk Limits ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Risk Limits</p>
+                      {(config.risk?.positionSizingMethod !== "fixed_lot") && (
+                        <FieldGroup label="Risk per Trade (%)" description="Percentage of balance risked per trade">
+                          <Input type="number" value={config.risk?.riskPerTrade ?? 1} onChange={e => updateField('risk', 'riskPerTrade', parseFloat(e.target.value) || 0)} step={0.1} className="h-9 text-sm" />
+                          <p className="text-[11px] text-muted-foreground mt-1 font-mono">
+                            ≈ ${(((config.risk?.riskPerTrade ?? 1) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} per trade
+                          </p>
+                        </FieldGroup>
+                      )}
+
+                      {/* ── Max Daily Drawdown: dual %/$ input ── */}
+                      <FieldGroup label="Max Daily Drawdown" description="Halt trading if daily loss exceeds this. Toggle between % and $ input.">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type="number"
+                              value={config.risk?._dailyDDMode === "dollar"
+                                ? (config.risk?._dailyDDDollar ?? ((config.risk?.maxDailyDrawdown ?? 3) / 100 * (config.account?.startingBalance ?? 10000)))
+                                : (config.risk?.maxDailyDrawdown ?? 3)
+                              }
+                              onChange={e => {
+                                const val = parseFloat(e.target.value) || 0;
+                                const balance = config.account?.startingBalance ?? 10000;
+                                if (config.risk?._dailyDDMode === "dollar") {
+                                  const pct = balance > 0 ? (val / balance) * 100 : 0;
+                                  updateField('risk', 'maxDailyDrawdown', Math.round(pct * 100) / 100);
+                                  updateField('risk', '_dailyDDDollar', val);
+                                } else {
+                                  updateField('risk', 'maxDailyDrawdown', val);
+                                  updateField('risk', '_dailyDDDollar', (val / 100) * balance);
+                                }
+                              }}
+                              step={config.risk?._dailyDDMode === "dollar" ? 10 : 0.5}
+                              min={0}
+                              className="h-9 text-sm pr-10"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-mono">
+                              {config.risk?._dailyDDMode === "dollar" ? "$" : "%"}
+                            </span>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 px-3 text-xs font-mono min-w-[44px]"
+                            onClick={() => {
+                              const balance = config.account?.startingBalance ?? 10000;
+                              const currentPct = config.risk?.maxDailyDrawdown ?? 3;
+                              if (config.risk?._dailyDDMode === "dollar") {
+                                updateField('risk', '_dailyDDMode', 'percent');
+                              } else {
+                                updateField('risk', '_dailyDDMode', 'dollar');
+                                updateField('risk', '_dailyDDDollar', (currentPct / 100) * balance);
+                              }
+                            }}
+                          >
+                            {config.risk?._dailyDDMode === "dollar" ? "%" : "$"}
+                          </Button>
+                        </div>
                         <p className="text-[11px] text-muted-foreground mt-1 font-mono">
-                          ≈ ${(((config.risk?.maxDailyDrawdown ?? 3) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} of ${(config.account?.startingBalance ?? 10000).toLocaleString()}
+                          {config.risk?._dailyDDMode === "dollar"
+                            ? `= ${(config.risk?.maxDailyDrawdown ?? 3).toFixed(1)}% of $${(config.account?.startingBalance ?? 10000).toLocaleString()}`
+                            : `≈ $${(((config.risk?.maxDailyDrawdown ?? 3) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} of $${(config.account?.startingBalance ?? 10000).toLocaleString()}`
+                          }
                         </p>
                       </FieldGroup>
-                      <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
-                        <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
-                      </FieldGroup>
-                      <FieldGroup label="Min R:R Ratio" description="Minimum risk-to-reward ratio">
-                        <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
+                          <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Min R:R Ratio" description="Minimum risk-to-reward ratio">
+                          <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
+                        </FieldGroup>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="Portfolio Heat (%)" description="Max total risk exposure across all open positions">
+                          <Input type="number" value={config.risk?.maxPortfolioHeat ?? 10} onChange={e => updateField('risk', 'maxPortfolioHeat', parseFloat(e.target.value) || 0)} step={1} min={1} max={100} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Max Per Symbol" description="Max open positions allowed on the same instrument">
+                          <Input type="number" value={config.risk?.maxPositionsPerSymbol ?? 2} onChange={e => updateField('risk', 'maxPositionsPerSymbol', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
+                        </FieldGroup>
+                      </div>
+
+                      {/* ── Max Total Drawdown: dual %/$ input ── */}
+                      <FieldGroup label="Max Total Drawdown" description="Kill switch — stops all trading if total drawdown exceeds this. Toggle between % and $.">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type="number"
+                              value={config.risk?._totalDDMode === "dollar"
+                                ? (config.risk?._totalDDDollar ?? ((config.risk?.maxDrawdown ?? 15) / 100 * (config.account?.startingBalance ?? 10000)))
+                                : (config.risk?.maxDrawdown ?? 15)
+                              }
+                              onChange={e => {
+                                const val = parseFloat(e.target.value) || 0;
+                                const balance = config.account?.startingBalance ?? 10000;
+                                if (config.risk?._totalDDMode === "dollar") {
+                                  const pct = balance > 0 ? (val / balance) * 100 : 0;
+                                  updateField('risk', 'maxDrawdown', Math.round(pct * 100) / 100);
+                                  updateField('risk', '_totalDDDollar', val);
+                                } else {
+                                  updateField('risk', 'maxDrawdown', val);
+                                  updateField('risk', '_totalDDDollar', (val / 100) * balance);
+                                }
+                              }}
+                              step={config.risk?._totalDDMode === "dollar" ? 50 : 1}
+                              min={0}
+                              className="h-9 text-sm pr-10"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-mono">
+                              {config.risk?._totalDDMode === "dollar" ? "$" : "%"}
+                            </span>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9 px-3 text-xs font-mono min-w-[44px]"
+                            onClick={() => {
+                              const balance = config.account?.startingBalance ?? 10000;
+                              const currentPct = config.risk?.maxDrawdown ?? 15;
+                              if (config.risk?._totalDDMode === "dollar") {
+                                updateField('risk', '_totalDDMode', 'percent');
+                              } else {
+                                updateField('risk', '_totalDDMode', 'dollar');
+                                updateField('risk', '_totalDDDollar', (currentPct / 100) * balance);
+                              }
+                            }}
+                          >
+                            {config.risk?._totalDDMode === "dollar" ? "%" : "$"}
+                          </Button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1 font-mono">
+                          {config.risk?._totalDDMode === "dollar"
+                            ? `= ${(config.risk?.maxDrawdown ?? 15).toFixed(1)}% of $${(config.account?.startingBalance ?? 10000).toLocaleString()}`
+                            : `≈ $${(((config.risk?.maxDrawdown ?? 15) / 100) * (config.account?.startingBalance ?? 10000)).toLocaleString(undefined, { maximumFractionDigits: 2 })} of $${(config.account?.startingBalance ?? 10000).toLocaleString()}`
+                          }
+                        </p>
                       </FieldGroup>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <FieldGroup label="Portfolio Heat (%)" description="Max total risk exposure across all open positions">
-                        <Input type="number" value={config.risk?.maxPortfolioHeat ?? 10} onChange={e => updateField('risk', 'maxPortfolioHeat', parseFloat(e.target.value) || 0)} step={1} min={1} max={100} className="h-9 text-sm" />
-                      </FieldGroup>
-                      <FieldGroup label="Max Per Symbol" description="Max open positions allowed on the same instrument">
-                        <Input type="number" value={config.risk?.maxPositionsPerSymbol ?? 2} onChange={e => updateField('risk', 'maxPositionsPerSymbol', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
-                      </FieldGroup>
-                    </div>
-                    <FieldGroup label="Max Total Drawdown (%)" description="Kill switch if total drawdown exceeds this">
-                      <Input type="number" value={config.risk?.maxDrawdown ?? 15} onChange={e => updateField('risk', 'maxDrawdown', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
-                    </FieldGroup>
                   </div>
                 )}
 
@@ -870,6 +1027,25 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                           <span className="text-sm font-mono font-bold w-12 text-right">{config.instruments?.maxSpreadPips ?? 3}</span>
                         </div>
                       </FieldGroup>
+                    </div>
+
+                    {/* ── ATR Volatility Filter ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="Volatility Filter (ATR)" description="Skip trades when market volatility is outside your preferred range" />
+                      <ToggleField label="Enable Volatility Filter" description="Gate trades based on current ATR value" checked={config.instruments?.volatilityFilterEnabled ?? false} onChange={v => updateField('instruments', 'volatilityFilterEnabled', v)} />
+                      {(config.instruments?.volatilityFilterEnabled) && (
+                        <div className="grid grid-cols-2 gap-4 mt-3">
+                          <FieldGroup label="Min ATR (pips)" description="Skip if ATR is below this — market too quiet">
+                            <Input type="number" value={config.instruments?.minATR ?? 0} onChange={e => updateField('instruments', 'minATR', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" disabled={!(config.instruments?.volatilityFilterEnabled)} />
+                          </FieldGroup>
+                          <FieldGroup label="Max ATR (pips)" description="Skip if ATR exceeds this — market too volatile">
+                            <Input type="number" value={config.instruments?.maxATR ?? 999} onChange={e => updateField('instruments', 'maxATR', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" disabled={!(config.instruments?.volatilityFilterEnabled)} />
+                          </FieldGroup>
+                        </div>
+                      )}
+                      {!(config.instruments?.volatilityFilterEnabled) && (
+                        <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot trades regardless of market volatility.</p>
+                      )}
                     </div>
                   </div>
                 )}

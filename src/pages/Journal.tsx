@@ -42,8 +42,17 @@ export default function JournalView() {
   const [formRisk, setFormRisk] = useState("");
   const [formRR, setFormRR] = useState("");
   const [formPnl, setFormPnl] = useState("");
+  const [journalPage, setJournalPage] = useState(0);
+  const journalPageSize = 50;
 
-  const { data: trades = [], isLoading } = useQuery({ queryKey: ["trades"], queryFn: () => tradesApi.list(100) });
+  const { data: tradesResponse, isLoading } = useQuery({
+    queryKey: ["trades", journalPage],
+    queryFn: () => tradesApi.list(journalPageSize, journalPage * journalPageSize),
+  });
+  // Support both old (array) and new (paginated object) response shapes
+  const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : (tradesResponse?.data ?? []);
+  const tradesTotalCount: number = Array.isArray(tradesResponse) ? tradesResponse.length : (tradesResponse?.total ?? trades.length);
+  const journalTotalPages = Math.max(1, Math.ceil(tradesTotalCount / journalPageSize));
 
   const createMutation = useMutation({
     mutationFn: (trade: any) => tradesApi.create(trade),
@@ -222,6 +231,19 @@ export default function JournalView() {
                         ))}
                       </tbody>
                     </table>
+                  )}
+                  {journalTotalPages > 1 && (
+                    <div className="flex items-center justify-between px-2 py-2 border-t border-border mt-2">
+                      <span className="text-[10px] text-muted-foreground font-mono">
+                        Page {journalPage + 1} of {journalTotalPages} ({tradesTotalCount} total)
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage === 0} onClick={() => setJournalPage(0)}>«</Button>
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage === 0} onClick={() => setJournalPage(p => p - 1)}>‹ Prev</Button>
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage >= journalTotalPages - 1} onClick={() => setJournalPage(p => p + 1)}>Next ›</Button>
+                        <Button variant="outline" size="sm" className="h-7 px-2 text-[10px]" disabled={journalPage >= journalTotalPages - 1} onClick={() => setJournalPage(journalTotalPages - 1)}>»</Button>
+                      </div>
+                    </div>
                   )}
                 </CardContent>
               </Card>

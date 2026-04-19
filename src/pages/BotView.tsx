@@ -840,7 +840,11 @@ export default function BotView() {
 
 function TradeHistoryTable({ trades }: { trades: any[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+  const totalPages = Math.ceil((trades?.length || 0) / pageSize);
   if (!trades || trades.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">No trades</p>;
+  const pagedTrades = trades.slice(page * pageSize, (page + 1) * pageSize);
 
   const reasonColor = (r: string) => {
     if (r === "tp_hit" || r === "trail_hit") return "text-success";
@@ -851,6 +855,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
   };
 
   return (
+    <>
     <table className="w-full text-[11px] font-mono">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
         <th className="w-4 py-1 px-1"></th>
@@ -861,7 +866,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
         <th className="text-left py-1 px-1">Reason</th>
       </tr></thead>
       <tbody>
-        {trades.slice(0, 30).map((t: any, i: number) => {
+        {pagedTrades.map((t: any, i: number) => {
           const key = t.orderId || t.positionId || `${t.symbol}-${t.closedAt}-${i}`;
           const isOpen = expanded === key;
           return (
@@ -918,6 +923,37 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
         })}
       </tbody>
     </table>
+    {totalPages > 1 && (
+      <div className="flex items-center justify-between px-2 py-2 border-t border-border">
+        <span className="text-[10px] text-muted-foreground font-mono">
+          {page * pageSize + 1}–{Math.min((page + 1) * pageSize, trades.length)} of {trades.length}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPage(0)}
+            disabled={page === 0}
+            className="px-1.5 py-0.5 text-[10px] font-mono border border-border rounded hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+          >«</button>
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={page === 0}
+            className="px-1.5 py-0.5 text-[10px] font-mono border border-border rounded hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+          >‹</button>
+          <span className="text-[10px] font-mono text-muted-foreground px-2">{page + 1}/{totalPages}</span>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+            className="px-1.5 py-0.5 text-[10px] font-mono border border-border rounded hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+          >›</button>
+          <button
+            onClick={() => setPage(totalPages - 1)}
+            disabled={page >= totalPages - 1}
+            className="px-1.5 py-0.5 text-[10px] font-mono border border-border rounded hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+          >»</button>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
