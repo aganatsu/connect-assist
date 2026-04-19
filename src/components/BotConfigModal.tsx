@@ -44,6 +44,11 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
   { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
   { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
+  { tab: "strategy", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "history", "advanced", "tuning"] },
+  { tab: "strategy", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "advanced", "tuning"] },
+  { tab: "strategy", label: "FVG Min Size", keywords: ["fvg", "min", "size", "pips", "filter", "advanced", "tuning"] },
+  { tab: "strategy", label: "FVG Only Unfilled", keywords: ["fvg", "unfilled", "mitigated", "advanced", "tuning"] },
+  { tab: "strategy", label: "Liquidity Pool Min Touches", keywords: ["liquidity", "pool", "touches", "equal highs", "advanced", "tuning"] },
   // Risk
   { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
   { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
