@@ -426,7 +426,7 @@ function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; con
 
 function regimeAlignmentAdjustment(
   regime: string, confidence: number, direction: string | null,
-  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group: string }>
+  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group?: string }>
 ): { adjustment: number; detail: string } {
   if (!direction || confidence < 0.5) return { adjustment: 0, detail: "Regime unknown or low confidence" };
   const trendFactors = ["Market Structure", "Trend Direction", "Displacement"];
