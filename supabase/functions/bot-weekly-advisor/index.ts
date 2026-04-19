@@ -930,8 +930,8 @@ Deno.serve(async (req) => {
             weeklyData,
             factorSuggestions: factorSuggestions.slice(0, 20),
             regimeAnalysis,
-            balance: account.balance,
-            peakBalance: account.peak_balance,
+            balance: balanceNum,
+            peakBalance: peakBalanceNum,
           },
           diagnosis: diagnosis.diagnosis,
           recommendations: [
