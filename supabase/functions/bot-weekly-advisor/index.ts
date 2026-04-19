@@ -33,6 +33,34 @@ interface TradeRecord {
   signal_reason?: any;
 }
 
+// ─── Number coercion helpers ────────────────────────────────
+function toSafeNumber(v: unknown, fallback = 0): number {
+  if (v === null || v === undefined || v === "") return fallback;
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeTradeRecord(raw: any): TradeRecord {
+  return {
+    id: raw.id,
+    user_id: raw.user_id,
+    symbol: raw.symbol,
+    direction: raw.direction,
+    entry_price: toSafeNumber(raw.entry_price),
+    exit_price: toSafeNumber(raw.exit_price),
+    sl: toSafeNumber(raw.sl ?? raw.stop_loss),
+    tp: toSafeNumber(raw.tp ?? raw.take_profit),
+    pnl: toSafeNumber(raw.pnl ?? raw.pnl_amount),
+    pnl_percent: toSafeNumber(raw.pnl_percent ?? raw.pnl_pips),
+    close_reason: raw.close_reason ?? "",
+    opened_at: raw.opened_at ?? raw.open_time ?? raw.created_at ?? "",
+    closed_at: raw.closed_at ?? "",
+    lot_size: toSafeNumber(raw.lot_size ?? raw.size),
+    bot_id: raw.bot_id,
+    signal_reason: raw.signal_reason,
+  };
+}
+
 interface TradeReasoning {
   id: string;
   user_id: string;
