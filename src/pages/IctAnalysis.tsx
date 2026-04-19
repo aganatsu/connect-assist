@@ -337,17 +337,17 @@ export default function IctAnalysis() {
                     <div className="space-y-3">
                       <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Day</p>
                         <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{analysis.pdLevels.pdh.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{analysis.pdLevels.pdl.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{analysis.pdLevels.pdo.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{analysis.pdLevels.pdc.toFixed(5)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{fx(analysis.pdLevels?.pdh)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{fx(analysis.pdLevels?.pdl)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{fx(analysis.pdLevels?.pdo)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{fx(analysis.pdLevels?.pdc)}</span></div>
                         </div></div>
                       <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Week</p>
                         <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{analysis.pdLevels.pwh.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{analysis.pdLevels.pwl.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{analysis.pdLevels.pwo.toFixed(5)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{analysis.pdLevels.pwc.toFixed(5)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{fx(analysis.pdLevels?.pwh)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{fx(analysis.pdLevels?.pwl)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{fx(analysis.pdLevels?.pwo)}</span></div>
+                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{fx(analysis.pdLevels?.pwc)}</span></div>
                         </div></div>
                     </div>
                   ) : <p className="text-muted-foreground">No data</p>}
