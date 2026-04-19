@@ -21,14 +21,27 @@ Deno.serve(async (req) => {
     const { action, ...payload } = await req.json();
 
     if (action === "list") {
-      const limit = payload.limit || 50;
-      const offset = payload.offset || 0;
-      const { data, error } = await supabase.from("trades")
-        .select("*").eq("user_id", user.id)
+      const page = Math.max(1, payload.page || 1);
+      const pageSize = Math.min(100, Math.max(1, payload.pageSize || payload.limit || 50));
+      const offset = (page - 1) * pageSize;
+
+      // M8: Get total count for pagination
+      const { count, error: countErr } = await supabase.from("trades")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id);
+      if (countErr) throw countErr;
+
+      // Optional symbol filter
+      let query = supabase.from("trades")
+        .select("*").eq("user_id", user.id);
+      if (payload.symbol) {
+        query = query.eq("symbol", payload.symbol);
+      }
+      const { data, error } = await query
         .order("entry_time", { ascending: false })
-        .range(offset, offset + limit - 1);
+        .range(offset, offset + pageSize - 1);
       if (error) throw error;
-      return respond(data);
+      return respond({ data: data || [], total: count || 0, page, pageSize });
     }
 
     if (action === "get") {
