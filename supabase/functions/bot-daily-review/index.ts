@@ -398,25 +398,34 @@ function computeSLAnalysis(trades: TradeRecord[]): SLAnalysis {
 // ─── LLM Integration ────────────────────────────────────────
 
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<LLMDiagnosis | null> {
+  const lovableKey = Deno.env.get("LOVABLE_API_KEY");
   const forgeApiUrl = Deno.env.get("FORGE_API_URL") || Deno.env.get("BUILT_IN_FORGE_API_URL");
   const forgeApiKey = Deno.env.get("FORGE_API_KEY") || Deno.env.get("BUILT_IN_FORGE_API_KEY");
 
-  if (!forgeApiUrl || !forgeApiKey) {
-    console.error("LLM API credentials not configured. Set FORGE_API_URL and FORGE_API_KEY in Supabase secrets.");
+  // Prefer Lovable AI Gateway (uses LOVABLE_API_KEY), fall back to Forge
+  const useLovable = !!lovableKey;
+  const url = useLovable
+    ? "https://ai.gateway.lovable.dev/v1/chat/completions"
+    : forgeApiUrl
+      ? `${forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
+      : "";
+  const apiKey = useLovable ? lovableKey : forgeApiKey;
+  const model = useLovable ? "google/gemini-2.5-flash" : "gemini-2.5-flash";
+
+  if (!url || !apiKey) {
+    console.error("LLM API credentials not configured. Set LOVABLE_API_KEY in Supabase secrets.");
     return null;
   }
-
-  const url = `${forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`;
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${forgeApiKey}`,
+        "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gemini-2.5-flash",
+        model,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
