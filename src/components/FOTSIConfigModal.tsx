@@ -179,6 +179,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
           <div className="grid grid-cols-3 gap-3">
             {Object.entries(PRESETS).map(([key, preset]) => (
               <button
+                type="button"
                 key={key}
                 onClick={() => {
                   setConfig((prev) =>
