@@ -819,6 +819,28 @@ Deno.serve(async (req) => {
         weeklyData.push(computeWeeklyMetrics(weekTrades, label, weekStart.toISOString(), weekEnd.toISOString()));
       }
 
+      // Normalize trade records (DB stores numeric fields as text)
+      const normalizedBotTrades: TradeRecord[] = botTrades.map(normalizeTradeRecord);
+
+      if (normalizedBotTrades.length < 5) {
+        console.log(`[Weekly Advisor] ${botName}: Only ${normalizedBotTrades.length} trades after normalization — skipping.`);
+        results.push({ botId, userId, status: "insufficient_trades" });
+        continue;
+      }
+
+      // Step 3.5: Split into weekly buckets (overwrite weeklyData using normalized trades)
+      weeklyData.length = 0;
+      for (let w = 3; w >= 0; w--) {
+        const weekStart = new Date(now.getTime() - (w + 1) * 7 * 24 * 60 * 60 * 1000);
+        const weekEnd = new Date(now.getTime() - w * 7 * 24 * 60 * 60 * 1000);
+        const weekTrades = normalizedBotTrades.filter(t => {
+          const closedAt = new Date(t.closed_at).getTime();
+          return closedAt >= weekStart.getTime() && closedAt < weekEnd.getTime();
+        });
+        const label = `Week ${4 - w} (${weekStart.toISOString().split("T")[0]})`;
+        weeklyData.push(computeWeeklyMetrics(weekTrades, label, weekStart.toISOString(), weekEnd.toISOString()));
+      }
+
       // Step 4: Fetch reasonings for factor analysis
       const { data: reasonings } = await supabase
         .from("trade_reasonings")
