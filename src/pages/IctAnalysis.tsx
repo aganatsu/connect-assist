@@ -13,6 +13,9 @@ import {
 const SYMBOLS = INSTRUMENTS.map(i => i.symbol);
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
 
+// Safe formatter — guards against undefined/null/NaN
+const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "—");
+
 export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
   const currentHour = new Date().getUTCHours();
