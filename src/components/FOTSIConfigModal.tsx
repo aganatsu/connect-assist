@@ -115,13 +115,13 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
   }, [rawConfig, open]);
 
   const saveMut = useMutation({
-    mutationFn: () => fotsiConfigApi.update(config),
+    mutationFn: (cfg: Config) => fotsiConfigApi.update(cfg),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["fotsi-config"] });
       toast.success("FOTSI config saved");
       onClose();
     },
-    onError: (e: any) => toast.error(e.message),
+    onError: (e: any) => toast.error(e?.message || "Failed to save FOTSI config"),
   });
 
   const resetMut = useMutation({
@@ -131,6 +131,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
       setConfig({ ...DEFAULTS });
       toast.success("FOTSI config reset to defaults");
     },
+    onError: (e: any) => toast.error(e?.message || "Failed to reset FOTSI config"),
   });
 
   const update = (key: string, value: any) => {
@@ -158,13 +159,13 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>
+            <Button type="button" variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()} disabled={resetMut.isPending}>
               Reset Defaults
             </Button>
-            <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+            <Button type="button" size="sm" className="text-xs" onClick={() => config && saveMut.mutate(config)} disabled={saveMut.isPending || !config}>
               {saveMut.isPending ? "Saving..." : "Save Config"}
             </Button>
-            <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2">
+            <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -178,6 +179,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
           <div className="grid grid-cols-3 gap-3">
             {Object.entries(PRESETS).map(([key, preset]) => (
               <button
+                type="button"
                 key={key}
                 onClick={() => {
                   setConfig((prev) =>
@@ -211,6 +213,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
               const isActive = activeTab === tab.id;
               return (
                 <button
+                  type="button"
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-xs transition-colors ${
