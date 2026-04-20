@@ -1498,6 +1498,7 @@ function processExits(
   barIndex: number,
   config: any,
   slippagePips: number,
+  btRateMap: Record<string, number>,
 ): { closedTrades: BacktestTrade[]; updatedPositions: OpenPosition[] } {
   const closedTrades: BacktestTrade[] = [];
   const surviving: OpenPosition[] = [];
@@ -1907,7 +1908,7 @@ Deno.serve(async (req) => {
             const exitCandle = entryCandles[j];
             const { closedTrades, updatedPositions } = processExits(
               openPositions.filter(p => p.symbol === symbol),
-              exitCandle, j, config, slippagePips,
+              exitCandle, j, config, slippagePips, btRateMap,
             );
             for (const trade of closedTrades) {
               balance += trade.pnl;

@@ -1939,6 +1939,7 @@ async function runSafetyGates(
   supabase: any, userId: string, symbol: string, direction: string,
   analysis: any, config: typeof DEFAULTS, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
+  rateMap?: Record<string, number>,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
@@ -2058,11 +2059,11 @@ async function runSafetyGates(
   if (analysis.stopLoss && analysis.takeProfit) {
     const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
     const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+    const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
     const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
     // Estimate commission cost in price terms: commissionPerLot / (lotUnits * quoteToUSD)
     // This converts the dollar commission into price-movement equivalent
-    const quoteToUSD = getQuoteToUSDRate(pair, rateMap);
+    const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
     const avgCommPerLot = (config as any)._avgCommissionPerLot ?? 0;
     const commCostInPrice = avgCommPerLot > 0 ? avgCommPerLot / (pairSpec.lotUnits * quoteToUSD) : 0;
     const totalCostInPrice = spreadCostInPrice + commCostInPrice;
@@ -2707,6 +2708,7 @@ async function runScanForUser(supabase: any, userId: string) {
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
+        rateMap,
       );
       const allPassed = gates.every(g => g.passed);
       detail.gates = gates;
