@@ -6,27 +6,43 @@ import {
   parsePairCurrencies, getFOTSIPairNames,
   type FOTSIResult, type Currency,
 } from "../_shared/fotsi.ts";
-import { classifyInstrumentRegime } from "../_shared/smcAnalysis.ts";
-
+import {
+  classifyInstrumentRegime,
+  // Types
+  type Candle, type SwingPoint, type OrderBlock,
+  type LiquidityPool, type BreakerBlock, type UnicornSetup,
+  type SMTResult, type AMDResult, type SilverBulletResult, type MacroWindowResult,
+  type ReasoningFactor, type GateResult,
+  // Constants
+  SPECS, YAHOO_SYMBOLS, SMT_PAIRS, ASSET_PROFILES, getAssetProfile,
+  // Analysis functions
+  calculateATR, calculateAnchoredVWAP,
+  detectSwingPoints, analyzeMarketStructure,
+  detectOrderBlocks, detectFVGs, detectLiquidityPools,
+  detectDisplacement, tagDisplacementQuality,
+  detectBreakerBlocks, detectUnicornSetups,
+  detectJudasSwing, detectReversalCandle,
+  calculatePDLevels,
+  computeOpeningRange, calculateSLTP,
+} from "../_shared/smcAnalysis.ts";
+import {
+  classifySetupType, manageOpenPositions,
+  type SetupClassification, type ManagementAction,
+} from "../_shared/scannerManagement.ts";
 
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
-
 // ─── Default Config (overridden by bot_configs) ─────────────────────
-// Confluence is normalized to 0-10 (raw max ~23.0 across 20 factors, clamped).
-// Recommended: 5.0-5.5 for balanced, 6.5+ for A+ only, <4.0 looser/scalp.
 const DEFAULTS = {
   minConfluence: 5.5,
   htfBiasRequired: true,
-  htfBiasHardVeto: false, // when true: ranging HTF blocks both sides; mismatch always blocks
-  entryTimeframe: "15min",
-  htfTimeframe: "1day",
-  onlyBuyInDiscount: true,
-  onlySellInPremium: true,
-  riskPerTrade: 1,
+  htfBiasHardVeto: false,
+  onlyBuyInDiscount: false,
+  onlySellInPremium: false,
+  maxDrawdown: 20,
   maxDailyLoss: 5,
-  maxDrawdown: 15,
-  maxOpenPositions: 5,
+  riskPerTrade: 1,
+  maxOpenPositions: 3,
   maxPerSymbol: 2,
   allowSameDirectionStacking: false,
   portfolioHeat: 10,
@@ -98,12 +114,11 @@ const DEFAULTS = {
   _smtResult: null as any,
   // ── Factor Weights (config-driven, AI-tunable) ──
   factorWeights: {} as Record<string, number>,
+  // ── Entry/HTF timeframes (set by style) ──
+  entryTimeframe: "15min",
+  htfTimeframe: "1day",
 };
-
 // ─── Default Factor Weights ─────────────────────────────────────────────────
-// These are the hardcoded max-weight values for each factor.
-// When config.factorWeights[key] is set, the factor's pts are scaled by
-// (configWeight / defaultWeight), preserving internal scoring tiers.
 const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   marketStructure: 1.5,
   orderBlock: 2.0,
@@ -126,10 +141,7 @@ const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   trendDirection: 1.5,
   dailyBias: 1.5,
 };
-
-/** Resolve a factor's weight multiplier from config overrides.
- *  Returns a scaling ratio: configWeight / defaultWeight.
- *  If no override exists, returns 1.0 (no change). */
+/** Resolve a factor's weight multiplier from config overrides. */
 function resolveWeightScale(factorKey: string, config: any): number {
   const fw = config.factorWeights;
   if (!fw || fw[factorKey] === undefined || fw[factorKey] === null) return 1.0;
@@ -137,9 +149,7 @@ function resolveWeightScale(factorKey: string, config: any): number {
   if (!defaultW || defaultW === 0) return 1.0;
   return Math.max(0, fw[factorKey]) / defaultW;
 }
-
-/** Apply weight scaling to a factor's pts and display weight.
- *  Call this right before `score += pts` for each factor. */
+/** Apply weight scaling to a factor's pts and display weight. */
 function applyWeightScale(pts: number, factorKey: string, displayWeight: number, config: any): { pts: number; displayWeight: number } {
   const scale = resolveWeightScale(factorKey, config);
   if (scale === 1.0) return { pts, displayWeight };
@@ -148,7 +158,6 @@ function applyWeightScale(pts: number, factorKey: string, displayWeight: number,
     displayWeight: Math.round(displayWeight * scale * 1000) / 1000,
   };
 }
-
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
 function normalizeSymKey(s: string): string {
   return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
@@ -162,10 +171,7 @@ function resolveSymbol(pair: string, conn: any): string {
   const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
   return base + (conn.symbol_suffix || "");
 }
-
 // ─── MetaAPI Region Failover ────────────────────────────────────────
-// Replicate the same failover logic from broker-execute: try London → New York → Singapore.
-// Caches the successful region per account to avoid repeated probing.
 const META_REGIONS = ["london", "new-york", "singapore"];
 const regionCache = new Map<string, string>();
 function metaBaseUrl(region: string, accountId: string) {
@@ -187,7 +193,6 @@ async function metaFetch(
     const body = await res.text();
     if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
     lastBody = body; lastStatus = res.status;
-    // If the error is NOT a region mismatch, stop trying other regions
     if (!/region|not connected to broker/i.test(body)) {
       return { res: new Response(body, { status: res.status }), body };
     }
@@ -237,69 +242,16 @@ function getYahooRange(entryTf: string): string {
   return map[entryTf] || "5d";
 }
 
-// ─── Standalone ATR Calculation ─────────────────────────────────────
-function calculateATR(candles: Candle[], period = 14): number {
-  if (candles.length < period + 1) return 0;
-  let atrSum = 0;
-  for (let i = candles.length - period; i < candles.length; i++) {
-    const prev = candles[i - 1];
-    const curr = candles[i];
-    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
-    atrSum += tr;
-  }
-  return atrSum / period;
-}
-
-// ─── Session-Anchored VWAP ─────────────────────────────────────────
-// Anchors at the start of the current UTC day. Returns current VWAP, distance in pips,
-// and whether the latest candle wicked through and rejected VWAP (for bonus).
-interface VWAPResult { value: number | null; distancePips: number | null; rejection: "bullish" | "bearish" | null; barsAnchored: number; }
-function calculateAnchoredVWAP(candles: Candle[], pipSize: number): VWAPResult {
-  if (candles.length === 0 || pipSize <= 0) {
-    return { value: null, distancePips: null, rejection: null, barsAnchored: 0 };
-  }
-  // Find anchor index = first candle whose UTC date matches the latest candle's UTC date
-  const lastDate = candles[candles.length - 1].datetime.slice(0, 10);
-  let anchorIdx = candles.length - 1;
-  for (let i = candles.length - 1; i >= 0; i--) {
-    if (candles[i].datetime.slice(0, 10) === lastDate) anchorIdx = i; else break;
-  }
-  let pvSum = 0, vSum = 0;
-  // Volume not available from Yahoo OHLC payload here; use range as proxy weight (high-low+epsilon).
-  for (let i = anchorIdx; i < candles.length; i++) {
-    const c = candles[i];
-    const typical = (c.high + c.low + c.close) / 3;
-    const w = Math.max(1e-9, c.high - c.low);
-    pvSum += typical * w;
-    vSum += w;
-  }
-  const value = vSum > 0 ? pvSum / vSum : null;
-  if (value == null) return { value: null, distancePips: null, rejection: null, barsAnchored: candles.length - anchorIdx };
-  const last = candles[candles.length - 1];
-  const distancePips = Math.abs(last.close - value) / pipSize;
-  // Rejection wick: candle traded through VWAP but closed back on one side
-  let rejection: "bullish" | "bearish" | null = null;
-  if (last.low < value && last.close > value && (last.close - last.open) > 0) rejection = "bullish";
-  else if (last.high > value && last.close < value && (last.open - last.close) > 0) rejection = "bearish";
-  return { value, distancePips, rejection, barsAnchored: candles.length - anchorIdx };
-}
-
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
-// Builds a histogram of time spent at each price level from OHLC candles.
-// Since forex lacks real volume, we use candle count at each price bin (TPO).
-// Returns POC (Point of Control), Value Area High/Low, and classified nodes.
 interface VolumeProfileResult {
-  poc: number;           // Point of Control — price level with most time
-  vah: number;           // Value Area High (70% of activity above this)
-  val: number;           // Value Area Low (70% of activity below this)
+  poc: number;
+  vah: number;
+  val: number;
   nodes: Array<{ price: number; count: number; type: "HVN" | "LVN" | "normal" }>;
   totalBins: number;
 }
-
 function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileResult | null {
   if (candles.length < 20) return null;
-
-  // Find the overall high and low across all candles
   let overallHigh = -Infinity, overallLow = Infinity;
   for (const c of candles) {
     if (c.high > overallHigh) overallHigh = c.high;
@@ -307,12 +259,8 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
   }
   const range = overallHigh - overallLow;
   if (range <= 0) return null;
-
   const binSize = range / numBins;
   const bins: number[] = new Array(numBins).fill(0);
-
-  // For each candle, increment every bin that falls within its high-low range
-  // This is the TPO (Time Price Opportunity) approach
   for (const c of candles) {
     const lowBin = Math.max(0, Math.floor((c.low - overallLow) / binSize));
     const highBin = Math.min(numBins - 1, Math.floor((c.high - overallLow) / binSize));
@@ -320,41 +268,24 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
       bins[b]++;
     }
   }
-
-  // Find POC (bin with highest count)
   let pocBin = 0, maxCount = 0;
   for (let i = 0; i < numBins; i++) {
-    if (bins[i] > maxCount) {
-      maxCount = bins[i];
-      pocBin = i;
-    }
+    if (bins[i] > maxCount) { maxCount = bins[i]; pocBin = i; }
   }
   const poc = overallLow + (pocBin + 0.5) * binSize;
-
-  // Calculate Value Area (70% of total TPO count, expanding from POC)
   const totalCount = bins.reduce((a, b) => a + b, 0);
   const targetCount = totalCount * 0.70;
   let vaLowBin = pocBin, vaHighBin = pocBin;
   let vaCount = bins[pocBin];
-
   while (vaCount < targetCount && (vaLowBin > 0 || vaHighBin < numBins - 1)) {
     const expandLow = vaLowBin > 0 ? bins[vaLowBin - 1] : -1;
     const expandHigh = vaHighBin < numBins - 1 ? bins[vaHighBin + 1] : -1;
-    if (expandLow >= expandHigh && expandLow >= 0) {
-      vaLowBin--;
-      vaCount += bins[vaLowBin];
-    } else if (expandHigh >= 0) {
-      vaHighBin++;
-      vaCount += bins[vaHighBin];
-    } else {
-      break;
-    }
+    if (expandLow >= expandHigh && expandLow >= 0) { vaLowBin--; vaCount += bins[vaLowBin]; }
+    else if (expandHigh >= 0) { vaHighBin++; vaCount += bins[vaHighBin]; }
+    else break;
   }
-
   const val = overallLow + vaLowBin * binSize;
   const vah = overallLow + (vaHighBin + 1) * binSize;
-
-  // Classify nodes: HVN if count > 1.5x average, LVN if count < 0.5x average
   const avgCount = totalCount / numBins;
   const nodes = bins.map((count, i) => ({
     price: overallLow + (i + 0.5) * binSize,
@@ -363,14 +294,11 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
          : count < avgCount * 0.5 ? "LVN" as const
          : "normal" as const,
   }));
-
   return { poc, vah, val, nodes, totalBins: numBins };
 }
 
 function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
-
-  // Calculate ATR from daily candles (14-period)
   const atrPeriod = Math.min(14, dailyCandles.length - 1);
   let atrSum = 0;
   for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
@@ -382,570 +310,24 @@ function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   const atr = atrSum / atrPeriod;
   const avgPrice = dailyCandles[dailyCandles.length - 1].close;
   const atrPercent = avgPrice > 0 ? (atr / avgPrice) * 100 : 0;
-
-  // Trend strength: compare recent 5-day move vs ATR
   const recentClose = dailyCandles[dailyCandles.length - 1].close;
   const fiveDaysAgo = dailyCandles[Math.max(0, dailyCandles.length - 6)].close;
   const trendMove = Math.abs(recentClose - fiveDaysAgo);
-  const trendStrength = atr > 0 ? trendMove / (atr * 5) : 0; // normalized
-
-  // Low volatility + ranging → scalper
+  const trendStrength = atr > 0 ? trendMove / (atr * 5) : 0;
   if (atrPercent < 0.5 && trendStrength < 0.3) return "scalper";
-  // High volatility + strong trend → swing
   if (atrPercent > 1.0 && trendStrength > 0.5) return "swing_trader";
-  // Default
   return "day_trader";
 }
 
-// ─── Setup Classifier ──────────────────────────────────────────────────
-// Reads the confluence factors that fired and classifies the trade setup
-// as scalp, day_trade, or swing based on the STRUCTURE of the setup,
-// not just volatility. Returns the classification + execution overrides.
-
-interface SetupClassification {
-  setupType: "scalp" | "day_trade" | "swing";
-  confidence: number;       // 0–1
-  rationale: string;        // human-readable explanation
-  executionProfile: {
-    tpRatio: number;
-    slBufferPips: number;
-    maxHoldHours: number;
-    tpMethod: string;       // "nearest_liquidity" | "next_level" | "rr_ratio"
-  };
-}
-
-function classifySetupType(analysis: {
-  factors: ReasoningFactor[];
-  session: { name: string; isKillZone: boolean };
-  silverBullet: SilverBulletResult;
-  macroWindow: MacroWindowResult;
-  amd: AMDResult;
-  displacement: DisplacementResult;
-  pd: { currentZone: string; zonePercent: number; oteZone: boolean };
-  regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null;
-  structure: { trend: "bullish" | "bearish" | "ranging"; swingPoints: SwingPoint[]; bos: any[]; choch: any[] };
-  direction: string | null;
-  score: number;
-}): SetupClassification {
-  const f = (name: string) => analysis.factors.find(x => x.name === name);
-  const fired = (name: string) => f(name)?.present === true;
-
-  // ── Score each setup type based on which factors fired ──
-  let scalpScore = 0;
-  let dayScore = 0;
-  let swingScore = 0;
-  const reasons: { scalp: string[]; day: string[]; swing: string[] } = { scalp: [], day: [], swing: [] };
-
-  // ── TIMING factors → heavily favor scalp ──
-  if (analysis.session.isKillZone) {
-    scalpScore += 2; reasons.scalp.push("Kill zone active");
-    dayScore += 1;
-  }
-  if (analysis.silverBullet.active) {
-    scalpScore += 2.5; reasons.scalp.push(`Silver Bullet ${analysis.silverBullet.window}`);
-  }
-  if (analysis.macroWindow.active) {
-    scalpScore += 1.5; reasons.scalp.push(`Macro window ${analysis.macroWindow.window}`);
-  }
-
-  // ── AMD Phase → scalp if manipulation/distribution, day if accumulation ──
-  if (analysis.amd.phase === "manipulation") {
-    scalpScore += 2; reasons.scalp.push("AMD manipulation phase (fake-out)");
-  } else if (analysis.amd.phase === "distribution") {
-    scalpScore += 1.5; reasons.scalp.push("AMD distribution phase");
-    dayScore += 1; reasons.day.push("AMD distribution");
-  } else if (analysis.amd.phase === "accumulation") {
-    dayScore += 1.5; reasons.day.push("AMD accumulation (building)");
-  }
-
-  // ── Liquidity Sweep → scalp (quick reversal play) ──
-  if (fired("Liquidity Sweep")) {
-    scalpScore += 2; reasons.scalp.push("Liquidity sweep detected");
-  }
-
-  // ── Judas Swing → scalp (fake-out reversal) ──
-  if (fired("Judas Swing")) {
-    scalpScore += 1.5; reasons.scalp.push("Judas swing (false move)");
-  }
-
-  // ── Reversal Candle → scalp (immediate entry signal) ──
-  if (fired("Reversal Candle")) {
-    scalpScore += 1; reasons.scalp.push("Reversal candle confirmation");
-  }
-
-  // ── FVG → day trade (gap fill play) ──
-  if (fired("Fair Value Gap")) {
-    dayScore += 1.5; reasons.day.push("FVG present");
-    scalpScore += 0.5;
-  }
-
-  // ── Order Block → day trade (zone-based entry) ──
-  if (fired("Order Block")) {
-    dayScore += 2; reasons.day.push("Order block entry");
-    scalpScore += 0.5;
-  }
-
-  // ── Market Structure (BOS/CHoCH) → day trade ──
-  if (fired("Market Structure")) {
-    dayScore += 2; reasons.day.push("Structure break (BOS/CHoCH)");
-    swingScore += 0.5;
-  }
-
-  // ── Trend Direction → day trade ──
-  if (fired("Trend Direction")) {
-    dayScore += 1; reasons.day.push("Trend direction aligned");
-    swingScore += 0.5;
-  }
-
-  // ── Daily Bias (HTF alignment) → swing ──
-  if (fired("Daily Bias")) {
-    swingScore += 2.5; reasons.swing.push("Daily bias aligned");
-    dayScore += 1; reasons.day.push("Daily bias supports");
-  }
-
-  // ── Premium/Discount deep zone → swing ──
-  const zp = analysis.pd.zonePercent;
-  if (zp <= 25 || zp >= 75) {
-    swingScore += 2; reasons.swing.push(`Deep ${zp <= 25 ? "discount" : "premium"} zone (${zp.toFixed(0)}%)`);
-    dayScore += 0.5;
-  } else if (analysis.pd.oteZone) {
-    dayScore += 1; reasons.day.push("OTE zone");
-  }
-
-  // ── Displacement → swing (strong momentum) ──
-  if (analysis.displacement.isDisplacement) {
-    swingScore += 2; reasons.swing.push(`Displacement (${analysis.displacement.displacementCandles.length} candles)`);
-    dayScore += 0.5;
-  }
-
-  // ── Volume Profile → swing (institutional footprint) ──
-  if (fired("Volume Profile")) {
-    swingScore += 1.5; reasons.swing.push("Volume profile alignment");
-  }
-
-  // ── Breaker Block → swing (HTF structure reclaim) ──
-  if (fired("Breaker Block")) {
-    swingScore += 1.5; reasons.swing.push("Breaker block (HTF reclaim)");
-  }
-
-  // ── Unicorn Model → day trade (complex setup) ──
-  if (fired("Unicorn Model")) {
-    dayScore += 1.5; reasons.day.push("Unicorn model");
-  }
-
-  // ── SMT Divergence → swing (macro confirmation) ──
-  if (fired("SMT Divergence")) {
-    swingScore += 1.5; reasons.swing.push("SMT divergence (macro)");
-  }
-
-  // ── Currency Strength → swing (macro flow) ──
-  if (fired("Currency Strength")) {
-    swingScore += 1; reasons.swing.push("Currency strength aligned");
-  }
-
-  // ── Regime → swing if trending with confidence ──
-  if (analysis.regimeInfo && analysis.regimeInfo.confidence >= 0.7) {
-    if (analysis.regimeInfo.regime === "trending" || analysis.regimeInfo.regime === "strong_trend") {
-      swingScore += 2; reasons.swing.push(`Regime: ${analysis.regimeInfo.regime} (${(analysis.regimeInfo.confidence * 100).toFixed(0)}%)`);
-    } else if (analysis.regimeInfo.regime === "ranging" || analysis.regimeInfo.regime === "choppy") {
-      scalpScore += 1.5; reasons.scalp.push(`Regime: ${analysis.regimeInfo.regime} (range-bound)`);
-    }
-  }
-
-  // ── PD/PW Levels → day trade (intraday targets) ──
-  if (fired("PD/PW Levels")) {
-    dayScore += 1; reasons.day.push("PD/PW levels active");
-  }
-
-  // ── Classify ──
-  const scores = { scalp: scalpScore, day_trade: dayScore, swing: swingScore };
-  const maxScore = Math.max(scalpScore, dayScore, swingScore);
-  const totalScore = scalpScore + dayScore + swingScore;
-
-  let setupType: "scalp" | "day_trade" | "swing";
-  let rationale: string;
-
-  if (maxScore === 0) {
-    setupType = "day_trade";
-    rationale = "No strong setup signals — defaulting to day trade";
-  } else if (scalpScore >= dayScore && scalpScore >= swingScore) {
-    setupType = "scalp";
-    rationale = reasons.scalp.join(", ");
-  } else if (swingScore >= dayScore && swingScore >= scalpScore) {
-    setupType = "swing";
-    rationale = reasons.swing.join(", ");
-  } else {
-    setupType = "day_trade";
-    rationale = reasons.day.join(", ");
-  }
-
-  // Confidence = how dominant the winning type is vs the others
-  const confidence = totalScore > 0 ? Math.min(1, maxScore / totalScore + 0.2) : 0.5;
-
-  // ── Execution profiles per setup type ──
-  const EXECUTION_PROFILES: Record<string, SetupClassification["executionProfile"]> = {
-    scalp: {
-      tpRatio: 1.5,
-      slBufferPips: 1,
-      maxHoldHours: 2,
-      tpMethod: "nearest_liquidity",
-    },
-    day_trade: {
-      tpRatio: 2.0,
-      slBufferPips: 2,
-      maxHoldHours: 8,
-      tpMethod: "next_level",
-    },
-    swing: {
-      tpRatio: 3.0,
-      slBufferPips: 5,
-      maxHoldHours: 72,
-      tpMethod: "rr_ratio",
-    },
-  };
-
-  return {
-    setupType,
-    confidence,
-    rationale: `[${setupType.toUpperCase()}] ${rationale} (scores: scalp=${scalpScore.toFixed(1)}, day=${dayScore.toFixed(1)}, swing=${swingScore.toFixed(1)})`,
-    executionProfile: EXECUTION_PROFILES[setupType],
-  };
-}
-
-// ─── Active Trade Management Engine ────────────────────────────────────
-// Runs at the start of each scan cycle BEFORE scanning for new trades.
-// Re-evaluates open positions, promotes setups, adjusts SL/TP, and flags
-// early exits when the setup invalidates.
-
-interface ManagementAction {
-  positionId: string;
-  symbol: string;
-  action: "promoted" | "sl_tightened" | "tp_extended" | "early_exit" | "trailing_enabled" | "partial_enabled" | "no_change";
-  from?: string;
-  to?: string;
-  reason: string;
-  newSL?: number;
-  newTP?: number;
-}
-
-const PROMOTION_MAP: Record<string, string> = {
-  scalp: "day_trade",
-  day_trade: "swing",
-};
-
-// Minimum profit in R-multiples before promotion is considered
-const PROMOTION_THRESHOLDS: Record<string, number> = {
-  scalp: 0.8,      // scalp must be at least 0.8R in profit to promote to day
-  day_trade: 1.2,  // day trade must be at least 1.2R in profit to promote to swing
-};
-
-async function manageOpenPositions(
-  supabase: any,
-  positions: any[],
-  config: any,
-  isAutoStyle: boolean,
-  scanCycleId: string,
-): Promise<ManagementAction[]> {
-  const actions: ManagementAction[] = [];
-  if (!positions || positions.length === 0) return actions;
-
-  for (const pos of positions) {
-    try {
-      const symbol: string = pos.symbol;
-      const spec = SPECS[symbol];
-      if (!spec) continue;
-
-      const entryPrice = parseFloat(pos.entry_price);
-      const currentPrice = parseFloat(pos.current_price);
-      const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
-      const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
-      if (!sl || !tp) continue;
-
-      // Parse existing signal_reason to get exitFlags and setupType
-      let signalData: any = {};
-      try { signalData = JSON.parse(pos.signal_reason || "{}"); } catch {}
-      const exitFlags = signalData.exitFlags || {};
-      const currentSetupType: string = signalData.setupType || "day_trade";
-
-      // Calculate current R-multiple (how many risk units in profit)
-      const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
-      const profitPips = pos.direction === "long"
-        ? (currentPrice - entryPrice) / spec.pipSize
-        : (entryPrice - currentPrice) / spec.pipSize;
-      const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
-
-      // ── 1. SETUP PROMOTION (only in Auto style mode) ──
-      // If the trade is in profit beyond the promotion threshold,
-      // check if higher-timeframe structure confirms the move.
-      const nextType = PROMOTION_MAP[currentSetupType];
-      const promoThreshold = PROMOTION_THRESHOLDS[currentSetupType];
-
-      if (isAutoStyle && nextType && promoThreshold && rMultiple >= promoThreshold) {
-        // Fetch fresh candles to check if structure confirms
-        let structureConfirms = false;
-        let promoReason = "";
-        try {
-          // Use 1H candles for scalp→day promotion, daily for day→swing
-          const tf = currentSetupType === "scalp" ? "1h" : "1d";
-          const range = currentSetupType === "scalp" ? "5d" : "1mo";
-          const freshCandles = await fetchCandles(symbol, tf, range).catch(() => [] as Candle[]);
-
-          if (freshCandles.length >= 20) {
-            const structure = analyzeMarketStructure(freshCandles);
-
-            // Check if structure trend matches trade direction
-            const trendMatchesDirection =
-              (pos.direction === "long" && structure.trend === "bullish") ||
-              (pos.direction === "short" && structure.trend === "bearish");
-
-            // Check for BOS in trade direction (strong confirmation)
-            const recentBOS = structure.bos.filter((b: any) =>
-              b.type === (pos.direction === "long" ? "bullish" : "bearish")
-            );
-            const hasFreshBOS = recentBOS.length > 0;
-
-            // Check if there's a clear next liquidity target further out
-            const swingPoints = structure.swingPoints || [];
-            const relevantSwings = pos.direction === "long"
-              ? swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > currentPrice)
-              : swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < currentPrice);
-            const hasNextTarget = relevantSwings.length > 0;
-
-            if (trendMatchesDirection && hasFreshBOS && hasNextTarget) {
-              structureConfirms = true;
-              const nextTarget = pos.direction === "long"
-                ? Math.min(...relevantSwings.map((s: SwingPoint) => s.price))
-                : Math.max(...relevantSwings.map((s: SwingPoint) => s.price));
-              promoReason = `HTF ${tf} trend=${structure.trend}, fresh BOS confirmed, next target at ${nextTarget.toFixed(spec.pipSize < 0.01 ? 2 : 5)}`;
-            }
-          }
-        } catch (e: any) {
-          console.warn(`[mgmt ${scanCycleId}] Structure check failed for ${symbol}: ${e?.message}`);
-        }
-
-        if (structureConfirms) {
-          // PROMOTE: update exitFlags with new execution profile
-          const newProfile = nextType === "day_trade"
-            ? { tpRatio: 2.0, slBufferPips: 2, maxHoldHours: 8, trailingStop: true, trailingStopPips: 15, trailingStopActivation: "after_1r", partialTP: true, partialTPPercent: 50, partialTPLevel: 1.0 }
-            : { tpRatio: 3.0, slBufferPips: 5, maxHoldHours: 72, trailingStop: true, trailingStopPips: 25, trailingStopActivation: "after_1r", partialTP: true, partialTPPercent: 40, partialTPLevel: 1.5 };
-
-          // Calculate new TP based on promoted profile
-          const slDistance = Math.abs(entryPrice - sl);
-          const newTP = pos.direction === "long"
-            ? entryPrice + (slDistance * newProfile.tpRatio)
-            : entryPrice - (slDistance * newProfile.tpRatio);
-
-          // Trail SL to lock in profit (move to at least breakeven + small buffer)
-          const lockBuffer = spec.pipSize * 2; // lock 2 pips profit minimum
-          const newSL = pos.direction === "long"
-            ? Math.max(sl, entryPrice + lockBuffer)
-            : Math.min(sl, entryPrice - lockBuffer);
-
-          // Update the position's exitFlags and SL/TP
-          const updatedExitFlags = {
-            ...exitFlags,
-            ...newProfile,
-            breakEven: true,
-            breakEvenPips: 0, // already at or past BE
-          };
-          const updatedSignalData = {
-            ...signalData,
-            setupType: nextType,
-            exitFlags: updatedExitFlags,
-            promotionHistory: [
-              ...(signalData.promotionHistory || []),
-              { from: currentSetupType, to: nextType, at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: promoReason },
-            ],
-          };
-
-          await supabase.from("paper_positions").update({
-            signal_reason: JSON.stringify(updatedSignalData),
-            stop_loss: newSL.toString(),
-            take_profit: newTP.toString(),
-          }).eq("id", pos.id);
-
-          actions.push({
-            positionId: pos.position_id,
-            symbol,
-            action: "promoted",
-            from: currentSetupType,
-            to: nextType,
-            reason: promoReason,
-            newSL,
-            newTP,
-          });
-          console.log(`[mgmt ${scanCycleId}] PROMOTED ${symbol} ${currentSetupType}→${nextType} at ${rMultiple.toFixed(2)}R | SL→${newSL.toFixed(5)} TP→${newTP.toFixed(5)} | ${promoReason}`);
-          continue; // Skip other checks for this position — promotion takes priority
-        }
-      }
-
-      // ── 2. AUTO-ENABLE SMART EXITS based on setup type ──
-      // If the position was opened without trailing/partial (old config or disabled),
-      // enable them based on the setup classification.
-      let exitFlagsUpdated = false;
-      const updatedFlags = { ...exitFlags };
-
-      if (currentSetupType === "scalp" && !exitFlags.trailingStop && rMultiple >= 0.5) {
-        // Scalps: enable tight trailing after 0.5R to protect quick profits
-        updatedFlags.trailingStop = true;
-        updatedFlags.trailingStopPips = Math.max(5, Math.round(riskPips * 0.4)); // 40% of risk as trail
-        updatedFlags.trailingStopActivation = "after_1r";
-        exitFlagsUpdated = true;
-        actions.push({ positionId: pos.position_id, symbol, action: "trailing_enabled", reason: `Scalp at ${rMultiple.toFixed(2)}R — tight trailing enabled (${updatedFlags.trailingStopPips} pips)` });
-      } else if (currentSetupType === "day_trade" && !exitFlags.partialTP && rMultiple >= 0.8) {
-        // Day trades: enable partial TP after 0.8R
-        updatedFlags.partialTP = true;
-        updatedFlags.partialTPPercent = 50;
-        updatedFlags.partialTPLevel = 1.0;
-        exitFlagsUpdated = true;
-        actions.push({ positionId: pos.position_id, symbol, action: "partial_enabled", reason: `Day trade at ${rMultiple.toFixed(2)}R — partial TP enabled (50% at 1R)` });
-      } else if (currentSetupType === "swing" && !exitFlags.trailingStop && rMultiple >= 1.0) {
-        // Swings: enable wide trailing after 1R
-        updatedFlags.trailingStop = true;
-        updatedFlags.trailingStopPips = Math.max(15, Math.round(riskPips * 0.5)); // 50% of risk as trail
-        updatedFlags.trailingStopActivation = "after_1r";
-        updatedFlags.partialTP = true;
-        updatedFlags.partialTPPercent = 40;
-        updatedFlags.partialTPLevel = 1.5;
-        exitFlagsUpdated = true;
-        actions.push({ positionId: pos.position_id, symbol, action: "trailing_enabled", reason: `Swing at ${rMultiple.toFixed(2)}R — trailing + partial enabled` });
-      }
-
-      // ── 3. EARLY EXIT / SL TIGHTENING on invalidation ──
-      // If the trade is losing and structure breaks against it, tighten SL
-      if (rMultiple < 0 && rMultiple > -0.8) {
-        // Trade is underwater but not yet at SL — check if structure invalidated
-        try {
-          const checkCandles = await fetchCandles(symbol, "15m", "2d").catch(() => [] as Candle[]);
-          if (checkCandles.length >= 20) {
-            const currentStructure = analyzeMarketStructure(checkCandles);
-
-            // If structure has broken against the trade direction, tighten SL
-            const structureAgainst =
-              (pos.direction === "long" && currentStructure.trend === "bearish") ||
-              (pos.direction === "short" && currentStructure.trend === "bullish");
-
-            // Check for CHoCH against the trade (strongest invalidation signal)
-            const chochAgainst = currentStructure.choch.filter((c: any) =>
-              (pos.direction === "long" && c.type === "bearish") ||
-              (pos.direction === "short" && c.type === "bullish")
-            );
-            const hasFreshCHoCH = chochAgainst.length > 0;
-
-            if (structureAgainst && hasFreshCHoCH) {
-              // Tighten SL to reduce loss — move SL 50% closer to current price
-              const currentSLDistance = Math.abs(currentPrice - sl);
-              const tightenedDistance = currentSLDistance * 0.5;
-              const newSL = pos.direction === "long"
-                ? currentPrice - tightenedDistance
-                : currentPrice + tightenedDistance;
-
-              // Only tighten (never widen)
-              const shouldTighten = pos.direction === "long" ? newSL > sl : newSL < sl;
-              if (shouldTighten) {
-                const updatedSignalForSL = {
-                  ...signalData,
-                  exitFlags: updatedFlags,
-                  invalidationHistory: [
-                    ...(signalData.invalidationHistory || []),
-                    { at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: "CHoCH against trade direction" },
-                  ],
-                };
-                await supabase.from("paper_positions").update({
-                  stop_loss: newSL.toString(),
-                  signal_reason: JSON.stringify(updatedSignalForSL),
-                }).eq("id", pos.id);
-
-                actions.push({
-                  positionId: pos.position_id,
-                  symbol,
-                  action: "sl_tightened",
-                  reason: `Structure CHoCH against ${pos.direction} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)}`,
-                  newSL,
-                });
-                console.log(`[mgmt ${scanCycleId}] SL TIGHTENED ${symbol} ${pos.direction} | CHoCH against | SL ${sl.toFixed(5)}→${newSL.toFixed(5)} at ${rMultiple.toFixed(2)}R`);
-                continue; // Already handled
-              }
-            }
-          }
-        } catch (e: any) {
-          console.warn(`[mgmt ${scanCycleId}] Invalidation check failed for ${symbol}: ${e?.message}`);
-        }
-      }
-
-      // ── 4. SESSION-BASED MANAGEMENT for scalps ──
-      // If a scalp is still open and its session has ended, tighten to breakeven or close
-      if (currentSetupType === "scalp" && rMultiple > 0) {
-        const currentSession = detectSession(config);
-        const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
-        const normalizedCurrentSession = sessionNameMap[currentSession.name] || currentSession.name.toLowerCase();
-
-        // If we're now in off-hours or a different session, the scalp's window has passed
-        if (normalizedCurrentSession === "off-hours") {
-          // Move SL to breakeven if in profit
-          if (rMultiple > 0.3) {
-            const beSL = pos.direction === "long"
-              ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
-              : entryPrice - (spec.pipSize * 1);
-            const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
-            if (shouldMove) {
-              const updatedSignalForSession = {
-                ...signalData,
-                exitFlags: { ...updatedFlags, maxHoldHours: 1 }, // Give it 1 more hour max
-              };
-              await supabase.from("paper_positions").update({
-                stop_loss: beSL.toString(),
-                signal_reason: JSON.stringify(updatedSignalForSession),
-              }).eq("id", pos.id);
-
-              actions.push({
-                positionId: pos.position_id,
-                symbol,
-                action: "sl_tightened",
-                reason: `Scalp session ended (now ${normalizedCurrentSession}) — SL moved to breakeven`,
-                newSL: beSL,
-              });
-              console.log(`[mgmt ${scanCycleId}] SCALP SESSION END ${symbol} | SL→BE at ${beSL.toFixed(5)}`);
-              continue;
-            }
-          }
-        }
-      }
-
-      // Write any exitFlags updates that were accumulated
-      if (exitFlagsUpdated) {
-        const updatedSignalData = { ...signalData, exitFlags: updatedFlags };
-        await supabase.from("paper_positions").update({
-          signal_reason: JSON.stringify(updatedSignalData),
-        }).eq("id", pos.id);
-      }
-
-      if (actions.filter(a => a.positionId === pos.position_id).length === 0) {
-        actions.push({ positionId: pos.position_id, symbol, action: "no_change", reason: `${currentSetupType} at ${rMultiple.toFixed(2)}R — no management action needed` });
-      }
-
-    } catch (e: any) {
-      console.warn(`[mgmt ${scanCycleId}] Error managing ${pos.symbol}: ${e?.message}`);
-    }
-  }
-
-  return actions;
-}
-
 // ─── DST-Aware New York Time Helper ─────────────────────────────────
-// Converts UTC Date to New York local time components.
-// US DST: 2nd Sunday of March 02:00 → 1st Sunday of November 02:00.
-// During EST (Nov–Mar): NY = UTC − 5.  During EDT (Mar–Nov): NY = UTC − 4.
 function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
   const year = utc.getUTCFullYear();
-  // 2nd Sunday of March
-  const mar1 = new Date(Date.UTC(year, 2, 1)); // March 1
-  const marSun2 = 14 - mar1.getUTCDay(); // day-of-month of 2nd Sunday
-  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0); // 02:00 EST = 07:00 UTC
-  // 1st Sunday of November
-  const nov1 = new Date(Date.UTC(year, 10, 1)); // November 1
+  const mar1 = new Date(Date.UTC(year, 2, 1));
+  const marSun2 = 14 - mar1.getUTCDay();
+  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0);
+  const nov1 = new Date(Date.UTC(year, 10, 1));
   const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
-  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0); // 02:00 EDT = 06:00 UTC
+  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0);
   const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
   const offsetH = isEDT ? 4 : 5;
   const nyMs = utc.getTime() - offsetH * 3600_000;
@@ -956,11 +338,9 @@ function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; i
 }
 
 // ─── Session Detection (DST-aware, config-driven) ─────────────────
-// Default session windows in NY local decimal hours (ICT convention).
-// Users can override via config.sessions.{london,newYork,asian,sydney}{Start,End}.
 const DEFAULT_SESSION_WINDOWS = {
-  sydney:  { start: 17, end: 26 },   // 17:00 → 02:00 next day (FX market open)
-  asian:   { start: 20, end: 26 },   // 20:00 → 02:00 (Tokyo)
+  sydney:  { start: 17, end: 26 },
+  asian:   { start: 20, end: 26 },
   london:  { start: 2,  end: 8.5 },
   newYork: { start: 8.5, end: 16 },
 };
@@ -972,7 +352,6 @@ function parseHHMM(s: any, fallback: number): number {
   return Number(m[1]) + Number(m[2]) / 60;
 }
 
-// Returns true if NY decimal hour `t` is inside [start,end), supporting overnight wrap (end > 24).
 function inWindow(t: number, start: number, end: number): boolean {
   if (end > 24) {
     return t >= start || t < (end - 24);
@@ -981,12 +360,8 @@ function inWindow(t: number, start: number, end: number): boolean {
 }
 
 function detectSession(_config?: any): { name: string; isKillZone: boolean } {
-  // Always use hardcoded DEFAULT_SESSION_WINDOWS (NY/ET decimal hours).
-  // The UI only toggles sessions on/off; custom start/end times are no longer supported
-  // to prevent UTC-vs-ET mismatch bugs.
   const ny = toNYTime(new Date());
   const t = ny.t;
-
   const lonStart = DEFAULT_SESSION_WINDOWS.london.start;
   const lonEnd   = DEFAULT_SESSION_WINDOWS.london.end;
   const nyStart  = DEFAULT_SESSION_WINDOWS.newYork.start;
@@ -995,11 +370,8 @@ function detectSession(_config?: any): { name: string; isKillZone: boolean } {
   const asiaEnd   = DEFAULT_SESSION_WINDOWS.asian.end;
   const sydStart  = DEFAULT_SESSION_WINDOWS.sydney.start;
   const sydEnd    = DEFAULT_SESSION_WINDOWS.sydney.end;
-
   const inLondonKZ = t >= 2 && t < 5;
   const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
-
-  // Order matters: prefer more specific / kill-zone sessions first.
   if (inWindow(t, lonStart, lonEnd))   return { name: "London",   isKillZone: inLondonKZ };
   if (inWindow(t, nyStart,  nyEnd))    return { name: "New York", isKillZone: inNYKZ };
   if (inWindow(t, asiaStart, asiaEnd)) return { name: "Asian",    isKillZone: false };
@@ -1007,14 +379,7 @@ function detectSession(_config?: any): { name: string; isKillZone: boolean } {
   return { name: "Off-Hours", isKillZone: false };
 }
 
-
-
 // ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
-// ICT Silver Bullet: 1-hour windows where FVG forms and fills.
-//   London Open SB: 03:00-04:00 NY (London open manipulation)
-//   AM SB:          10:00-11:00 NY (NY morning session)
-//   PM SB:          14:00-15:00 NY (NY afternoon session)
-interface SilverBulletResult { active: boolean; window: string | null; minutesRemaining: number; }
 function detectSilverBullet(): SilverBulletResult {
   const ny = toNYTime(new Date());
   const t = ny.t;
@@ -1032,20 +397,18 @@ function detectSilverBullet(): SilverBulletResult {
 }
 
 // ─── ICT Macro Windows (DST-aware, NY local time, ~20min each) ────
-interface MacroWindowResult { active: boolean; window: string | null; minutesRemaining: number; }
 function detectMacroWindow(): MacroWindowResult {
   const ny = toNYTime(new Date());
-  const tMin = ny.tMin; // minutes since midnight NY local
-  // All start/end in minutes since 00:00 NY local time
+  const tMin = ny.tMin;
   const windows: { name: string; start: number; end: number }[] = [
-    { name: "London Macro 1",    start:  2 * 60 + 33, end:  2 * 60 + 50 }, // 02:33-02:50 NY
-    { name: "London Macro 2",    start:  4 * 60 +  3, end:  4 * 60 + 20 }, // 04:03-04:20 NY
-    { name: "NY Pre-Open Macro", start:  8 * 60 + 50, end:  9 * 60 + 10 }, // 08:50-09:10 NY
-    { name: "NY AM Macro",       start:  9 * 60 + 50, end: 10 * 60 + 10 }, // 09:50-10:10 NY
-    { name: "London Close Macro",start: 10 * 60 + 50, end: 11 * 60 + 10 }, // 10:50-11:10 NY
-    { name: "NY Lunch Macro",    start: 11 * 60 + 50, end: 12 * 60 + 10 }, // 11:50-12:10 NY
-    { name: "Last Hour Macro",   start: 13 * 60 + 10, end: 13 * 60 + 40 }, // 13:10-13:40 NY
-    { name: "PM Macro",          start: 15 * 60 + 15, end: 15 * 60 + 45 }, // 15:15-15:45 NY
+    { name: "London Macro 1",    start:  2 * 60 + 33, end:  2 * 60 + 50 },
+    { name: "London Macro 2",    start:  4 * 60 +  3, end:  4 * 60 + 20 },
+    { name: "NY Pre-Open Macro", start:  8 * 60 + 50, end:  9 * 60 + 10 },
+    { name: "NY AM Macro",       start:  9 * 60 + 50, end: 10 * 60 + 10 },
+    { name: "London Close Macro",start: 10 * 60 + 50, end: 11 * 60 + 10 },
+    { name: "NY Lunch Macro",    start: 11 * 60 + 50, end: 12 * 60 + 10 },
+    { name: "Last Hour Macro",   start: 13 * 60 + 10, end: 13 * 60 + 40 },
+    { name: "PM Macro",          start: 15 * 60 + 15, end: 15 * 60 + 45 },
   ];
   for (const w of windows) {
     if (tMin >= w.start && tMin < w.end) {
@@ -1056,40 +419,18 @@ function detectMacroWindow(): MacroWindowResult {
 }
 
 // ─── ICT AMD Phase Detection (DST-aware, NY local time) ───────────
-// Splits candles into NY-local buckets:
-//   Accumulation = Asian range (20:00-02:00 NY prev day evening into early morning)
-//   Manipulation = London session (02:00-08:30 NY) sweeps Asian high or low
-//   Distribution = NY session (08:30-16:00 NY) expands opposite the sweep
-interface AMDResult {
-  phase: "accumulation" | "manipulation" | "distribution" | "unknown";
-  bias: "bullish" | "bearish" | null;
-  asianHigh: number | null;
-  asianLow: number | null;
-  sweptSide: "high" | "low" | null;
-  detail: string;
-}
 function detectAMDPhase(candles: Candle[]): AMDResult {
   if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };
-
-  // Convert each candle's UTC datetime to NY local hour for bucketing
   const nyHourOf = (c: Candle): number => {
     const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
     return toNYTime(utc).h;
   };
-
-  // Use recent candles for today's AMD analysis
   const recent = candles.slice(-200);
-  // Asian accumulation: 20:00-02:00 NY (wraps midnight)
   const asian  = recent.filter(c => { const h = nyHourOf(c); return h >= 20 || h < 2; });
-  // London manipulation: 02:00-09:00 NY
   const london = recent.filter(c => { const h = nyHourOf(c); return h >= 2 && h < 9; });
-  // NY distribution: 09:00-16:00 NY
   const nyCandles = recent.filter(c => { const h = nyHourOf(c); return h >= 9 && h < 16; });
-
   const asianHigh = asian.length > 0 ? Math.max(...asian.map(c => c.high)) : null;
   const asianLow  = asian.length > 0 ? Math.min(...asian.map(c => c.low))  : null;
-
-  // Determine sweep from London candles
   let sweptSide: "high" | "low" | null = null;
   let bias: "bullish" | "bearish" | null = null;
   if (asianHigh != null && asianLow != null && london.length > 0) {
@@ -1108,8 +449,6 @@ function detectAMDPhase(candles: Candle[]): AMDResult {
       else if (tailLow < asianLow && tail[tail.length - 1].close > asianLow) { sweptSide = "low"; bias = "bullish"; }
     }
   }
-
-  // Determine current phase from NY local clock + structure
   const nowNY = toNYTime(new Date());
   const h = nowNY.h;
   let phase: AMDResult["phase"] = "unknown";
@@ -1128,800 +467,71 @@ function detectAMDPhase(candles: Candle[]): AMDResult {
   } else if (h >= 16 && h < 20) {
     phase = "distribution";
   }
-
   const detail = sweptSide
     ? `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, London swept ${sweptSide} → ${bias} bias, phase: ${phase}`
     : `Asian range ${asianLow?.toFixed(5)}-${asianHigh?.toFixed(5)}, no clear London sweep, phase: ${phase}`;
   return { phase, bias, asianHigh, asianLow, sweptSide, detail };
 }
 
-// ─── SMT Divergence (Smart Money Tool) ─────────────────────────────
-// Compares this pair's recent swing high/low against a positively-correlated pair.
-// Bullish SMT: this pair makes a LOWER low while correlated pair does NOT (failure to confirm sell-side liquidity grab).
-// Bearish SMT: this pair makes a HIGHER high while correlated pair does NOT (failure to confirm buy-side liquidity grab).
-const SMT_PAIRS: Record<string, string> = {
-  "EUR/USD": "GBP/USD", "GBP/USD": "EUR/USD",
-  "USD/JPY": "USD/CHF", "USD/CHF": "USD/JPY",
-  "AUD/USD": "NZD/USD", "NZD/USD": "AUD/USD",
-  "XAU/USD": "XAG/USD", "XAG/USD": "XAU/USD",
-  "BTC/USD": "ETH/USD", "ETH/USD": "BTC/USD",
-};
-interface SMTResult { detected: boolean; type: "bullish" | "bearish" | null; correlatedPair: string | null; detail: string; }
+// ─── SMT Divergence (scanner-specific, uses local detectSwingPoints) ──
 function detectSMTDivergence(symbol: string, candles: Candle[], correlatedCandles: Candle[]): SMTResult {
   const corrPair = SMT_PAIRS[symbol] || null;
   if (!corrPair) return { detected: false, type: null, correlatedPair: null, detail: "No SMT pair mapped" };
   if (candles.length < 30 || correlatedCandles.length < 30) {
     return { detected: false, type: null, correlatedPair: corrPair, detail: `Insufficient ${corrPair} data` };
   }
-
-  // Use swing-point comparison (ICT methodology) instead of absolute extremes.
-  // Find the last 2 swing lows and last 2 swing highs on each pair.
   const thisSwings = detectSwingPoints(candles, 3);
   const corrSwings = detectSwingPoints(correlatedCandles, 3);
-
   const thisHighs = thisSwings.filter(s => s.type === "high").slice(-3);
   const thisLows  = thisSwings.filter(s => s.type === "low").slice(-3);
   const corrHighs = corrSwings.filter(s => s.type === "high").slice(-3);
   const corrLows  = corrSwings.filter(s => s.type === "low").slice(-3);
-
   if (thisHighs.length < 2 || thisLows.length < 2 || corrHighs.length < 2 || corrLows.length < 2) {
     return { detected: false, type: null, correlatedPair: corrPair, detail: "Not enough swing points for SMT" };
   }
-
-  // Bullish SMT: primary pair's latest swing low is LOWER than prior swing low,
-  // but correlated pair's latest swing low is NOT lower (failed to confirm).
   const thisLatestLow = thisLows[thisLows.length - 1].price;
   const thisPriorLow  = thisLows[thisLows.length - 2].price;
   const corrLatestLow = corrLows[corrLows.length - 1].price;
   const corrPriorLow  = corrLows[corrLows.length - 2].price;
-
   if (thisLatestLow < thisPriorLow && corrLatestLow >= corrPriorLow) {
     return {
       detected: true, type: "bullish", correlatedPair: corrPair,
       detail: `${symbol} swing low ${thisLatestLow.toFixed(5)} < prior ${thisPriorLow.toFixed(5)}, but ${corrPair} held (${corrLatestLow.toFixed(5)} >= ${corrPriorLow.toFixed(5)}) — bullish SMT`,
     };
   }
-
-  // Bearish SMT: primary pair's latest swing high is HIGHER than prior swing high,
-  // but correlated pair's latest swing high is NOT higher.
   const thisLatestHigh = thisHighs[thisHighs.length - 1].price;
   const thisPriorHigh  = thisHighs[thisHighs.length - 2].price;
   const corrLatestHigh = corrHighs[corrHighs.length - 1].price;
   const corrPriorHigh  = corrHighs[corrHighs.length - 2].price;
-
   if (thisLatestHigh > thisPriorHigh && corrLatestHigh <= corrPriorHigh) {
     return {
       detected: true, type: "bearish", correlatedPair: corrPair,
       detail: `${symbol} swing high ${thisLatestHigh.toFixed(5)} > prior ${thisPriorHigh.toFixed(5)}, but ${corrPair} held (${corrLatestHigh.toFixed(5)} <= ${corrPriorHigh.toFixed(5)}) — bearish SMT`,
     };
   }
-
   return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
 }
 
 // ─── Premium/Discount Zone Calculation ──────────────────────────────
 function calculatePremiumDiscount(candles: Candle[]): { currentZone: string; zonePercent: number; oteZone: boolean } {
   if (candles.length < 10) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-
   const swings = detectSwingPoints(candles);
   const recentHighs = swings.filter(s => s.type === "high").slice(-5);
   const recentLows = swings.filter(s => s.type === "low").slice(-5);
-
   if (recentHighs.length === 0 || recentLows.length === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-
   const swingHigh = Math.max(...recentHighs.map(s => s.price));
   const swingLow = Math.min(...recentLows.map(s => s.price));
   const range = swingHigh - swingLow;
-
   if (range === 0) return { currentZone: "equilibrium", zonePercent: 50, oteZone: false };
-
   const lastPrice = candles[candles.length - 1].close;
   const zonePercent = ((lastPrice - swingLow) / range) * 100;
-
   let currentZone = "equilibrium";
   if (zonePercent > 55) currentZone = "premium";
   else if (zonePercent < 45) currentZone = "discount";
-
-  // OTE (Optimal Trade Entry) zone: 62-79% retracement
   const oteZone = zonePercent >= 62 && zonePercent <= 79;
-
   return { currentZone, zonePercent, oteZone };
 }
 
-const YAHOO_SYMBOLS: Record<string, string> = {
-  // Forex Majors
-  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
-  "USD/CHF": "USDCHF=X",
-  // Forex Crosses
-  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
-  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
-  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
-  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
-  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
-  // FOTSI-only crosses (not in default instruments but needed for currency strength)
-  "AUD/CHF": "AUDCHF=X", "AUD/NZD": "AUDNZD=X", "CAD/CHF": "CADCHF=X",
-  "CHF/JPY": "CHFJPY=X", "NZD/CAD": "NZDCAD=X", "NZD/CHF": "NZDCHF=X",
-  "NZD/JPY": "NZDJPY=X",
-  // Indices
-  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
-  // Commodities
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
-  // Crypto
-  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
-};
-
-// ─── Instrument Specifications ──────────────────────────────────────
-const SPECS: Record<string, { pipSize: number; lotUnits: number; type: string }> = {
-  // Forex Majors
-  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
-  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  // Forex Crosses
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
-  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex" },
-  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
-  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex" },
-  // Indices
-  "US30": { pipSize: 1.0, lotUnits: 1, type: "index" },
-  "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index" },
-  "SPX500": { pipSize: 0.25, lotUnits: 1, type: "index" },
-  // Commodities
-  "XAU/USD": { pipSize: 0.01, lotUnits: 100, type: "commodity" },
-  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, type: "commodity" },
-  "US Oil": { pipSize: 0.01, lotUnits: 1000, type: "commodity" },
-  // Crypto
-  "BTC/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto" },
-  "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto" },
-};
-
-// ─── Asset-Class Trading Profiles ───────────────────────────────────
-// Applied BEFORE style overrides — adjusts parameters based on asset behavior
-const ASSET_PROFILES: Record<string, { slBufferMultiplier: number; proximityMultiplier: number; skipSessionGate: boolean; minConfluenceAdj: number }> = {
-  forex:     { slBufferMultiplier: 1.0, proximityMultiplier: 1.0, skipSessionGate: false, minConfluenceAdj: 0 },
-  index:     { slBufferMultiplier: 3.0, proximityMultiplier: 2.0, skipSessionGate: false, minConfluenceAdj: 0 },
-  commodity: { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: false, minConfluenceAdj: 0 },
-  crypto:    { slBufferMultiplier: 2.0, proximityMultiplier: 1.5, skipSessionGate: true,  minConfluenceAdj: 0 },
-};
-
-function getAssetProfile(symbol: string) {
-  const spec = SPECS[symbol];
-  const type = spec?.type || "forex";
-  return ASSET_PROFILES[type] || ASSET_PROFILES.forex;
-}
-
-// ─── Types ──────────────────────────────────────────────────────────
-interface Candle { datetime: string; open: number; high: number; low: number; close: number; volume?: number; }
-interface SwingPoint { index: number; price: number; type: "high" | "low"; datetime: string; }
-interface OrderBlock { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; mitigatedPercent: number; }
-interface FairValueGap { index: number; high: number; low: number; type: "bullish" | "bearish"; datetime: string; mitigated: boolean; }
-interface LiquidityPool { price: number; type: "buy-side" | "sell-side"; strength: number; datetime: string; swept: boolean; }
-interface ReasoningFactor { name: string; present: boolean; weight: number; detail: string; group?: string; }
-interface DisplacementCandle { index: number; bodyRatio: number; rangeMultiple: number; direction: "bullish" | "bearish"; }
-interface DisplacementResult { isDisplacement: boolean; displacementCandles: DisplacementCandle[]; lastDirection: "bullish" | "bearish" | null; }
-
-// ─── Displacement Detection ─────────────────────────────────────────
-function detectDisplacement(candles: Candle[]): DisplacementResult {
-  if (candles.length < 25) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
-  const window = candles.slice(-21, -1); // last 20 prior candles
-  let bodySum = 0, rangeSum = 0;
-  for (const c of window) {
-    bodySum += Math.abs(c.close - c.open);
-    rangeSum += (c.high - c.low);
-  }
-  const avgBody = bodySum / window.length;
-  const avgRange = rangeSum / window.length;
-  if (avgBody <= 0 || avgRange <= 0) return { isDisplacement: false, displacementCandles: [], lastDirection: null };
-
-  const checkStart = Math.max(0, candles.length - 5);
-  const displacementCandles: DisplacementCandle[] = [];
-  for (let i = checkStart; i < candles.length; i++) {
-    const c = candles[i];
-    const body = Math.abs(c.close - c.open);
-    const range = c.high - c.low;
-    if (range <= 0) continue;
-    const bodyRatio = body / range;
-    const rangeMultiple = range / avgRange;
-    const bodyMultiple = body / avgBody;
-    if (bodyMultiple >= 2.0 && bodyRatio >= 0.7 && rangeMultiple >= 1.5) {
-      displacementCandles.push({
-        index: i, bodyRatio, rangeMultiple,
-        direction: c.close > c.open ? "bullish" : "bearish",
-      });
-    }
-  }
-  const lastDirection = displacementCandles.length > 0
-    ? displacementCandles[displacementCandles.length - 1].direction
-    : null;
-  return { isDisplacement: displacementCandles.length > 0, displacementCandles, lastDirection };
-}
-
-function tagDisplacementQuality(
-  orderBlocks: OrderBlock[],
-  fvgs: FairValueGap[],
-  displacementCandles: DisplacementCandle[],
-) {
-  for (const ob of orderBlocks) {
-    const hasNearby = displacementCandles.some(d => d.index > ob.index && d.index <= ob.index + 3);
-    (ob as any).hasDisplacement = hasNearby;
-  }
-  for (const fvg of fvgs) {
-    // FVG middle candle is at fvg.index (we store index of middle/c2 candle)
-    const createdByDisp = displacementCandles.some(d => d.index === fvg.index);
-    (fvg as any).hasDisplacement = createdByDisp;
-  }
-}
-
-// ─── SMC Analysis Functions ─────────────────────────────────────────
-
-function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[] {
-  const swings: SwingPoint[] = [];
-  for (let i = lookback; i < candles.length - lookback; i++) {
-    let isHigh = true, isLow = true;
-    for (let j = 1; j <= lookback; j++) {
-      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) isHigh = false;
-      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) isLow = false;
-    }
-    if (isHigh) swings.push({ index: i, price: candles[i].high, type: "high", datetime: candles[i].datetime });
-    if (isLow) swings.push({ index: i, price: candles[i].low, type: "low", datetime: candles[i].datetime });
-  }
-  return swings;
-}
-
-function analyzeMarketStructure(candles: Candle[]) {
-  const swings = detectSwingPoints(candles);
-  const highs = swings.filter(s => s.type === "high"), lows = swings.filter(s => s.type === "low");
-  let currentTrend = "ranging";
-  const bos: any[] = [], choch: any[] = [];
-
-  for (let i = 1; i < highs.length; i++) {
-    if (highs[i].price > highs[i - 1].price) {
-      if (currentTrend === "bearish") choch.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
-      else bos.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
-      currentTrend = "bullish";
-    }
-  }
-  for (let i = 1; i < lows.length; i++) {
-    if (lows[i].price < lows[i - 1].price) {
-      if (currentTrend === "bullish") choch.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
-      else bos.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
-      currentTrend = "bearish";
-    }
-  }
-
-  let trend: "bullish" | "bearish" | "ranging" = "ranging";
-  if (highs.length >= 2 && lows.length >= 2) {
-    const rH = highs.slice(-2), rL = lows.slice(-2);
-    if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) trend = "bullish";
-    else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
-  }
-  return { trend, swingPoints: swings, bos, choch };
-}
-
-function detectOrderBlocks(
-  candles: Candle[],
-  structureBreaks?: { index: number; type: string }[],
-  obLookbackOverride?: number,
-): OrderBlock[] {
-  const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0)
-    ? obLookbackOverride
-    : 50; // only keep OBs from the last N candles (config-driven, default 50)
-  const OB_CAP = 5;      // max OBs to return
-  const BREAK_LOOKAHEAD = 10; // structure break must occur within N candles after OB
-  const recencyStart = Math.max(2, candles.length - OB_RECENCY);
-
-  const candidates: (OrderBlock & { quality: number })[] = [];
-  for (let i = recencyStart; i < candles.length; i++) {
-    const prev = candles[i - 1], curr = candles[i];
-
-    // Bullish OB: last bearish candle before a bullish engulf that closes above prior high
-    if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
-      // Use candle body (open-to-close) for OB zone per ICT methodology
-      const obHigh = Math.max(prev.open, prev.close); // = prev.open (bearish candle)
-      const obLow = Math.min(prev.open, prev.close);   // = prev.close
-      const ob: OrderBlock & { quality: number } = {
-        index: i - 1, high: obHigh, low: obLow, type: "bullish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
-      };
-
-      // Check mitigation (price returns to 50% of OB body)
-      for (let j = i + 1; j < candles.length; j++) {
-        const mid = (ob.high + ob.low) / 2;
-        if (candles[j].low <= mid) {
-          ob.mitigatedPercent = Math.min(100, ((ob.high - candles[j].low) / (ob.high - ob.low)) * 100);
-          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
-          break;
-        }
-      }
-
-      // Quality scoring: structure break requirement
-      if (structureBreaks && structureBreaks.length > 0) {
-        const hasBreak = structureBreaks.some(b =>
-          b.type === "bullish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD
-        );
-        if (hasBreak) ob.quality += 2;
-      } else {
-        ob.quality += 1; // no structure data available — don't penalize
-      }
-
-      // Recency bonus (newer OBs score higher)
-      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
-
-      candidates.push(ob);
-    }
-
-    // Bearish OB: last bullish candle before a bearish engulf that closes below prior low
-    if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
-      const obHigh = Math.max(prev.open, prev.close); // = prev.close (bullish candle)
-      const obLow = Math.min(prev.open, prev.close);   // = prev.open
-      const ob: OrderBlock & { quality: number } = {
-        index: i - 1, high: obHigh, low: obLow, type: "bearish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
-      };
-
-      // Check mitigation
-      for (let j = i + 1; j < candles.length; j++) {
-        const mid = (ob.high + ob.low) / 2;
-        if (candles[j].high >= mid) {
-          ob.mitigatedPercent = Math.min(100, ((candles[j].high - ob.low) / (ob.high - ob.low)) * 100);
-          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
-          break;
-        }
-      }
-
-      // Quality scoring: structure break requirement
-      if (structureBreaks && structureBreaks.length > 0) {
-        const hasBreak = structureBreaks.some(b =>
-          b.type === "bearish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD
-        );
-        if (hasBreak) ob.quality += 2;
-      } else {
-        ob.quality += 1;
-      }
-
-      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
-
-      candidates.push(ob);
-    }
-  }
-
-  // Sort by quality descending, then by recency (index) descending
-  candidates.sort((a, b) => b.quality - a.quality || b.index - a.index);
-
-  // Cap at OB_CAP most relevant OBs
-  return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
-}
-
-interface BreakerBlock {
-  type: "bullish_breaker" | "bearish_breaker";
-  high: number;
-  low: number;
-  mitigatedAt: number;
-  originalOBType: "bullish" | "bearish";
-  isActive: boolean;
-}
-
-interface UnicornSetup {
-  type: "bullish_unicorn" | "bearish_unicorn";
-  breakerHigh: number;
-  breakerLow: number;
-  fvgHigh: number;
-  fvgLow: number;
-  overlapHigh: number;
-  overlapLow: number;
-}
-
-function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]): BreakerBlock[] {
-  const breakers: BreakerBlock[] = [];
-  for (const ob of orderBlocks) {
-    if (!ob.mitigated) continue;
-    // A bullish OB that broke = bearish breaker (former support is now resistance)
-    // A bearish OB that broke = bullish breaker (former resistance is now support)
-    const breakerType: "bullish_breaker" | "bearish_breaker" =
-      ob.type === "bullish" ? "bearish_breaker" : "bullish_breaker";
-
-    // Find first candle index after the OB where the OB was clearly broken
-    // (close beyond OB body indicates mitigation/break)
-    let mitigatedAt = ob.index;
-    for (let j = ob.index + 1; j < candles.length; j++) {
-      if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
-      if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
-    }
-
-    // Check if the breaker zone has already been retested and rejected after mitigation
-    let isActive = true;
-    for (let j = mitigatedAt + 1; j < candles.length; j++) {
-      const c = candles[j];
-      const enteredZone = c.high >= ob.low && c.low <= ob.high;
-      if (!enteredZone) continue;
-      if (breakerType === "bearish_breaker") {
-        // expected to reject down — if a later candle closed back below ob.low, it was used
-        if (c.close < ob.low) { isActive = false; break; }
-      } else {
-        if (c.close > ob.high) { isActive = false; break; }
-      }
-    }
-
-    breakers.push({
-      type: breakerType,
-      high: ob.high,
-      low: ob.low,
-      mitigatedAt,
-      originalOBType: ob.type,
-      isActive,
-    });
-  }
-  return breakers.filter(b => b.isActive);
-}
-
-function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairValueGap[]): UnicornSetup[] {
-  const unicorns: UnicornSetup[] = [];
-  const activeFVGs = fvgs.filter(f => !f.mitigated);
-  for (const breaker of breakerBlocks) {
-    if (!breaker.isActive) continue;
-    const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
-    for (const fvg of activeFVGs) {
-      if (fvg.type !== wantFVGType) continue;
-      const overlapLow = Math.max(breaker.low, fvg.low);
-      const overlapHigh = Math.min(breaker.high, fvg.high);
-      if (overlapLow < overlapHigh) {
-        unicorns.push({
-          type: breaker.type === "bullish_breaker" ? "bullish_unicorn" : "bearish_unicorn",
-          breakerHigh: breaker.high,
-          breakerLow: breaker.low,
-          fvgHigh: fvg.high,
-          fvgLow: fvg.low,
-          overlapHigh,
-          overlapLow,
-        });
-      }
-    }
-  }
-  return unicorns;
-}
-
-function detectFVGs(candles: Candle[]): FairValueGap[] {
-  const fvgs: FairValueGap[] = [];
-  for (let i = 2; i < candles.length; i++) {
-    const c1 = candles[i - 2], c2 = candles[i - 1], c3 = candles[i];
-    if (c3.low > c1.high && c2.close > c2.open) {
-      const fvg: FairValueGap = { index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime, mitigated: false };
-      for (let j = i + 1; j < candles.length; j++) { if (candles[j].low <= fvg.low) { fvg.mitigated = true; break; } }
-      fvgs.push(fvg);
-    }
-    if (c1.low > c3.high && c2.close < c2.open) {
-      const fvg: FairValueGap = { index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime, mitigated: false };
-      for (let j = i + 1; j < candles.length; j++) { if (candles[j].high >= fvg.high) { fvg.mitigated = true; break; } }
-      fvgs.push(fvg);
-    }
-  }
-  return fvgs;
-}
-
-function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTouches = 2): LiquidityPool[] {
-  const pools: LiquidityPool[] = [];
-  const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
-  const tol = priceRange * tolerance;
-  const last = candles[candles.length - 1];
-  const usedH = new Set<number>(), usedL = new Set<number>();
-  const minT = Math.max(2, minTouches | 0);
-
-  for (let i = 0; i < candles.length; i++) {
-    if (usedH.has(i)) continue;
-    let count = 1;
-    for (let j = i + 1; j < candles.length; j++) {
-      if (usedH.has(j)) continue;
-      if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
-    }
-    if (count >= minT) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
-  }
-  for (let i = 0; i < candles.length; i++) {
-    if (usedL.has(i)) continue;
-    let count = 1;
-    for (let j = i + 1; j < candles.length; j++) {
-      if (usedL.has(j)) continue;
-      if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
-    }
-    if (count >= minT) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
-  }
-  return pools.sort((a, b) => b.strength - a.strength);
-}
-
-function detectJudasSwing(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
-  const none = { detected: false, type: null as any, confirmed: false, description: "No Judas Swing" };
-  if (candles.length < 20) return none;
-  const recent = candles.slice(-20);
-  const midnightOpen = recent[0].open;
-  const range = Math.max(...recent.map(c => c.high)) - Math.min(...recent.map(c => c.low));
-  const firstHalf = recent.slice(0, 10);
-  const secondHalf = recent.slice(10);
-  const currentClose = recent[recent.length - 1].close;
-
-  // Check for bullish Judas: price drops below open then reverses above
-  const firstHalfLow = Math.min(...firstHalf.map(c => c.low));
-  const dropBelow = midnightOpen - firstHalfLow;
-  if (dropBelow > range * 0.3 && currentClose > midnightOpen) {
-    return { detected: true, type: "bullish", confirmed: true, description: `Bullish Judas: false break below ${midnightOpen.toFixed(5)}, reversed above` };
-  }
-
-  // Check for bearish Judas: price spikes above open then reverses below
-  const firstHalfHigh = Math.max(...firstHalf.map(c => c.high));
-  const spikeAbove = firstHalfHigh - midnightOpen;
-  if (spikeAbove > range * 0.3 && currentClose < midnightOpen) {
-    return { detected: true, type: "bearish", confirmed: true, description: `Bearish Judas: false break above ${midnightOpen.toFixed(5)}, reversed below` };
-  }
-
-  return none;
-}
-
-function detectReversalCandle(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null } {
-  if (candles.length < 2) return { detected: false, type: null };
-  const last = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
-  const bodySize = Math.abs(last.close - last.open);
-  const totalRange = last.high - last.low;
-  if (totalRange === 0) return { detected: false, type: null };
-
-  // Pin bar: body < 30% of range, wick > 60% of range
-  const upperWick = last.high - Math.max(last.open, last.close);
-  const lowerWick = Math.min(last.open, last.close) - last.low;
-
-  // Bullish pin bar
-  if (bodySize / totalRange < 0.3 && lowerWick / totalRange > 0.6 && last.close > last.open) {
-    return { detected: true, type: "bullish" };
-  }
-  // Bearish pin bar
-  if (bodySize / totalRange < 0.3 && upperWick / totalRange > 0.6 && last.close < last.open) {
-    return { detected: true, type: "bearish" };
-  }
-
-  // Bullish engulfing
-  if (prev.close < prev.open && last.close > last.open && last.open <= prev.close && last.close >= prev.open) {
-    return { detected: true, type: "bullish" };
-  }
-  // Bearish engulfing
-  if (prev.close > prev.open && last.close < last.open && last.open >= prev.close && last.close <= prev.open) {
-    return { detected: true, type: "bearish" };
-  }
-
-  return { detected: false, type: null };
-}
-
-function calculatePDLevels(dailyCandles: Candle[]) {
-  if (dailyCandles.length < 10) return null;
-  const prev = dailyCandles[dailyCandles.length - 2];
-  const weekCandles = dailyCandles.slice(-5);
-  return {
-    pdh: prev.high, pdl: prev.low, pdo: prev.open, pdc: prev.close,
-    pwh: Math.max(...weekCandles.map(c => c.high)),
-    pwl: Math.min(...weekCandles.map(c => c.low)),
-    pwo: weekCandles[0].open,
-    pwc: weekCandles[weekCandles.length - 1].close,
-  };
-}
-
-// ─── Opening Range ──────────────────────────────────────────────────
-interface OpeningRangeResult { high: number; low: number; midpoint: number; completed: boolean; }
-
-function computeOpeningRange(hourlyCandles: Candle[], candleCount: number): OpeningRangeResult | null {
-  if (!hourlyCandles || hourlyCandles.length === 0) return null;
-  // Get the start of the current UTC trading day
-  const now = new Date();
-  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
-  const todayCandles = hourlyCandles.filter(c => c.datetime >= todayStart);
-  if (todayCandles.length === 0) return null;
-  const orCandles = todayCandles.slice(0, candleCount);
-  const high = Math.max(...orCandles.map(c => c.high));
-  const low = Math.min(...orCandles.map(c => c.low));
-  return { high, low, midpoint: (high + low) / 2, completed: todayCandles.length >= candleCount };
-}
-
-// ─── Full SL/TP Calculation Dispatch ────────────────────────────────
-interface SLTPInput {
-  direction: "long" | "short" | null;
-  lastPrice: number;
-  pipSize: number;
-  config: any;
-  swings: SwingPoint[];
-  orderBlocks: OrderBlock[];
-  liquidityPools: LiquidityPool[];
-  pdLevels: any;
-  atrValue: number;
-}
-
-function calculateSLTP(input: SLTPInput): { stopLoss: number | null; takeProfit: number | null } {
-  const { direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue } = input;
-  if (!direction) return { stopLoss: null, takeProfit: null };
-
-  const buffer = (config.slBufferPips || 2) * pipSize;
-  let sl: number | null = null;
-  let tp: number | null = null;
-
-  // ── Stop Loss ──
-  const slMethod: string = config.slMethod || "structure";
-
-  if (slMethod === "fixed_pips") {
-    const dist = (config.fixedSLPips || 25) * pipSize;
-    sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
-  } else if (slMethod === "atr_based") {
-    if (atrValue > 0) {
-      const dist = atrValue * (config.slATRMultiple || 1.5);
-      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
-    } else {
-      // Fallback to fixed_pips
-      const dist = (config.fixedSLPips || 25) * pipSize;
-      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
-    }
-  } else if (slMethod === "below_ob") {
-    if (direction === "long") {
-      const bullishOBs = orderBlocks
-        .filter(ob => !ob.mitigated && ob.type === "bullish" && ob.low < lastPrice)
-        .sort((a, b) => b.low - a.low);
-      if (bullishOBs.length > 0) {
-        sl = bullishOBs[0].low - buffer;
-      }
-    } else {
-      const bearishOBs = orderBlocks
-        .filter(ob => !ob.mitigated && ob.type === "bearish" && ob.high > lastPrice)
-        .sort((a, b) => a.high - b.high);
-      if (bearishOBs.length > 0) {
-        sl = bearishOBs[0].high + buffer;
-      }
-    }
-    // Fallback to fixed_pips if no OB found
-    if (sl === null) {
-      const dist = (config.fixedSLPips || 25) * pipSize;
-      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
-    }
-  } else {
-    // Default: structure-based
-    if (direction === "long") {
-      const recentLows = swings.filter(s => s.type === "low" && s.price < lastPrice).slice(-3);
-      if (recentLows.length > 0) {
-        const nearestLow = Math.max(...recentLows.map(s => s.price));
-        sl = nearestLow - buffer;
-      }
-    } else {
-      const recentHighs = swings.filter(s => s.type === "high" && s.price > lastPrice).slice(-3);
-      if (recentHighs.length > 0) {
-        const nearestHigh = Math.min(...recentHighs.map(s => s.price));
-        sl = nearestHigh + buffer;
-      }
-    }
-    // Fallback to fixed_pips if no swing found
-    if (sl === null) {
-      const dist = (config.fixedSLPips || 25) * pipSize;
-      sl = direction === "long" ? lastPrice - dist : lastPrice + dist;
-    }
-  }
-
-  // ── Take Profit ──
-  const tpMethod: string = config.tpMethod || "rr_ratio";
-  const slDistance = Math.abs(lastPrice - sl);
-
-  if (tpMethod === "fixed_pips") {
-    const dist = (config.fixedTPPips || 50) * pipSize;
-    tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
-  } else if (tpMethod === "next_level") {
-    // Target nearest PD/PW level or liquidity pool
-    const targets: number[] = [];
-    if (direction === "long") {
-      if (pdLevels) {
-        if (pdLevels.pdh > lastPrice) targets.push(pdLevels.pdh);
-        if (pdLevels.pwh > lastPrice) targets.push(pdLevels.pwh);
-      }
-      liquidityPools
-        .filter(lp => lp.type === "buy-side" && lp.price > lastPrice && lp.strength >= 2)
-        .forEach(lp => targets.push(lp.price));
-      targets.sort((a, b) => a - b); // nearest first
-    } else {
-      if (pdLevels) {
-        if (pdLevels.pdl < lastPrice) targets.push(pdLevels.pdl);
-        if (pdLevels.pwl < lastPrice) targets.push(pdLevels.pwl);
-      }
-      liquidityPools
-        .filter(lp => lp.type === "sell-side" && lp.price < lastPrice && lp.strength >= 2)
-        .forEach(lp => targets.push(lp.price));
-      targets.sort((a, b) => b - a); // nearest first (descending)
-    }
-    if (targets.length > 0) {
-      tp = targets[0];
-    } else {
-      // Fallback to fixed_pips
-      const dist = (config.fixedTPPips || 50) * pipSize;
-      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
-    }
-  } else if (tpMethod === "atr_multiple") {
-    if (atrValue > 0) {
-      const dist = atrValue * (config.tpATRMultiple || 2.0);
-      tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
-    } else {
-      // Fallback to rr_ratio
-      tp = direction === "long"
-        ? lastPrice + slDistance * (config.tpRatio || 2.0)
-        : lastPrice - slDistance * (config.tpRatio || 2.0);
-    }
-  } else {
-    // Default: rr_ratio
-    tp = direction === "long"
-      ? lastPrice + slDistance * (config.tpRatio || 2.0)
-      : lastPrice - slDistance * (config.tpRatio || 2.0);
-  }
-
-return { stopLoss: sl, takeProfit: tp };
-}
-
-/**
- * ─── CONFLUENCE FACTOR AUDIT (20 factors + OR enhancements) ──────────────
- * 9 Factor Groups with anti-double-count rules and group caps.
- * Final score is clamped to 0–10 via Math.min(10, score).
- *
- * GROUP 1: Market Structure (cap 3.0)
- *  1  | BOS/CHoCH              | 1.5  | Structure breaks only
- * 19  | Trend Direction        | 1.5  | Entry TF trend alignment (-0.5 counter)
- *
- * GROUP 2: Daily Bias (cap 1.5)
- * 20  | Daily Bias (HTF)       | 1.5  | Daily trend alignment (-0.5 counter)
- *
- * GROUP 3: Order Flow Zones (cap 3.0)
- *  2  | Order Block            | 2.0  | Quality-gated
- *  3  | Fair Value Gap         | 2.0  | CE level check (2.0 at CE, 1.5 inside)
- * 11  | Breaker Block          | 1.0  | Proximity-gated
- * 12  | Unicorn Model          | 1.5  | Absorbs Breaker + FVG when active
- *
- * GROUP 4: Premium/Discount & Fibonacci (cap 2.5)
- *  4  | P/D + Fibonacci        | 2.0  | OTE sweet spot (70.5%) = 2.0
- *  7  | PD/PW Levels           | 1.0  | Weekly/daily high-low proximity
- *
- * GROUP 5: Timing (cap 1.5)
- *  5  | Session/Kill Zone      | 1.0  | Absorbed by SB when active
- * 13  | Silver Bullet          | 1.0  | Absorbs Kill Zone (+0.5 boost)
- * 14  | Macro Window           | 0.5  | Reduced to 0.25 during Kill Zone
- *
- * GROUP 6: Price Action (cap 2.0)
- *  6  | Judas Swing            | 0.5  | Absorbed by AMD combo
- *  8  | Reversal Candle        | 0.5  | Context-aware
- *  9  | Liquidity Sweep        | 1.0  | Strength-tiered
- * 10  | Displacement           | 1.0  | Reduced to 0.5 when FVG scored
- *
- * GROUP 7: AMD / Power of 3 (cap 1.5)
- * 17  | AMD Phase              | 1.0  | +0.5 distribution bonus
- *  —  | Power of 3 Combo       | +1.0 | AMD + Sweep/Judas + Trend aligned
- *
- * GROUP 8: Macro Confirmation (cap 2.0)
- * 15  | SMT Divergence         | 1.0  | Swing-point-based
- * 18  | Currency Strength      | 1.5  | FOTSI alignment (-0.5 to +1.5)
- *
- * GROUP 9: Volume Profile (cap 1.5)
- * 16  | Volume Profile         | 1.5  | TPO-based POC/HVN/LVN + cross-validation
- *
- * Anti-double-count rules:
- *  - Unicorn fires → Breaker=0, FVG=0
- *  - Displacement+FVG overlap → Displacement reduced to 0.5
- *  - OB+FVG same zone → cap combined at 3.0
- *  - Silver Bullet fires → Kill Zone=0, SB boosted to 1.5
- *  - AMD+Sweep fires → Judas=0
- *  - Macro during Kill Zone → Macro reduced to 0.25
- *
- * TOTAL GROUP CAPS SUM = 18.5 (clamped to 10)
- *
- * Recommended thresholds on the 0-10 scale (post-clamp):
- *   5.5–6.5 = balanced default · 7.0+ = A+ only · <5.0 = looser scalp mode
- */
 function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[]) {
   // P1: structure lookback — limit candles fed into structure analysis (config-driven, default 50)
   const structureLookback = (typeof config.structureLookback === "number" && config.structureLookback > 0)
@@ -2868,7 +1478,6 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
   };
 }
-
 // ─── Lightweight Regime Classification (for real-time scoring) ──────
 // Uses dailyCandles already available in the scoring function.
 // Returns a regime label + confidence so the scorer can apply a penalty/bonus.
@@ -3199,7 +1808,6 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
-interface GateResult { passed: boolean; reason: string; }
 
 async function runSafetyGates(
   supabase: any, userId: string, symbol: string, direction: string,
@@ -3688,7 +2296,7 @@ async function runScanForUser(supabase: any, userId: string) {
   let managementActions: ManagementAction[] = [];
   if (openPosArr.length > 0) {
     try {
-      managementActions = await manageOpenPositions(supabase, openPosArr, config, isAutoStyle, scanCycleId);
+      managementActions = await manageOpenPositions(supabase, openPosArr, config, isAutoStyle, scanCycleId, fetchCandles, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
