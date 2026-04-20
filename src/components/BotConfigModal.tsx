@@ -578,8 +578,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                               <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
                               <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
                               <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
-                              <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours}h</strong></span>
                               <span>Min Score: <strong className="text-foreground">{params.minConfluence}</strong></span>
+                              <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours === 0 ? "None" : `${params.maxHoldHours}h`}</strong></span>
+                            </div>
+                            <div className="mt-1.5 pt-1.5 border-t border-border/50 grid grid-cols-3 gap-x-2 gap-y-0.5 text-[8px] text-muted-foreground">
+                              <span>Trail: <strong className={params.trailingStopEnabled ? "text-success" : "text-muted-foreground"}>{params.trailingStopEnabled ? `${params.trailingStopPips}p` : "Off"}</strong></span>
+                              <span>BE: <strong className={params.breakEvenEnabled ? "text-success" : "text-muted-foreground"}>{params.breakEvenEnabled ? `${params.breakEvenPips}p` : "Off"}</strong></span>
+                              <span>Partial: <strong className={params.partialTPEnabled ? "text-success" : "text-muted-foreground"}>{params.partialTPEnabled ? `${params.partialTPPercent}%@${params.partialTPLevel}R` : "Off"}</strong></span>
                             </div>
                           </button>
                         );
@@ -954,13 +959,56 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                     {/* ── Exit Management ── */}
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit Management</p>
-                      <div className="grid grid-cols-2 gap-4">
-                        <ToggleField label="Trailing Stop" description="Move SL as price moves in favor" checked={config.exit?.trailingStop ?? false} onChange={v => updateField('exit', 'trailingStop', v)} />
-                        <ToggleField label="Break Even" description="Move SL to entry once in profit" checked={config.exit?.breakEven ?? false} onChange={v => updateField('exit', 'breakEven', v)} />
-                        <ToggleField label="Partial Take Profit" description="Close portion of position at first TP" checked={config.exit?.partialTP ?? false} onChange={v => updateField('exit', 'partialTP', v)} />
-                      </div>
-                      <FieldGroup label="Time-Based Exit (hours)" description="Auto-close after N hours (0 = disabled)">
-                        <Input type="number" value={config.exit?.timeExitHours ?? 0} onChange={e => updateField('exit', 'timeExitHours', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
+                      <p className="text-[10px] text-muted-foreground italic">Your trading style sets sensible defaults. Override any value below to adapt for your broker's conditions.</p>
+
+                      {/* Trailing Stop */}
+                      <ToggleField label="Trailing Stop" description="Move SL as price moves in favor" checked={config.exit?.trailingStop ?? false} onChange={v => updateField('exit', 'trailingStop', v)} />
+                      {(config.exit?.trailingStop) && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Trailing Distance (pips)" description="How far behind price the trailing SL follows">
+                            <Input type="number" value={config.exit?.trailingStopPips ?? 15} onChange={e => updateField('exit', 'trailingStopPips', parseFloat(e.target.value) || 1)} step={1} min={1} max={200} className="h-9 text-sm" />
+                          </FieldGroup>
+                          <FieldGroup label="Activation" description="When to start trailing">
+                            <Select value={config.exit?.trailingStopActivation ?? 'after_1r'} onValueChange={v => updateField('exit', 'trailingStopActivation', v)}>
+                              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="after_0.5r">After 0.5R profit</SelectItem>
+                                <SelectItem value="after_1r">After 1R profit</SelectItem>
+                                <SelectItem value="after_1.5r">After 1.5R profit</SelectItem>
+                                <SelectItem value="after_2r">After 2R profit</SelectItem>
+                                <SelectItem value="immediate">Immediately</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </FieldGroup>
+                        </div>
+                      )}
+
+                      {/* Break Even */}
+                      <ToggleField label="Break Even" description="Move SL to entry once in profit" checked={config.exit?.breakEven ?? false} onChange={v => updateField('exit', 'breakEven', v)} />
+                      {(config.exit?.breakEven) && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Break-Even Trigger (pips)" description="Move SL to entry after this many pips of profit">
+                            <Input type="number" value={config.exit?.breakEvenTriggerPips ?? 20} onChange={e => updateField('exit', 'breakEvenTriggerPips', parseFloat(e.target.value) || 1)} step={1} min={1} max={200} className="h-9 text-sm" />
+                          </FieldGroup>
+                        </div>
+                      )}
+
+                      {/* Partial Take Profit */}
+                      <ToggleField label="Partial Take Profit" description="Close portion of position at first TP" checked={config.exit?.partialTP ?? false} onChange={v => updateField('exit', 'partialTP', v)} />
+                      {(config.exit?.partialTP) && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Close Percentage" description="Portion of position to close at partial TP">
+                            <Input type="number" value={config.exit?.partialTPPercent ?? 50} onChange={e => updateField('exit', 'partialTPPercent', parseFloat(e.target.value) || 10)} step={5} min={10} max={90} className="h-9 text-sm" />
+                          </FieldGroup>
+                          <FieldGroup label="Trigger Level (R-multiple)" description="Close partial at this R-multiple (e.g., 1.0 = 1R profit)">
+                            <Input type="number" value={config.exit?.partialTPLevel ?? 1.0} onChange={e => updateField('exit', 'partialTPLevel', parseFloat(e.target.value) || 0.5)} step={0.1} min={0.3} max={5} className="h-9 text-sm" />
+                          </FieldGroup>
+                        </div>
+                      )}
+
+                      {/* Time-Based Exit */}
+                      <FieldGroup label="Max Hold Time (hours)" description="Auto-tighten SL after this many hours (0 = no limit)">
+                        <Input type="number" value={config.exit?.timeExitHours ?? 0} onChange={e => updateField('exit', 'timeExitHours', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" />
                       </FieldGroup>
                     </div>
                   </div>

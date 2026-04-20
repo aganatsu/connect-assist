@@ -2220,12 +2220,35 @@ async function runScanForUser(supabase: any, userId: string) {
   // ── Resolve Trading Style ──
   const resolvedStyle = config.tradingStyle?.mode || "day_trader";
 
-  // Apply style overrides to config
-  // Preserve user-set minConfluence — style overrides should not overwrite it
+  // Apply style overrides as DEFAULTS — user-explicit values always win.
+  // The management fields (trailing, BE, partial, maxHold) may have been
+  // explicitly set by the user to accommodate broker-specific conditions.
+  // We only fill in style defaults for fields the user hasn't touched.
   if (STYLE_OVERRIDES[resolvedStyle]) {
-    const userMinConfluence = config.minConfluence;
-    Object.assign(config, STYLE_OVERRIDES[resolvedStyle]);
-    config.minConfluence = userMinConfluence;
+    const styleDefaults = STYLE_OVERRIDES[resolvedStyle];
+    // These fields should NEVER be overwritten by style if the user set them:
+    const userProtectedFields = new Set([
+      "minConfluence",
+      // Management fields the user can tune per-broker:
+      "trailingStopEnabled", "trailingStopPips", "trailingStopActivation",
+      "breakEvenEnabled", "breakEvenPips",
+      "partialTPEnabled", "partialTPPercent", "partialTPLevel",
+      "maxHoldHours",
+    ]);
+    for (const [key, val] of Object.entries(styleDefaults)) {
+      if (userProtectedFields.has(key)) {
+        // Only apply style default if user didn't explicitly set this field
+        // (i.e., the value is still the global DEFAULTS fallback)
+        if ((config as any)[key] === (DEFAULTS as any)[key]) {
+          (config as any)[key] = val;
+        }
+        // else: user explicitly set a different value — keep it
+      } else {
+        // Non-protected fields (entryTimeframe, htfTimeframe, tpRatio, slBufferPips)
+        // always come from the style
+        (config as any)[key] = val;
+      }
+    }
   }
 
   // Day-of-week check — skip for crypto-only instrument lists.

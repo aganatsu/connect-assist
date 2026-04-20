@@ -7,8 +7,17 @@ export interface StyleOverrides {
   htfTimeframe: string;
   tpRatio: number;
   slBufferPips: number;
-  maxHoldHours: number;
   minConfluence: number;
+  // Management defaults (user can override per-broker):
+  trailingStopEnabled: boolean;
+  trailingStopPips: number;
+  trailingStopActivation: string;
+  breakEvenEnabled: boolean;
+  breakEvenPips: number;
+  partialTPEnabled: boolean;
+  partialTPPercent: number;
+  partialTPLevel: number;
+  maxHoldHours: number;
 }
 
 export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
@@ -17,24 +26,48 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     htfTimeframe: "1h",
     tpRatio: 1.5,
     slBufferPips: 1,
-    maxHoldHours: 1,
     minConfluence: 5,
+    trailingStopEnabled: true,
+    trailingStopPips: 10,
+    trailingStopActivation: "after_0.5r",
+    breakEvenEnabled: true,
+    breakEvenPips: 10,
+    partialTPEnabled: false,
+    partialTPPercent: 50,
+    partialTPLevel: 1.0,
+    maxHoldHours: 4,
   },
   day_trader: {
     entryTimeframe: "15m",
     htfTimeframe: "1d",
     tpRatio: 2.0,
     slBufferPips: 2,
-    maxHoldHours: 8,
     minConfluence: 5.5,
+    trailingStopEnabled: false,
+    trailingStopPips: 15,
+    trailingStopActivation: "after_1r",
+    breakEvenEnabled: true,
+    breakEvenPips: 20,
+    partialTPEnabled: true,
+    partialTPPercent: 50,
+    partialTPLevel: 1.0,
+    maxHoldHours: 24,
   },
   swing_trader: {
     entryTimeframe: "1h",
     htfTimeframe: "1w",
     tpRatio: 3.0,
     slBufferPips: 5,
-    maxHoldHours: 120,
     minConfluence: 6.5,
+    trailingStopEnabled: true,
+    trailingStopPips: 30,
+    trailingStopActivation: "after_1r",
+    breakEvenEnabled: true,
+    breakEvenPips: 50,
+    partialTPEnabled: true,
+    partialTPPercent: 40,
+    partialTPLevel: 1.5,
+    maxHoldHours: 0,  // no limit for swings
   },
 };
 
