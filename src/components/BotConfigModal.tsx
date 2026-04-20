@@ -231,7 +231,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
   }, [open]);
 
   const saveMut = useMutation({
-    mutationFn: () => botConfigApi.update(config, connectionId),
+    mutationFn: () => {
+      if (!config) return Promise.reject(new Error("Config not loaded yet"));
+      return botConfigApi.update(config, connectionId);
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Config saved"); onClose(); },
     onError: (e: any) => {
       const msg = e?.message || "Failed to save config";

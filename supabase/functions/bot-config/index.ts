@@ -58,6 +58,12 @@ Deno.serve(async (req) => {
     }
 
     if (action === "update") {
+      // Guard: payload.config must be present
+      if (!payload.config || typeof payload.config !== "object") {
+        return new Response(JSON.stringify({ error: "Missing 'config' in request body" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       // H12: Validate config before saving
       const validationErrors = validateConfig(payload.config);
       if (validationErrors.length > 0) {
