@@ -430,13 +430,7 @@ export default function BotView() {
                                         <div className="mt-1.5 space-y-1">
                                           <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
                                           <div className="flex flex-wrap gap-1">
-                                            {setupType && (
-                                              <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase border rounded ${
-                                                setupType === "scalp" ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                                                : setupType === "swing" ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
-                                                : "bg-blue-500/15 border-blue-500/40 text-blue-400"
-                                              }`}>{setupType === "scalp" ? "\u26A1 SCALP" : setupType === "swing" ? "\uD83C\uDF0A SWING" : "\uD83D\uDCC8 DAY"}</span>
-                                            )}
+
                                             {ef.trailingStop && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 rounded">Trailing ON</span>}
                                             {ef.partialTP && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 rounded">Partial TP</span>}
                                             {ef.breakEven && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 rounded">BE Active</span>}
@@ -732,13 +726,7 @@ export default function BotView() {
                             <div className="min-w-0 flex items-center gap-1.5 flex-1">
                               {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
                               <span className="font-medium shrink-0">{sig.pair}</span>
-                              {sig.setupClassification?.setupType && (
-                                <span className={`text-[7px] font-bold uppercase px-1 py-0 rounded border ${
-                                  sig.setupClassification.setupType === "scalp" ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                                  : sig.setupClassification.setupType === "swing" ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
-                                  : "bg-blue-500/15 border-blue-500/40 text-blue-400"
-                                }`}>{sig.setupClassification.setupType}</span>
-                              )}
+
                               {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
                             </div>
                             <div className="flex items-center gap-1.5">
@@ -1095,24 +1083,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
               ))}
             </div>
           )}
-          {/* Setup Classification */}
-          {d.setupClassification?.setupType && (
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-bold tracking-wider ${
-                d.setupClassification.setupType === "scalp" ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-                : d.setupClassification.setupType === "swing" ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
-                : "bg-blue-500/15 border-blue-500/40 text-blue-400"
-              }`}>
-                {d.setupClassification.setupType === "scalp" ? "\u26A1 SCALP" : d.setupClassification.setupType === "swing" ? "\uD83C\uDF0A SWING" : "\uD83D\uDCC8 DAY TRADE"}
-                {d.setupClassification.confidence != null && (
-                  <span className="ml-1 text-[8px] opacity-70">{Math.round(d.setupClassification.confidence * 100)}%</span>
-                )}
-              </span>
-              {d.setupClassification.rationale && (
-                <span className="text-[8px] text-muted-foreground truncate">{d.setupClassification.rationale}</span>
-              )}
-            </div>
-          )}
+
           {/* Summary */}
           {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
         </div>
@@ -1195,26 +1166,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Setup Classification */}
-      {d.setupClassification?.setupType && (
-        <div className="flex items-center gap-2 mt-1">
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-bold tracking-wider ${
-            d.setupClassification.setupType === "scalp" ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
-            : d.setupClassification.setupType === "swing" ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
-            : "bg-blue-500/15 border-blue-500/40 text-blue-400"
-          }`}>
-            {d.setupClassification.setupType === "scalp" ? "\u26A1 SCALP" : d.setupClassification.setupType === "swing" ? "\uD83C\uDF0A SWING" : "\uD83D\uDCC8 DAY TRADE"}
-            {d.setupClassification.confidence != null && (
-              <span className="ml-1 text-[8px] opacity-70">{Math.round(d.setupClassification.confidence * 100)}%</span>
-            )}
-          </span>
-          {d.setupClassification.executionProfile && (
-            <span className="text-[8px] text-muted-foreground">
-              TP {d.setupClassification.executionProfile.tpRatio}:1 · SL +{d.setupClassification.executionProfile.slBufferPips}pip · Max {d.setupClassification.executionProfile.maxHoldHours}h
-            </span>
-          )}
-        </div>
-      )}
+
       {/* Summary */}
       {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
     </div>
