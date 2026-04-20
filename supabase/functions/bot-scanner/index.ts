@@ -42,7 +42,7 @@ const DEFAULTS = {
   tpATRMultiple: 2.0,
   breakEvenEnabled: true,
   breakEvenPips: 20,
-  enabledSessions: ["London", "New York"],
+  enabledSessions: ["london", "newyork"],
   enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
   instruments: [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
@@ -2599,8 +2599,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
         : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
 
     // ── Sessions ──
-    enabledSessions: Array.isArray(sessions.filter) && sessions.filter.length > 0
-      ? sessions.filter
+    enabledSessions: (Array.isArray(sessions.filter) && sessions.filter.length > 0
+      ? sessions.filter.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
       : sessions.asianEnabled !== undefined
         ? [
             ...(sessions.asianEnabled ? ["asian"] : []),
@@ -2608,7 +2608,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
             ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
             ...(sessions.sydneyEnabled ? ["sydney"] : []),
           ]
-        : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions : DEFAULTS.enabledSessions),
+        : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, "")) : DEFAULTS.enabledSessions)
+    ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     // Pass through raw sessions block so detectSession() can read custom HH:MM windows.
     sessions: sessions,
