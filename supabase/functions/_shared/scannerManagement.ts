@@ -434,36 +434,103 @@ export async function manageOpenPositions(
         }
       }
 
-      // ── 3. TRAILING STOP ACTIVATION ──
-      // If trailing is enabled in config and hasn't been activated yet
-      // Use trailingStopActivated (new format). For backward compat with old
-      // positions that stored trailingStop as config intent (always true),
-      // we check the dedicated Activated field.
+      // ── 3. TRAILING STOP ACTIVATION + TIGHTENING ──
+      // Phase A: If trailing is enabled in config and hasn't been activated yet,
+      //          check if rMultiple has reached the activation threshold.
+      // Phase B: If trailing was already activated, ratchet the SL forward
+      //          as price moves further in profit (never move SL backwards).
       const trailingAlreadyActivated = exitFlags.trailingStopActivated === true;
       if (trailingEnabled && !trailingAlreadyActivated) {
+        // ── Phase A: First-time activation ──
         const activationR = trailingActivation === "after_1r" ? 1.0
           : trailingActivation === "after_0.5r" ? 0.5
+          : trailingActivation === "after_1.5r" ? 1.5
           : trailingActivation === "after_2r" ? 2.0
+          : trailingActivation === "immediate" ? 0.0
           : 1.0;
 
         if (rMultiple >= activationR) {
-          updatedFlags.trailingStopActivated = true;
-          updatedFlags.trailingStopLevel = pos.direction === "long"
+          const newTrailLevel = pos.direction === "long"
             ? currentPrice - (trailingPips * spec.pipSize)
             : currentPrice + (trailingPips * spec.pipSize);
+          updatedFlags.trailingStopActivated = true;
+          updatedFlags.trailingStopLevel = newTrailLevel;
           updatedFlags.trailingStopPips = trailingPips;
           updatedFlags.trailingStopActivation = trailingActivation;
           exitFlagsUpdated = true;
 
+          // Also move the actual SL if the trail level is better than current SL
+          const shouldMoveSL = pos.direction === "long" ? newTrailLevel > sl : newTrailLevel < sl;
+          if (shouldMoveSL) {
+            const attribution = makeAttribution(
+              "trailing_enabled",
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${trailingPips} pips) — SL moved to ${newTrailLevel.toFixed(5)}`,
+            );
+            const updatedSignal = {
+              ...signalData,
+              exitFlags: updatedFlags,
+              exitAttribution: [...(signalData.exitAttribution || []), attribution],
+            };
+            await supabase.from("paper_positions").update({
+              stop_loss: newTrailLevel.toString(),
+              signal_reason: JSON.stringify(updatedSignal),
+            }).eq("id", pos.id);
+
+            actions.push({
+              positionId: pos.position_id, symbol, action: "trailing_enabled",
+              reason: attribution.detail, newSL: newTrailLevel, attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL→${newTrailLevel.toFixed(5)} (${trailingPips} pips trail)`);
+            continue;
+          } else {
+            const attribution = makeAttribution(
+              "trailing_enabled",
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${trailingPips} pips) — SL already better, keeping ${sl.toFixed(5)}`,
+            );
+            actions.push({
+              positionId: pos.position_id, symbol, action: "trailing_enabled",
+              reason: attribution.detail, attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL already better at ${sl.toFixed(5)}`);
+          }
+        }
+      } else if (trailingEnabled && trailingAlreadyActivated && rMultiple > 0) {
+        // ── Phase B: Trailing tightening — ratchet SL forward ──
+        const prevTrailLevel = exitFlags.trailingStopLevel ?? sl;
+        const effectiveTrailPips = exitFlags.trailingStopPips ?? trailingPips;
+        const newTrailLevel = pos.direction === "long"
+          ? currentPrice - (effectiveTrailPips * spec.pipSize)
+          : currentPrice + (effectiveTrailPips * spec.pipSize);
+
+        // Only ratchet forward (tighten), never widen
+        const shouldTighten = pos.direction === "long"
+          ? newTrailLevel > sl && newTrailLevel > prevTrailLevel
+          : newTrailLevel < sl && newTrailLevel < prevTrailLevel;
+
+        if (shouldTighten) {
+          updatedFlags.trailingStopLevel = newTrailLevel;
+          exitFlagsUpdated = true;
+
           const attribution = makeAttribution(
-            "trailing_enabled",
-            `Trailing stop enabled at ${rMultiple.toFixed(2)}R (activation: ${trailingActivation}, distance: ${trailingPips} pips)`,
+            "trailing_stop",
+            `Trailing SL tightened at ${rMultiple.toFixed(2)}R — SL moved from ${sl.toFixed(5)} to ${newTrailLevel.toFixed(5)} (${effectiveTrailPips} pips behind price)`,
           );
+          const updatedSignal = {
+            ...signalData,
+            exitFlags: updatedFlags,
+            exitAttribution: [...(signalData.exitAttribution || []), attribution],
+          };
+          await supabase.from("paper_positions").update({
+            stop_loss: newTrailLevel.toString(),
+            signal_reason: JSON.stringify(updatedSignal),
+          }).eq("id", pos.id);
+
           actions.push({
-            positionId: pos.position_id, symbol, action: "trailing_enabled",
-            reason: attribution.detail, attribution,
+            positionId: pos.position_id, symbol, action: "sl_tightened",
+            reason: attribution.detail, newSL: newTrailLevel, attribution,
           });
-          console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | ${trailingPips} pips`);
+          console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${newTrailLevel.toFixed(5)}`);
+          continue;
         }
       }
 

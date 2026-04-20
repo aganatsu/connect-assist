@@ -75,10 +75,10 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "entry_exit", label: "Fixed TP Pips", keywords: ["tp", "fixed", "pips"] },
   { tab: "entry_exit", label: "R:R Ratio", keywords: ["rr", "risk reward", "ratio", "tp"] },
   { tab: "entry_exit", label: "TP ATR Multiple", keywords: ["tp", "atr", "multiple"] },
-  { tab: "entry_exit", label: "Trailing Stop", keywords: ["trailing", "stop", "trail"] },
-  { tab: "entry_exit", label: "Break Even", keywords: ["break even", "breakeven", "be"] },
-  { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out"] },
-  { tab: "entry_exit", label: "Time-Based Exit (hours)", keywords: ["time", "exit", "hours", "auto close"] },
+  { tab: "entry_exit", label: "Trailing Stop", keywords: ["trailing", "stop", "trail", "ratchet", "management"] },
+  { tab: "entry_exit", label: "Break Even", keywords: ["break even", "breakeven", "be", "management"] },
+  { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out", "management"] },
+  { tab: "entry_exit", label: "Time-Based Exit", keywords: ["time", "exit", "hours", "auto close", "max hold", "management"] },
   // Instruments
   { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
@@ -956,60 +956,128 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       )}
                     </div>
 
-                    {/* ── Exit Management ── */}
+                    {/* ── Trade Management ── */}
                     <div className="border-t border-border pt-4 space-y-4">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit Management</p>
-                      <p className="text-[10px] text-muted-foreground italic">Your trading style sets sensible defaults. Override any value below to adapt for your broker's conditions.</p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
+                        {(() => {
+                          const activeStyle = (config.tradingStyle?.mode || "day_trader") as TradingStyleMode;
+                          const styleMeta = STYLE_META[activeStyle];
+                          return (
+                            <Badge variant="secondary" className="text-[9px] px-2 py-0.5 font-normal">
+                              {styleMeta.icon} {styleMeta.label} defaults
+                            </Badge>
+                          );
+                        })()}
+                      </div>
 
-                      {/* Trailing Stop */}
-                      <ToggleField label="Trailing Stop" description="Move SL as price moves in favor" checked={config.exit?.trailingStop ?? false} onChange={v => updateField('exit', 'trailingStop', v)} />
-                      {(config.exit?.trailingStop) && (
-                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
-                          <FieldGroup label="Trailing Distance (pips)" description="How far behind price the trailing SL follows">
-                            <Input type="number" value={config.exit?.trailingStopPips ?? 15} onChange={e => updateField('exit', 'trailingStopPips', parseFloat(e.target.value) || 1)} step={1} min={1} max={200} className="h-9 text-sm" />
-                          </FieldGroup>
-                          <FieldGroup label="Activation" description="When to start trailing">
-                            <Select value={config.exit?.trailingStopActivation ?? 'after_1r'} onValueChange={v => updateField('exit', 'trailingStopActivation', v)}>
-                              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="after_0.5r">After 0.5R profit</SelectItem>
-                                <SelectItem value="after_1r">After 1R profit</SelectItem>
-                                <SelectItem value="after_1.5r">After 1.5R profit</SelectItem>
-                                <SelectItem value="after_2r">After 2R profit</SelectItem>
-                                <SelectItem value="immediate">Immediately</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </FieldGroup>
-                        </div>
-                      )}
+                      {/* Style defaults summary card */}
+                      {(() => {
+                        const activeStyle = (config.tradingStyle?.mode || "day_trader") as TradingStyleMode;
+                        const sp = STYLE_PARAMS[activeStyle];
+                        return (
+                          <div className="bg-muted/30 border border-border/60 p-3 space-y-2">
+                            <p className="text-[10px] text-muted-foreground">Your <strong>{STYLE_META[activeStyle].label}</strong> style sets these management defaults. Override any value below to customize for your broker.</p>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                              <span className="text-muted-foreground">Trailing:</span>
+                              <span className={sp.trailingStopEnabled ? "text-success font-medium" : "text-muted-foreground"}>{sp.trailingStopEnabled ? `ON — ${sp.trailingStopPips}p @ ${sp.trailingStopActivation.replace("after_", "")}` : "OFF"}</span>
+                              <span className="text-muted-foreground">Break-Even:</span>
+                              <span className={sp.breakEvenEnabled ? "text-success font-medium" : "text-muted-foreground"}>{sp.breakEvenEnabled ? `ON — after ${sp.breakEvenPips}p profit` : "OFF"}</span>
+                              <span className="text-muted-foreground">Partial TP:</span>
+                              <span className={sp.partialTPEnabled ? "text-success font-medium" : "text-muted-foreground"}>{sp.partialTPEnabled ? `ON — ${sp.partialTPPercent}% @ ${sp.partialTPLevel}R` : "OFF"}</span>
+                              <span className="text-muted-foreground">Max Hold:</span>
+                              <span className="font-medium">{sp.maxHoldHours > 0 ? `${sp.maxHoldHours}h` : "No limit"}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
-                      {/* Break Even */}
-                      <ToggleField label="Break Even" description="Move SL to entry once in profit" checked={config.exit?.breakEven ?? false} onChange={v => updateField('exit', 'breakEven', v)} />
-                      {(config.exit?.breakEven) && (
-                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
-                          <FieldGroup label="Break-Even Trigger (pips)" description="Move SL to entry after this many pips of profit">
-                            <Input type="number" value={config.exit?.breakEvenTriggerPips ?? 20} onChange={e => updateField('exit', 'breakEvenTriggerPips', parseFloat(e.target.value) || 1)} step={1} min={1} max={200} className="h-9 text-sm" />
-                          </FieldGroup>
-                        </div>
-                      )}
+                      {/* Important: activation conditions note */}
+                      <div className="bg-blue-500/5 border border-blue-500/20 p-3">
+                        <p className="text-[10px] text-blue-400 font-medium">Activation Safety</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">Trailing stops and break-even only activate when the trade is <strong>in profit</strong>. They will never fire on a losing position. Structure invalidation may tighten SL on underwater trades to reduce loss.</p>
+                      </div>
 
-                      {/* Partial Take Profit */}
-                      <ToggleField label="Partial Take Profit" description="Close portion of position at first TP" checked={config.exit?.partialTP ?? false} onChange={v => updateField('exit', 'partialTP', v)} />
-                      {(config.exit?.partialTP) && (
-                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
-                          <FieldGroup label="Close Percentage" description="Portion of position to close at partial TP">
-                            <Input type="number" value={config.exit?.partialTPPercent ?? 50} onChange={e => updateField('exit', 'partialTPPercent', parseFloat(e.target.value) || 10)} step={5} min={10} max={90} className="h-9 text-sm" />
-                          </FieldGroup>
-                          <FieldGroup label="Trigger Level (R-multiple)" description="Close partial at this R-multiple (e.g., 1.0 = 1R profit)">
-                            <Input type="number" value={config.exit?.partialTPLevel ?? 1.0} onChange={e => updateField('exit', 'partialTPLevel', parseFloat(e.target.value) || 0.5)} step={0.1} min={0.3} max={5} className="h-9 text-sm" />
-                          </FieldGroup>
-                        </div>
-                      )}
+                      {/* ── Trailing Stop ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Trailing Stop" description="Ratchet SL forward as price moves in your favor — locks in profit automatically" checked={config.exit?.trailingStop ?? config.exit?.trailingStopEnabled ?? false} onChange={v => { updateField('exit', 'trailingStop', v); updateField('exit', 'trailingStopEnabled', v); }} />
+                        {(config.exit?.trailingStop || config.exit?.trailingStopEnabled) && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <FieldGroup label="Trailing Distance (pips)" description="How far behind current price the trailing SL follows">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.trailingStopPips ?? 15]} onValueChange={v => updateField('exit', 'trailingStopPips', v[0])} min={1} max={100} step={1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.trailingStopPips ?? 15}</span>
+                              </div>
+                            </FieldGroup>
+                            <FieldGroup label="Activation Threshold" description="When to start trailing — only activates when trade reaches this R-multiple in profit">
+                              <Select value={config.exit?.trailingStopActivation ?? 'after_1r'} onValueChange={v => updateField('exit', 'trailingStopActivation', v)}>
+                                <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="immediate">Immediately (any profit)</SelectItem>
+                                  <SelectItem value="after_0.5r">After 0.5R profit</SelectItem>
+                                  <SelectItem value="after_1r">After 1R profit</SelectItem>
+                                  <SelectItem value="after_1.5r">After 1.5R profit</SelectItem>
+                                  <SelectItem value="after_2r">After 2R profit</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </FieldGroup>
+                            <p className="text-[9px] text-muted-foreground italic">Once activated, the SL ratchets forward each scan cycle as price moves further in profit. It never moves backward.</p>
+                          </div>
+                        )}
+                      </div>
 
-                      {/* Time-Based Exit */}
-                      <FieldGroup label="Max Hold Time (hours)" description="Auto-tighten SL after this many hours (0 = no limit)">
-                        <Input type="number" value={config.exit?.timeExitHours ?? 0} onChange={e => updateField('exit', 'timeExitHours', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" />
-                      </FieldGroup>
+                      {/* ── Break Even ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Break Even" description="Move SL to entry price once trade reaches a profit threshold" checked={config.exit?.breakEven ?? config.exit?.breakEvenEnabled ?? false} onChange={v => { updateField('exit', 'breakEven', v); updateField('exit', 'breakEvenEnabled', v); }} />
+                        {(config.exit?.breakEven || config.exit?.breakEvenEnabled) && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <FieldGroup label="Break-Even Trigger (pips)" description="Move SL to entry after this many pips of profit">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.breakEvenTriggerPips ?? 20]} onValueChange={v => updateField('exit', 'breakEvenTriggerPips', v[0])} min={1} max={100} step={1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.breakEvenTriggerPips ?? 20}</span>
+                              </div>
+                            </FieldGroup>
+                            <p className="text-[9px] text-muted-foreground italic">Only fires once per position. After activation, SL sits at entry + 1 pip to guarantee a risk-free trade.</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Partial Take Profit ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Partial Take Profit" description="Close a portion of the position at an R-multiple target, let the rest run" checked={config.exit?.partialTP ?? config.exit?.partialTPEnabled ?? false} onChange={v => { updateField('exit', 'partialTP', v); updateField('exit', 'partialTPEnabled', v); }} />
+                        {(config.exit?.partialTP || config.exit?.partialTPEnabled) && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <FieldGroup label="Close Percentage" description="Portion of position to close at partial TP">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.partialTPPercent ?? 50]} onValueChange={v => updateField('exit', 'partialTPPercent', v[0])} min={10} max={90} step={5} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.partialTPPercent ?? 50}%</span>
+                              </div>
+                            </FieldGroup>
+                            <FieldGroup label="Trigger Level (R-multiple)" description="Close partial at this R-multiple (e.g., 1.0 = 1R profit)">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.partialTPLevel ?? 1.0]} onValueChange={v => updateField('exit', 'partialTPLevel', v[0])} min={0.3} max={5} step={0.1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{(config.exit?.partialTPLevel ?? 1.0).toFixed(1)}R</span>
+                              </div>
+                            </FieldGroup>
+                            <p className="text-[9px] text-muted-foreground italic">Fires once per position. The remaining portion continues to the full TP target.</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Time-Based Exit ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Time-Based Exit" description="Auto-tighten SL or close after a maximum hold duration" checked={(config.exit?.timeBasedExitEnabled ?? (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0)} onChange={v => { updateField('exit', 'timeBasedExitEnabled', v); if (!v) { updateField('exit', 'timeExitHours', 0); updateField('exit', 'maxHoldHours', 0); } }} />
+                        {(config.exit?.timeBasedExitEnabled || (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0) && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <FieldGroup label="Max Hold Time (hours)" description="After this duration, SL moves to breakeven if in profit, or position is flagged for review">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 24]} onValueChange={v => { updateField('exit', 'timeExitHours', v[0]); updateField('exit', 'maxHoldHours', v[0]); }} min={1} max={168} step={1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-16 text-right">{config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 24}h</span>
+                              </div>
+                            </FieldGroup>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
