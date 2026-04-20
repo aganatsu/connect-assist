@@ -1,38 +1,28 @@
 
-This is a thorough audit. The user already approved fixes for the P0 items in a prior turn (regime scoring + useVolumeProfile/useTrendDirection/useDailyBias toggles), so those should already be live. I'll focus the plan on the remaining **P1 (real quality wins)** and offer P2 as opt-in.
+## Fix smc-analysis/index.ts type errors
 
-## Plan: Wire P1 OB/FVG/Structure/Liquidity Tuning Into Scanner
+### Verified shapes (from `_shared/smcAnalysis.ts`)
+- `DisplacementResult` → `{ isDisplacement, displacementCandles[], lastDirection }` (no `detected`, no `count`)
+- `AMDResult.phase` → `"accumulation" | "manipulation" | "distribution" | "unknown"` (no `"none"`)
+- `VWAPResult` → `{ value, distancePips, rejection, barsAnchored }` (no `vwap`)
 
-These five config fields exist in the UI (Strategy tab) and DB but the scanner hardcodes the values. After this fix, changing them in the UI actually changes scoring behavior.
+### Edits to `supabase/functions/smc-analysis/index.ts`
 
-### Changes to `supabase/functions/bot-scanner/index.ts`
+**Factor 10 — Displacement (~line 262)**
+- `displacement.detected` → `displacement.isDisplacement`
+- `displacement.count` → `displacement.displacementCandles.length`
 
-**1. `loadConfig()` — map missing strategy fields to flat config**
-Add these mappings from `strategy.*`:
-- `obLookbackCandles` (default 50)
-- `fvgMinSizePips` (default 0 = off)
-- `fvgOnlyUnfilled` (default true)
-- `structureLookback` (default 50)
-- `liquidityPoolMinTouches` (default 2)
+**Factor 15 — AMD Phase (~line 332)**
+- `amd.phase !== "none"` → `amd.phase !== "unknown"`
 
-**2. Order Block recency (~line 864)**
-Replace hardcoded `OB_RECENCY = 50` with `config.obLookbackCandles ?? 50`.
+**Factor 16 — VWAP (~lines 346–349)**
+- All 3 `vwap.vwap` → `vwap.value`
+- Null check stays the same (`!== null`)
 
-**3. FVG minimum size filter (~line 1452, FVG scoring)**
-Before scoring an FVG, compute its size in pips and skip if `< config.fvgMinSizePips`.
-
-**4. FVG unfilled filter (~line 1452)**
-If `config.fvgOnlyUnfilled !== false`, skip FVGs flagged as mitigated.
-
-**5. Structure lookback (~`analyzeMarketStructure` call site)**
-Slice candles to last `config.structureLookback ?? 50` before passing in.
-
-**6. Liquidity pool min touches (~`detectLiquidityPools`)**
-Replace hardcoded `count >= 2` with `count >= (config.liquidityPoolMinTouches ?? 2)`.
+### Out of scope
+- No bot logic changes
+- No UI changes
+- Other pre-existing build errors in other functions (backtest-engine, bot-scanner, bot-weekly-advisor) — handle in a follow-up if they still block deploy after this fix
 
 ### Verification
-Deploy `bot-scanner`, run a manual scan, then change `fvgMinSizePips` from 0 → 20 and re-scan. FVG factor scores should drop noticeably for pairs with small gaps.
-
-### Out of scope for this plan
-- P2 items (fixed lot sizing, ATR filter, correlation filter, EoS close, profit-target halt) — large surface area, propose separately if wanted.
-- "Medium" tuning items I judged low-value (obMinBodyWickRatio, chochAsReversal, zoneMethod alternatives) — current scanner behavior is already the sensible default, wiring them adds knobs without clear user value. Leave as-is unless you want them.
+After edit, the 6 reported TS errors in `smc-analysis/index.ts` clear. Bot-scanner deploy + same-direction stacking test proceeds next.
