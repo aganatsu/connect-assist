@@ -84,101 +84,94 @@ function RMultipleBar({
   const currentPct = toPercent(currentR);
   const isProfit = currentR >= 0;
 
+  // Build marker data for the legend below
+  const markers: { r: number; label: string; price: string; color: string; bgColor: string }[] = [];
+  markers.push({ r: 0, label: "Entry", price: formatPrice(entry, symbol), color: "text-muted-foreground", bgColor: "bg-muted-foreground" });
+  if (beR != null && bePrice != null) {
+    markers.push({ r: beR, label: `BE (${beR.toFixed(1)}R)`, price: formatPrice(bePrice, symbol), color: "text-yellow-400", bgColor: "bg-yellow-400" });
+  }
+  if (partialR != null && partialPrice != null) {
+    markers.push({ r: partialR, label: `Partial (${partialR}R)`, price: formatPrice(partialPrice, symbol), color: "text-cyan-400", bgColor: "bg-cyan-400" });
+  }
+  if (tpR != null && tpPrice != null) {
+    markers.push({ r: tpR, label: `TP (${tpR.toFixed(1)}R)`, price: formatPrice(tpPrice, symbol), color: "text-blue-400", bgColor: "bg-blue-400" });
+  }
+
   return (
-    <div className="relative w-full select-none bg-muted/10 rounded-lg border border-border/30 p-3 pb-5">
-      {/* Current R label above bar */}
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[10px] text-muted-foreground font-medium">R-Multiple</span>
-        <span className={`text-sm font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
+    <div className="w-full select-none bg-muted/10 rounded-lg border border-border/30 p-4">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">R-Multiple</span>
+        <span className={`text-lg font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
           {currentR >= 0 ? "+" : ""}{currentR.toFixed(2)}R
         </span>
       </div>
 
-      {/* Bar track */}
-      <div className="relative h-3 bg-muted/30 rounded-full overflow-hidden">
+      {/* Bar track — no overflow hidden so markers can extend */}
+      <div className="relative h-4 bg-muted/30 rounded-full mx-2">
         {/* Fill from entry to current */}
         {isProfit ? (
           <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-500/70 to-emerald-400"
-            style={{ left: `${entryPct}%`, width: `${Math.max(0, currentPct - entryPct)}%` }}
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
+            style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
           />
         ) : (
           <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-500/70"
-            style={{ left: `${currentPct}%`, width: `${Math.max(0, entryPct - currentPct)}%` }}
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
+            style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
           />
         )}
 
-        {/* Entry line */}
-        <div
-          className="absolute top-0 bottom-0 w-0.5 bg-muted-foreground/50"
-          style={{ left: `${entryPct}%` }}
-        />
+        {/* Entry tick */}
+        <div className="absolute top-0 bottom-0 w-[2px] bg-white/40 rounded" style={{ left: `${entryPct}%` }} />
 
-        {/* Current position indicator */}
+        {/* BE tick */}
+        {beR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-yellow-400 rounded" style={{ left: `${toPercent(beR)}%` }} />
+        )}
+
+        {/* Partial TP tick */}
+        {partialR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-cyan-400 rounded" style={{ left: `${toPercent(partialR)}%` }} />
+        )}
+
+        {/* TP tick */}
+        {tpR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-blue-400 rounded" style={{ left: `${toPercent(tpR)}%` }} />
+        )}
+
+        {/* Current position dot */}
         <div
-          className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 shadow-md ${
-            isProfit ? "bg-emerald-400 border-emerald-200" : "bg-red-400 border-red-200"
+          className={`absolute top-1/2 w-4 h-4 rounded-full border-2 shadow-lg ${
+            isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"
           }`}
           style={{ left: `${currentPct}%`, transform: "translate(-50%, -50%)" }}
         />
-
-        {/* BE marker */}
-        {beR != null && (
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-yellow-400/60"
-            style={{ left: `${toPercent(beR)}%` }}
-          />
-        )}
-
-        {/* Partial TP marker */}
-        {partialR != null && (
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-cyan-400/60"
-            style={{ left: `${toPercent(partialR)}%` }}
-          />
-        )}
-
-        {/* TP marker */}
-        {tpR != null && (
-          <div
-            className="absolute top-0 bottom-0 w-1 bg-blue-400/60 rounded-full"
-            style={{ left: `${toPercent(tpR)}%` }}
-          />
-        )}
       </div>
 
-      {/* Labels below bar */}
-      <div className="relative h-5 mt-1">
-        {/* Entry label */}
-        <div className="absolute text-[9px] text-muted-foreground font-mono" style={{ left: `${entryPct}%`, transform: "translateX(-50%)" }}>
-          Entry
+      {/* Scale labels below bar */}
+      <div className="flex items-center justify-between mt-1 mx-2">
+        <span className="text-[10px] text-muted-foreground/50 font-mono">-1R</span>
+        <span className="text-[10px] text-muted-foreground/50 font-mono">0R</span>
+        <span className="text-[10px] text-muted-foreground/50 font-mono">1R</span>
+        <span className="text-[10px] text-muted-foreground/50 font-mono">+{maxR.toFixed(0)}R</span>
+      </div>
+
+      {/* Legend: marker labels with prices in a readable row */}
+      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-3 pt-3 border-t border-border/20">
+        {markers.map((m, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <div className={`w-2.5 h-2.5 rounded-sm flex-shrink-0 ${m.bgColor}`} />
+            <span className={`text-xs font-medium ${m.color}`}>{m.label}</span>
+            <span className="text-xs font-mono text-foreground/70">{m.price}</span>
+          </div>
+        ))}
+        {/* Current price in legend too */}
+        <div className="flex items-center gap-1.5">
+          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${isProfit ? "bg-emerald-400" : "bg-red-400"}`} />
+          <span className={`text-xs font-medium ${isProfit ? "text-emerald-400" : "text-red-400"}`}>Current</span>
+          <span className="text-xs font-mono text-foreground/70">{formatPrice(currentPrice, symbol)}</span>
         </div>
-
-        {/* BE label */}
-        {beR != null && bePrice != null && (
-          <div className="absolute text-[9px] text-yellow-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(beR)}%`, transform: "translateX(-50%)" }}>
-            BE
-          </div>
-        )}
-
-        {/* Partial TP label */}
-        {partialR != null && (
-          <div className="absolute text-[9px] text-cyan-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(partialR)}%`, transform: "translateX(-50%)" }}>
-            {partialR}R
-          </div>
-        )}
-
-        {/* TP label */}
-        {tpR != null && (
-          <div className="absolute text-[9px] text-blue-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(tpR)}%`, transform: "translateX(-50%)" }}>
-            TP
-          </div>
-        )}
-
-        {/* Scale edges */}
-        <div className="absolute left-0 text-[8px] text-muted-foreground/40 font-mono">-1R</div>
-        <div className="absolute right-0 text-[8px] text-muted-foreground/40 font-mono">+{maxR.toFixed(0)}R</div>
       </div>
     </div>
   );
