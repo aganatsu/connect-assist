@@ -15,7 +15,7 @@ import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
   TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
-  ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor,
+  ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 import { FOTSIConfigModal } from "@/components/FOTSIConfigModal";
@@ -99,7 +99,8 @@ export default function BotView() {
   const stopMut = useMutation({ mutationFn: () => paperApi.stopEngine(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Engine stopped"); } });
   const killMut = useMutation({ mutationFn: () => paperApi.killSwitch(true), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.error("Kill switch activated"); } });
   const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
-  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Account reset"); } });
+  const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); } });
+  const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); } });
   const scanMut = useMutation({
     mutationFn: () => scannerApi.manualScan(),
     onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(`Scan: ${data.signalsFound} signals, ${data.tradesPlaced} trades`); },
@@ -621,9 +622,16 @@ export default function BotView() {
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
                   {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Manual Scan
                 </Button>
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10" onClick={() => {
+                  if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
+                }} disabled={resetBalMut.isPending}>
+                  {resetBalMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Reset Balance
+                </Button>
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-destructive/30 text-destructive hover:bg-destructive/10" onClick={() => {
-                  if (window.confirm("Reset account to $10,000? This will close all positions and clear all trade history. This cannot be undone.")) resetMut.mutate();
-                }}>Reset Account</Button>
+                  if (window.confirm("⚠️ FULL RESET — This will:\n\n• Close all open positions\n• Delete ALL trade history\n• Delete ALL scan logs\n• Delete ALL reasonings & post-mortems\n• Reset balance to configured starting amount\n• Stop the engine\n\nThis CANNOT be undone. Are you sure?")) resetMut.mutate();
+                }} disabled={resetMut.isPending}>
+                  {resetMut.isPending ? <Loader2 className="h-3 w-3 mr-1" /> : null} Full Reset
+                </Button>
               </CardContent>
             </Card>
 

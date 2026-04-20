@@ -1276,18 +1276,42 @@ Deno.serve(async (req) => {
       return respond({ success: true });
     }
 
+    // Helper: read configured starting balance from bot_configs (falls back to 10000)
+    async function getConfiguredStartingBalance(): Promise<string> {
+      try {
+        const { data: cfgRow } = await supabase.from("bot_configs").select("config_json")
+          .eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        const bal = cfgRow?.config_json?.account?.startingBalance;
+        if (typeof bal === "number" && bal > 0) return bal.toFixed(2);
+      } catch (_) { /* ignore — fall back to default */ }
+      return "10000";
+    }
+
+    // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
+    if (action === "reset_balance_only") {
+      const startBal = await getConfiguredStartingBalance();
+      await supabase.from("paper_accounts").update({
+        balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
+        daily_pnl_date: "", scan_count: 0, signal_count: 0, rejected_count: 0,
+        kill_switch_active: false,
+      }).eq("user_id", user.id);
+      return respond({ success: true, startingBalance: startBal });
+    }
+
+    // ── Full Reset: wipes everything and resets balance to configured starting balance ──
     if (action === "reset_account") {
+      const startBal = await getConfiguredStartingBalance();
       await supabase.from("paper_positions").delete().eq("user_id", user.id);
       await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
       await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
       await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
       await supabase.from("scan_logs").delete().eq("user_id", user.id);
       await supabase.from("paper_accounts").update({
-        balance: "10000", peak_balance: "10000", is_running: false, is_paused: false,
-        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: "10000",
+        balance: startBal, peak_balance: startBal, is_running: false, is_paused: false,
+        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
         daily_pnl_date: "", kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
-      return respond({ success: true });
+      return respond({ success: true, startingBalance: startBal });
     }
 
     if (action === "set_execution_mode") {

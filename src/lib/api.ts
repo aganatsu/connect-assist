@@ -153,6 +153,7 @@ export const paperApi = {
   stopEngine: () => invokeFunction("paper-trading", { action: "stop_engine" }),
   killSwitch: (active: boolean) => invokeFunction("paper-trading", { action: "kill_switch", active }),
   resetAccount: () => invokeFunction("paper-trading", { action: "reset_account" }),
+  resetBalanceOnly: () => invokeFunction("paper-trading", { action: "reset_balance_only" }),
   setExecutionMode: (mode: "paper" | "live") => invokeFunction("paper-trading", { action: "set_execution_mode", mode }),
 };
 
