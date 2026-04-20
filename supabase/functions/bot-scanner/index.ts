@@ -445,8 +445,9 @@ function inWindow(t: number, start: number, end: number): boolean {
 }
 
 function detectSession(config?: any): { name: string; isKillZone: boolean } {
-  const ny = toNYTime(new Date());
-  const t = ny.t;
+  // Session windows in config (HH:MM) are interpreted as UTC, matching what the UI displays.
+  const now = new Date();
+  const t = now.getUTCHours() + now.getUTCMinutes() / 60;
   const s = config?.sessions ?? {};
 
   const lonStart = parseHHMM(s.londonStart, DEFAULT_SESSION_WINDOWS.london.start);
@@ -460,8 +461,10 @@ function detectSession(config?: any): { name: string; isKillZone: boolean } {
   const sydEndRaw = parseHHMM(s.sydneyEnd, 2);
   const sydEnd = sydEndRaw <= sydStart ? sydEndRaw + 24 : sydEndRaw;
 
-  const inLondonKZ = t >= 2 && t < 5;
-  const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
+  // Kill zones still expressed in NY local time (ICT convention)
+  const nyT = toNYTime(now).t;
+  const inLondonKZ = nyT >= 2 && nyT < 5;
+  const inNYKZ = (nyT >= 8.5 && nyT < 11) || (nyT >= 11 && nyT < 12);
 
   // Order matters: prefer more specific / kill-zone sessions first.
   if (inWindow(t, lonStart, lonEnd))   return { name: "London",   isKillZone: inLondonKZ };
