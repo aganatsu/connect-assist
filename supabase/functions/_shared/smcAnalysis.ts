@@ -1041,7 +1041,7 @@ export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, numbe
 // fallbackMaxLot: optional override for the hardcoded max lot cap.
 export function calculatePositionSize(
   balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
-  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number },
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number; atrVolatilityMultiplier?: number },
   rateMap?: Record<string, number>,
   fallbackMaxLot?: number
 ): number {
