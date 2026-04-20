@@ -40,6 +40,8 @@ export default function BotView() {
   const [selectedScanIdx, setSelectedScanIdx] = useState(0);
   const [activeBot, setActiveBot] = useState<"smc" | "fotsi">("smc");
   const [fotsiConfigOpen, setFotsiConfigOpen] = useState(false);
+  const [customBalanceInput, setCustomBalanceInput] = useState("");
+  const [showSetBalance, setShowSetBalance] = useState(false);
 
   // Order form state
   const [orderType, setOrderType] = useState("market");
@@ -101,6 +103,16 @@ export default function BotView() {
   const deactivateKill = useMutation({ mutationFn: () => paperApi.killSwitch(false), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success("Kill switch deactivated"); } });
   const resetMut = useMutation({ mutationFn: () => paperApi.resetAccount(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Full reset complete — balance set to $${data?.startingBalance || "10,000"}`); } });
   const resetBalMut = useMutation({ mutationFn: () => paperApi.resetBalanceOnly(), onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); toast.success(`Balance reset to $${data?.startingBalance || "10,000"} — history preserved`); } });
+  const setBalMut = useMutation({
+    mutationFn: (balance: number) => paperApi.setBalance(balance),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      toast.success(`Balance set to $${parseFloat(data?.balance || "0").toLocaleString()}`);
+      setCustomBalanceInput("");
+      setShowSetBalance(false);
+    },
+    onError: (err: any) => toast.error(err.message || "Failed to set balance"),
+  });
   const scanMut = useMutation({
     mutationFn: () => scannerApi.manualScan(),
     onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(`Scan: ${data.signalsFound} signals, ${data.tradesPlaced} trades`); },
@@ -622,6 +634,43 @@ export default function BotView() {
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
                   {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Manual Scan
                 </Button>
+                {/* Set Balance — inline expandable */}
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)}>
+                  <Settings className="h-3 w-3 mr-1" /> Set Balance
+                </Button>
+                {showSetBalance && (
+                  <div className="flex gap-1.5 items-center">
+                    <div className="relative flex-1">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">$</span>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="100"
+                        placeholder="e.g. 50000"
+                        value={customBalanceInput}
+                        onChange={(e) => setCustomBalanceInput(e.target.value)}
+                        className="h-7 text-[11px] pl-5 font-mono"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            const val = parseFloat(customBalanceInput);
+                            if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
+                          }
+                        }}
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-7 text-[11px] px-3 bg-cyan-600 hover:bg-cyan-700 text-white"
+                      disabled={setBalMut.isPending || !customBalanceInput || isNaN(parseFloat(customBalanceInput)) || parseFloat(customBalanceInput) < 0}
+                      onClick={() => {
+                        const val = parseFloat(customBalanceInput);
+                        if (!isNaN(val) && val >= 0) setBalMut.mutate(val);
+                      }}
+                    >
+                      {setBalMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
+                    </Button>
+                  </div>
+                )}
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10" onClick={() => {
                   if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
                 }} disabled={resetBalMut.isPending}>

@@ -1311,6 +1311,23 @@ Deno.serve(async (req) => {
       return "10000";
     }
 
+    // ── Set Balance: set account balance to any custom amount ──
+    if (action === "set_balance") {
+      const newBalance = parseFloat(payload.balance);
+      if (isNaN(newBalance) || newBalance < 0) {
+        return respond({ error: "Invalid balance amount" });
+      }
+      const balStr = newBalance.toFixed(2);
+      // Update balance and peak (peak = max of current peak and new balance)
+      const { data: acct } = await supabase.from("paper_accounts").select("peak_balance").eq("user_id", user.id).maybeSingle();
+      const currentPeak = parseFloat(acct?.peak_balance || "0");
+      const newPeak = Math.max(currentPeak, newBalance).toFixed(2);
+      await supabase.from("paper_accounts").update({
+        balance: balStr, peak_balance: newPeak, daily_pnl_base: balStr,
+      }).eq("user_id", user.id);
+      return respond({ success: true, balance: balStr });
+    }
+
     // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
     if (action === "reset_balance_only") {
       const startBal = await getConfiguredStartingBalance();
