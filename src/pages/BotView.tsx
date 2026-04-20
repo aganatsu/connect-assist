@@ -424,6 +424,57 @@ export default function BotView() {
                                     <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(p.openTime)}</span></div>
                                     <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
                                   </div>
+                                  {/* Trade Management Status */}
+                                  {(() => {
+                                    try {
+                                      const sr = JSON.parse(p.signalReason || "{}");
+                                      const promoHistory = sr.promotionHistory || [];
+                                      const invalidHistory = sr.invalidationHistory || [];
+                                      const setupType = sr.setupType || "";
+                                      const ef = sr.exitFlags || {};
+                                      if (!setupType && promoHistory.length === 0) return null;
+                                      return (
+                                        <div className="mt-1.5 space-y-1">
+                                          <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
+                                          <div className="flex flex-wrap gap-1">
+                                            {setupType && (
+                                              <span className={`px-1.5 py-0.5 text-[9px] font-bold uppercase border rounded ${
+                                                setupType === "scalp" ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
+                                                : setupType === "swing" ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
+                                                : "bg-blue-500/15 border-blue-500/40 text-blue-400"
+                                              }`}>{setupType === "scalp" ? "\u26A1 SCALP" : setupType === "swing" ? "\uD83C\uDF0A SWING" : "\uD83D\uDCC8 DAY"}</span>
+                                            )}
+                                            {ef.trailingStop && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 rounded">Trailing ON</span>}
+                                            {ef.partialTP && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 rounded">Partial TP</span>}
+                                            {ef.breakEven && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 rounded">BE Active</span>}
+                                          </div>
+                                          {promoHistory.length > 0 && (
+                                            <div className="text-[9px] space-y-0.5">
+                                              {promoHistory.map((ph: any, i: number) => (
+                                                <div key={i} className="flex items-center gap-1 text-emerald-400">
+                                                  <span>\uD83D\uDCC8</span>
+                                                  <span className="font-medium">{(ph.from || "").toUpperCase()} \u2192 {(ph.to || "").toUpperCase()}</span>
+                                                  <span className="text-muted-foreground">at {ph.rMultiple}R</span>
+                                                  <span className="text-muted-foreground truncate max-w-[200px]">{ph.reason}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {invalidHistory.length > 0 && (
+                                            <div className="text-[9px] space-y-0.5">
+                                              {invalidHistory.map((ih: any, i: number) => (
+                                                <div key={i} className="flex items-center gap-1 text-destructive">
+                                                  <span>\uD83D\uDEE1\uFE0F</span>
+                                                  <span className="font-medium">SL Tightened</span>
+                                                  <span className="text-muted-foreground">at {ih.rMultiple}R — {ih.reason}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    } catch { return null; }
+                                  })()}
                                   <EditSLTPInline position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                                 </div>
                               </td>
