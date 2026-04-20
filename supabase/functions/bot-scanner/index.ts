@@ -445,9 +445,10 @@ function inWindow(t: number, start: number, end: number): boolean {
 }
 
 function detectSession(config?: any): { name: string; isKillZone: boolean } {
-  // Session windows in config (HH:MM) are interpreted as UTC, matching what the UI displays.
+  // Session windows in config (HH:MM) are interpreted as New York / ET time (DST-aware),
+  // matching the labels shown in the UI ("Times shown are New York / ET").
   const now = new Date();
-  const t = now.getUTCHours() + now.getUTCMinutes() / 60;
+  const t = toNYTime(now).t;
   const s = config?.sessions ?? {};
 
   const lonStart = parseHHMM(s.londonStart, DEFAULT_SESSION_WINDOWS.london.start);
