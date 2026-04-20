@@ -84,96 +84,80 @@ function RMultipleBar({
   const currentPct = toPercent(currentR);
   const isProfit = currentR >= 0;
 
+  // Build levels array for the grid
+  const levels: { label: string; price: string; rVal: string; color: string; dotClass: string }[] = [];
+  levels.push({ label: "Entry", price: formatPrice(entry, symbol), rVal: "0R", color: "text-muted-foreground", dotClass: "bg-white/50" });
+  levels.push({ label: "Current", price: formatPrice(currentPrice, symbol), rVal: `${currentR >= 0 ? "+" : ""}${currentR.toFixed(2)}R`, color: isProfit ? "text-emerald-400" : "text-red-400", dotClass: isProfit ? "bg-emerald-400" : "bg-red-400" });
+  if (beR != null && bePrice != null) {
+    levels.push({ label: "Break Even", price: formatPrice(bePrice, symbol), rVal: `${beR.toFixed(1)}R`, color: "text-yellow-400", dotClass: "bg-yellow-400" });
+  }
+  if (partialR != null && partialPrice != null) {
+    levels.push({ label: "Partial TP", price: formatPrice(partialPrice, symbol), rVal: `${partialR}R`, color: "text-cyan-400", dotClass: "bg-cyan-400" });
+  }
+  if (tpR != null && tpPrice != null) {
+    levels.push({ label: "Take Profit", price: formatPrice(tpPrice, symbol), rVal: `${tpR.toFixed(1)}R`, color: "text-blue-400", dotClass: "bg-blue-400" });
+  }
+
   return (
-    <div className="w-full select-none">
-      {/* Header: R-Multiple value large and clear */}
-      <div className="flex items-center justify-between mb-2">
+    <div className="w-full select-none space-y-3">
+      {/* Header: R-Multiple value */}
+      <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">R-Multiple</span>
         <span className={`text-xl font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
           {currentR >= 0 ? "+" : ""}{currentR.toFixed(2)}R
         </span>
       </div>
 
-      {/* Bar with markers */}
-      <div className="relative bg-muted/15 rounded-lg border border-border/20 px-3 pt-8 pb-10">
-        {/* Bar track */}
-        <div className="relative h-5 bg-muted/30 rounded-full">
-          {/* Fill from entry to current */}
-          {isProfit ? (
-            <div
-              className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
-              style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
-            />
-          ) : (
-            <div
-              className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
-              style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
-            />
-          )}
+      {/* Clean bar — only colored ticks and dot, NO text labels */}
+      <div className="relative h-5 bg-muted/20 rounded-full">
+        {/* Fill from entry to current */}
+        {isProfit ? (
+          <div
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
+            style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
+          />
+        ) : (
+          <div
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
+            style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
+          />
+        )}
 
-          {/* Entry tick + label above */}
-          <div className="absolute" style={{ left: `${entryPct}%`, transform: "translateX(-50%)" }}>
-            <div className="absolute bottom-full mb-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
-              <div className="text-[10px] text-muted-foreground font-medium">Entry</div>
-            </div>
-            <div className="w-[2px] bg-white/50" style={{ height: "20px" }} />
+        {/* Entry tick */}
+        <div className="absolute top-0 bottom-0 w-[2px] bg-white/50 rounded" style={{ left: `${entryPct}%` }} />
+
+        {/* BE tick */}
+        {beR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-yellow-400 rounded" style={{ left: `${toPercent(beR)}%` }} />
+        )}
+
+        {/* Partial TP tick */}
+        {partialR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-cyan-400 rounded" style={{ left: `${toPercent(partialR)}%` }} />
+        )}
+
+        {/* TP tick */}
+        {tpR != null && (
+          <div className="absolute -top-1 -bottom-1 w-[3px] bg-blue-400 rounded" style={{ left: `${toPercent(tpR)}%` }} />
+        )}
+
+        {/* Current position dot */}
+        <div
+          className={`absolute top-1/2 w-5 h-5 rounded-full border-2 shadow-lg ${isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"}`}
+          style={{ left: `${currentPct}%`, transform: "translate(-50%, -50%)" }}
+        />
+      </div>
+
+      {/* Levels grid — always readable, never overlaps */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+        {levels.map((lv, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${lv.dotClass}`} />
+            <span className={`text-xs font-medium ${lv.color} w-16`}>{lv.label}</span>
+            <span className="text-xs font-mono text-foreground/80 flex-1">{lv.price}</span>
+            <span className={`text-xs font-mono font-semibold ${lv.color}`}>{lv.rVal}</span>
           </div>
-
-          {/* BE tick + label below */}
-          {beR != null && bePrice != null && (
-            <div className="absolute" style={{ left: `${toPercent(beR)}%`, transform: "translateX(-50%)" }}>
-              <div className="w-[3px] bg-yellow-400" style={{ height: "20px" }} />
-              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
-                <div className="text-[11px] text-yellow-400 font-bold">BE</div>
-                <div className="text-[10px] text-yellow-400/70 font-mono">{formatPrice(bePrice, symbol)}</div>
-              </div>
-            </div>
-          )}
-
-          {/* Partial TP tick + label below */}
-          {partialR != null && partialPrice != null && (
-            <div className="absolute" style={{ left: `${toPercent(partialR)}%`, transform: "translateX(-50%)" }}>
-              <div className="w-[3px] bg-cyan-400" style={{ height: "20px" }} />
-              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
-                <div className="text-[11px] text-cyan-400 font-bold">{partialR}R PT</div>
-                <div className="text-[10px] text-cyan-400/70 font-mono">{formatPrice(partialPrice, symbol)}</div>
-              </div>
-            </div>
-          )}
-
-          {/* TP tick + label below */}
-          {tpR != null && tpPrice != null && (
-            <div className="absolute" style={{ left: `${toPercent(tpR)}%`, transform: "translateX(-50%)" }}>
-              <div className="w-[3px] bg-blue-400" style={{ height: "20px" }} />
-              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
-                <div className="text-[11px] text-blue-400 font-bold">TP</div>
-                <div className="text-[10px] text-blue-400/70 font-mono">{formatPrice(tpPrice, symbol)}</div>
-              </div>
-            </div>
-          )}
-
-          {/* Current position dot + label above */}
-          <div className="absolute" style={{ left: `${currentPct}%`, transform: "translateX(-50%)" }}>
-            <div className="absolute bottom-full mb-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
-              <div className={`text-xs font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
-                {formatPrice(currentPrice, symbol)}
-              </div>
-            </div>
-            <div
-              className={`w-5 h-5 rounded-full border-2 shadow-lg ${
-                isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"
-              }`}
-            />
-          </div>
-        </div>
-
-        {/* Scale at very bottom */}
-        <div className="absolute bottom-1 left-3 right-3 flex items-center justify-between">
-          <span className="text-[9px] text-muted-foreground/40 font-mono">-1R</span>
-          <span className="text-[9px] text-muted-foreground/40 font-mono">0R</span>
-          <span className="text-[9px] text-muted-foreground/40 font-mono">1R</span>
-          <span className="text-[9px] text-muted-foreground/40 font-mono">+{maxR.toFixed(0)}R</span>
-        </div>
+        ))}
       </div>
     </div>
   );
