@@ -303,6 +303,9 @@ export async function manageOpenPositions(
   const actions: ManagementAction[] = [];
   if (!positions || positions.length === 0) return actions;
 
+  // Read trading style for style-aware management decisions
+  const tradingStyle: string = config.tradingStyle?.mode ?? "day_trader";
+
   // Read management params from user config (set via STYLE_OVERRIDES + user overrides)
   const trailingEnabled = config.trailingStopEnabled ?? false;
   const trailingPips = config.trailingStopPips ?? 15;
@@ -544,8 +547,10 @@ export async function manageOpenPositions(
       }
 
       // ── 6. SESSION-BASED MANAGEMENT ──
-      // If position is in profit and we're now in off-hours, tighten to breakeven
-      if (rMultiple > 0.3) {
+      // Only scalps get session-based tightening. Day trades and swings are
+      // designed to be held across sessions — tightening them during off-hours
+      // defeats their purpose.
+      if (tradingStyle === "scalper" && rMultiple > 0.3) {
         const currentSession = detectSessionFn(config);
         const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
         const normalizedCurrentSession = sessionNameMap[currentSession.name] || currentSession.name.toLowerCase();

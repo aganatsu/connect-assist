@@ -208,6 +208,14 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 1.5,
     slBufferPips: 1,
     minConfluence: 5,
+    // Management: tight trailing, fast BE, no partial, short hold
+    trailingStopEnabled: true,
+    trailingStopPips: 10,           // tight trail for scalps
+    trailingStopActivation: "after_0.5r",
+    breakEvenEnabled: true,
+    breakEvenPips: 10,              // quick BE for scalps
+    partialTPEnabled: false,
+    maxHoldHours: 4,
   },
   day_trader: {
     entryTimeframe: "15min",
@@ -215,6 +223,14 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 2.0,
     slBufferPips: 2,
     minConfluence: 5.5,
+    // Management: partial TP at 1R, moderate BE, no trailing by default
+    trailingStopEnabled: false,
+    breakEvenEnabled: true,
+    breakEvenPips: 20,              // moderate BE for day trades
+    partialTPEnabled: true,
+    partialTPPercent: 50,
+    partialTPLevel: 1.0,            // partial at 1R
+    maxHoldHours: 24,
   },
   swing_trader: {
     entryTimeframe: "1h",
@@ -222,6 +238,16 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 3.0,
     slBufferPips: 5,
     minConfluence: 6.5,
+    // Management: wide trailing, wide BE, partial at 1.5R, long hold
+    trailingStopEnabled: true,
+    trailingStopPips: 30,           // wide trail for swings
+    trailingStopActivation: "after_1r",
+    breakEvenEnabled: true,
+    breakEvenPips: 50,              // wide BE — 50 pips so XAU noise doesn't trigger it
+    partialTPEnabled: true,
+    partialTPPercent: 40,
+    partialTPLevel: 1.5,            // partial at 1.5R
+    maxHoldHours: 0,                // no time limit for swings
   },
 };
 
