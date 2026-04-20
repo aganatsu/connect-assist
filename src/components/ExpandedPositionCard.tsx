@@ -167,8 +167,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   ) : null;
   const riskSl = originalSl ?? sl;
 
-  // R-multiple
+  // R-multiple (current floating R based on live price)
   const currentR = riskSl != null ? calcRMultiple(direction, entry, current, riskSl) : null;
+
+  // Locked R (guaranteed R based on where trailing SL sits, not current price)
+  const lockedR = (ef.trailingStopActivated && sl != null && riskSl != null)
+    ? calcRMultiple(direction, entry, sl, riskSl)
+    : null;
 
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
@@ -314,7 +319,11 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               lines={ef.trailingStopActivated
                 ? [
                     sl != null ? `Current SL: ${formatPrice(sl, p.symbol)}` : "Active",
-                    currentR != null ? `${currentR.toFixed(2)}R locked` : "",
+                    lockedR != null
+                      ? (lockedR >= 0
+                          ? `${lockedR.toFixed(2)}R locked`
+                          : `Risk reduced to ${lockedR.toFixed(2)}R`)
+                      : "",
                   ].filter(Boolean)
                 : [
                     ef.trailingStopActivation
