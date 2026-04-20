@@ -205,20 +205,36 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   const setupConfidence: number | null = sr.setupConfidence ?? null;
 
   // Aligned factors — extract from factorScores or summary text
+  // Summary format: "BUY: 9/22 factors ... (score: 8/10). Market Structure: MS+Trend | Order Flow: Breaker | FOTSI: aligned"
+  // Each segment after ". " is "GroupName: Factor1+Factor2" separated by " | "
   let alignedFactors: string[] = [];
   if (Array.isArray(sr.factorScores) && sr.factorScores.length > 0) {
     alignedFactors = sr.factorScores
       .filter((f: any) => f.present)
       .map((f: any) => f.name);
   } else {
-    const afterPeriod = summaryText.split(/\.\s+/).slice(1).join(". ");
-    if (afterPeriod) {
-      const segments = afterPeriod.split(/\s*\|\s*/);
-      const factorSeg = segments[0] || "";
-      alignedFactors = factorSeg
-        .split(",")
-        .map((s: string) => s.trim())
-        .filter((s: string) => s.length > 0 && s !== "...");
+    // Split on first "). " to get the factor groups part
+    const afterParen = summaryText.split(/\)\. /).slice(1).join("). ");
+    if (afterParen) {
+      // Split on " | " to get each group segment
+      const segments = afterParen.split(/\s*\|\s*/);
+      for (const seg of segments) {
+        // Each segment is "GroupName: Factor1+Factor2" or "FOTSI: label"
+        const colonIdx = seg.indexOf(":");
+        if (colonIdx >= 0) {
+          const groupName = seg.slice(0, colonIdx).trim();
+          // Skip FOTSI — its value is a label ("aligned"/"divergent"), not factor names
+          if (groupName.toUpperCase() === "FOTSI") continue;
+          const factorsPart = seg.slice(colonIdx + 1).trim();
+          // Split individual factors on "+"
+          const names = factorsPart.split("+").map(s => s.trim()).filter(Boolean);
+          alignedFactors.push(...names);
+        } else {
+          // No colon — treat the whole segment as a factor name
+          const trimmed = seg.trim();
+          if (trimmed) alignedFactors.push(trimmed);
+        }
+      }
     }
   }
 
