@@ -2277,14 +2277,18 @@ async function runScanForUser(supabase: any, userId: string) {
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
         for (const a of activeActions) {
-          console.log(`  [mgmt] ${a.symbol}: ${a.action}${a.from ? ` (${a.from}→${a.to})` : ""} — ${a.reason}`);
+          console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
         }
         // Send Telegram alerts for significant management actions
         if (telegramChatIds.length > 0) {
           for (const a of activeActions) {
-            const emoji = a.action === "promoted" ? "📈" : a.action === "sl_tightened" ? "🛡️" : "⚙️";
-            const actionLabel = a.action === "promoted" ? `PROMOTED ${(a.from || "").toUpperCase()}→${(a.to || "").toUpperCase()}`
-              : a.action === "sl_tightened" ? "SL TIGHTENED"
+            const emoji = a.action === "sl_tightened" ? "🛡️"
+              : a.action === "be_enabled" ? "🔒"
+              : a.action === "trailing_enabled" ? "📏"
+              : a.action === "partial_enabled" ? "💰"
+              : "⚙️";
+            const actionLabel = a.action === "sl_tightened" ? "SL TIGHTENED"
+              : a.action === "be_enabled" ? "BREAK-EVEN ACTIVATED"
               : a.action === "trailing_enabled" ? "TRAILING ENABLED"
               : a.action === "partial_enabled" ? "PARTIAL TP ENABLED"
               : a.action.toUpperCase().replace("_", " ");
