@@ -1318,12 +1318,11 @@ Deno.serve(async (req) => {
         return respond({ error: "Invalid balance amount" });
       }
       const balStr = newBalance.toFixed(2);
-      // Update balance and peak (peak = max of current peak and new balance)
-      const { data: acct } = await supabase.from("paper_accounts").select("peak_balance").eq("user_id", user.id).maybeSingle();
-      const currentPeak = parseFloat(acct?.peak_balance || "0");
-      const newPeak = Math.max(currentPeak, newBalance).toFixed(2);
+      // Reset peak_balance to the new balance — this is a fresh starting point
+      // Prevents drawdown gate from triggering (e.g., setting $100 with old peak of $10k = 99% drawdown)
       await supabase.from("paper_accounts").update({
-        balance: balStr, peak_balance: newPeak, daily_pnl_base: balStr,
+        balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
+        daily_pnl_date: "", kill_switch_active: false,
       }).eq("user_id", user.id);
       return respond({ success: true, balance: balStr });
     }
