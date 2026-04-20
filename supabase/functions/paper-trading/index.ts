@@ -89,10 +89,48 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
-function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string) {
+// ─── Quote-to-USD conversion (matching shared/smcAnalysis.ts) ──
+function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  // Non-forex instruments are already USD-denominated
+  if (!symbol.includes("/")) return 1.0;
+  const parts = symbol.split("/");
+  const quote = parts[1];
+  if (quote === "USD") return 1.0;
+  if (!rateMap) return 1.0;
+  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
+    "JPY": { pair: "USD/JPY", invert: true },
+    "GBP": { pair: "GBP/USD", invert: false },
+    "AUD": { pair: "AUD/USD", invert: false },
+    "NZD": { pair: "NZD/USD", invert: false },
+    "CAD": { pair: "USD/CAD", invert: true },
+    "CHF": { pair: "USD/CHF", invert: true },
+  };
+  const conv = QUOTE_CONVERSION[quote];
+  if (!conv) return 1.0;
+  const rate = rateMap[conv.pair];
+  if (!rate || rate <= 0) return 1.0;
+  return conv.invert ? (1 / rate) : rate;
+}
+
+// Module-level rateMap built once per invocation from live prices
+let _rateMap: Record<string, number> = {};
+
+async function buildRateMap(): Promise<Record<string, number>> {
+  const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
+  const map: Record<string, number> = {};
+  await Promise.all(RATE_PAIRS.map(async (pair) => {
+    const price = await fetchLivePrice(pair);
+    if (price !== null) map[pair] = price;
+  }));
+  return map;
+}
+
+function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
-  return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
+  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap || _rateMap);
+  return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
 }
 
 // ─── MetaAPI Region Failover ──────────────────────────────────────────────────
@@ -675,6 +713,15 @@ Deno.serve(async (req) => {
     const user = { id: claimsData.claims.sub as string };
 
     const { action, ...payload } = await req.json();
+
+    // Build rateMap once per request for cross-pair PnL conversion
+    if (Object.keys(_rateMap).length === 0) {
+      try {
+        _rateMap = await buildRateMap();
+      } catch (e: any) {
+        console.warn(`rateMap build failed: ${e?.message} — using legacy 1.0 fallback`);
+      }
+    }
 
     // ── Get account state ──
     if (action === "status") {

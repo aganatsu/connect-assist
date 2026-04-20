@@ -17,7 +17,7 @@
  *                detectSMTDivergence, calculateAnchoredVWAP, calculateATR,
  *                detectAMDPhase, detectSilverBullet, detectMacroWindow,
  *                detectSession, detectOptimalStyle
- *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize
+ *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize, getQuoteToUSDRate
  *   Constants:   SPECS, YAHOO_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
  *                STYLE_OVERRIDES, DEFAULTS
  */
@@ -981,14 +981,67 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
   return { stopLoss: sl, takeProfit: tp };
 }
 
+// ─── Quote-to-USD Conversion ────────────────────────────────────────
+// Returns the multiplier to convert 1 unit of the quote currency into USD.
+// rateMap should contain last close prices for major pairs keyed by symbol
+// (e.g. { "USD/JPY": 150.0, "GBP/USD": 1.27, "AUD/USD": 0.65, ... }).
+// For non-forex instruments (indices, commodities, crypto) priced in USD,
+// returns 1.0 since their PnL is already denominated in USD.
+export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
+  // Non-forex: already USD-denominated
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  if (spec.type !== "forex") return 1.0;
+
+  const parts = symbol.split("/");
+  if (parts.length !== 2) return 1.0;
+  const quote = parts[1]; // e.g. "JPY" in EUR/JPY, "USD" in EUR/USD
+
+  // Quote is already USD — no conversion needed
+  if (quote === "USD") return 1.0;
+
+  // If no rate map provided, fall back to 1.0 (legacy behavior)
+  if (!rateMap) return 1.0;
+
+  // Try to find a direct conversion rate
+  // For JPY quote: need USD/JPY → quoteToUSD = 1 / USD_JPY
+  // For GBP quote: need GBP/USD → quoteToUSD = GBP_USD
+  // For AUD quote: need AUD/USD → quoteToUSD = AUD_USD
+  // For NZD quote: need NZD/USD → quoteToUSD = NZD_USD
+  // For CAD quote: need USD/CAD → quoteToUSD = 1 / USD_CAD
+  // For CHF quote: need USD/CHF → quoteToUSD = 1 / USD_CHF
+
+  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
+    "JPY": { pair: "USD/JPY", invert: true },   // 1 JPY = 1/USDJPY USD
+    "GBP": { pair: "GBP/USD", invert: false },   // 1 GBP = GBPUSD USD
+    "AUD": { pair: "AUD/USD", invert: false },   // 1 AUD = AUDUSD USD
+    "NZD": { pair: "NZD/USD", invert: false },   // 1 NZD = NZDUSD USD
+    "CAD": { pair: "USD/CAD", invert: true },    // 1 CAD = 1/USDCAD USD
+    "CHF": { pair: "USD/CHF", invert: true },    // 1 CHF = 1/USDCHF USD
+  };
+
+  const conv = QUOTE_CONVERSION[quote];
+  if (!conv) return 1.0; // Unknown quote currency — safe fallback
+
+  const rate = rateMap[conv.pair];
+  if (!rate || rate <= 0) return 1.0; // Rate unavailable — safe fallback
+
+  return conv.invert ? (1 / rate) : rate;
+}
+
 // ─── Position Sizing ────────────────────────────────────────────────
+// rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
+// used to convert pip value to USD for cross-pair lot sizing.
+// fallbackMaxLot: optional override for the hardcoded max lot cap.
 export function calculatePositionSize(
   balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
-  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number }
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number },
+  rateMap?: Record<string, number>,
+  fallbackMaxLot?: number
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  const maxLot = fallbackMaxLot ?? (spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5);
   const method = config?.positionSizingMethod || "percent_risk";
+  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
 
   if (method === "fixed_lot") {
     const fixed = config?.fixedLotSize ?? 0.01;
@@ -997,11 +1050,11 @@ export function calculatePositionSize(
 
   if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
     // Volatility-adjusted: scale risk inversely with ATR
-    // Base risk amount, then divide by ATR-normalized SL distance
     const riskAmount = balance * (riskPercent / 100);
     const atrDistance = config.atrValue * 1.5; // Use 1.5x ATR as reference SL distance
     if (atrDistance === 0) return 0.01;
-    const lots = riskAmount / (atrDistance * spec.lotUnits);
+    // pipValuePerLot in USD = atrDistance * lotUnits * quoteToUSD
+    const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
     return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
   }
 
@@ -1009,15 +1062,18 @@ export function calculatePositionSize(
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const lots = riskAmount / (slDistance * spec.lotUnits);
+  // pipValuePerLot in USD = slDistance * lotUnits * quoteToUSD
+  const lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
 // ─── PnL Calculation ────────────────────────────────────────────────
-export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string) {
+// rateMap: optional map for cross-pair PnL conversion to USD
+export function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
-  return { pnl: diff * spec.lotUnits * size, pnlPips: diff / spec.pipSize };
+  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+  return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
 }
 
 // ─── Instrument Regime Classification (H7: shared across scanner + weekly advisor) ──

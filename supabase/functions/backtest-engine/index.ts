@@ -57,6 +57,7 @@ import {
   calculateSLTP,
   calculatePositionSize,
   calcPnl,
+  getQuoteToUSDRate,
   detectSession,
   detectSilverBullet,
   detectMacroWindow,
@@ -1581,7 +1582,7 @@ function processExits(
       if (triggerHit) {
         const closeSize = pos.size * (pos.exitFlags.partialTPPercent / 100);
         const remainSize = pos.size - closeSize;
-        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol);
+        const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol, btRateMap);
         closedTrades.push({
           id: `${pos.id}_partial`,
           symbol: pos.symbol,
@@ -1604,7 +1605,7 @@ function processExits(
     }
 
     if (closeReason) {
-      const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, exitPrice, pos.size, pos.symbol);
+      const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, exitPrice, pos.size, pos.symbol, btRateMap);
       closedTrades.push({
         id: pos.id,
         symbol: pos.symbol,
@@ -1830,6 +1831,31 @@ Deno.serve(async (req) => {
       console.warn(`[backtest] FOTSI computation error: ${e?.message}`);
     }
 
+    // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
+    // Use the last close from already-fetched candle data for major pairs.
+    const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
+    const btRateMap: Record<string, number> = {};
+    for (const rp of RATE_PAIRS) {
+      // Try the backtest candleData first, then fotsiCandleMap
+      const rpCandles = candleData[rp]?.daily || (fotsiCandleMap as any)?.[rp];
+      if (rpCandles && rpCandles.length > 0) {
+        btRateMap[rp] = rpCandles[rpCandles.length - 1].close;
+      }
+    }
+    // If some pairs are missing, try fetching them
+    const missingRatePairs = RATE_PAIRS.filter(p => !btRateMap[p]);
+    if (missingRatePairs.length > 0) {
+      try {
+        const fetched = await Promise.all(
+          missingRatePairs.map(p => fetchHistoricalCandles(p, "1d", "1mo").catch(() => [] as Candle[]))
+        );
+        for (let i = 0; i < missingRatePairs.length; i++) {
+          if (fetched[i].length > 0) btRateMap[missingRatePairs[i]] = fetched[i][fetched[i].length - 1].close;
+        }
+      } catch {}
+    }
+    console.log(`[backtest] rateMap: ${JSON.stringify(btRateMap)}`);
+
     // ── Sliding Window Backtest Loop ──
     const allTrades: BacktestTrade[] = [];
     let openPositions: OpenPosition[] = [];
@@ -1983,7 +2009,7 @@ Deno.serve(async (req) => {
             const reverseExitPrice = pos.direction === "long"
               ? analysis.lastPrice - reverseSpread / 2
               : analysis.lastPrice + reverseSpread / 2;
-            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, reverseExitPrice, pos.size, pos.symbol);
+            const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, reverseExitPrice, pos.size, pos.symbol, btRateMap);
             balance += pnl;
             if (balance > peakBalance) peakBalance = balance;
             allTrades.push({
@@ -2040,7 +2066,7 @@ Deno.serve(async (req) => {
           positionSizingMethod: config.positionSizingMethod,
           fixedLotSize: config.fixedLotSize,
           atrValue: (analysis as any).atrValue ?? calculateATR(entryCandles.slice(Math.max(0, entryCandles.length - 100)), config.slATRPeriod || 14),
-        });
+        }, btRateMap);
 
         // ── Open Position ──
         const posId = `bt_${++tradeCounter}`;
@@ -2081,7 +2107,7 @@ Deno.serve(async (req) => {
       const data = candleData[pos.symbol];
       if (!data || data.entry.length === 0) continue;
       const lastCandle = data.entry[data.entry.length - 1];
-      const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol);
+      const { pnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, btRateMap);
       balance += pnl;
       allTrades.push({
         id: pos.id,

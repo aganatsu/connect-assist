@@ -1580,14 +1580,43 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
   return result.candles;
 }
 
+// ─── Quote-to-USD conversion (local copy matching shared/smcAnalysis.ts) ──
+function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  if (spec.type !== "forex") return 1.0;
+  const parts = symbol.split("/");
+  if (parts.length !== 2) return 1.0;
+  const quote = parts[1];
+  if (quote === "USD") return 1.0;
+  if (!rateMap) return 1.0;
+  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
+    "JPY": { pair: "USD/JPY", invert: true },
+    "GBP": { pair: "GBP/USD", invert: false },
+    "AUD": { pair: "AUD/USD", invert: false },
+    "NZD": { pair: "NZD/USD", invert: false },
+    "CAD": { pair: "USD/CAD", invert: true },
+    "CHF": { pair: "USD/CHF", invert: true },
+  };
+  const conv = QUOTE_CONVERSION[quote];
+  if (!conv) return 1.0;
+  const rate = rateMap[conv.pair];
+  if (!rate || rate <= 0) return 1.0;
+  return conv.invert ? (1 / rate) : rate;
+}
+
 // ─── Position sizing ────────────────────────────────────────────────
+// rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
+// fallbackMaxLot: optional override for the hardcoded max lot cap.
 function calculatePositionSize(
   balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
-  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number }
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number },
+  rateMap?: Record<string, number>,
+  fallbackMaxLot?: number
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const maxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  const maxLot = fallbackMaxLot ?? (spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5);
   const method = config?.positionSizingMethod || "percent_risk";
+  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
 
   if (method === "fixed_lot") {
     const fixed = config?.fixedLotSize ?? 0.01;
@@ -1598,7 +1627,7 @@ function calculatePositionSize(
     const riskAmount = balance * (riskPercent / 100);
     const atrDistance = config.atrValue * 1.5;
     if (atrDistance === 0) return 0.01;
-    const lots = riskAmount / (atrDistance * spec.lotUnits);
+    const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
     return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
   }
 
@@ -1606,7 +1635,7 @@ function calculatePositionSize(
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const lots = riskAmount / (slDistance * spec.lotUnits);
+  const lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
@@ -2383,6 +2412,25 @@ async function runScanForUser(supabase: any, userId: string) {
   let tradesPlaced = 0;
   let rejectedCount = 0;
 
+  // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
+  // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
+  const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
+  const rateMap: Record<string, number> = {};
+  try {
+    const rateFetches = await Promise.all(
+      RATE_PAIRS.map(p => fetchCandles(p, "1d", "5d").catch(() => [] as Candle[]))
+    );
+    for (let i = 0; i < RATE_PAIRS.length; i++) {
+      const candles = rateFetches[i];
+      if (candles.length > 0) {
+        rateMap[RATE_PAIRS[i]] = candles[candles.length - 1].close;
+      }
+    }
+    console.log(`[scan ${scanCycleId}] rateMap built: ${JSON.stringify(Object.fromEntries(Object.entries(rateMap).map(([k, v]) => [k, (v as number).toFixed(4)])))}`); 
+  } catch (e: any) {
+    console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
+  }
+
   // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
   let _fotsiResult: FOTSIResult | null = null;
   try {
@@ -2558,7 +2606,7 @@ async function runScanForUser(supabase: any, userId: string) {
           positionSizingMethod: (pairConfig as any).positionSizingMethod,
           fixedLotSize: (pairConfig as any).fixedLotSize,
           atrValue: (analysis as any).atrValue,
-        });
+        }, rateMap);
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
@@ -2572,7 +2620,8 @@ async function runScanForUser(supabase: any, userId: string) {
             const oppSize = parseFloat(opp.size);
             const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
             const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
-            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize;
+            const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
+            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
             const oppPnlPips = oppDiff / oppSpec.pipSize;
 
             await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
@@ -2880,7 +2929,7 @@ async function runScanForUser(supabase: any, userId: string) {
                        positionSizingMethod: (pairConfig as any).positionSizingMethod,
                        fixedLotSize: (pairConfig as any).fixedLotSize,
                        atrValue: (analysis as any).atrValue,
-                     });
+                     }, rateMap);
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
                    } catch (balErr: any) {
                      console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);
