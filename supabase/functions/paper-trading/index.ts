@@ -89,6 +89,17 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
+// ─── Hardcoded fallback rates (approximate) — used when Yahoo Finance fails ──
+// These prevent catastrophic PnL miscalculation (e.g., treating JPY as USD = 142x error)
+const FALLBACK_RATES: Record<string, number> = {
+  "USD/JPY": 142.0,
+  "GBP/USD": 1.27,
+  "AUD/USD": 0.66,
+  "NZD/USD": 0.61,
+  "USD/CAD": 1.36,
+  "USD/CHF": 0.88,
+};
+
 // ─── Quote-to-USD conversion (matching shared/smcAnalysis.ts) ──
 function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -97,7 +108,6 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
   const parts = symbol.split("/");
   const quote = parts[1];
   if (quote === "USD") return 1.0;
-  if (!rateMap) return 1.0;
   const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
     "JPY": { pair: "USD/JPY", invert: true },
     "GBP": { pair: "GBP/USD", invert: false },
@@ -108,7 +118,9 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
   };
   const conv = QUOTE_CONVERSION[quote];
   if (!conv) return 1.0;
-  const rate = rateMap[conv.pair];
+  // Try live rate first, then fallback to approximate hardcoded rate
+  const liveRate = rateMap?.[conv.pair];
+  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
   if (!rate || rate <= 0) return 1.0;
   return conv.invert ? (1 / rate) : rate;
 }
@@ -118,11 +130,16 @@ let _rateMap: Record<string, number> = {};
 
 async function buildRateMap(): Promise<Record<string, number>> {
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-  const map: Record<string, number> = {};
+  // Start with fallback rates so we always have something reasonable
+  const map: Record<string, number> = { ...FALLBACK_RATES };
   await Promise.all(RATE_PAIRS.map(async (pair) => {
     const price = await fetchLivePrice(pair);
-    if (price !== null) map[pair] = price;
+    if (price !== null) map[pair] = price; // Override fallback with live rate
   }));
+  const liveCount = RATE_PAIRS.filter(p => map[p] !== FALLBACK_RATES[p]).length;
+  if (liveCount < RATE_PAIRS.length) {
+    console.warn(`[rateMap] Only ${liveCount}/${RATE_PAIRS.length} live rates fetched — using fallbacks for the rest`);
+  }
   return map;
 }
 
@@ -130,7 +147,14 @@ function calcPnl(dir: string, entry: number, current: number, size: number, symb
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap || _rateMap);
-  return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
+  const pnl = diff * spec.lotUnits * size * quoteToUSD;
+  const pnlPips = diff / spec.pipSize;
+  // Sanity check: warn if single trade PnL exceeds reasonable bounds
+  // This catches conversion errors (e.g., quoteToUSD=1.0 for JPY pairs = 142x inflation)
+  if (Math.abs(pnl) > 50000) {
+    console.warn(`[PnL SANITY] Suspicious PnL $${pnl.toFixed(2)} on ${symbol} (${size} lots, diff=${diff.toFixed(5)}, quoteToUSD=${quoteToUSD.toFixed(6)}). Check rate conversion.`);
+  }
+  return { pnl, pnlPips };
 }
 
 // ─── MetaAPI Region Failover ──────────────────────────────────────────────────

@@ -1658,6 +1658,16 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
   return result.candles;
 }
 
+// ─── Hardcoded fallback rates (approximate) — prevents catastrophic sizing errors when API fails ──
+const FALLBACK_RATES: Record<string, number> = {
+  "USD/JPY": 142.0,
+  "GBP/USD": 1.27,
+  "AUD/USD": 0.66,
+  "NZD/USD": 0.61,
+  "USD/CAD": 1.36,
+  "USD/CHF": 0.88,
+};
+
 // ─── Quote-to-USD conversion (local copy matching shared/smcAnalysis.ts) ──
 function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -1666,7 +1676,6 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
   if (parts.length !== 2) return 1.0;
   const quote = parts[1];
   if (quote === "USD") return 1.0;
-  if (!rateMap) return 1.0;
   const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
     "JPY": { pair: "USD/JPY", invert: true },
     "GBP": { pair: "GBP/USD", invert: false },
@@ -1677,10 +1686,24 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
   };
   const conv = QUOTE_CONVERSION[quote];
   if (!conv) return 1.0;
-  const rate = rateMap[conv.pair];
+  // Try live rate first, then fallback to approximate hardcoded rate
+  const liveRate = rateMap?.[conv.pair];
+  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
   if (!rate || rate <= 0) return 1.0;
   return conv.invert ? (1 / rate) : rate;
 }
+
+// ─── Minimum SL distance per asset class (in pips) ────────────────────────────────────
+// Prevents absurdly tight SLs that cause oversized positions
+const MIN_SL_PIPS: Record<string, number> = {
+  // JPY crosses are volatile — minimum 20 pips
+  "GBP/JPY": 20, "EUR/JPY": 20, "USD/JPY": 15,
+  // Standard forex pairs
+  "EUR/USD": 10, "GBP/USD": 12, "AUD/USD": 10, "NZD/USD": 10,
+  "USD/CAD": 10, "USD/CHF": 10, "EUR/GBP": 10,
+  // Commodities & crypto have their own dynamics
+  "XAU/USD": 30, "BTC/USD": 100,
+};
 
 // ─── Position sizing ────────────────────────────────────────────────
 // rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
@@ -1693,7 +1716,13 @@ function calculatePositionSize(
   commissionPerLot?: number,
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const maxLot = fallbackMaxLot ?? (spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5);
+  const typeMaxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  // Account-relative cap: max 10x leverage (notional / balance)
+  // e.g., $10k account → max $100k notional → ~0.47 lots on GBP/JPY at 214
+  const priceInUSD = spec.type === "forex" ? entryPrice * getQuoteToUSDRate(symbol, rateMap) : entryPrice;
+  const maxLeverage = 10;
+  const accountMaxLot = balance > 0 ? (balance * maxLeverage) / (spec.lotUnits * priceInUSD) : 0.01;
+  const maxLot = fallbackMaxLot ?? Math.min(typeMaxLot, Math.max(0.01, Math.round(accountMaxLot * 100) / 100));
   const method = config?.positionSizingMethod || "percent_risk";
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
   // Round-trip commission per lot in account currency (default 0)
@@ -2734,6 +2763,24 @@ async function runScanForUser(supabase: any, userId: string) {
             const risk = sl - analysis.lastPrice;
             tp = analysis.lastPrice - risk * config.tpRatio;
           }
+        }
+
+        // Enforce minimum SL distance to prevent oversized positions from tight SLs
+        const minSlPips = MIN_SL_PIPS[pair] ?? 10;
+        const minSlDistance = minSlPips * spec.pipSize;
+        const actualSlDistance = Math.abs(analysis.lastPrice - sl);
+        if (actualSlDistance < minSlDistance) {
+          console.log(`[${pair}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${minSlPips} pips. Widening SL.`);
+          if (analysis.direction === "long") {
+            sl = analysis.lastPrice - minSlDistance;
+          } else {
+            sl = analysis.lastPrice + minSlDistance;
+          }
+          // Recalculate TP based on widened SL
+          const newRisk = Math.abs(analysis.lastPrice - sl);
+          tp = analysis.direction === "long"
+            ? analysis.lastPrice + newRisk * config.tpRatio
+            : analysis.lastPrice - newRisk * config.tpRatio;
         }
 
         const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
