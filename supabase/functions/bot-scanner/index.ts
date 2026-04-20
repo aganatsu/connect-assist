@@ -397,6 +397,221 @@ function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
   return "day_trader";
 }
 
+// ─── Setup Classifier ──────────────────────────────────────────────────
+// Reads the confluence factors that fired and classifies the trade setup
+// as scalp, day_trade, or swing based on the STRUCTURE of the setup,
+// not just volatility. Returns the classification + execution overrides.
+
+interface SetupClassification {
+  setupType: "scalp" | "day_trade" | "swing";
+  confidence: number;       // 0–1
+  rationale: string;        // human-readable explanation
+  executionProfile: {
+    tpRatio: number;
+    slBufferPips: number;
+    maxHoldHours: number;
+    tpMethod: string;       // "nearest_liquidity" | "next_level" | "rr_ratio"
+  };
+}
+
+function classifySetupType(analysis: {
+  factors: ReasoningFactor[];
+  session: { name: string; isKillZone: boolean };
+  silverBullet: SilverBulletResult;
+  macroWindow: MacroWindowResult;
+  amd: AMDResult;
+  displacement: DisplacementResult;
+  pd: { currentZone: string; zonePercent: number; oteZone: boolean };
+  regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null;
+  structure: { trend: "bullish" | "bearish" | "ranging"; swingPoints: SwingPoint[]; bos: any[]; choch: any[] };
+  direction: string | null;
+  score: number;
+}): SetupClassification {
+  const f = (name: string) => analysis.factors.find(x => x.name === name);
+  const fired = (name: string) => f(name)?.present === true;
+
+  // ── Score each setup type based on which factors fired ──
+  let scalpScore = 0;
+  let dayScore = 0;
+  let swingScore = 0;
+  const reasons: { scalp: string[]; day: string[]; swing: string[] } = { scalp: [], day: [], swing: [] };
+
+  // ── TIMING factors → heavily favor scalp ──
+  if (analysis.session.isKillZone) {
+    scalpScore += 2; reasons.scalp.push("Kill zone active");
+    dayScore += 1;
+  }
+  if (analysis.silverBullet.active) {
+    scalpScore += 2.5; reasons.scalp.push(`Silver Bullet ${analysis.silverBullet.window}`);
+  }
+  if (analysis.macroWindow.active) {
+    scalpScore += 1.5; reasons.scalp.push(`Macro window ${analysis.macroWindow.window}`);
+  }
+
+  // ── AMD Phase → scalp if manipulation/distribution, day if accumulation ──
+  if (analysis.amd.phase === "manipulation") {
+    scalpScore += 2; reasons.scalp.push("AMD manipulation phase (fake-out)");
+  } else if (analysis.amd.phase === "distribution") {
+    scalpScore += 1.5; reasons.scalp.push("AMD distribution phase");
+    dayScore += 1; reasons.day.push("AMD distribution");
+  } else if (analysis.amd.phase === "accumulation") {
+    dayScore += 1.5; reasons.day.push("AMD accumulation (building)");
+  }
+
+  // ── Liquidity Sweep → scalp (quick reversal play) ──
+  if (fired("Liquidity Sweep")) {
+    scalpScore += 2; reasons.scalp.push("Liquidity sweep detected");
+  }
+
+  // ── Judas Swing → scalp (fake-out reversal) ──
+  if (fired("Judas Swing")) {
+    scalpScore += 1.5; reasons.scalp.push("Judas swing (false move)");
+  }
+
+  // ── Reversal Candle → scalp (immediate entry signal) ──
+  if (fired("Reversal Candle")) {
+    scalpScore += 1; reasons.scalp.push("Reversal candle confirmation");
+  }
+
+  // ── FVG → day trade (gap fill play) ──
+  if (fired("Fair Value Gap")) {
+    dayScore += 1.5; reasons.day.push("FVG present");
+    scalpScore += 0.5;
+  }
+
+  // ── Order Block → day trade (zone-based entry) ──
+  if (fired("Order Block")) {
+    dayScore += 2; reasons.day.push("Order block entry");
+    scalpScore += 0.5;
+  }
+
+  // ── Market Structure (BOS/CHoCH) → day trade ──
+  if (fired("Market Structure")) {
+    dayScore += 2; reasons.day.push("Structure break (BOS/CHoCH)");
+    swingScore += 0.5;
+  }
+
+  // ── Trend Direction → day trade ──
+  if (fired("Trend Direction")) {
+    dayScore += 1; reasons.day.push("Trend direction aligned");
+    swingScore += 0.5;
+  }
+
+  // ── Daily Bias (HTF alignment) → swing ──
+  if (fired("Daily Bias")) {
+    swingScore += 2.5; reasons.swing.push("Daily bias aligned");
+    dayScore += 1; reasons.day.push("Daily bias supports");
+  }
+
+  // ── Premium/Discount deep zone → swing ──
+  const zp = analysis.pd.zonePercent;
+  if (zp <= 25 || zp >= 75) {
+    swingScore += 2; reasons.swing.push(`Deep ${zp <= 25 ? "discount" : "premium"} zone (${zp.toFixed(0)}%)`);
+    dayScore += 0.5;
+  } else if (analysis.pd.oteZone) {
+    dayScore += 1; reasons.day.push("OTE zone");
+  }
+
+  // ── Displacement → swing (strong momentum) ──
+  if (analysis.displacement.isDisplacement) {
+    swingScore += 2; reasons.swing.push(`Displacement (${analysis.displacement.displacementCandles.length} candles)`);
+    dayScore += 0.5;
+  }
+
+  // ── Volume Profile → swing (institutional footprint) ──
+  if (fired("Volume Profile")) {
+    swingScore += 1.5; reasons.swing.push("Volume profile alignment");
+  }
+
+  // ── Breaker Block → swing (HTF structure reclaim) ──
+  if (fired("Breaker Block")) {
+    swingScore += 1.5; reasons.swing.push("Breaker block (HTF reclaim)");
+  }
+
+  // ── Unicorn Model → day trade (complex setup) ──
+  if (fired("Unicorn Model")) {
+    dayScore += 1.5; reasons.day.push("Unicorn model");
+  }
+
+  // ── SMT Divergence → swing (macro confirmation) ──
+  if (fired("SMT Divergence")) {
+    swingScore += 1.5; reasons.swing.push("SMT divergence (macro)");
+  }
+
+  // ── Currency Strength → swing (macro flow) ──
+  if (fired("Currency Strength")) {
+    swingScore += 1; reasons.swing.push("Currency strength aligned");
+  }
+
+  // ── Regime → swing if trending with confidence ──
+  if (analysis.regimeInfo && analysis.regimeInfo.confidence >= 0.7) {
+    if (analysis.regimeInfo.regime === "trending" || analysis.regimeInfo.regime === "strong_trend") {
+      swingScore += 2; reasons.swing.push(`Regime: ${analysis.regimeInfo.regime} (${(analysis.regimeInfo.confidence * 100).toFixed(0)}%)`);
+    } else if (analysis.regimeInfo.regime === "ranging" || analysis.regimeInfo.regime === "choppy") {
+      scalpScore += 1.5; reasons.scalp.push(`Regime: ${analysis.regimeInfo.regime} (range-bound)`);
+    }
+  }
+
+  // ── PD/PW Levels → day trade (intraday targets) ──
+  if (fired("PD/PW Levels")) {
+    dayScore += 1; reasons.day.push("PD/PW levels active");
+  }
+
+  // ── Classify ──
+  const scores = { scalp: scalpScore, day_trade: dayScore, swing: swingScore };
+  const maxScore = Math.max(scalpScore, dayScore, swingScore);
+  const totalScore = scalpScore + dayScore + swingScore;
+
+  let setupType: "scalp" | "day_trade" | "swing";
+  let rationale: string;
+
+  if (maxScore === 0) {
+    setupType = "day_trade";
+    rationale = "No strong setup signals — defaulting to day trade";
+  } else if (scalpScore >= dayScore && scalpScore >= swingScore) {
+    setupType = "scalp";
+    rationale = reasons.scalp.join(", ");
+  } else if (swingScore >= dayScore && swingScore >= scalpScore) {
+    setupType = "swing";
+    rationale = reasons.swing.join(", ");
+  } else {
+    setupType = "day_trade";
+    rationale = reasons.day.join(", ");
+  }
+
+  // Confidence = how dominant the winning type is vs the others
+  const confidence = totalScore > 0 ? Math.min(1, maxScore / totalScore + 0.2) : 0.5;
+
+  // ── Execution profiles per setup type ──
+  const EXECUTION_PROFILES: Record<string, SetupClassification["executionProfile"]> = {
+    scalp: {
+      tpRatio: 1.5,
+      slBufferPips: 1,
+      maxHoldHours: 2,
+      tpMethod: "nearest_liquidity",
+    },
+    day_trade: {
+      tpRatio: 2.0,
+      slBufferPips: 2,
+      maxHoldHours: 8,
+      tpMethod: "next_level",
+    },
+    swing: {
+      tpRatio: 3.0,
+      slBufferPips: 5,
+      maxHoldHours: 72,
+      tpMethod: "rr_ratio",
+    },
+  };
+
+  return {
+    setupType,
+    confidence,
+    rationale: `[${setupType.toUpperCase()}] ${rationale} (scores: scalp=${scalpScore.toFixed(1)}, day=${dayScore.toFixed(1)}, swing=${swingScore.toFixed(1)})`,
+    executionProfile: EXECUTION_PROFILES[setupType],
+  };
+}
+
 // ─── DST-Aware New York Time Helper ─────────────────────────────────
 // Converts UTC Date to New York local time components.
 // US DST: 2nd Sunday of March 02:00 → 1st Sunday of November 02:00.
@@ -3268,6 +3483,25 @@ async function runScanForUser(supabase: any, userId: string) {
     (pairConfig as any)._fotsiResult = _fotsiResult;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
+    // ── Setup Classifier: determine scalp/day/swing from the actual setup structure ──
+    const setupClassification = classifySetupType(analysis);
+    // Apply execution profile overrides from the classifier (unless user forced a manual style)
+    if (isAutoStyle) {
+      pairConfig.tpRatio = setupClassification.executionProfile.tpRatio;
+      pairConfig.slBufferPips = setupClassification.executionProfile.slBufferPips;
+      pairConfig.maxHoldHours = setupClassification.executionProfile.maxHoldHours;
+      // Override TP method if classifier suggests a different one
+      if (setupClassification.executionProfile.tpMethod === "nearest_liquidity") {
+        pairConfig.tpMethod = "next_level";
+      } else if (setupClassification.executionProfile.tpMethod === "next_level") {
+        pairConfig.tpMethod = "next_level";
+      }
+      // Re-adjust SL buffer for asset class after classifier override
+      const pairAssetProfileClassifier = getAssetProfile(pair);
+      const classifierAdjustedSlBuffer = pairConfig.slBufferPips * pairAssetProfileClassifier.slBufferMultiplier;
+      pairConfig.slBufferPips = classifierAdjustedSlBuffer;
+    }
+
     const detail: any = {
       pair,
       score: analysis.score,
@@ -3296,6 +3530,12 @@ async function runScanForUser(supabase: any, userId: string) {
       },
       status: "analyzed",
       tradingStyle: pairStyle,
+      setupClassification: {
+        setupType: setupClassification.setupType,
+        confidence: setupClassification.confidence,
+        rationale: setupClassification.rationale,
+        executionProfile: setupClassification.executionProfile,
+      },
     };
 
     const minFactorGate = (pairConfig.minFactorCount ?? 0) > 0;
@@ -3464,7 +3704,7 @@ async function runScanForUser(supabase: any, userId: string) {
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -3478,7 +3718,7 @@ async function runScanForUser(supabase: any, userId: string) {
           symbol: pair,
           direction: analysis.direction,
           confluence_score: Math.round(analysis.score),
-          summary: analysis.summary,
+          summary: `[${setupClassification.setupType.toUpperCase()}] ${analysis.summary}`,
           bias: analysis.bias,
           session: analysis.session.name,
           timeframe: pairConfig.entryTimeframe,
@@ -3507,6 +3747,7 @@ async function runScanForUser(supabase: any, userId: string) {
             `<b>TP:</b> ${tp}\n` +
             `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
             `<b>Session:</b> ${analysis.session.name}\n` +
+            `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}`;
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {

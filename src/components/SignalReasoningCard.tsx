@@ -266,6 +266,9 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
 
   const groupedFactors = factorScores ? buildGroupedFactors(factorScores) : null;
 
+  const setupType: string | null = parsed?.setupType ?? null;
+  const setupConfidence: number | null = parsed?.setupConfidence ?? null;
+  const setupRationale: string | null = parsed?.setupRationale ?? null;
   const exitFlags = parsed?.exitFlags ?? null;
   const spreadFilter = parsed?.spreadFilter ?? null;
   const newsFilter = parsed?.newsFilter ?? null;
@@ -309,6 +312,25 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
         {s.factorCount !== null && s.total !== null && (
           <span className="text-[9px] text-muted-foreground font-mono">
             {s.factorCount}/{s.total} factors aligned
+          </span>
+        )}
+        {setupType && (
+          <span
+            className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[9px] font-bold tracking-wider ${
+              setupType === "scalp"
+                ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
+                : setupType === "swing"
+                  ? "bg-purple-500/15 border-purple-500/40 text-purple-400"
+                  : "bg-blue-500/15 border-blue-500/40 text-blue-400"
+            }`}
+            title={setupRationale || `${setupType} setup`}
+          >
+            {setupType === "scalp" ? "\u26A1 SCALP" : setupType === "swing" ? "\uD83C\uDF0A SWING" : "\uD83D\uDCC8 DAY"}
+            {setupConfidence != null && (
+              <span className="ml-1 text-[8px] opacity-70">
+                {Math.round(setupConfidence * 100)}%
+              </span>
+            )}
           </span>
         )}
       </div>
