@@ -175,6 +175,21 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     ? calcRMultiple(direction, entry, sl, riskSl)
     : null;
 
+  // Locked P&L in dollars (what you'd get if trailing SL is hit)
+  // Uses the same formula as current P&L but with SL as exit price instead of current price
+  const lockedPnl = (ef.trailingStopActivated && sl != null)
+    ? (() => {
+        const diff = direction === "long" ? sl - entry : entry - sl;
+        const pipsLocked = diff / pipSize;
+        // Approximate dollar value: use the ratio of current pnl to current pips
+        const currentPnlPips = direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;
+        if (Math.abs(currentPnlPips) > 0.001 && p.pnl != null) {
+          return (pipsLocked / currentPnlPips) * p.pnl;
+        }
+        return null;
+      })()
+    : null;
+
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
   const beR = ef.breakEvenPips != null && riskDist && riskDist > 0
@@ -321,8 +336,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                     sl != null ? `Current SL: ${formatPrice(sl, p.symbol)}` : "Active",
                     lockedR != null
                       ? (lockedR >= 0
-                          ? `${lockedR.toFixed(2)}R locked`
-                          : `Risk reduced to ${lockedR.toFixed(2)}R`)
+                          ? `${lockedR.toFixed(2)}R locked${lockedPnl != null ? ` (${formatMoney(lockedPnl, true)})` : ""}`
+                          : `Risk → ${lockedR.toFixed(2)}R${lockedPnl != null ? ` (${formatMoney(lockedPnl, true)})` : ""}`)
                       : "",
                   ].filter(Boolean)
                 : [
