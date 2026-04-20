@@ -61,8 +61,8 @@ function ManagementCard({
   badgeColor: string;
 }) {
   return (
-    <div className={`flex-1 min-w-0 rounded-lg border-l-[3px] ${borderColor} bg-secondary/40 p-3`}>
-      <div className="flex items-center justify-between mb-1.5">
+    <div className={`flex-1 min-w-0 rounded-lg border-l-[3px] ${borderColor} bg-secondary/40 px-2.5 py-2`}>
+      <div className="flex items-center justify-between mb-1">
         <span className="text-[11px] font-bold text-foreground/80 uppercase tracking-wider">{title}</span>
         <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${badgeColor}`}>
           {active ? "ACTIVE" : "Pending"}
@@ -105,7 +105,7 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
   };
 
   return (
-    <div className="flex items-end gap-3 pt-3 border-t border-border/40">
+    <div className="flex items-end gap-3 pt-2 border-t border-border/30">
       <div className="space-y-1 flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Stop Loss</Label>
         <Input
@@ -270,7 +270,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   };
 
   return (
-    <div className="bg-secondary/20 border border-border/50 rounded-lg p-4 space-y-4">
+    <div className="bg-secondary/20 border border-border/50 rounded-lg p-3 space-y-2.5">
 
       {/* ═══ ROW 1: Trade Header Bar ═══ */}
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -301,7 +301,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
       {/* ═══ ROW 2: Live Trade Management Status (3 cards) ═══ */}
       {hasManagement && (
-        <div className="flex gap-3">
+        <div className="flex gap-2">
           {(ef.trailingStopEnabled || ef.trailingStop) && (
             <ManagementCard
               title="TRAILING STOP"
@@ -365,14 +365,14 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
         </div>
       )}
 
-      {/* ═══ ROW 3: Signal + Exit Strategy (two columns) ═══ */}
-      <div className="grid grid-cols-2 gap-6">
+      {/* ═══ ROW 3: Signal + Exit Strategy (two columns, compact) ═══ */}
+      <div className="grid grid-cols-2 gap-4">
         {/* Left: Signal */}
-        <div className="space-y-1.5">
+        <div>
           <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Signal</span>
-          <div className="space-y-1 pt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             {summaryDir && (
-              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wider ${
                 summaryDir === "BUY"
                   ? "bg-success/15 border border-success/40 text-success"
                   : "bg-destructive/15 border border-destructive/40 text-destructive"
@@ -380,27 +380,25 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 Direction {summaryDir}
               </span>
             )}
-            {factorCount != null && factorTotal != null && (
-              <div className="text-xs text-foreground/80 font-mono">{factorCount}/{factorTotal} factors</div>
-            )}
-            {summaryScore != null && (
-              <div className="text-xs text-foreground/80 font-mono">score {summaryScore}/10</div>
-            )}
-            {setupType && (
-              <div className="text-xs text-foreground/80 font-mono">
-                Setup: {setupType}{setupConfidence != null ? ` ${setupConfidence}% conf` : ""}
-              </div>
-            )}
+            <span className="text-[11px] text-foreground/80 font-mono">
+              {factorCount != null ? `${factorCount}/${factorTotal} factors` : ""}
+              {summaryScore != null ? ` \u00B7 score ${summaryScore}/10` : ""}
+            </span>
           </div>
+          {setupType && (
+            <div className="text-[11px] text-foreground/70 font-mono mt-0.5">
+              Setup: {setupType}{setupConfidence != null ? ` ${Math.round(setupConfidence * 100)}% conf` : ""}
+            </div>
+          )}
         </div>
 
         {/* Right: Exit Strategy */}
         {exitConfig.length > 0 && (
-          <div className="space-y-1.5">
+          <div>
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit Strategy</span>
-            <div className="space-y-1 pt-1">
+            <div className="mt-1 space-y-0.5">
               {exitConfig.map((c, i) => (
-                <div key={i} className="text-xs font-mono text-foreground/80">
+                <div key={i} className="text-[11px] font-mono text-foreground/80">
                   {c.label}: {c.value}
                 </div>
               ))}
@@ -411,11 +409,11 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
       {/* ═══ ROW 4: Aligned Factors (pills) ═══ */}
       {alignedFactors.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-1.5">
           {alignedFactors.map((f, i) => (
             <span
               key={i}
-              className="rounded-full bg-secondary/60 border border-border px-3 py-1 text-[11px] text-foreground/80"
+              className="rounded-full bg-secondary/60 border border-border px-2.5 py-0.5 text-[10px] text-foreground/80"
             >
               {f}
             </span>
@@ -425,7 +423,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
       {/* ═══ ROW 5: Exit Attribution Timeline ═══ */}
       {exitAttribution.length > 0 && (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {exitAttribution.map((ea: any, i: number) => {
             if (ea.trigger === "no_action") return null;
             const color = triggerColors[ea.trigger] || "text-muted-foreground";
@@ -443,7 +441,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
       {/* Legacy invalidation history */}
       {invalidHistory.length > 0 && exitAttribution.length === 0 && (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {invalidHistory.map((ih: any, i: number) => (
             <div key={i} className="flex items-center gap-2 text-xs text-destructive">
               <span className="flex-shrink-0">{"\uD83D\uDEE1"}</span>
