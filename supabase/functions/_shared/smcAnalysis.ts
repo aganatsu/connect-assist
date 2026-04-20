@@ -1058,7 +1058,8 @@ export function calculatePositionSize(
   if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
     // Volatility-adjusted: scale risk inversely with ATR
     const riskAmount = balance * (riskPercent / 100);
-    const atrDistance = config.atrValue * 1.5; // Use 1.5x ATR as reference SL distance
+    const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
+    const atrDistance = config.atrValue * atrMultiplier; // Configurable ATR multiplier for volatility sizing
     if (atrDistance === 0) return 0.01;
     // pipValuePerLot in USD = atrDistance * lotUnits * quoteToUSD
     const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);

@@ -2070,6 +2070,7 @@ Deno.serve(async (req) => {
           positionSizingMethod: config.positionSizingMethod,
           fixedLotSize: config.fixedLotSize,
           atrValue: (analysis as any).atrValue ?? calculateATR(entryCandles.slice(Math.max(0, entryCandles.length - 100)), config.slATRPeriod || 14),
+          atrVolatilityMultiplier: config.atrVolatilityMultiplier,
         }, btRateMap);
 
         // ── Open Position ──

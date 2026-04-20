@@ -63,6 +63,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
   { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
+  { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
   { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
@@ -120,7 +121,7 @@ const BASE_CONFIG = {
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-    fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
+    fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
   },
   entry: {
     defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
@@ -722,7 +723,22 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         </FieldGroup>
                       )}
                       {config.risk?.positionSizingMethod === "volatility_adjusted" && (
-                        <p className="text-[10px] text-muted-foreground italic">Lot size scales inversely with ATR — smaller positions in volatile markets, larger in calm markets. Uses Risk% as the base.</p>
+                        <>
+                          <p className="text-[10px] text-muted-foreground italic">Lot size scales inversely with ATR — smaller positions in volatile markets, larger in calm markets. Uses Risk% as the base.</p>
+                          <FieldGroup label={`ATR Multiplier: ${config.risk?.atrVolatilityMultiplier ?? 1.5}×`} description="ATR is multiplied by this factor to set the volatility-based risk distance. Lower = larger lots (more aggressive), higher = smaller lots (more conservative)">
+                            <Slider
+                              value={[config.risk?.atrVolatilityMultiplier ?? 1.5]}
+                              onValueChange={([v]) => updateField('risk', 'atrVolatilityMultiplier', Math.round(v * 10) / 10)}
+                              min={0.5} max={3.0} step={0.1}
+                              className="w-full"
+                            />
+                            <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                              <span>0.5× (aggressive)</span>
+                              <span>1.5× (default)</span>
+                              <span>3.0× (conservative)</span>
+                            </div>
+                          </FieldGroup>
+                        </>
                       )}
                     </div>
 

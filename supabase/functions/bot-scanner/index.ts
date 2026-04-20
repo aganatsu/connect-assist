@@ -200,6 +200,84 @@ async function metaFetch(
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
 
+// ─── Unified Broker Spread Check ────────────────────────────────────
+// Single function for both OANDA and MetaApi spread checks.
+// Returns { bid, ask, spreadPips, passed, effectiveMax } or null on error.
+interface SpreadCheckResult {
+  bid: number;
+  ask: number;
+  spreadPips: number;
+  passed: boolean;
+  effectiveMax: number;
+  halfSpreadPrice: number;
+}
+async function fetchBrokerSpread(
+  conn: any,
+  pair: string,
+  config: { spreadFilterEnabled: boolean; maxSpreadPips: number },
+  metaAccountId?: string,
+  authToken?: string,
+): Promise<SpreadCheckResult | null> {
+  const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+  const effectiveMax = config.maxSpreadPips > 0 ? config.maxSpreadPips : pairSpec.maxSpread;
+  try {
+    let bid = 0, ask = 0;
+    if (conn.broker_type === "oanda") {
+      const oandaBase = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+      const oandaSym = resolveSymbol(pair, conn).replace(/([A-Z]{3})([A-Z]{3})/, "$1_$2");
+      const priceRes = await fetch(
+        `${oandaBase}/v3/accounts/${conn.account_id}/pricing?instruments=${encodeURIComponent(oandaSym)}`,
+        { headers: { Authorization: `Bearer ${conn.api_key}` } },
+      );
+      if (!priceRes.ok) {
+        console.warn(`OANDA pricing fetch failed [${conn.display_name}]: ${priceRes.status}`);
+        return null;
+      }
+      const priceData: any = await priceRes.json();
+      const pricing = priceData.prices?.[0];
+      if (!pricing) return null;
+      bid = parseFloat(pricing.bids?.[0]?.price ?? "0");
+      ask = parseFloat(pricing.asks?.[0]?.price ?? "0");
+    } else if (conn.broker_type === "metaapi" && metaAccountId && authToken) {
+      const brokerSymbol = resolveSymbol(pair, conn);
+      const { res: priceRes, body: priceBody } = await metaFetch(
+        metaAccountId, authToken,
+        (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`,
+      );
+      if (!priceRes.ok) {
+        console.warn(`MetaApi price fetch [${conn.display_name}] ${brokerSymbol}: HTTP ${priceRes.status}`);
+        return null;
+      }
+      const priceData: any = JSON.parse(priceBody);
+      bid = priceData.bid ?? 0;
+      ask = priceData.ask ?? 0;
+    } else {
+      return null;
+    }
+    if (bid <= 0 || ask <= 0) return null;
+    const spreadPips = (ask - bid) / pairSpec.pipSize;
+    const halfSpreadPrice = (spreadPips * pairSpec.pipSize) / 2;
+    const passed = !config.spreadFilterEnabled || spreadPips <= effectiveMax;
+    const source = config.maxSpreadPips > 0 ? "user" : "per-instrument";
+    console.log(`Spread check [${conn.display_name}] ${pair}: bid=${bid} ask=${ask} spread=${spreadPips.toFixed(2)}p (max=${effectiveMax} [${source}]) → ${passed ? "OK" : "BLOCKED"}`);
+    return { bid, ask, spreadPips, passed, effectiveMax, halfSpreadPrice };
+  } catch (err: any) {
+    console.warn(`Spread check error [${conn.display_name}] ${pair}: ${err?.message}`);
+    return null;
+  }
+}
+
+// Adjust SL/TP for broker spread. Returns adjusted { sl, tp }.
+function adjustSLTPForSpread(
+  sl: number, tp: number, direction: string, halfSpreadPrice: number,
+): { brokerSL: number; brokerTP: number } {
+  if (direction === "long") {
+    return { brokerSL: sl - halfSpreadPrice, brokerTP: tp + halfSpreadPrice };
+  } else {
+    return { brokerSL: sl + halfSpreadPrice, brokerTP: tp - halfSpreadPrice };
+  }
+}
+
 // ─── Trading Style Overrides ────────────────────────────────────────
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
@@ -1625,7 +1703,8 @@ function calculatePositionSize(
 
   if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
     const riskAmount = balance * (riskPercent / 100);
-    const atrDistance = config.atrValue * 1.5;
+    const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
+    const atrDistance = config.atrValue * atrMultiplier;
     if (atrDistance === 0) return 0.01;
     const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
     return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
@@ -2612,6 +2691,7 @@ async function runScanForUser(supabase: any, userId: string) {
           positionSizingMethod: (pairConfig as any).positionSizingMethod,
           fixedLotSize: (pairConfig as any).fixedLotSize,
           atrValue: (analysis as any).atrValue,
+          atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
         }, rateMap);
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
@@ -2821,50 +2901,20 @@ async function runScanForUser(supabase: any, userId: string) {
               for (const conn of connections) {
                 try {
                   if (conn.broker_type !== "metaapi") {
-                    // ── OANDA spread check: fetch live pricing before placing order ──
-                    if (conn.broker_type === "oanda" && config.spreadFilterEnabled) {
-                      try {
-                        const oandaBase = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
-                        // Resolve OANDA symbol format (EUR/USD → EUR_USD)
-                        const rawOverrides = conn.symbol_overrides || {};
-                        let oandaSym = pair;
-                        const normKey = pair.trim().replace(/[\s/._-]/g, "").toUpperCase();
-                        for (const [k, v] of Object.entries(rawOverrides)) {
-                          if (k.trim().replace(/[\s/._-]/g, "").toUpperCase() === normKey && v) { oandaSym = String(v); break; }
-                        }
-                        if (oandaSym === pair) {
-                          const cleaned = pair.trim().replace(/\s+/g, "").toUpperCase();
-                          if (cleaned.includes("/")) oandaSym = cleaned.replace("/", "_");
-                          else if (cleaned.length === 6 && !cleaned.includes("_")) oandaSym = `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
-                          else oandaSym = cleaned;
-                        }
-                        const priceRes = await fetch(`${oandaBase}/v3/accounts/${conn.account_id}/pricing?instruments=${encodeURIComponent(oandaSym)}`, {
-                          headers: { Authorization: `Bearer ${conn.api_key}` },
-                        });
-                        if (priceRes.ok) {
-                          const priceData: any = await priceRes.json();
-                          const pricing = priceData.prices?.[0];
-                          if (pricing) {
-                            const oBid = parseFloat(pricing.bids?.[0]?.price ?? "0");
-                            const oAsk = parseFloat(pricing.asks?.[0]?.price ?? "0");
-                            if (oBid > 0 && oAsk > 0) {
-                              const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
-                              const oSpreadPips = (oAsk - oBid) / pairSpec.pipSize;
-                              const effectiveMaxSpread = config.maxSpreadPips > 0 ? config.maxSpreadPips : pairSpec.maxSpread;
-                              console.log(`OANDA spread [${conn.display_name}] ${oandaSym}: bid=${oBid} ask=${oAsk} spread=${oSpreadPips.toFixed(2)} pips (max=${effectiveMaxSpread} [${config.maxSpreadPips > 0 ? 'user' : 'per-instrument'}])`);
-                              if (oSpreadPips > effectiveMaxSpread) {
-                                console.warn(`OANDA spread too wide [${conn.display_name}]: ${oSpreadPips.toFixed(2)} > ${effectiveMaxSpread} — skipping`);
-                                mirrorResults.push(`${conn.display_name}: skipped (spread ${oSpreadPips.toFixed(1)} > ${effectiveMaxSpread})`);
-                                continue;
-                              }
-                            }
-                          }
-                        } else {
-                          console.warn(`OANDA pricing fetch failed [${conn.display_name}]: ${priceRes.status} — proceeding without spread check`);
-                        }
-                      } catch (spreadErr: any) {
-                        console.warn(`OANDA spread check error [${conn.display_name}]: ${spreadErr?.message} — proceeding without spread check`);
-                      }
+                    // ── Unified spread check for OANDA ──
+                    const oandaSpread = await fetchBrokerSpread(conn, pair, pairConfig);
+                    if (oandaSpread && !oandaSpread.passed) {
+                      mirrorResults.push(`${conn.display_name}: skipped (spread ${oandaSpread.spreadPips.toFixed(1)} > ${oandaSpread.effectiveMax} max)`);
+                      continue;
+                    }
+                    // Adjust SL/TP for spread (was missing for OANDA — broker-execute doesn't do it)
+                    let oandaSL = sl;
+                    let oandaTP = tp;
+                    if (oandaSpread) {
+                      const adj = adjustSLTPForSpread(sl, tp, analysis.direction, oandaSpread.halfSpreadPrice);
+                      oandaSL = adj.brokerSL;
+                      oandaTP = adj.brokerTP;
+                      console.log(`OANDA SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${oandaSL}, TP ${tp} → ${oandaTP}`);
                     }
                     // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
                     const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
@@ -2879,8 +2929,8 @@ async function runScanForUser(supabase: any, userId: string) {
                         symbol: pair,
                         direction: analysis.direction,
                         size,
-                        stopLoss: sl,
-                        takeProfit: tp,
+                        stopLoss: oandaSL,
+                        takeProfit: oandaTP,
                         userId,
                       }),
                     });
@@ -2936,6 +2986,7 @@ async function runScanForUser(supabase: any, userId: string) {
                        positionSizingMethod: (pairConfig as any).positionSizingMethod,
                        fixedLotSize: (pairConfig as any).fixedLotSize,
                        atrValue: (analysis as any).atrValue,
+                       atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
                      }, rateMap);
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
                    } catch (balErr: any) {
@@ -2970,56 +3021,21 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.log(`Broker specs [${conn.display_name}] ${brokerSymbol}: min=${brokerSpec.minVolume}, max=${brokerSpec.maxVolume}, step=${brokerSpec.volumeStep} → clamped ${preClamp} → ${brokerVolume}`);
                    }
 
-                   // ── Spread-aware execution: fetch live bid/ask and validate spread ──
-                   let brokerBid: number | null = null;
-                   let brokerAsk: number | null = null;
-                   let brokerSpreadPips: number | null = null;
-                   try {
-                     const { res: priceRes, body: priceBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`);
-                     if (priceRes.ok) {
-                       const priceData: any = JSON.parse(priceBody);
-                       brokerBid = priceData.bid ?? null;
-                       brokerAsk = priceData.ask ?? null;
-                       if (brokerBid != null && brokerAsk != null) {
-                         const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
-                         brokerSpreadPips = (brokerAsk - brokerBid) / pairSpec.pipSize;
-                         console.log(`Spread check [${conn.display_name}] ${brokerSymbol}: bid=${brokerBid}, ask=${brokerAsk}, spread=${brokerSpreadPips.toFixed(2)} pips`);
-                       }
-                     } else {
-                       console.warn(`Price fetch [${conn.display_name}] ${brokerSymbol}: HTTP ${priceRes.status}`);
-                     }
-                   } catch (priceErr: any) {
-                     console.warn(`Price fetch error [${conn.display_name}] ${brokerSymbol}: ${priceErr?.message}`);
-                   }
-
-                   // Gate: skip this broker if spread exceeds per-instrument or user-configured maximum
-                   const metaPairSpec = SPECS[pair] || SPECS["EUR/USD"];
-                   const metaEffectiveMaxSpread = pairConfig.maxSpreadPips > 0 ? pairConfig.maxSpreadPips : metaPairSpec.maxSpread;
-                   if (pairConfig.spreadFilterEnabled && brokerSpreadPips != null && brokerSpreadPips > metaEffectiveMaxSpread) {
-                     console.warn(`Spread filter [${conn.display_name}]: ${brokerSpreadPips.toFixed(2)} pips > ${metaEffectiveMaxSpread} max [${pairConfig.maxSpreadPips > 0 ? 'user' : 'per-instrument'}] — skipping`);
-                     mirrorResults.push(`${conn.display_name}: skipped (spread ${brokerSpreadPips.toFixed(1)} > ${metaEffectiveMaxSpread} max)`);
+                   // ── Unified spread check for MetaApi ──
+                   const metaSpread = await fetchBrokerSpread(conn, pair, pairConfig, metaAccountId, authToken);
+                   if (metaSpread && !metaSpread.passed) {
+                     mirrorResults.push(`${conn.display_name}: skipped (spread ${metaSpread.spreadPips.toFixed(1)} > ${metaSpread.effectiveMax} max)`);
                      continue;
                    }
 
-                   // Adjust SL/TP for broker spread:
-                   // SL widened by half-spread (prevents premature stop-out)
-                   // TP widened by half-spread (compensates for bid/ask exit)
+                   // Adjust SL/TP for broker spread using unified helper
                    let brokerSL = sl;
                    let brokerTP = tp;
-                   if (brokerSpreadPips != null && brokerSpreadPips > 0) {
-                     const halfSpread = (brokerSpreadPips * metaPairSpec.pipSize) / 2;
-                     if (analysis.direction === "long") {
-                       // Long: entry at ask, SL hit at bid → widen SL down
-                       brokerSL = sl - halfSpread;
-                       // Long: TP hit at bid → widen TP up to compensate
-                       brokerTP = tp + halfSpread;
-                     } else {
-                       // Short: entry at bid, SL hit at ask → widen SL up
-                       brokerSL = sl + halfSpread;
-                       // Short: TP hit at ask → widen TP down to compensate
-                       brokerTP = tp - halfSpread;
-                     }
-                     console.log(`SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${brokerSL}, TP ${tp} → ${brokerTP} (half-spread=${halfSpread.toFixed(6)})`);
+                   if (metaSpread) {
+                     const adj = adjustSLTPForSpread(sl, tp, analysis.direction, metaSpread.halfSpreadPrice);
+                     brokerSL = adj.brokerSL;
+                     brokerTP = adj.brokerTP;
+                     console.log(`MetaApi SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${brokerSL}, TP ${tp} → ${brokerTP}`);
                    }
 
                    const mt5Body: any = {
@@ -3030,7 +3046,7 @@ async function runScanForUser(supabase: any, userId: string) {
                    };
                    if (brokerSL) mt5Body.stopLoss = brokerSL;
                    if (brokerTP) mt5Body.takeProfit = brokerTP;
-                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${brokerSpreadPips?.toFixed(2) ?? "?"} pips`);
+                   console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${metaSpread?.spreadPips?.toFixed(2) ?? "?"} pips`);
                    const { res: mt5Res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
                    if (mt5Res.ok) {
                      console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
