@@ -28,6 +28,7 @@ const DEFAULTS = {
   maxDrawdown: 15,
   maxOpenPositions: 5,
   maxPerSymbol: 2,
+  allowSameDirectionStacking: false,
   portfolioHeat: 10,
   minRiskReward: 1.5,
   // ── SL/TP Method Defaults ──
@@ -2562,6 +2563,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // tpRatio is set later (in SL/TP method block)
     // Legacy DB keys
     maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
+    allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
 
     // ── Entry mappings ──
@@ -2722,12 +2724,12 @@ async function runSafetyGates(
   // Gate 5: Max per symbol + same-direction duplicate check
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
-  if (sameDirectionExists) {
-    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate` });
+  if (sameDirectionExists && !config.allowSameDirectionStacking) {
+    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
   } else if (symbolPositions >= config.maxPerSymbol) {
     gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
   } else {
-    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}` });
+    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
   }
 
   // Gate 6: Portfolio heat (actual risk per position)

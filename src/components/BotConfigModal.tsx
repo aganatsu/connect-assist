@@ -59,6 +59,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Min R:R Ratio", keywords: ["rr", "risk reward", "ratio", "minimum"] },
   { tab: "risk", label: "Portfolio Heat (%)", keywords: ["portfolio", "heat", "exposure", "total"] },
   { tab: "risk", label: "Max Per Symbol", keywords: ["per symbol", "instrument", "max", "duplicate"] },
+  { tab: "risk", label: "Same-Direction Stacking", keywords: ["stacking", "duplicate", "same direction", "pyramid", "double"] },
   { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
   { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
@@ -119,7 +120,7 @@ const BASE_CONFIG = {
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-    fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
+    fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
   },
   entry: {
     defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
@@ -803,6 +804,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                           <Input type="number" value={config.risk?.maxPositionsPerSymbol ?? 2} onChange={e => updateField('risk', 'maxPositionsPerSymbol', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
                         </FieldGroup>
                       </div>
+                      <ToggleField label="Allow Same-Direction Stacking" description="When enabled, the bot can open multiple positions in the same direction on the same pair (e.g. two longs on GBP/USD). Still limited by Max Per Symbol." checked={config.risk?.allowSameDirectionStacking ?? false} onChange={v => updateField('risk', 'allowSameDirectionStacking', v)} />
 
                       {/* ── Max Total Drawdown: dual %/$ input ── */}
                       <FieldGroup label="Max Total Drawdown" description="Kill switch — stops all trading if total drawdown exceeds this. Toggle between % and $.">
