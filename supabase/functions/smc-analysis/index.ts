@@ -259,9 +259,9 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   {
     let pts = 0;
     let detail = "";
-    if (displacement.detected) {
+    if (displacement.isDisplacement) {
       pts = 1.5;
-      detail = `Displacement: ${displacement.count} large-body candle(s), last ${displacement.lastDirection}`;
+      detail = `Displacement: ${displacement.displacementCandles.length} large-body candle(s), last ${displacement.lastDirection}`;
     } else {
       detail = "No displacement detected";
     }
@@ -329,7 +329,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   {
     let pts = 0;
     let detail = "";
-    if (amd.phase !== "none") {
+    if (amd.phase !== "unknown") {
       pts = amd.phase === "distribution" ? 1.0 : 0.5;
       detail = `AMD: ${amd.phase} phase detected`;
     } else {
@@ -343,10 +343,10 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   {
     let pts = 0;
     let detail = "";
-    if (vwap.vwap !== null) {
+    if (vwap.value !== null) {
       pts = 0.5;
-      const position = lastPrice > vwap.vwap ? "above" : "below";
-      detail = `Price ${position} VWAP (${fx(vwap.vwap)})`;
+      const position = lastPrice > vwap.value ? "above" : "below";
+      detail = `Price ${position} VWAP (${fx(vwap.value)})`;
     } else {
       detail = "VWAP not available";
     }
