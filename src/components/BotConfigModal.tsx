@@ -1054,29 +1054,37 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   <div className="space-y-5">
                     <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during. Times shown are New York / ET (DST-aware)." />
                     <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { id: "asian", label: "Asian", time: "20:00 – 02:00 ET" },
-                        { id: "london", label: "London", time: "02:00 – 08:30 ET" },
-                        { id: "newyork", label: "New York", time: "08:30 – 16:00 ET" },
-                        { id: "sydney", label: "Sydney", time: "17:00 – 02:00 ET" },
-                      ].map(session => {
+                      {([
+                        { id: "asian",   label: "Asian",    time: "20:00 – 02:00 ET", start: "20:00", end: "02:00", boolKey: "asianEnabled",   startKey: "asianStart",   endKey: "asianEnd"   },
+                        { id: "london",  label: "London",   time: "02:00 – 08:30 ET", start: "02:00", end: "08:30", boolKey: "londonEnabled",  startKey: "londonStart",  endKey: "londonEnd"  },
+                        { id: "newyork", label: "New York", time: "08:30 – 16:00 ET", start: "08:30", end: "16:00", boolKey: "newYorkEnabled", startKey: "newYorkStart", endKey: "newYorkEnd" },
+                        { id: "sydney",  label: "Sydney",   time: "17:00 – 02:00 ET", start: "17:00", end: "02:00", boolKey: "sydneyEnabled",  startKey: "sydneyStart",  endKey: "sydneyEnd"  },
+                      ] as const).map(session => {
                         const filterArr = config.sessions?.filter;
-                        const boolKey = `${session.id}Enabled` as string;
-                        const enabled = Array.isArray(filterArr) ? filterArr.includes(session.id) : (config.sessions?.[boolKey] ?? true);
+                        const enabled = Array.isArray(filterArr)
+                          ? filterArr.includes(session.id)
+                          : (config.sessions?.[session.boolKey] ?? true);
                         return (
                           <button
                             key={session.id}
                             onClick={() => {
-                              // Build current filter array from either format
                               const sessions_cfg = config.sessions || {};
-                              const current = Array.isArray(sessions_cfg.filter) ? [...sessions_cfg.filter] : [
-                                ...(sessions_cfg.asianEnabled !== false ? ["asian"] : []),
-                                ...(sessions_cfg.londonEnabled !== false ? ["london"] : []),
-                                ...(sessions_cfg.newYorkEnabled !== false || sessions_cfg.newyorkEnabled !== false ? ["newyork"] : []),
-                                ...(sessions_cfg.sydneyEnabled !== false ? ["sydney"] : []),
+                              const current: string[] = Array.isArray(sessions_cfg.filter) ? [...sessions_cfg.filter] : [
+                                ...(sessions_cfg.asianEnabled    ? ["asian"]   : []),
+                                ...(sessions_cfg.londonEnabled   ? ["london"]  : []),
+                                ...((sessions_cfg.newYorkEnabled || sessions_cfg.newyorkEnabled) ? ["newyork"] : []),
+                                ...(sessions_cfg.sydneyEnabled   ? ["sydney"]  : []),
                               ];
-                              const updated = enabled ? current.filter((s: string) => s !== session.id) : [...current, session.id];
-                              updateField('sessions', 'filter', updated);
+                              const updated = enabled ? current.filter((s: string) => s !== session.id) : Array.from(new Set([...current, session.id]));
+                              const newSessions = {
+                                ...sessions_cfg,
+                                filter: updated,
+                                [session.boolKey]: !enabled,
+                                // Lock displayed ET windows so the scanner matches the UI labels
+                                [session.startKey]: session.start,
+                                [session.endKey]: session.end,
+                              };
+                              setConfig({ ...config, sessions: newSessions });
                             }}
                             className={`flex items-center justify-between px-4 py-3 border text-left transition-colors ${enabled ? "border-primary/40 bg-primary/5" : "border-border text-muted-foreground"}`}
                           >
