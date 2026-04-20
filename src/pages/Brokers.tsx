@@ -351,6 +351,8 @@ function ConnectionDetail({
   const [editOverrides, setEditOverrides] = useState<Record<string, string>>(c.symbol_overrides || {});
   const [newSym, setNewSym] = useState("");
   const [newBrokerSym, setNewBrokerSym] = useState("");
+  const [editCommission, setEditCommission] = useState<string>(String(c.commission_per_lot || 0));
+  const [editCustomCommission, setEditCustomCommission] = useState("");
   const [dirty, setDirty] = useState(false);
   // Probe results for manually-typed broker symbols (keyed by broker symbol string).
   // Auto-populated by validate-on-save; merged with auto-map probe data for badge rendering.
@@ -365,6 +367,8 @@ function ConnectionDetail({
   useMemo(() => {
     setEditSuffix(c.symbol_suffix || "");
     setEditOverrides(c.symbol_overrides || {});
+    setEditCommission(String(c.commission_per_lot || 0));
+    setEditCustomCommission("");
     setManualProbes({});
     setManuallyTouched(new Set());
     setDirty(false);
@@ -372,8 +376,10 @@ function ConnectionDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c.id]);
 
+  const commissionValue = editCommission === "custom" ? parseFloat(editCustomCommission || "0") : parseFloat(editCommission);
+
   const updateMutation = useMutation({
-    mutationFn: () => brokerApi.update({ id: c.id, symbol_suffix: editSuffix, symbol_overrides: editOverrides }),
+    mutationFn: () => brokerApi.update({ id: c.id, symbol_suffix: editSuffix, symbol_overrides: editOverrides, commission_per_lot: commissionValue }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
       toast.success("Saved");
@@ -700,6 +706,55 @@ function ConnectionDetail({
               }}>Discard</Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Commission settings */}
+      <Card>
+        <CardContent className="pt-5 space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold">Commission Settings</h3>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Round-trip commission per standard lot. Set to 0 for spread-only accounts.
+              {c.detected_commission_per_lot ? (
+                <span className="block mt-1 text-primary">Auto-detected: ${c.detected_commission_per_lot.toFixed(2)}/lot from last trade</span>
+              ) : null}
+            </p>
+          </div>
+          <div>
+            <Label className="text-xs">Commission preset</Label>
+            <select
+              value={["0", "5", "7", "10"].includes(editCommission) ? editCommission : "custom"}
+              onChange={(e) => {
+                setEditCommission(e.target.value);
+                if (e.target.value !== "custom") setEditCustomCommission("");
+                setDirty(true);
+              }}
+              className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm"
+            >
+              <option value="0">Spread-only ($0/lot)</option>
+              <option value="5">ECN Low ($5/lot round-trip)</option>
+              <option value="7">ECN Standard ($7/lot round-trip)</option>
+              <option value="10">ECN High ($10/lot round-trip)</option>
+              <option value="custom">Custom...</option>
+            </select>
+            {!["0", "5", "7", "10"].includes(editCommission) && (
+              <Input
+                type="number"
+                step="0.5"
+                min="0"
+                max="50"
+                value={editCommission === "custom" ? editCustomCommission : editCommission}
+                onChange={(e) => {
+                  setEditCommission("custom");
+                  setEditCustomCommission(e.target.value);
+                  setDirty(true);
+                }}
+                placeholder="e.g. 6.50"
+                className="mt-2 font-mono text-xs"
+              />
+            )}
+          </div>
         </CardContent>
       </Card>
 
