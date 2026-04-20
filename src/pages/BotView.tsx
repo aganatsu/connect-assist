@@ -23,6 +23,7 @@ import { FOTSIMeter } from "@/components/FOTSIMeter";
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
+import { ExpandedPositionCard } from "@/components/ExpandedPositionCard";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import SessionStatusPill from "@/components/SessionStatusPill";
@@ -420,112 +421,8 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={11} className="bg-secondary/20 border-b border-border p-2">
-                                <div className="space-y-2 text-[10px]">
-                                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
-                                  <SignalReasoningCard signalReason={p.signalReason || ""} />
-                                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
-                                    <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{p.signalScore}/10</span></div>
-                                    <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{p.orderId}</span></div>
-                                    <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(p.openTime)}</span></div>
-                                    <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{((p.pnl / (parseFloat(p.size) * 100000)) * 10000).toFixed(1)}</span></div>
-                                  </div>
-                                  {/* Trade Management Status */}
-                                  {(() => {
-                                    try {
-                                      const sr = JSON.parse(p.signalReason || "{}");
-                                      const promoHistory = sr.promotionHistory || [];
-                                      const invalidHistory = sr.invalidationHistory || [];
-                                      const setupType = sr.setupType || "";
-                                      const ef = sr.exitFlags || {};
-                                      const exitAttribution: any[] = sr.exitAttribution || [];
-                                      // Show management section if any features are enabled or any actions taken
-                                      const hasManagement = ef.trailingStopEnabled || ef.breakEvenEnabled || ef.partialTPEnabled || exitAttribution.length > 0 || invalidHistory.length > 0;
-                                      if (!hasManagement) return null;
-                                      return (
-                                        <div className="mt-1.5 space-y-1">
-                                          <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
-                                          {/* Feature status badges — pending vs active */}
-                                          <div className="flex flex-wrap gap-1">
-                                            {ef.trailingStopEnabled && (
-                                              ef.trailingStopActivated
-                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 rounded">Trailing ACTIVE</span>
-                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/5 border border-emerald-500/20 text-emerald-400/50 rounded">Trailing (pending)</span>
-                                            )}
-                                            {ef.breakEvenEnabled && (
-                                              ef.breakEvenActivated
-                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 rounded">BE ACTIVE</span>
-                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/5 border border-yellow-500/20 text-yellow-400/50 rounded">BE (pending)</span>
-                                            )}
-                                            {ef.partialTPEnabled && (
-                                              ef.partialTPActivated
-                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/20 border border-cyan-500/50 text-cyan-400 rounded">Partial TP FILLED</span>
-                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/5 border border-cyan-500/20 text-cyan-400/50 rounded">Partial TP (pending)</span>
-                                            )}
-                                            {/* Backward compat: old positions with trailingStop/breakEven/partialTP as intent booleans */}
-                                            {!ef.trailingStopEnabled && ef.trailingStop && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 rounded">Trailing ON (legacy)</span>}
-                                            {!ef.breakEvenEnabled && ef.breakEven && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 rounded">BE (legacy)</span>}
-                                            {!ef.partialTPEnabled && ef.partialTP && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 rounded">Partial TP (legacy)</span>}
-                                          </div>
-                                          {/* Exit attribution timeline — every management action taken */}
-                                          {exitAttribution.length > 0 && (
-                                            <div className="text-[9px] space-y-0.5">
-                                              {exitAttribution.map((ea: any, i: number) => {
-                                                const triggerColors: Record<string, string> = {
-                                                  trailing_enabled: "text-emerald-400",
-                                                  trailing_stop: "text-emerald-400",
-                                                  be_enabled: "text-yellow-400",
-                                                  break_even: "text-yellow-400",
-                                                  partial_enabled: "text-cyan-400",
-                                                  partial_tp: "text-cyan-400",
-                                                  structure_invalidated: "text-destructive",
-                                                  session_close: "text-orange-400",
-                                                  max_hold_exceeded: "text-orange-400",
-                                                  no_action: "text-muted-foreground",
-                                                };
-                                                const triggerIcons: Record<string, string> = {
-                                                  trailing_enabled: "\u2197\uFE0F",
-                                                  trailing_stop: "\u2197\uFE0F",
-                                                  be_enabled: "\u2696\uFE0F",
-                                                  break_even: "\u2696\uFE0F",
-                                                  partial_enabled: "\uD83D\uDCB0",
-                                                  partial_tp: "\uD83D\uDCB0",
-                                                  structure_invalidated: "\uD83D\uDEE1\uFE0F",
-                                                  session_close: "\u23F0",
-                                                  max_hold_exceeded: "\u23F3",
-                                                  no_action: "\u2014",
-                                                };
-                                                if (ea.trigger === "no_action") return null;
-                                                const color = triggerColors[ea.trigger] || "text-muted-foreground";
-                                                const icon = triggerIcons[ea.trigger] || "\u2022";
-                                                return (
-                                                  <div key={i} className={`flex items-center gap-1 ${color}`}>
-                                                    <span>{icon}</span>
-                                                    <span className="font-medium">{ea.rMultiple?.toFixed(2)}R</span>
-                                                    <span className="text-muted-foreground truncate max-w-[300px]">{ea.detail}</span>
-                                                  </div>
-                                                );
-                                              })}
-                                            </div>
-                                          )}
-                                          {/* Legacy invalidation history (backward compat) */}
-                                          {invalidHistory.length > 0 && exitAttribution.length === 0 && (
-                                            <div className="text-[9px] space-y-0.5">
-                                              {invalidHistory.map((ih: any, i: number) => (
-                                                <div key={i} className="flex items-center gap-1 text-destructive">
-                                                  <span>\uD83D\uDEE1\uFE0F</span>
-                                                  <span className="font-medium">SL Tightened</span>
-                                                  <span className="text-muted-foreground">at {ih.rMultiple}R — {ih.reason}</span>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    } catch { return null; }
-                                  })()}
-                                  <EditSLTPInline position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
-                                </div>
+                              <td colSpan={11} className="border-b border-border p-2">
+                                <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                               </td>
                             </tr>
                           )}
