@@ -84,93 +84,95 @@ function RMultipleBar({
   const currentPct = toPercent(currentR);
   const isProfit = currentR >= 0;
 
-  // Build marker data for the legend below
-  const markers: { r: number; label: string; price: string; color: string; bgColor: string }[] = [];
-  markers.push({ r: 0, label: "Entry", price: formatPrice(entry, symbol), color: "text-muted-foreground", bgColor: "bg-muted-foreground" });
-  if (beR != null && bePrice != null) {
-    markers.push({ r: beR, label: `BE (${beR.toFixed(1)}R)`, price: formatPrice(bePrice, symbol), color: "text-yellow-400", bgColor: "bg-yellow-400" });
-  }
-  if (partialR != null && partialPrice != null) {
-    markers.push({ r: partialR, label: `Partial (${partialR}R)`, price: formatPrice(partialPrice, symbol), color: "text-cyan-400", bgColor: "bg-cyan-400" });
-  }
-  if (tpR != null && tpPrice != null) {
-    markers.push({ r: tpR, label: `TP (${tpR.toFixed(1)}R)`, price: formatPrice(tpPrice, symbol), color: "text-blue-400", bgColor: "bg-blue-400" });
-  }
-
   return (
-    <div className="w-full select-none bg-muted/10 rounded-lg border border-border/30 p-4">
-      {/* Header row */}
-      <div className="flex items-center justify-between mb-4">
+    <div className="w-full select-none">
+      {/* Header: R-Multiple value large and clear */}
+      <div className="flex items-center justify-between mb-2">
         <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">R-Multiple</span>
-        <span className={`text-lg font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
+        <span className={`text-xl font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
           {currentR >= 0 ? "+" : ""}{currentR.toFixed(2)}R
         </span>
       </div>
 
-      {/* Bar track — no overflow hidden so markers can extend */}
-      <div className="relative h-4 bg-muted/30 rounded-full mx-2">
-        {/* Fill from entry to current */}
-        {isProfit ? (
-          <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
-            style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
-          />
-        ) : (
-          <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
-            style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
-          />
-        )}
+      {/* Bar with markers */}
+      <div className="relative bg-muted/15 rounded-lg border border-border/20 px-3 pt-8 pb-10">
+        {/* Bar track */}
+        <div className="relative h-5 bg-muted/30 rounded-full">
+          {/* Fill from entry to current */}
+          {isProfit ? (
+            <div
+              className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
+              style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
+            />
+          ) : (
+            <div
+              className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
+              style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
+            />
+          )}
 
-        {/* Entry tick */}
-        <div className="absolute top-0 bottom-0 w-[2px] bg-white/40 rounded" style={{ left: `${entryPct}%` }} />
-
-        {/* BE tick */}
-        {beR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-yellow-400 rounded" style={{ left: `${toPercent(beR)}%` }} />
-        )}
-
-        {/* Partial TP tick */}
-        {partialR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-cyan-400 rounded" style={{ left: `${toPercent(partialR)}%` }} />
-        )}
-
-        {/* TP tick */}
-        {tpR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-blue-400 rounded" style={{ left: `${toPercent(tpR)}%` }} />
-        )}
-
-        {/* Current position dot */}
-        <div
-          className={`absolute top-1/2 w-4 h-4 rounded-full border-2 shadow-lg ${
-            isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"
-          }`}
-          style={{ left: `${currentPct}%`, transform: "translate(-50%, -50%)" }}
-        />
-      </div>
-
-      {/* Scale labels below bar */}
-      <div className="flex items-center justify-between mt-1 mx-2">
-        <span className="text-[10px] text-muted-foreground/50 font-mono">-1R</span>
-        <span className="text-[10px] text-muted-foreground/50 font-mono">0R</span>
-        <span className="text-[10px] text-muted-foreground/50 font-mono">1R</span>
-        <span className="text-[10px] text-muted-foreground/50 font-mono">+{maxR.toFixed(0)}R</span>
-      </div>
-
-      {/* Legend: marker labels with prices in a readable row */}
-      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-3 pt-3 border-t border-border/20">
-        {markers.map((m, i) => (
-          <div key={i} className="flex items-center gap-1.5">
-            <div className={`w-2.5 h-2.5 rounded-sm flex-shrink-0 ${m.bgColor}`} />
-            <span className={`text-xs font-medium ${m.color}`}>{m.label}</span>
-            <span className="text-xs font-mono text-foreground/70">{m.price}</span>
+          {/* Entry tick + label above */}
+          <div className="absolute" style={{ left: `${entryPct}%`, transform: "translateX(-50%)" }}>
+            <div className="absolute bottom-full mb-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
+              <div className="text-[10px] text-muted-foreground font-medium">Entry</div>
+            </div>
+            <div className="w-[2px] bg-white/50" style={{ height: "20px" }} />
           </div>
-        ))}
-        {/* Current price in legend too */}
-        <div className="flex items-center gap-1.5">
-          <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${isProfit ? "bg-emerald-400" : "bg-red-400"}`} />
-          <span className={`text-xs font-medium ${isProfit ? "text-emerald-400" : "text-red-400"}`}>Current</span>
-          <span className="text-xs font-mono text-foreground/70">{formatPrice(currentPrice, symbol)}</span>
+
+          {/* BE tick + label below */}
+          {beR != null && bePrice != null && (
+            <div className="absolute" style={{ left: `${toPercent(beR)}%`, transform: "translateX(-50%)" }}>
+              <div className="w-[3px] bg-yellow-400" style={{ height: "20px" }} />
+              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
+                <div className="text-[11px] text-yellow-400 font-bold">BE</div>
+                <div className="text-[10px] text-yellow-400/70 font-mono">{formatPrice(bePrice, symbol)}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Partial TP tick + label below */}
+          {partialR != null && partialPrice != null && (
+            <div className="absolute" style={{ left: `${toPercent(partialR)}%`, transform: "translateX(-50%)" }}>
+              <div className="w-[3px] bg-cyan-400" style={{ height: "20px" }} />
+              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
+                <div className="text-[11px] text-cyan-400 font-bold">{partialR}R PT</div>
+                <div className="text-[10px] text-cyan-400/70 font-mono">{formatPrice(partialPrice, symbol)}</div>
+              </div>
+            </div>
+          )}
+
+          {/* TP tick + label below */}
+          {tpR != null && tpPrice != null && (
+            <div className="absolute" style={{ left: `${toPercent(tpR)}%`, transform: "translateX(-50%)" }}>
+              <div className="w-[3px] bg-blue-400" style={{ height: "20px" }} />
+              <div className="absolute top-full mt-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
+                <div className="text-[11px] text-blue-400 font-bold">TP</div>
+                <div className="text-[10px] text-blue-400/70 font-mono">{formatPrice(tpPrice, symbol)}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Current position dot + label above */}
+          <div className="absolute" style={{ left: `${currentPct}%`, transform: "translateX(-50%)" }}>
+            <div className="absolute bottom-full mb-1 whitespace-nowrap text-center" style={{ left: "50%", transform: "translateX(-50%)" }}>
+              <div className={`text-xs font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
+                {formatPrice(currentPrice, symbol)}
+              </div>
+            </div>
+            <div
+              className={`w-5 h-5 rounded-full border-2 shadow-lg ${
+                isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"
+              }`}
+            />
+          </div>
+        </div>
+
+        {/* Scale at very bottom */}
+        <div className="absolute bottom-1 left-3 right-3 flex items-center justify-between">
+          <span className="text-[9px] text-muted-foreground/40 font-mono">-1R</span>
+          <span className="text-[9px] text-muted-foreground/40 font-mono">0R</span>
+          <span className="text-[9px] text-muted-foreground/40 font-mono">1R</span>
+          <span className="text-[9px] text-muted-foreground/40 font-mono">+{maxR.toFixed(0)}R</span>
         </div>
       </div>
     </div>
