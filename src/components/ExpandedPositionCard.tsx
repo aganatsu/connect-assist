@@ -3,8 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
-import { SignalReasoningCard } from "@/components/SignalReasoningCard";
-import { formatFullDateTime } from "@/lib/formatTime";
 import { formatMoney } from "@/lib/marketData";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
@@ -47,171 +45,39 @@ function formatPrice(price: number, symbol: string): string {
   return price.toFixed(5);
 }
 
-// ─── R-Multiple Progress Bar ────────────────────────────────────────
+// ─── Management Card (ROW 2) ────────────────────────────────────────
 
-function RMultipleBar({
-  currentR,
-  tpR,
-  beR,
-  partialR,
-  entry,
-  currentPrice,
-  tpPrice,
-  bePrice,
-  partialPrice,
-  direction,
-  symbol,
+function ManagementCard({
+  title,
+  active,
+  lines,
+  borderColor,
+  badgeColor,
 }: {
-  currentR: number;
-  tpR: number | null;
-  beR: number | null;
-  partialR: number | null;
-  entry: number;
-  currentPrice: number;
-  tpPrice: number | null;
-  bePrice: number | null;
-  partialPrice: number | null;
-  direction: string;
-  symbol: string;
+  title: string;
+  active: boolean;
+  lines: string[];
+  borderColor: string;
+  badgeColor: string;
 }) {
-  const maxR = Math.max(tpR ? tpR + 0.5 : 2, 2);
-  const minR = -1;
-  const range = maxR - minR;
-
-  const toPercent = (r: number) => Math.max(0, Math.min(100, ((r - minR) / range) * 100));
-
-  const entryPct = toPercent(0);
-  const currentPct = toPercent(currentR);
-  const isProfit = currentR >= 0;
-
-  // Build levels array for the grid
-  const levels: { label: string; price: string; rVal: string; color: string; dotClass: string }[] = [];
-  levels.push({ label: "Entry", price: formatPrice(entry, symbol), rVal: "0R", color: "text-muted-foreground", dotClass: "bg-white/50" });
-  levels.push({ label: "Current", price: formatPrice(currentPrice, symbol), rVal: `${currentR >= 0 ? "+" : ""}${currentR.toFixed(2)}R`, color: isProfit ? "text-emerald-400" : "text-red-400", dotClass: isProfit ? "bg-emerald-400" : "bg-red-400" });
-  if (beR != null && bePrice != null) {
-    levels.push({ label: "Break Even", price: formatPrice(bePrice, symbol), rVal: `${beR.toFixed(1)}R`, color: "text-yellow-400", dotClass: "bg-yellow-400" });
-  }
-  if (partialR != null && partialPrice != null) {
-    levels.push({ label: "Partial TP", price: formatPrice(partialPrice, symbol), rVal: `${partialR}R`, color: "text-cyan-400", dotClass: "bg-cyan-400" });
-  }
-  if (tpR != null && tpPrice != null) {
-    levels.push({ label: "Take Profit", price: formatPrice(tpPrice, symbol), rVal: `${tpR.toFixed(1)}R`, color: "text-blue-400", dotClass: "bg-blue-400" });
-  }
-
   return (
-    <div className="w-full select-none space-y-3">
-      {/* Header: R-Multiple value */}
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">R-Multiple</span>
-        <span className={`text-xl font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
-          {currentR >= 0 ? "+" : ""}{currentR.toFixed(2)}R
+    <div className={`flex-1 min-w-0 rounded-lg border-l-[3px] ${borderColor} bg-secondary/40 p-3`}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[11px] font-bold text-foreground/80 uppercase tracking-wider">{title}</span>
+        <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${badgeColor}`}>
+          {active ? "ACTIVE" : "Pending"}
         </span>
       </div>
-
-      {/* Clean bar — only colored ticks and dot, NO text labels */}
-      <div className="relative h-5 bg-muted/20 rounded-full">
-        {/* Fill from entry to current */}
-        {isProfit ? (
-          <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-600 to-emerald-400"
-            style={{ left: `${entryPct}%`, width: `${Math.min(100 - entryPct, Math.max(0, currentPct - entryPct))}%` }}
-          />
-        ) : (
-          <div
-            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-600"
-            style={{ left: `${currentPct}%`, width: `${Math.min(100 - currentPct, Math.max(0, entryPct - currentPct))}%` }}
-          />
-        )}
-
-        {/* Entry tick */}
-        <div className="absolute top-0 bottom-0 w-[2px] bg-white/50 rounded" style={{ left: `${entryPct}%` }} />
-
-        {/* BE tick */}
-        {beR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-yellow-400 rounded" style={{ left: `${toPercent(beR)}%` }} />
-        )}
-
-        {/* Partial TP tick */}
-        {partialR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-cyan-400 rounded" style={{ left: `${toPercent(partialR)}%` }} />
-        )}
-
-        {/* TP tick */}
-        {tpR != null && (
-          <div className="absolute -top-1 -bottom-1 w-[3px] bg-blue-400 rounded" style={{ left: `${toPercent(tpR)}%` }} />
-        )}
-
-        {/* Current position dot */}
-        <div
-          className={`absolute top-1/2 w-5 h-5 rounded-full border-2 shadow-lg ${isProfit ? "bg-emerald-400 border-white" : "bg-red-400 border-white"}`}
-          style={{ left: `${currentPct}%`, transform: "translate(-50%, -50%)" }}
-        />
-      </div>
-
-      {/* Levels grid — always readable, never overlaps */}
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        {levels.map((lv, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${lv.dotClass}`} />
-            <span className={`text-xs font-medium ${lv.color} w-16`}>{lv.label}</span>
-            <span className="text-xs font-mono text-foreground/80 flex-1">{lv.price}</span>
-            <span className={`text-xs font-mono font-semibold ${lv.color}`}>{lv.rVal}</span>
-          </div>
-        ))}
-      </div>
+      {lines.map((line, i) => (
+        <div key={i} className={`text-xs font-mono ${i === 0 ? "text-foreground/90" : "text-foreground/60"}`}>
+          {line}
+        </div>
+      ))}
     </div>
   );
 }
 
-// ─── Trade Management Status Rows ───────────────────────────────────
-
-function ManagementRow({
-  label,
-  active,
-  activeText,
-  pendingText,
-  colorClass,
-}: {
-  label: string;
-  active: boolean;
-  activeText: string;
-  pendingText: string;
-  colorClass: "emerald" | "yellow" | "cyan";
-}) {
-  const colors = {
-    emerald: {
-      dot: active ? "bg-emerald-400" : "bg-emerald-400/30",
-      badge: active ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-muted/30 text-emerald-400/50 border-border/40",
-      text: active ? "text-emerald-300" : "text-muted-foreground",
-    },
-    yellow: {
-      dot: active ? "bg-yellow-400" : "bg-yellow-400/30",
-      badge: active ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/50" : "bg-muted/30 text-yellow-400/50 border-border/40",
-      text: active ? "text-yellow-300" : "text-muted-foreground",
-    },
-    cyan: {
-      dot: active ? "bg-cyan-400" : "bg-cyan-400/30",
-      badge: active ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50" : "bg-muted/30 text-cyan-400/50 border-border/40",
-      text: active ? "text-cyan-300" : "text-muted-foreground",
-    },
-  };
-  const c = colors[colorClass];
-
-  return (
-    <div className="flex items-start gap-2 py-1.5 px-2.5 rounded-md bg-secondary/30 border border-border/30">
-      <div className={`w-2 h-2 rounded-full flex-shrink-0 mt-0.5 ${c.dot}`} />
-      <span className="text-[11px] font-medium text-foreground/80 w-20 flex-shrink-0">{label}</span>
-      <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border flex-shrink-0 ${c.badge}`}>
-        {active ? "ACTIVE" : "Pending"}
-      </span>
-      <span className={`text-[11px] font-mono leading-snug break-words ${c.text}`}>
-        {active ? activeText : pendingText}
-      </span>
-    </div>
-  );
-}
-
-// ─── Inline SL/TP Editor ────────────────────────────────────────────
+// ─── Inline SL/TP Editor (ROW 6) ───────────────────────────────────
 
 function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void }) {
   const [sl, setSl] = useState(position.stopLoss ? String(parseFloat(position.stopLoss)) : "");
@@ -240,27 +106,32 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
 
   return (
     <div className="flex items-end gap-3 pt-3 border-t border-border/40">
-      <div className="space-y-1">
+      <div className="space-y-1 flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Stop Loss</Label>
         <Input
           type="number" step="0.00001" value={sl}
           onChange={(e) => setSl(e.target.value)} placeholder="—"
-          className="h-8 w-32 text-xs font-mono px-2"
+          className="h-9 text-xs font-mono px-2"
         />
       </div>
-      <div className="space-y-1">
+      <div className="space-y-1 flex-1">
         <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Take Profit</Label>
         <Input
           type="number" step="0.00001" value={tp}
           onChange={(e) => setTp(e.target.value)} placeholder="—"
-          className="h-8 w-32 text-xs font-mono px-2"
+          className="h-9 text-xs font-mono px-2"
         />
       </div>
-      <Button size="sm" className="h-8 text-xs px-4" disabled={!dirty || saving} onClick={handleSave}>
+      <Button
+        size="sm"
+        className="h-9 px-6 text-xs bg-cyan-600 hover:bg-cyan-700 text-white"
+        disabled={!dirty || saving}
+        onClick={handleSave}
+      >
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
       </Button>
       {dirty && !saving && (
-        <Button size="sm" variant="ghost" className="h-8 text-xs"
+        <Button size="sm" variant="ghost" className="h-9 text-xs"
           onClick={() => { setSl(initialSl); setTp(initialTp); }}>
           Reset
         </Button>
@@ -298,7 +169,6 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
   // R-multiple
   const currentR = riskSl != null ? calcRMultiple(direction, entry, current, riskSl) : null;
-  const tpR = (tp != null && riskSl != null) ? calcRMultiple(direction, entry, tp, riskSl) : null;
 
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
@@ -318,13 +188,44 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
   // Has any management features
   const hasManagement = ef.trailingStopEnabled || ef.breakEvenEnabled || ef.partialTPEnabled
-    || ef.trailingStop || ef.breakEven || ef.partialTP
-    || exitAttribution.length > 0 || invalidHistory.length > 0;
+    || ef.trailingStop || ef.breakEven || ef.partialTP;
+
+  // Parse summary for signal info
+  const summaryText = sr.summary || "";
+  const dirMatch = summaryText.match(/^(BUY|SELL)/i);
+  const summaryDir = dirMatch ? dirMatch[1].toUpperCase() : null;
+  const factorMatch = summaryText.match(/(\d+)\/(\d+)\s+factors/i);
+  const factorCount = factorMatch ? parseInt(factorMatch[1], 10) : null;
+  const factorTotal = factorMatch ? parseInt(factorMatch[2], 10) : null;
+  const scoreMatch = summaryText.match(/score:\s*([\d.]+)\/10/i);
+  const summaryScore = scoreMatch ? parseFloat(scoreMatch[1]) : null;
+
+  // Setup info
+  const setupType: string | null = sr.setupType ?? null;
+  const setupConfidence: number | null = sr.setupConfidence ?? null;
+
+  // Aligned factors — extract from factorScores or summary text
+  let alignedFactors: string[] = [];
+  if (Array.isArray(sr.factorScores) && sr.factorScores.length > 0) {
+    alignedFactors = sr.factorScores
+      .filter((f: any) => f.present)
+      .map((f: any) => f.name);
+  } else {
+    const afterPeriod = summaryText.split(/\.\s+/).slice(1).join(". ");
+    if (afterPeriod) {
+      const segments = afterPeriod.split(/\s*\|\s*/);
+      const factorSeg = segments[0] || "";
+      alignedFactors = factorSeg
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter((s: string) => s.length > 0 && s !== "...");
+    }
+  }
 
   // Exit strategy config rows
   const exitConfig: { label: string; value: string }[] = [];
   if (ef.trailingStopPips != null) {
-    exitConfig.push({ label: "Trail", value: `${ef.trailingStopPips} pips${ef.trailingStopActivation ? ` (${ef.trailingStopActivation})` : ""}` });
+    exitConfig.push({ label: "Trailing", value: `${ef.trailingStopPips} pips${ef.trailingStopActivation ? ` (${ef.trailingStopActivation})` : ""}` });
   }
   if (ef.breakEvenPips != null) {
     exitConfig.push({ label: "BE", value: `${ef.breakEvenPips} pips` });
@@ -336,14 +237,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     exitConfig.push({ label: "Max Hold", value: `${ef.maxHoldHours}h` });
   }
 
-  // Trigger colors and icons
-  const triggerColors: Record<string, string> = {
-    trailing_enabled: "text-emerald-400", trailing_stop: "text-emerald-400",
-    be_enabled: "text-yellow-400", break_even: "text-yellow-400",
-    partial_enabled: "text-cyan-400", partial_tp: "text-cyan-400",
-    structure_invalidated: "text-destructive", session_close: "text-orange-400",
-    max_hold_exceeded: "text-orange-400", no_action: "text-muted-foreground",
-  };
+  // Trigger icons/colors for exit attribution
   const triggerIcons: Record<string, string> = {
     trailing_enabled: "\u2197", trailing_stop: "\u2197",
     be_enabled: "\u2696", break_even: "\u2696",
@@ -351,164 +245,200 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     structure_invalidated: "\uD83D\uDEE1", session_close: "\u23F0",
     max_hold_exceeded: "\u23F3", no_action: "\u2014",
   };
+  const triggerColors: Record<string, string> = {
+    trailing_enabled: "text-emerald-400", trailing_stop: "text-emerald-400",
+    be_enabled: "text-yellow-400", break_even: "text-yellow-400",
+    partial_enabled: "text-cyan-400", partial_tp: "text-cyan-400",
+    structure_invalidated: "text-destructive", session_close: "text-orange-400",
+    max_hold_exceeded: "text-orange-400", no_action: "text-muted-foreground",
+  };
 
   return (
     <div className="bg-secondary/20 border border-border/50 rounded-lg p-4 space-y-4">
-      {/* ── TOP BAR: Trade Header ── */}
+
+      {/* ═══ ROW 1: Trade Header Bar ═══ */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2.5">
-          <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-bold tracking-wider ${
+          <span className={`inline-flex items-center px-2.5 py-1 rounded text-[11px] font-bold tracking-wider ${
             direction === "long"
               ? "bg-success/15 border border-success/40 text-success"
               : "bg-destructive/15 border border-destructive/40 text-destructive"
           }`}>
             {direction === "long" ? "BUY" : "SELL"}
           </span>
-          <span className="font-bold text-foreground text-sm">{p.symbol}</span>
+          <span className="font-bold text-foreground text-base">{p.symbol}</span>
           <span className="text-muted-foreground text-xs">{parseFloat(p.size)?.toFixed(2)} lots</span>
           <span className={`text-xs ${direction === "long" ? "text-success" : "text-destructive"}`}>
-            {direction === "long" ? "▲" : "▼"}
+            {direction === "long" ? "\u25B2" : "\u25BC"}
           </span>
         </div>
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <span className="text-muted-foreground">Entry <span className="text-foreground font-medium">{formatPrice(entry, p.symbol)}</span></span>
-          <span className="text-muted-foreground/50">→</span>
-          <span className="text-muted-foreground">Now <span className="text-foreground font-medium">{formatPrice(current, p.symbol)}</span></span>
-          <span className={`font-bold text-sm ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
-            {formatMoney(p.pnl, true)}
-          </span>
-          <span className={`text-xs ${pnlPips >= 0 ? "text-success/70" : "text-destructive/70"}`}>
-            {pnlPips >= 0 ? "+" : ""}{pnlPips.toFixed(1)} pips
-          </span>
-          <span className="text-muted-foreground/60">Score <span className="text-primary font-bold">{p.signalScore}/10</span></span>
-          <span className="text-muted-foreground/40">ID {p.orderId?.slice(0, 8)}</span>
+        <div className="flex items-center gap-3 text-xs font-mono flex-wrap">
+          <span className="text-muted-foreground">Entry: <span className="text-foreground font-semibold">{formatPrice(entry, p.symbol)}</span></span>
+          <span className="text-muted-foreground/40">|</span>
+          <span className="text-muted-foreground">Current: <span className="text-foreground font-semibold">{formatPrice(current, p.symbol)}</span></span>
+          <span className="text-muted-foreground/40">|</span>
+          <span className="text-muted-foreground">P&L: <span className={`font-bold ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</span></span>
+          <span className="text-muted-foreground/40">|</span>
+          <span className="text-muted-foreground">Score: <span className="text-primary font-bold">{p.signalScore}/10</span></span>
         </div>
       </div>
 
-      {/* ── TWO-COLUMN LAYOUT ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* ── LEFT COLUMN: Analysis ── */}
-        <div className="space-y-3 min-w-0">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Analysis</p>
-          <SignalReasoningCard signalReason={p.signalReason || ""} />
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>Opened: <span className="font-mono text-foreground/70">{formatFullDateTime(p.openTime)}</span></span>
-          </div>
-        </div>
-
-        {/* ── RIGHT COLUMN: Trade Management ── */}
-        <div className="space-y-3 min-w-0">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
-
-          {/* R-Multiple Progress Bar */}
-          {currentR != null && (
-            <RMultipleBar
-              currentR={currentR}
-              tpR={tpR}
-              beR={beR}
-              partialR={partialR}
-              entry={entry}
-              currentPrice={current}
-              tpPrice={tp}
-              bePrice={bePrice}
-              partialPrice={partialPrice}
-              direction={direction}
-              symbol={p.symbol}
+      {/* ═══ ROW 2: Live Trade Management Status (3 cards) ═══ */}
+      {hasManagement && (
+        <div className="flex gap-3">
+          {(ef.trailingStopEnabled || ef.trailingStop) && (
+            <ManagementCard
+              title="TRAILING STOP"
+              active={!!ef.trailingStopActivated}
+              borderColor="border-l-emerald-500"
+              badgeColor={ef.trailingStopActivated
+                ? "bg-emerald-500/20 text-emerald-400"
+                : "bg-yellow-500/20 text-yellow-400"
+              }
+              lines={ef.trailingStopActivated
+                ? [
+                    sl != null ? `Current SL: ${formatPrice(sl, p.symbol)}` : "Active",
+                    currentR != null ? `${currentR.toFixed(2)}R locked` : "",
+                  ].filter(Boolean)
+                : [
+                    ef.trailingStopActivation
+                      ? `Triggers ${ef.trailingStopActivation}`
+                      : `${ef.trailingStopPips ?? "?"}p step`,
+                  ]
+              }
             />
           )}
 
-          {/* Management status rows */}
-          {hasManagement && (
-            <div className="space-y-1.5">
-              {(ef.trailingStopEnabled || ef.trailingStop) && (
-                <ManagementRow
-                  label="Trailing"
-                  active={!!ef.trailingStopActivated}
-                  colorClass="emerald"
-                  activeText={sl != null
-                    ? `SL → ${formatPrice(sl, p.symbol)} (${currentR != null ? currentR.toFixed(2) : "?"}R)`
-                    : "Active"
-                  }
-                  pendingText={ef.trailingStopActivation
-                    ? `Triggers ${ef.trailingStopActivation} · ${ef.trailingStopPips}p`
-                    : `${ef.trailingStopPips ?? "?"}p step`
-                  }
-                />
-              )}
-
-              {(ef.breakEvenEnabled || ef.breakEven) && (
-                <ManagementRow
-                  label="Break Even"
-                  active={!!ef.breakEvenActivated}
-                  colorClass="yellow"
-                  activeText={`SL → entry (${formatPrice(entry, p.symbol)})`}
-                  pendingText={bePrice != null
-                    ? `At ${beR?.toFixed(1)}R → SL to ${formatPrice(entry, p.symbol)}`
-                    : `${ef.breakEvenPips}p from entry`
-                  }
-                />
-              )}
-
-              {(ef.partialTPEnabled || ef.partialTP) && (
-                <ManagementRow
-                  label="Partial TP"
-                  active={!!ef.partialTPActivated || !!p.partialTpFired}
-                  colorClass="cyan"
-                  activeText={`${ef.partialTPPercent ?? 50}% closed at ${partialR ?? "?"}R`}
-                  pendingText={partialPrice != null
-                    ? `${ef.partialTPPercent ?? 50}% @ ${partialR}R (${formatPrice(partialPrice, p.symbol)})`
-                    : `${ef.partialTPPercent ?? 50}% @ ${ef.partialTPLevel ?? "?"}R`
-                  }
-                />
-              )}
-            </div>
+          {(ef.breakEvenEnabled || ef.breakEven) && (
+            <ManagementCard
+              title="BREAK EVEN"
+              active={!!ef.breakEvenActivated}
+              borderColor="border-l-yellow-500"
+              badgeColor={ef.breakEvenActivated
+                ? "bg-emerald-500/20 text-emerald-400"
+                : "bg-yellow-500/20 text-yellow-400"
+              }
+              lines={ef.breakEvenActivated
+                ? [`SL moved to entry (${formatPrice(entry, p.symbol)})`]
+                : [
+                    bePrice != null
+                      ? `Trigger: ${beR?.toFixed(1)}R (${formatPrice(bePrice, p.symbol)})`
+                      : `${ef.breakEvenPips} pips from entry`,
+                  ]
+              }
+            />
           )}
 
-          {/* Exit config summary */}
-          {exitConfig.length > 0 && (
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs px-2.5 py-1.5 bg-muted/20 rounded-md border border-border/20">
+          {(ef.partialTPEnabled || ef.partialTP) && (
+            <ManagementCard
+              title="PARTIAL TP"
+              active={!!ef.partialTPActivated || !!p.partialTpFired}
+              borderColor="border-l-cyan-500"
+              badgeColor={(ef.partialTPActivated || p.partialTpFired)
+                ? "bg-emerald-500/20 text-emerald-400"
+                : "bg-yellow-500/20 text-yellow-400"
+              }
+              lines={(ef.partialTPActivated || p.partialTpFired)
+                ? [`${ef.partialTPPercent ?? 50}% closed at ${partialR ?? "?"}R`]
+                : [
+                    `${ef.partialTPPercent ?? 50}% @ ${partialR != null ? `${partialR}R` : `${ef.partialTPLevel ?? "?"}R`}`,
+                  ]
+              }
+            />
+          )}
+        </div>
+      )}
+
+      {/* ═══ ROW 3: Signal + Exit Strategy (two columns) ═══ */}
+      <div className="grid grid-cols-2 gap-6">
+        {/* Left: Signal */}
+        <div className="space-y-1.5">
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Signal</span>
+          <div className="space-y-1 pt-1">
+            {summaryDir && (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${
+                summaryDir === "BUY"
+                  ? "bg-success/15 border border-success/40 text-success"
+                  : "bg-destructive/15 border border-destructive/40 text-destructive"
+              }`}>
+                Direction {summaryDir}
+              </span>
+            )}
+            {factorCount != null && factorTotal != null && (
+              <div className="text-xs text-foreground/80 font-mono">{factorCount}/{factorTotal} factors</div>
+            )}
+            {summaryScore != null && (
+              <div className="text-xs text-foreground/80 font-mono">score {summaryScore}/10</div>
+            )}
+            {setupType && (
+              <div className="text-xs text-foreground/80 font-mono">
+                Setup: {setupType}{setupConfidence != null ? ` ${setupConfidence}% conf` : ""}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Exit Strategy */}
+        {exitConfig.length > 0 && (
+          <div className="space-y-1.5">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Exit Strategy</span>
+            <div className="space-y-1 pt-1">
               {exitConfig.map((c, i) => (
-                <span key={i} className="text-muted-foreground">
-                  {c.label}: <span className="font-mono text-foreground/70">{c.value}</span>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Exit attribution timeline */}
-          {exitAttribution.length > 0 && (
-            <div className="space-y-1 pl-1">
-              {exitAttribution.map((ea: any, i: number) => {
-                if (ea.trigger === "no_action") return null;
-                const color = triggerColors[ea.trigger] || "text-muted-foreground";
-                const icon = triggerIcons[ea.trigger] || "\u2022";
-                return (
-                  <div key={i} className={`flex items-start gap-1.5 text-xs ${color}`}>
-                    <span className="flex-shrink-0">{icon}</span>
-                    <span className="font-medium font-mono flex-shrink-0">{ea.rMultiple?.toFixed(2)}R</span>
-                    <span className="text-muted-foreground break-words">{ea.detail}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Legacy invalidation history */}
-          {invalidHistory.length > 0 && exitAttribution.length === 0 && (
-            <div className="space-y-1 pl-1">
-              {invalidHistory.map((ih: any, i: number) => (
-                <div key={i} className="flex items-start gap-1.5 text-xs text-destructive">
-                  <span className="flex-shrink-0">{"\uD83D\uDEE1"}</span>
-                  <span className="font-medium flex-shrink-0">SL Tightened</span>
-                  <span className="text-muted-foreground">at {ih.rMultiple}R — {ih.reason}</span>
+                <div key={i} className="text-xs font-mono text-foreground/80">
+                  {c.label}: {c.value}
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* ── BOTTOM: SL/TP Editor ── */}
+      {/* ═══ ROW 4: Aligned Factors (pills) ═══ */}
+      {alignedFactors.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {alignedFactors.map((f, i) => (
+            <span
+              key={i}
+              className="rounded-full bg-secondary/60 border border-border px-3 py-1 text-[11px] text-foreground/80"
+            >
+              {f}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* ═══ ROW 5: Exit Attribution Timeline ═══ */}
+      {exitAttribution.length > 0 && (
+        <div className="space-y-1.5">
+          {exitAttribution.map((ea: any, i: number) => {
+            if (ea.trigger === "no_action") return null;
+            const color = triggerColors[ea.trigger] || "text-muted-foreground";
+            const icon = triggerIcons[ea.trigger] || "\u2022";
+            return (
+              <div key={i} className={`flex items-center gap-2 text-xs ${color}`}>
+                <span className="flex-shrink-0">{icon}</span>
+                <span className="font-bold font-mono">{ea.rMultiple?.toFixed(2)}R</span>
+                <span className="text-foreground/70">{ea.detail}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Legacy invalidation history */}
+      {invalidHistory.length > 0 && exitAttribution.length === 0 && (
+        <div className="space-y-1.5">
+          {invalidHistory.map((ih: any, i: number) => (
+            <div key={i} className="flex items-center gap-2 text-xs text-destructive">
+              <span className="flex-shrink-0">{"\uD83D\uDEE1"}</span>
+              <span className="font-bold">SL Tightened</span>
+              <span className="text-foreground/70">at {ih.rMultiple}R — {ih.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ═══ ROW 6: SL/TP Editor ═══ */}
       <SLTPEditor position={p} onSaved={onSaved} />
     </div>
   );
