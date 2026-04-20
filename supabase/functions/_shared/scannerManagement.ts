@@ -7,7 +7,7 @@
  * Exports:
  *   Types:       SetupClassification, ManagementAction
  *   Functions:   classifySetupType, manageOpenPositions
- *   Constants:   EXECUTION_PROFILES, PROMOTION_MAP, PROMOTION_THRESHOLDS
+ *   Constants:   EXECUTION_PROFILES
  */
 
 import type {
@@ -259,22 +259,11 @@ export interface ManagementAction {
   newTP?: number;
 }
 
-export const PROMOTION_MAP: Record<string, string> = {
-  scalp: "day_trade",
-  day_trade: "swing",
-};
-
-// Minimum profit in R-multiples before promotion is considered
-export const PROMOTION_THRESHOLDS: Record<string, number> = {
-  scalp: 0.8,      // scalp must be at least 0.8R in profit to promote to day
-  day_trade: 1.2,  // day trade must be at least 1.2R in profit to promote to swing
-};
 
 export async function manageOpenPositions(
   supabase: any,
   positions: any[],
   config: any,
-  isAutoStyle: boolean,
   scanCycleId: string,
   // Injected dependencies to avoid circular imports:
   fetchCandlesFn: (symbol: string, interval: string, range: string) => Promise<Candle[]>,
@@ -308,112 +297,7 @@ export async function manageOpenPositions(
         : (entryPrice - currentPrice) / spec.pipSize;
       const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
 
-      // ── 1. SETUP PROMOTION (only in Auto style mode) ──
-      // If the trade is in profit beyond the promotion threshold,
-      // check if higher-timeframe structure confirms the move.
-      const nextType = PROMOTION_MAP[currentSetupType];
-      const promoThreshold = PROMOTION_THRESHOLDS[currentSetupType];
-
-      if (isAutoStyle && nextType && promoThreshold && rMultiple >= promoThreshold) {
-        // Fetch fresh candles to check if structure confirms
-        let structureConfirms = false;
-        let promoReason = "";
-        try {
-          // Use 1H candles for scalp→day promotion, daily for day→swing
-          const tf = currentSetupType === "scalp" ? "1h" : "1d";
-          const range = currentSetupType === "scalp" ? "5d" : "1mo";
-          const freshCandles = await fetchCandlesFn(symbol, tf, range).catch(() => [] as Candle[]);
-
-          if (freshCandles.length >= 20) {
-            const structure = analyzeMarketStructure(freshCandles);
-
-            // Check if structure trend matches trade direction
-            const trendMatchesDirection =
-              (pos.direction === "long" && structure.trend === "bullish") ||
-              (pos.direction === "short" && structure.trend === "bearish");
-
-            // Check for BOS in trade direction (strong confirmation)
-            const recentBOS = structure.bos.filter((b: any) =>
-              b.type === (pos.direction === "long" ? "bullish" : "bearish")
-            );
-            const hasFreshBOS = recentBOS.length > 0;
-
-            // Check if there's a clear next liquidity target further out
-            const swingPoints = structure.swingPoints || [];
-            const relevantSwings = pos.direction === "long"
-              ? swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > currentPrice)
-              : swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < currentPrice);
-            const hasNextTarget = relevantSwings.length > 0;
-
-            if (trendMatchesDirection && hasFreshBOS && hasNextTarget) {
-              structureConfirms = true;
-              const nextTarget = pos.direction === "long"
-                ? Math.min(...relevantSwings.map((s: SwingPoint) => s.price))
-                : Math.max(...relevantSwings.map((s: SwingPoint) => s.price));
-              promoReason = `HTF ${tf} trend=${structure.trend}, fresh BOS confirmed, next target at ${nextTarget.toFixed(spec.pipSize < 0.01 ? 2 : 5)}`;
-            }
-          }
-        } catch (e: any) {
-          console.warn(`[mgmt ${scanCycleId}] Structure check failed for ${symbol}: ${e?.message}`);
-        }
-
-        if (structureConfirms) {
-          // PROMOTE: update exitFlags with new execution profile
-          const newProfile = nextType === "day_trade"
-            ? { tpRatio: 2.0, slBufferPips: 2, maxHoldHours: 8, trailingStop: true, trailingStopPips: 15, trailingStopActivation: "after_1r", partialTP: true, partialTPPercent: 50, partialTPLevel: 1.0 }
-            : { tpRatio: 3.0, slBufferPips: 5, maxHoldHours: 72, trailingStop: true, trailingStopPips: 25, trailingStopActivation: "after_1r", partialTP: true, partialTPPercent: 40, partialTPLevel: 1.5 };
-
-          // Calculate new TP based on promoted profile
-          const slDistance = Math.abs(entryPrice - sl);
-          const newTP = pos.direction === "long"
-            ? entryPrice + (slDistance * newProfile.tpRatio)
-            : entryPrice - (slDistance * newProfile.tpRatio);
-
-          // Trail SL to lock in profit (move to at least breakeven + small buffer)
-          const lockBuffer = spec.pipSize * 2; // lock 2 pips profit minimum
-          const newSL = pos.direction === "long"
-            ? Math.max(sl, entryPrice + lockBuffer)
-            : Math.min(sl, entryPrice - lockBuffer);
-
-          // Update the position's exitFlags and SL/TP
-          const updatedExitFlags = {
-            ...exitFlags,
-            ...newProfile,
-            breakEven: true,
-            breakEvenPips: 0, // already at or past BE
-          };
-          const updatedSignalData = {
-            ...signalData,
-            setupType: nextType,
-            exitFlags: updatedExitFlags,
-            promotionHistory: [
-              ...(signalData.promotionHistory || []),
-              { from: currentSetupType, to: nextType, at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: promoReason },
-            ],
-          };
-
-          await supabase.from("paper_positions").update({
-            signal_reason: JSON.stringify(updatedSignalData),
-            stop_loss: newSL.toString(),
-            take_profit: newTP.toString(),
-          }).eq("id", pos.id);
-
-          actions.push({
-            positionId: pos.position_id,
-            symbol,
-            action: "promoted",
-            from: currentSetupType,
-            to: nextType,
-            reason: promoReason,
-            newSL,
-            newTP,
-          });
-          console.log(`[mgmt ${scanCycleId}] PROMOTED ${symbol} ${currentSetupType}→${nextType} at ${rMultiple.toFixed(2)}R | SL→${newSL.toFixed(5)} TP→${newTP.toFixed(5)} | ${promoReason}`);
-          continue; // Skip other checks for this position — promotion takes priority
-        }
-      }
-
-      // ── 2. AUTO-ENABLE SMART EXITS based on setup type ──
+      // ── 1. AUTO-ENABLE SMART EXITS based on setup type ──
       // If the position was opened without trailing/partial (old config or disabled),
       // enable them based on the setup classification.
       let exitFlagsUpdated = false;

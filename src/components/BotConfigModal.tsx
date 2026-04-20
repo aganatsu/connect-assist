@@ -21,7 +21,7 @@ import { formatBrokerTime } from "@/lib/formatTime";
 // settings by intuition (e.g. "trailing", "spread", "news", "drawdown").
 const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   // Trading Style
-  { tab: "tradingStyle", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "auto", "style", "mode"] },
+  { tab: "tradingStyle", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "style", "mode"] },
   // Strategy
   { tab: "strategy", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
   { tab: "strategy", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
@@ -172,7 +172,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxDailyLoss: 2, maxOpenPositions: 2, minRiskReward: 2.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 3.0, trailingStopEnabled: true, trailingStopPips: 20, breakEvenEnabled: true, breakEvenTriggerPips: 15, maxHoldHours: 120 },
-      tradingStyle: { mode: "swing_trader", autoDetectEnabled: false },
+      tradingStyle: { mode: "swing_trader" },
     },
   },
   moderate: {
@@ -183,7 +183,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 5.5, minFactorCount: 5 },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxDailyLoss: 3, maxOpenPositions: 4, minRiskReward: 1.5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: true, breakEvenTriggerPips: 20, maxHoldHours: 24 },
-      tradingStyle: { mode: "day_trader", autoDetectEnabled: false },
+      tradingStyle: { mode: "day_trader" },
     },
   },
   aggressive: {
@@ -196,7 +196,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, maxHoldHours: 1 },
       sessions: { ...BASE_CONFIG.sessions, filter: ["asian", "london", "newyork", "sydney"] },
-      tradingStyle: { mode: "scalper", autoDetectEnabled: false },
+      tradingStyle: { mode: "scalper" },
     },
   },
 };
@@ -552,11 +552,11 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 {effectiveActiveTab === "tradingStyle" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Style" description="Choose how the bot trades — this overrides entry timeframe, TP/SL ratios, and hold duration" />
-                    <div className="grid grid-cols-2 gap-3">
-                      {(["scalper", "day_trader", "swing_trader", "auto"] as TradingStyleMode[]).map(mode => {
+                    <div className="grid grid-cols-3 gap-3">
+                      {(["scalper", "day_trader", "swing_trader"] as TradingStyleMode[]).map(mode => {
                         const isActive = (config.tradingStyle?.mode || "day_trader") === mode;
-                        const meta = mode !== "auto" ? STYLE_META[mode] : null;
-                        const params = mode !== "auto" ? STYLE_PARAMS[mode] : null;
+                        const meta = STYLE_META[mode];
+                        const params = STYLE_PARAMS[mode];
                         return (
                           <button
                             key={mode}
@@ -564,22 +564,20 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                             className={`p-4 border text-left transition-colors ${isActive ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
                           >
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-lg">{meta?.icon || "🤖"}</span>
-                              <span className="text-xs font-bold">{meta?.label || "Auto-Detect"}</span>
+                              <span className="text-lg">{meta.icon}</span>
+                              <span className="text-xs font-bold">{meta.label}</span>
                             </div>
                             <p className="text-[10px] text-muted-foreground">
-                              {meta?.description || "Bot analyzes volatility and trend per instrument to pick the best style automatically."}
+                              {meta.description}
                             </p>
-                            {params && (
-                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px] text-muted-foreground">
-                                <span>Entry TF: <strong className="text-foreground">{params.entryTimeframe}</strong></span>
-                                <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
-                                <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
-                                <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
-                                <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours}h</strong></span>
-                                <span>Min Score: <strong className="text-foreground">{params.minConfluence}</strong></span>
-                              </div>
-                            )}
+                            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px] text-muted-foreground">
+                              <span>Entry TF: <strong className="text-foreground">{params.entryTimeframe}</strong></span>
+                              <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
+                              <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
+                              <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
+                              <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours}h</strong></span>
+                              <span>Min Score: <strong className="text-foreground">{params.minConfluence}</strong></span>
+                            </div>
                           </button>
                         );
                       })}

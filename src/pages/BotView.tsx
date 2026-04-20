@@ -282,13 +282,6 @@ export default function BotView() {
           {/* Trading Style Badge */}
           {(() => {
             const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
-            if (styleMode === "auto") {
-              return (
-                <span className="text-[10px] font-medium px-1.5 py-0.5 bg-accent/20 text-accent-foreground border border-accent/30 flex items-center gap-1">
-                  🤖 Auto
-                </span>
-              );
-            }
             const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
             if (meta) {
               return (

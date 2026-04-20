@@ -276,7 +276,7 @@ export const DEFAULTS = {
     "XAU/USD", "BTC/USD",
   ],
   openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-  tradingStyle: { mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" | "auto", autoDetectEnabled: false },
+  tradingStyle: { mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" },
   spreadFilterEnabled: true,
   maxSpreadPips: 3,
   newsFilterEnabled: true,

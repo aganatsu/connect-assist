@@ -76,8 +76,7 @@ const DEFAULTS = {
     waitForCompletion: true,
   },
   tradingStyle: {
-    mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" | "auto",
-    autoDetectEnabled: false,
+    mode: "day_trader" as "scalper" | "day_trader" | "swing_trader",
   },
   // ── Spread Filter ──
   spreadFilterEnabled: true,
@@ -297,27 +296,6 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
   return { poc, vah, val, nodes, totalBins: numBins };
 }
 
-function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): string {
-  if (candles.length < 20 || dailyCandles.length < 10) return "day_trader";
-  const atrPeriod = Math.min(14, dailyCandles.length - 1);
-  let atrSum = 0;
-  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
-    const prev = dailyCandles[i - 1];
-    const curr = dailyCandles[i];
-    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
-    atrSum += tr;
-  }
-  const atr = atrSum / atrPeriod;
-  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
-  const atrPercent = avgPrice > 0 ? (atr / avgPrice) * 100 : 0;
-  const recentClose = dailyCandles[dailyCandles.length - 1].close;
-  const fiveDaysAgo = dailyCandles[Math.max(0, dailyCandles.length - 6)].close;
-  const trendMove = Math.abs(recentClose - fiveDaysAgo);
-  const trendStrength = atr > 0 ? trendMove / (atr * 5) : 0;
-  if (atrPercent < 0.5 && trendStrength < 0.3) return "scalper";
-  if (atrPercent > 1.0 && trendStrength > 0.5) return "swing_trader";
-  return "day_trader";
-}
 
 // ─── DST-Aware New York Time Helper ─────────────────────────────────
 function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
@@ -2214,13 +2192,11 @@ async function runScanForUser(supabase: any, userId: string) {
   const config = await loadConfig(supabase, userId);
 
   // ── Resolve Trading Style ──
-  const styleMode = config.tradingStyle?.mode || "day_trader";
-  let resolvedStyle = styleMode === "auto" ? "day_trader" : styleMode; // default, may be overridden per-instrument in auto mode
-  const isAutoStyle = styleMode === "auto" || config.tradingStyle?.autoDetectEnabled;
+  const resolvedStyle = config.tradingStyle?.mode || "day_trader";
 
-  // Apply style overrides to config (non-auto mode applies globally)
+  // Apply style overrides to config
   // Preserve user-set minConfluence — style overrides should not overwrite it
-  if (!isAutoStyle && STYLE_OVERRIDES[resolvedStyle]) {
+  if (STYLE_OVERRIDES[resolvedStyle]) {
     const userMinConfluence = config.minConfluence;
     Object.assign(config, STYLE_OVERRIDES[resolvedStyle]);
     config.minConfluence = userMinConfluence;
@@ -2296,7 +2272,7 @@ async function runScanForUser(supabase: any, userId: string) {
   let managementActions: ManagementAction[] = [];
   if (openPosArr.length > 0) {
     try {
-      managementActions = await manageOpenPositions(supabase, openPosArr, config, isAutoStyle, scanCycleId, fetchCandles, detectSession);
+      managementActions = await manageOpenPositions(supabase, openPosArr, config, scanCycleId, fetchCandles, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
@@ -2436,13 +2412,6 @@ async function runScanForUser(supabase: any, userId: string) {
       continue;
     }
 
-    // Auto-detect style per instrument if in auto mode (Fix #6 — clone, don't mutate)
-    let pairStyle = resolvedStyle;
-    if (isAutoStyle) {
-      pairStyle = detectOptimalStyle(candles, dailyCandles);
-      pairConfig = { ...pairConfig, ...STYLE_OVERRIDES[pairStyle] };
-    }
-
     // Apply asset-class profile adjustments
     const pairAssetProfileInner = getAssetProfile(pair);
     const adjustedSlBuffer = pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
@@ -2456,24 +2425,8 @@ async function runScanForUser(supabase: any, userId: string) {
     (pairConfig as any)._fotsiResult = _fotsiResult;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
-    // ── Setup Classifier: determine scalp/day/swing from the actual setup structure ──
+    // ── Setup Classifier: determine scalp/day/swing from the actual setup structure (informational only) ──
     const setupClassification = classifySetupType(analysis);
-    // Apply execution profile overrides from the classifier (unless user forced a manual style)
-    if (isAutoStyle) {
-      pairConfig.tpRatio = setupClassification.executionProfile.tpRatio;
-      pairConfig.slBufferPips = setupClassification.executionProfile.slBufferPips;
-      pairConfig.maxHoldHours = setupClassification.executionProfile.maxHoldHours;
-      // Override TP method if classifier suggests a different one
-      if (setupClassification.executionProfile.tpMethod === "nearest_liquidity") {
-        pairConfig.tpMethod = "next_level";
-      } else if (setupClassification.executionProfile.tpMethod === "next_level") {
-        pairConfig.tpMethod = "next_level";
-      }
-      // Re-adjust SL buffer for asset class after classifier override
-      const pairAssetProfileClassifier = getAssetProfile(pair);
-      const classifierAdjustedSlBuffer = pairConfig.slBufferPips * pairAssetProfileClassifier.slBufferMultiplier;
-      pairConfig.slBufferPips = classifierAdjustedSlBuffer;
-    }
 
     const detail: any = {
       pair,
@@ -2502,7 +2455,7 @@ async function runScanForUser(supabase: any, userId: string) {
         fotsi: analysis.fotsiAlignment || null,
       },
       status: "analyzed",
-      tradingStyle: pairStyle,
+      tradingStyle: resolvedStyle,
       setupClassification: {
         setupType: setupClassification.setupType,
         confidence: setupClassification.confidence,

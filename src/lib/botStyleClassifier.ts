@@ -1,6 +1,6 @@
 // Trading style classification — pure function, no backend needed
 
-export type TradingStyleMode = "scalper" | "day_trader" | "swing_trader" | "auto";
+export type TradingStyleMode = "scalper" | "day_trader" | "swing_trader";
 
 export interface StyleOverrides {
   entryTimeframe: string;
@@ -11,7 +11,7 @@ export interface StyleOverrides {
   minConfluence: number;
 }
 
-export const STYLE_PARAMS: Record<Exclude<TradingStyleMode, "auto">, StyleOverrides> = {
+export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   scalper: {
     entryTimeframe: "5m",
     htfTimeframe: "1h",
@@ -38,7 +38,7 @@ export const STYLE_PARAMS: Record<Exclude<TradingStyleMode, "auto">, StyleOverri
   },
 };
 
-export const STYLE_META: Record<Exclude<TradingStyleMode, "auto">, { label: string; icon: string; color: string; description: string }> = {
+export const STYLE_META: Record<TradingStyleMode, { label: string; icon: string; color: string; description: string }> = {
   scalper: {
     label: "Scalper",
     icon: "⚡",
@@ -59,8 +59,7 @@ export const STYLE_META: Record<Exclude<TradingStyleMode, "auto">, { label: stri
   },
 };
 
-export function getActiveStyle(config: any): Exclude<TradingStyleMode, "auto"> {
+export function getActiveStyle(config: any): TradingStyleMode {
   const mode = config?.tradingStyle?.mode || "day_trader";
-  if (mode === "auto") return "day_trader"; // Auto resolved at scanner level
-  return mode as Exclude<TradingStyleMode, "auto">;
+  return mode as TradingStyleMode;
 }

@@ -359,7 +359,6 @@ function getDefaultConfig() {
     },
     tradingStyle: {
       mode: "day_trader",
-      autoDetectEnabled: false,
     },
     // Factor Weights — config-driven, AI-tunable.
     // Empty object = use hardcoded defaults. Override individual keys to tune.
