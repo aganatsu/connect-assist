@@ -444,28 +444,24 @@ function inWindow(t: number, start: number, end: number): boolean {
   return t >= start && t < end;
 }
 
-function detectSession(config?: any): { name: string; isKillZone: boolean } {
-  // Session windows in config (HH:MM) are interpreted as New York / ET time (DST-aware),
-  // matching the labels shown in the UI ("Times shown are New York / ET").
-  const now = new Date();
-  const t = toNYTime(now).t;
-  const s = config?.sessions ?? {};
+function detectSession(_config?: any): { name: string; isKillZone: boolean } {
+  // Always use hardcoded DEFAULT_SESSION_WINDOWS (NY/ET decimal hours).
+  // The UI only toggles sessions on/off; custom start/end times are no longer supported
+  // to prevent UTC-vs-ET mismatch bugs.
+  const ny = toNYTime(new Date());
+  const t = ny.t;
 
-  const lonStart = parseHHMM(s.londonStart, DEFAULT_SESSION_WINDOWS.london.start);
-  const lonEnd   = parseHHMM(s.londonEnd,   DEFAULT_SESSION_WINDOWS.london.end);
-  const nyStart  = parseHHMM(s.newYorkStart, DEFAULT_SESSION_WINDOWS.newYork.start);
-  const nyEnd    = parseHHMM(s.newYorkEnd,   DEFAULT_SESSION_WINDOWS.newYork.end);
-  const asiaStart = parseHHMM(s.asianStart, DEFAULT_SESSION_WINDOWS.asian.start);
-  const asiaEndRaw = parseHHMM(s.asianEnd, 2);
-  const asiaEnd = asiaEndRaw <= asiaStart ? asiaEndRaw + 24 : asiaEndRaw;
-  const sydStart = parseHHMM(s.sydneyStart, DEFAULT_SESSION_WINDOWS.sydney.start);
-  const sydEndRaw = parseHHMM(s.sydneyEnd, 2);
-  const sydEnd = sydEndRaw <= sydStart ? sydEndRaw + 24 : sydEndRaw;
+  const lonStart = DEFAULT_SESSION_WINDOWS.london.start;
+  const lonEnd   = DEFAULT_SESSION_WINDOWS.london.end;
+  const nyStart  = DEFAULT_SESSION_WINDOWS.newYork.start;
+  const nyEnd    = DEFAULT_SESSION_WINDOWS.newYork.end;
+  const asiaStart = DEFAULT_SESSION_WINDOWS.asian.start;
+  const asiaEnd   = DEFAULT_SESSION_WINDOWS.asian.end;
+  const sydStart  = DEFAULT_SESSION_WINDOWS.sydney.start;
+  const sydEnd    = DEFAULT_SESSION_WINDOWS.sydney.end;
 
-  // Kill zones still expressed in NY local time (ICT convention)
-  const nyT = toNYTime(now).t;
-  const inLondonKZ = nyT >= 2 && nyT < 5;
-  const inNYKZ = (nyT >= 8.5 && nyT < 11) || (nyT >= 11 && nyT < 12);
+  const inLondonKZ = t >= 2 && t < 5;
+  const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
 
   // Order matters: prefer more specific / kill-zone sessions first.
   if (inWindow(t, lonStart, lonEnd))   return { name: "London",   isKillZone: inLondonKZ };
@@ -2615,8 +2611,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
         : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, "")) : DEFAULTS.enabledSessions)
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
-    // Pass through raw sessions block so detectSession() can read custom HH:MM windows.
-    sessions: sessions,
+    // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
+    // The UI only toggles sessions on/off via the filter array.
 
     // ── Active Days (convert {mon:true,...} to day-of-week numbers) ──
     enabledDays: sessions.activeDays

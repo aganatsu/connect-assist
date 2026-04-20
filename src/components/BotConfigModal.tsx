@@ -144,10 +144,7 @@ const BASE_CONFIG = {
     minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8,
   },
   sessions: {
-    londonEnabled: true, londonStart: "08:00", londonEnd: "16:00",
-    newYorkEnabled: true, newYorkStart: "13:00", newYorkEnd: "21:00",
-    asianEnabled: false, asianStart: "00:00", asianEnd: "08:00",
-    sydneyEnabled: false, sydneyStart: "22:00", sydneyEnd: "06:00",
+    filter: ["london", "newyork"],
     activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
     newsFilterEnabled: true, newsFilterPauseMinutes: 30,
   },
@@ -197,7 +194,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxDailyLoss: 5, maxOpenPositions: 6, minRiskReward: 1.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, maxHoldHours: 1 },
-      sessions: { ...BASE_CONFIG.sessions, asianEnabled: true },
+      sessions: { ...BASE_CONFIG.sessions, filter: ["asian", "london", "newyork", "sydney"] },
       tradingStyle: { mode: "scalper", autoDetectEnabled: false },
     },
   },
@@ -1052,52 +1049,48 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
                 {effectiveActiveTab === "sessions" && (
                   <div className="space-y-5">
-                    <SectionHeader title="Trading Sessions" description="Control which market sessions the bot is active during. Times shown are New York / ET (DST-aware)." />
-                    <div className="grid grid-cols-2 gap-3">
-                      {([
-                        { id: "asian",   label: "Asian",    time: "20:00 – 02:00 ET", start: "20:00", end: "02:00", boolKey: "asianEnabled",   startKey: "asianStart",   endKey: "asianEnd"   },
-                        { id: "london",  label: "London",   time: "02:00 – 08:30 ET", start: "02:00", end: "08:30", boolKey: "londonEnabled",  startKey: "londonStart",  endKey: "londonEnd"  },
-                        { id: "newyork", label: "New York", time: "08:30 – 16:00 ET", start: "08:30", end: "16:00", boolKey: "newYorkEnabled", startKey: "newYorkStart", endKey: "newYorkEnd" },
-                        { id: "sydney",  label: "Sydney",   time: "17:00 – 02:00 ET", start: "17:00", end: "02:00", boolKey: "sydneyEnabled",  startKey: "sydneyStart",  endKey: "sydneyEnd"  },
-                      ] as const).map(session => {
+                    <SectionHeader title="Trading Sessions" description="Toggle which market sessions the bot is active during. Session windows use fixed NY/ET times (DST-aware)." />
+                    <div className="space-y-1">
+                      {[
+                        { id: "asian", label: "Asian Session", desc: "8:00 PM – 2:00 AM ET (Tokyo / Hong Kong)" },
+                        { id: "london", label: "London Session", desc: "2:00 AM – 8:30 AM ET (London open)" },
+                        { id: "newyork", label: "New York Session", desc: "8:30 AM – 4:00 PM ET (NY open)" },
+                        { id: "sydney", label: "Sydney Session", desc: "5:00 PM – 2:00 AM ET (FX week open)" },
+                      ].map(session => {
+                        // Derive enabled state: prefer filter array, fall back to legacy booleans
                         const filterArr = config.sessions?.filter;
+                        const legacyKey = `${session.id}Enabled` as string;
                         const enabled = Array.isArray(filterArr)
                           ? filterArr.includes(session.id)
-                          : (config.sessions?.[session.boolKey] ?? true);
-                        return (
-                          <button
-                            key={session.id}
-                            onClick={() => {
-                              const sessions_cfg = config.sessions || {};
-                              const current: string[] = Array.isArray(sessions_cfg.filter) ? [...sessions_cfg.filter] : [
-                                ...(sessions_cfg.asianEnabled    ? ["asian"]   : []),
-                                ...(sessions_cfg.londonEnabled   ? ["london"]  : []),
-                                ...((sessions_cfg.newYorkEnabled || sessions_cfg.newyorkEnabled) ? ["newyork"] : []),
-                                ...(sessions_cfg.sydneyEnabled   ? ["sydney"]  : []),
+                          : (config.sessions?.[legacyKey] ?? false);
+                        const toggle = (checked: boolean) => {
+                          const sessions_cfg = config.sessions || {};
+                          // Always normalise to filter-array format on toggle
+                          const current: string[] = Array.isArray(sessions_cfg.filter)
+                            ? [...sessions_cfg.filter]
+                            : [
+                                ...(sessions_cfg.asianEnabled ? ["asian"] : []),
+                                ...(sessions_cfg.londonEnabled ? ["london"] : []),
+                                ...(sessions_cfg.newYorkEnabled || sessions_cfg.newyorkEnabled ? ["newyork"] : []),
+                                ...(sessions_cfg.sydneyEnabled ? ["sydney"] : []),
                               ];
-                              const updated = enabled ? current.filter((s: string) => s !== session.id) : Array.from(new Set([...current, session.id]));
-                              const newSessions = {
-                                ...sessions_cfg,
-                                filter: updated,
-                                [session.boolKey]: !enabled,
-                                // Lock displayed ET windows so the scanner matches the UI labels
-                                [session.startKey]: session.start,
-                                [session.endKey]: session.end,
-                              };
-                              setConfig({ ...config, sessions: newSessions });
-                            }}
-                            className={`flex items-center justify-between px-4 py-3 border text-left transition-colors ${enabled ? "border-primary/40 bg-primary/5" : "border-border text-muted-foreground"}`}
-                          >
+                          const updated = checked
+                            ? [...new Set([...current, session.id])]
+                            : current.filter((s: string) => s !== session.id);
+                          updateField('sessions', 'filter', updated);
+                        };
+                        return (
+                          <div key={session.id} className={`flex items-start justify-between gap-3 p-3 border transition-colors ${enabled ? "border-primary/40 bg-primary/5" : "border-border hover:border-border/80"}`}>
                             <div>
-                              <p className="text-xs font-medium">{session.label}</p>
-                              <p className="text-[10px] text-muted-foreground">{session.time}</p>
+                              <p className={`text-xs font-medium ${enabled ? "text-primary" : ""}`}>{session.label}</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{session.desc}</p>
                             </div>
-                            <span className={`w-2 h-2 rounded-full ${enabled ? "bg-primary" : "bg-muted-foreground/30"}`} />
-                          </button>
+                            <Switch checked={enabled} onCheckedChange={toggle} className="shrink-0 mt-0.5" />
+                          </div>
                         );
                       })}
                     </div>
-                    <ToggleField label="Kill Zone Only Trading" description="Only trade during high-volume kill zone windows" checked={config.sessions?.killZoneOnly ?? false} onChange={v => updateField('sessions', 'killZoneOnly', v)} />
+                    <ToggleField label="Kill Zone Only Trading" description="Only trade during high-volume kill zone windows (London 02-05 ET, NY 08:30-11 ET)" checked={config.sessions?.killZoneOnly ?? false} onChange={v => updateField('sessions', 'killZoneOnly', v)} />
                     {/* ── News Event Filter ── */}
                     <div className="border-t border-border pt-4 mt-4">
                       <SectionHeader title="News Event Filter" description="Pause trading around high-impact economic events (NFP, FOMC, CPI, etc.)" />
