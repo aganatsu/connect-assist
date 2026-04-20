@@ -117,7 +117,7 @@ export const settingsApi = {
 // ── Broker Connections ──
 export const brokerApi = {
   list: () => invokeFunction("broker-connections", { action: "list" }),
-  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string> }) =>
+  create: (data: { broker_type: string; display_name: string; api_key: string; account_id: string; is_live?: boolean; symbol_suffix?: string; symbol_overrides?: Record<string, string>; commission_per_lot?: number }) =>
     invokeFunction("broker-connections", { action: "create", ...data }),
   update: (data: any) => invokeFunction("broker-connections", { action: "update", ...data }),
   delete: (id: string) => invokeFunction("broker-connections", { action: "delete", id }),

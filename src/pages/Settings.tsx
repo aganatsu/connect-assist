@@ -83,12 +83,14 @@ function BrokerSettings() {
   const [symbolsConnName, setSymbolsConnName] = useState("");
   const [symbolsData, setSymbolsData] = useState<any>(null);
   const [symbolsFilter, setSymbolsFilter] = useState("");
+  const [commissionPreset, setCommissionPreset] = useState<string>("0");
+  const [customCommission, setCustomCommission] = useState("");
 
   const { data: connections = [] } = useQuery({ queryKey: ["broker-connections"], queryFn: () => brokerApi.list() });
 
   const createMutation = useMutation({
-    mutationFn: () => brokerApi.create({ broker_type: brokerType, display_name: displayName || brokerType, api_key: apiKey, account_id: accountId, is_live: isLive, symbol_suffix: symbolSuffix, symbol_overrides: symbolOverrides }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection saved"); setApiKey(""); setAccountId(""); setDisplayName(""); setSymbolSuffix(""); setSymbolOverrides({}); },
+    mutationFn: () => brokerApi.create({ broker_type: brokerType, display_name: displayName || brokerType, api_key: apiKey, account_id: accountId, is_live: isLive, symbol_suffix: symbolSuffix, symbol_overrides: symbolOverrides, commission_per_lot: commissionPreset === "custom" ? parseFloat(customCommission || "0") : parseFloat(commissionPreset) }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["broker-connections"] }); toast.success("Connection saved"); setApiKey(""); setAccountId(""); setDisplayName(""); setSymbolSuffix(""); setSymbolOverrides({}); setCommissionPreset("0"); setCustomCommission(""); },
     onError: (e: any) => toast.error(e.message),
   });
 
@@ -374,6 +376,20 @@ function BrokerSettings() {
           </div>
 
           <div className="flex items-center gap-2"><Switch checked={isLive} onCheckedChange={setIsLive} /><Label className="text-sm">Live account</Label></div>
+          <div>
+            <Label className="text-xs">Commission (round-trip per standard lot)</Label>
+            <p className="text-[10px] text-muted-foreground mb-1">Set to 0 for spread-only accounts. Auto-detected after first trade if left at 0.</p>
+            <select value={commissionPreset} onChange={e => setCommissionPreset(e.target.value)} className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm">
+              <option value="0">Spread-only ($0/lot)</option>
+              <option value="5">ECN Low ($5/lot round-trip)</option>
+              <option value="7">ECN Standard ($7/lot round-trip)</option>
+              <option value="10">ECN High ($10/lot round-trip)</option>
+              <option value="custom">Custom...</option>
+            </select>
+            {commissionPreset === "custom" && (
+              <Input type="number" step="0.5" min="0" max="50" value={customCommission} onChange={e => setCustomCommission(e.target.value)} placeholder="e.g. 6.50" className="mt-2 font-mono text-xs" />
+            )}
+          </div>
           <Button onClick={() => createMutation.mutate()} disabled={!apiKey || !accountId}>Save Connection</Button>
         </CardContent>
       </Card>

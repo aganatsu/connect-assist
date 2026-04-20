@@ -32,6 +32,8 @@ type Connection = {
   symbol_suffix: string;
   symbol_overrides: Record<string, string>;
   created_at?: string;
+  commission_per_lot?: number;
+  detected_commission_per_lot?: number;
 };
 
 type ProbedCandidate = {
@@ -486,6 +488,13 @@ function ConnectionDetail({
                 <Field icon={Hash} label="Account" value={c.account_id} mono />
                 <Field icon={KeyRound} label="Suffix" value={c.symbol_suffix || "—"} mono />
                 <Field icon={RadioTower} label="Mappings" value={`${overrideCount} symbol${overrideCount !== 1 ? "s" : ""}`} />
+                <Field icon={Zap} label="Commission" value={
+                  c.commission_per_lot
+                    ? `$${c.commission_per_lot}/lot (manual)`
+                    : c.detected_commission_per_lot
+                      ? `$${c.detected_commission_per_lot.toFixed(2)}/lot (auto-detected)`
+                      : "$0 (spread-only)"
+                } />
               </div>
             </div>
           </div>
@@ -772,6 +781,8 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
   const [apiKey, setApiKey] = useState("");
   const [accountId, setAccountId] = useState("");
   const [isLive, setIsLive] = useState(false);
+  const [commissionPreset, setCommissionPreset] = useState<string>("0");
+  const [customCommission, setCustomCommission] = useState("");
 
   const createMutation = useMutation({
     mutationFn: () => brokerApi.create({
@@ -780,6 +791,7 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
       api_key: apiKey,
       account_id: accountId,
       is_live: isLive,
+      commission_per_lot: commissionPreset === "custom" ? parseFloat(customCommission || "0") : parseFloat(commissionPreset),
     }),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["broker-connections"] });
@@ -843,6 +855,34 @@ function AddConnectionForm({ onCreated, onCancel }: { onCreated: (id: string) =>
         <div className="flex items-center gap-2 pt-1">
           <Switch checked={isLive} onCheckedChange={setIsLive} />
           <Label className="text-sm">Live account</Label>
+        </div>
+
+        <div>
+          <Label className="text-xs">Commission (round-trip per standard lot)</Label>
+          <p className="text-[10px] text-muted-foreground mb-1">Set to 0 for spread-only accounts. Auto-detected after first trade if left at 0.</p>
+          <select
+            value={commissionPreset}
+            onChange={(e) => setCommissionPreset(e.target.value)}
+            className="w-full mt-1 bg-secondary border border-border rounded px-3 py-2 text-sm"
+          >
+            <option value="0">Spread-only ($0/lot)</option>
+            <option value="5">ECN Low ($5/lot round-trip)</option>
+            <option value="7">ECN Standard ($7/lot round-trip)</option>
+            <option value="10">ECN High ($10/lot round-trip)</option>
+            <option value="custom">Custom...</option>
+          </select>
+          {commissionPreset === "custom" && (
+            <Input
+              type="number"
+              step="0.5"
+              min="0"
+              max="50"
+              value={customCommission}
+              onChange={(e) => setCustomCommission(e.target.value)}
+              placeholder="e.g. 6.50"
+              className="mt-2 font-mono text-xs"
+            />
+          )}
         </div>
 
         <div className="flex gap-2 pt-2">

@@ -1687,14 +1687,17 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
 // fallbackMaxLot: optional override for the hardcoded max lot cap.
 function calculatePositionSize(
   balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
-  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number },
+  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number; atrVolatilityMultiplier?: number },
   rateMap?: Record<string, number>,
-  fallbackMaxLot?: number
+  fallbackMaxLot?: number,
+  commissionPerLot?: number,
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const maxLot = fallbackMaxLot ?? (spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5);
   const method = config?.positionSizingMethod || "percent_risk";
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+  // Round-trip commission per lot in account currency (default 0)
+  const commRT = commissionPerLot ?? 0;
 
   if (method === "fixed_lot") {
     const fixed = config?.fixedLotSize ?? 0.01;
@@ -1706,7 +1709,13 @@ function calculatePositionSize(
     const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
     const atrDistance = config.atrValue * atrMultiplier;
     if (atrDistance === 0) return 0.01;
-    const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
+    // Iterative solve: lots = (riskAmount - lots*commission) / (distance*lotUnits*quoteToUSD)
+    // First pass without commission, then adjust
+    let lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
+    if (commRT > 0) {
+      const adjustedRisk = riskAmount - (lots * commRT);
+      if (adjustedRisk > 0) lots = adjustedRisk / (atrDistance * spec.lotUnits * quoteToUSD);
+    }
     return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
   }
 
@@ -1714,7 +1723,12 @@ function calculatePositionSize(
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  const lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
+  // Iterative solve: lots = (riskAmount - lots*commission) / (slDistance*lotUnits*quoteToUSD)
+  let lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
+  if (commRT > 0) {
+    const adjustedRisk = riskAmount - (lots * commRT);
+    if (adjustedRisk > 0) lots = adjustedRisk / (slDistance * spec.lotUnits * quoteToUSD);
+  }
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
@@ -2039,21 +2053,27 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
-  // Gate 10: Min R:R (spread-adjusted)
-  // Subtract typical spread cost from reward to get effective R:R.
-  // This prevents inflated R:R from passing the gate when spread eats into profit.
+  // Gate 10: Min R:R (spread + commission adjusted)
+  // Subtract typical spread cost AND estimated commission cost from reward to get effective R:R.
   if (analysis.stopLoss && analysis.takeProfit) {
     const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
     const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
     const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
     const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
-    const effectiveReward = Math.max(0, rawReward - spreadCostInPrice);
+    // Estimate commission cost in price terms: commissionPerLot / (lotUnits * quoteToUSD)
+    // This converts the dollar commission into price-movement equivalent
+    const quoteToUSD = getQuoteToUSDRate(pair, rateMap);
+    const avgCommPerLot = (config as any)._avgCommissionPerLot ?? 0;
+    const commCostInPrice = avgCommPerLot > 0 ? avgCommPerLot / (pairSpec.lotUnits * quoteToUSD) : 0;
+    const totalCostInPrice = spreadCostInPrice + commCostInPrice;
+    const effectiveReward = Math.max(0, rawReward - totalCostInPrice);
     const rawRR = risk > 0 ? rawReward / risk : 0;
     const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
+    const costDetail = avgCommPerLot > 0 ? `spread ${pairSpec.typicalSpread}p + comm $${avgCommPerLot.toFixed(1)}/lot` : `spread ${pairSpec.typicalSpread}p`;
     if (effectiveRR < config.minRiskReward) {
-      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (spread cost ${pairSpec.typicalSpread}p) < ${config.minRiskReward} min` });
+      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${config.minRiskReward} min` });
     } else {
-      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${pairSpec.typicalSpread}p)` });
+      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})` });
     }
   } else {
     gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
@@ -2409,6 +2429,28 @@ async function runScanForUser(supabase: any, userId: string) {
   const balance = parseFloat(account.balance || "10000");
   const isPaused = account.is_paused;
 
+  // ── Compute average commission per lot across active broker connections ──
+  // Used in R:R gating and lot sizing. Reads commission_per_lot (user-set) or detected_commission_per_lot (auto-learned).
+  let avgCommissionPerLot = 0;
+  if (account.execution_mode === "live") {
+    const { data: commConns } = await supabase.from("broker_connections")
+      .select("commission_per_lot, detected_commission_per_lot")
+      .eq("user_id", userId).eq("is_active", true);
+    if (commConns && commConns.length > 0) {
+      let totalComm = 0;
+      let count = 0;
+      for (const c of commConns) {
+        const userComm = parseFloat(c.commission_per_lot ?? "0");
+        const detectedComm = parseFloat(c.detected_commission_per_lot ?? "0") * 2; // detected is per-side, double for round-trip
+        const effective = userComm > 0 ? userComm : detectedComm;
+        if (effective > 0) { totalComm += effective; count++; }
+      }
+      avgCommissionPerLot = count > 0 ? totalComm / count : 0;
+      if (avgCommissionPerLot > 0) console.log(`[scan ${scanCycleId}] Avg commission: $${avgCommissionPerLot.toFixed(2)}/lot round-trip (from ${count} broker(s))`);
+    }
+  }
+  (config as any)._avgCommissionPerLot = avgCommissionPerLot;
+
   // Load the user's active MetaAPI connection (used as primary candle source).
   // Prefer rows where account_id is a clean UUID (correctly formed; avoids broken duplicates).
   const { data: brokerConns } = await supabase.from("broker_connections")
@@ -2692,7 +2734,7 @@ async function runScanForUser(supabase: any, userId: string) {
           fixedLotSize: (pairConfig as any).fixedLotSize,
           atrValue: (analysis as any).atrValue,
           atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-        }, rateMap);
+        }, rateMap, undefined, avgCommissionPerLot);
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
@@ -2941,6 +2983,24 @@ async function runScanForUser(supabase: any, userId: string) {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                       mirroredConnIds.push(conn.id);
+                      // Auto-detect commission from OANDA fill response
+                      try {
+                        const fillTx = parsedEx?.orderFillTransaction || parsedEx?.data?.orderFillTransaction;
+                        if (fillTx && fillTx.commission !== undefined) {
+                          const fillComm = Math.abs(parseFloat(fillTx.commission || "0"));
+                          const fillUnits = Math.abs(parseFloat(fillTx.units || fillTx.tradeOpened?.units || "0"));
+                          if (fillUnits > 0 && fillComm > 0) {
+                            const spec = SPECS[pair] || SPECS["EUR/USD"];
+                            const commPerLot = fillComm / (fillUnits / spec.lotUnits); // per-side
+                            console.log(`[commission auto-detect] OANDA [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from fill (comm=$${fillComm}, units=${fillUnits})`);
+                            await supabase.from("broker_connections")
+                              .update({ detected_commission_per_lot: commPerLot })
+                              .eq("id", conn.id);
+                          }
+                        }
+                      } catch (commErr: any) {
+                        console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
+                      }
                     } else {
                       const reason = parsedEx?.error || exBody.slice(0, 200);
                       console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
@@ -2982,12 +3042,16 @@ async function runScanForUser(supabase: any, userId: string) {
                        continue;
                      }
                      const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
+                     // Get per-connection commission: user-set takes priority, then auto-detected (per-side × 2 for round-trip)
+                     const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
+                     const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;
+                     const connCommRT = connUserComm > 0 ? connUserComm : connDetectedComm;
                      brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair, {
                        positionSizingMethod: (pairConfig as any).positionSizingMethod,
                        fixedLotSize: (pairConfig as any).fixedLotSize,
                        atrValue: (analysis as any).atrValue,
                        atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-                     }, rateMap);
+                     }, rateMap, undefined, connCommRT);
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
                    } catch (balErr: any) {
                      console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);
@@ -3058,6 +3122,34 @@ async function runScanForUser(supabase: any, userId: string) {
                         } else {
                           mirrorResults.push(`${conn.display_name}: success`);
                           mirroredConnIds.push(conn.id);
+                          // Auto-detect commission from MetaApi trade response
+                          try {
+                            const orderId = parsed.orderId || parsed.positionId;
+                            if (orderId) {
+                              // Fetch the deal associated with this order to get commission
+                              const { res: dealRes, body: dealBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/history-deals/position/${orderId}`);
+                              if (dealRes.ok) {
+                                const deals = JSON.parse(dealBody);
+                                const dealArr = Array.isArray(deals) ? deals : [];
+                                for (const deal of dealArr) {
+                                  if (deal.commission !== undefined && deal.volume > 0) {
+                                    const dealComm = Math.abs(parseFloat(deal.commission || "0"));
+                                    const dealVol = parseFloat(deal.volume || "0");
+                                    if (dealComm > 0 && dealVol > 0) {
+                                      const commPerLot = dealComm / dealVol; // per-side per lot
+                                      console.log(`[commission auto-detect] MetaApi [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from deal (comm=$${dealComm}, vol=${dealVol})`);
+                                      await supabase.from("broker_connections")
+                                        .update({ detected_commission_per_lot: commPerLot })
+                                        .eq("id", conn.id);
+                                      break;
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          } catch (commErr: any) {
+                            console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
+                          }
                         }
                       } catch { mirrorResults.push(`${conn.display_name}: success`); mirroredConnIds.push(conn.id); }
                    } else {
