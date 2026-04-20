@@ -18,7 +18,6 @@ interface ExpandedPositionCardProps {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-/** Calculate current R-multiple: (current - entry) / (entry - sl) for long, inverted for short */
 function calcRMultiple(direction: string, entry: number, current: number, sl: number): number | null {
   const risk = direction === "long" ? entry - sl : sl - entry;
   if (!risk || risk <= 0) return null;
@@ -26,14 +25,12 @@ function calcRMultiple(direction: string, entry: number, current: number, sl: nu
   return reward / risk;
 }
 
-/** Calculate the price at a given R-multiple */
 function priceAtR(direction: string, entry: number, sl: number, rMultiple: number): number | null {
   const risk = direction === "long" ? entry - sl : sl - entry;
   if (!risk || risk <= 0) return null;
   return direction === "long" ? entry + risk * rMultiple : entry - risk * rMultiple;
 }
 
-/** Calculate pip value based on symbol */
 function getPipSize(symbol: string): number {
   const s = symbol.toUpperCase();
   if (s.includes("JPY") || s.includes("XAU") || s.includes("GOLD")) return 0.01;
@@ -43,9 +40,11 @@ function getPipSize(symbol: string): number {
   return 0.0001;
 }
 
-function priceToPips(symbol: string, priceDistance: number): string {
-  const pipSize = getPipSize(symbol);
-  return (priceDistance / pipSize).toFixed(1);
+function formatPrice(price: number, symbol: string): string {
+  const s = symbol.toUpperCase();
+  if (s.includes("JPY")) return price.toFixed(3);
+  if (s.includes("XAU") || s.includes("GOLD")) return price.toFixed(2);
+  return price.toFixed(5);
 }
 
 // ─── R-Multiple Progress Bar ────────────────────────────────────────
@@ -61,6 +60,7 @@ function RMultipleBar({
   bePrice,
   partialPrice,
   direction,
+  symbol,
 }: {
   currentR: number;
   tpR: number | null;
@@ -72,8 +72,8 @@ function RMultipleBar({
   bePrice: number | null;
   partialPrice: number | null;
   direction: string;
+  symbol: string;
 }) {
-  // Bar range: -1R to max(tpR + 0.5, 2R)
   const maxR = Math.max(tpR ? tpR + 0.5 : 2, 2);
   const minR = -1;
   const range = maxR - minR;
@@ -84,66 +84,102 @@ function RMultipleBar({
   const currentPct = toPercent(currentR);
   const isProfit = currentR >= 0;
 
-  // Markers
-  const markers: { r: number; label: string; price: string; color: string }[] = [];
-  if (beR != null && bePrice != null) {
-    markers.push({ r: beR, label: `${beR}R BE`, price: bePrice.toFixed(5), color: "text-yellow-400" });
-  }
-  if (partialR != null && partialPrice != null) {
-    markers.push({ r: partialR, label: `${partialR}R PT`, price: partialPrice.toFixed(3), color: "text-cyan-400" });
-  }
-  if (tpR != null && tpPrice != null) {
-    markers.push({ r: tpR, label: `TP`, price: tpPrice.toFixed(5), color: "text-blue-400" });
-  }
-
   return (
-    <div className="relative w-full h-14 select-none">
-      {/* Track */}
-      <div className="absolute top-5 left-0 right-0 h-1.5 bg-muted/40 rounded-full" />
-
-      {/* Fill from entry to current */}
-      {isProfit ? (
-        <div
-          className="absolute top-5 h-1.5 rounded-full bg-gradient-to-r from-emerald-500/60 to-emerald-400"
-          style={{ left: `${entryPct}%`, width: `${Math.max(0, currentPct - entryPct)}%` }}
-        />
-      ) : (
-        <div
-          className="absolute top-5 h-1.5 rounded-full bg-gradient-to-r from-red-400 to-red-500/60"
-          style={{ left: `${currentPct}%`, width: `${Math.max(0, entryPct - currentPct)}%` }}
-        />
-      )}
-
-      {/* Entry marker */}
-      <div className="absolute top-3 flex flex-col items-center" style={{ left: `${entryPct}%`, transform: "translateX(-50%)" }}>
-        <div className="w-0.5 h-4 bg-muted-foreground/60" />
-        <span className="text-[7px] text-muted-foreground mt-0.5">Entry</span>
-      </div>
-
-      {/* Current position dot */}
-      <div className="absolute flex flex-col items-center" style={{ left: `${currentPct}%`, transform: "translateX(-50%)", top: "0px" }}>
-        <span className={`text-[8px] font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
+    <div className="relative w-full select-none bg-muted/10 rounded-lg border border-border/30 p-3 pb-5">
+      {/* Current R label above bar */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[10px] text-muted-foreground font-medium">R-Multiple</span>
+        <span className={`text-sm font-mono font-bold ${isProfit ? "text-emerald-400" : "text-red-400"}`}>
           {currentR >= 0 ? "+" : ""}{currentR.toFixed(2)}R
         </span>
-        <div className={`w-2.5 h-2.5 rounded-full border-2 mt-0.5 ${isProfit ? "bg-emerald-400 border-emerald-300" : "bg-red-400 border-red-300"}`} />
       </div>
 
-      {/* R-level markers */}
-      {markers.map((m, i) => (
-        <div
-          key={i}
-          className="absolute flex flex-col items-center"
-          style={{ left: `${toPercent(m.r)}%`, transform: "translateX(-50%)", top: "12px" }}
-        >
-          <div className={`w-0.5 h-5 ${m.color.replace("text-", "bg-")} opacity-60`} />
-          <span className={`text-[7px] font-mono mt-0.5 ${m.color} opacity-80`}>{m.label}</span>
-        </div>
-      ))}
+      {/* Bar track */}
+      <div className="relative h-3 bg-muted/30 rounded-full overflow-hidden">
+        {/* Fill from entry to current */}
+        {isProfit ? (
+          <div
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-emerald-500/70 to-emerald-400"
+            style={{ left: `${entryPct}%`, width: `${Math.max(0, currentPct - entryPct)}%` }}
+          />
+        ) : (
+          <div
+            className="absolute top-0 bottom-0 rounded-full bg-gradient-to-r from-red-400 to-red-500/70"
+            style={{ left: `${currentPct}%`, width: `${Math.max(0, entryPct - currentPct)}%` }}
+          />
+        )}
 
-      {/* Scale labels */}
-      <div className="absolute bottom-0 left-0 text-[7px] text-muted-foreground/50 font-mono">-1R</div>
-      <div className="absolute bottom-0 text-[7px] text-muted-foreground/50 font-mono" style={{ left: `${toPercent(1)}%`, transform: "translateX(-50%)" }}>1R</div>
-      <div className="absolute bottom-0 right-0 text-[7px] text-muted-foreground/50 font-mono">+{maxR.toFixed(1)}R</div>
+        {/* Entry line */}
+        <div
+          className="absolute top-0 bottom-0 w-0.5 bg-muted-foreground/50"
+          style={{ left: `${entryPct}%` }}
+        />
+
+        {/* Current position indicator */}
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 shadow-md ${
+            isProfit ? "bg-emerald-400 border-emerald-200" : "bg-red-400 border-red-200"
+          }`}
+          style={{ left: `${currentPct}%`, transform: "translate(-50%, -50%)" }}
+        />
+
+        {/* BE marker */}
+        {beR != null && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-yellow-400/60"
+            style={{ left: `${toPercent(beR)}%` }}
+          />
+        )}
+
+        {/* Partial TP marker */}
+        {partialR != null && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-cyan-400/60"
+            style={{ left: `${toPercent(partialR)}%` }}
+          />
+        )}
+
+        {/* TP marker */}
+        {tpR != null && (
+          <div
+            className="absolute top-0 bottom-0 w-1 bg-blue-400/60 rounded-full"
+            style={{ left: `${toPercent(tpR)}%` }}
+          />
+        )}
+      </div>
+
+      {/* Labels below bar */}
+      <div className="relative h-5 mt-1">
+        {/* Entry label */}
+        <div className="absolute text-[9px] text-muted-foreground font-mono" style={{ left: `${entryPct}%`, transform: "translateX(-50%)" }}>
+          Entry
+        </div>
+
+        {/* BE label */}
+        {beR != null && bePrice != null && (
+          <div className="absolute text-[9px] text-yellow-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(beR)}%`, transform: "translateX(-50%)" }}>
+            BE
+          </div>
+        )}
+
+        {/* Partial TP label */}
+        {partialR != null && (
+          <div className="absolute text-[9px] text-cyan-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(partialR)}%`, transform: "translateX(-50%)" }}>
+            {partialR}R
+          </div>
+        )}
+
+        {/* TP label */}
+        {tpR != null && (
+          <div className="absolute text-[9px] text-blue-400/80 font-mono whitespace-nowrap" style={{ left: `${toPercent(tpR)}%`, transform: "translateX(-50%)" }}>
+            TP
+          </div>
+        )}
+
+        {/* Scale edges */}
+        <div className="absolute left-0 text-[8px] text-muted-foreground/40 font-mono">-1R</div>
+        <div className="absolute right-0 text-[8px] text-muted-foreground/40 font-mono">+{maxR.toFixed(0)}R</div>
+      </div>
     </div>
   );
 }
@@ -166,30 +202,30 @@ function ManagementRow({
   const colors = {
     emerald: {
       dot: active ? "bg-emerald-400" : "bg-emerald-400/30",
-      badge: active ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-emerald-500/5 text-emerald-400/50 border-emerald-500/20",
-      text: active ? "text-emerald-300" : "text-emerald-400/40",
+      badge: active ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-muted/30 text-emerald-400/50 border-border/40",
+      text: active ? "text-emerald-300" : "text-muted-foreground",
     },
     yellow: {
       dot: active ? "bg-yellow-400" : "bg-yellow-400/30",
-      badge: active ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/50" : "bg-yellow-500/5 text-yellow-400/50 border-yellow-500/20",
-      text: active ? "text-yellow-300" : "text-yellow-400/40",
+      badge: active ? "bg-yellow-500/20 text-yellow-400 border-yellow-500/50" : "bg-muted/30 text-yellow-400/50 border-border/40",
+      text: active ? "text-yellow-300" : "text-muted-foreground",
     },
     cyan: {
       dot: active ? "bg-cyan-400" : "bg-cyan-400/30",
-      badge: active ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50" : "bg-cyan-500/5 text-cyan-400/50 border-cyan-500/20",
-      text: active ? "text-cyan-300" : "text-cyan-400/40",
+      badge: active ? "bg-cyan-500/20 text-cyan-400 border-cyan-500/50" : "bg-muted/30 text-cyan-400/50 border-border/40",
+      text: active ? "text-cyan-300" : "text-muted-foreground",
     },
   };
   const c = colors[colorClass];
 
   return (
-    <div className="flex items-center gap-2 py-1 px-2 rounded bg-secondary/30 border border-border/30">
-      <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${c.dot}`} />
-      <span className="text-[9px] font-medium text-foreground/80 w-16 flex-shrink-0">{label}</span>
-      <span className={`px-1.5 py-0.5 text-[8px] font-bold rounded border ${c.badge}`}>
+    <div className="flex items-start gap-2 py-1.5 px-2.5 rounded-md bg-secondary/30 border border-border/30">
+      <div className={`w-2 h-2 rounded-full flex-shrink-0 mt-0.5 ${c.dot}`} />
+      <span className="text-[11px] font-medium text-foreground/80 w-20 flex-shrink-0">{label}</span>
+      <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border flex-shrink-0 ${c.badge}`}>
         {active ? "ACTIVE" : "Pending"}
       </span>
-      <span className={`text-[9px] font-mono flex-1 truncate ${c.text}`}>
+      <span className={`text-[11px] font-mono leading-snug break-words ${c.text}`}>
         {active ? activeText : pendingText}
       </span>
     </div>
@@ -224,28 +260,28 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
   };
 
   return (
-    <div className="flex items-end gap-2 pt-2 border-t border-border/40">
-      <div className="space-y-0.5">
-        <Label className="text-[8px] text-muted-foreground uppercase tracking-wider">Stop Loss</Label>
+    <div className="flex items-end gap-3 pt-3 border-t border-border/40">
+      <div className="space-y-1">
+        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Stop Loss</Label>
         <Input
           type="number" step="0.00001" value={sl}
           onChange={(e) => setSl(e.target.value)} placeholder="—"
-          className="h-7 w-28 text-[10px] font-mono px-1.5"
+          className="h-8 w-32 text-xs font-mono px-2"
         />
       </div>
-      <div className="space-y-0.5">
-        <Label className="text-[8px] text-muted-foreground uppercase tracking-wider">Take Profit</Label>
+      <div className="space-y-1">
+        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Take Profit</Label>
         <Input
           type="number" step="0.00001" value={tp}
           onChange={(e) => setTp(e.target.value)} placeholder="—"
-          className="h-7 w-28 text-[10px] font-mono px-1.5"
+          className="h-8 w-32 text-xs font-mono px-2"
         />
       </div>
-      <Button size="sm" className="h-7 text-[10px]" disabled={!dirty || saving} onClick={handleSave}>
-        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+      <Button size="sm" className="h-8 text-xs px-4" disabled={!dirty || saving} onClick={handleSave}>
+        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
       </Button>
       {dirty && !saving && (
-        <Button size="sm" variant="ghost" className="h-7 text-[10px]"
+        <Button size="sm" variant="ghost" className="h-8 text-xs"
           onClick={() => { setSl(initialSl); setTp(initialTp); }}>
           Reset
         </Button>
@@ -273,30 +309,22 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   const direction = p.direction;
   const pipSize = getPipSize(p.symbol);
 
-  // Original SL from exit flags (the initial SL before any trailing/BE moved it)
-  // We need the original entry SL to calculate R-multiples properly
-  // The original risk = entry - originalSL (for long)
-  // If trailing has moved the SL, the current SL is different from original
-  const originalSlPips = ef.trailingStopPips || ef.breakEvenPips;
+  // Original SL for R-multiple calculation
   const originalSl = sl != null ? (
     ef.trailingStopActivated && ef.trailingStopPips
       ? (direction === "long" ? entry - ef.trailingStopPips * pipSize : entry + ef.trailingStopPips * pipSize)
       : sl
   ) : null;
-
-  // Use original SL for R-multiple calculation (risk = distance from entry to original SL)
-  // But if we don't have original SL info, use current SL
   const riskSl = originalSl ?? sl;
 
   // R-multiple
   const currentR = riskSl != null ? calcRMultiple(direction, entry, current, riskSl) : null;
-
-  // TP R-multiple
   const tpR = (tp != null && riskSl != null) ? calcRMultiple(direction, entry, tp, riskSl) : null;
 
   // BE trigger level
-  const beR = ef.breakEvenPips != null && riskSl != null
-    ? (ef.breakEvenPips * pipSize) / (direction === "long" ? entry - riskSl : riskSl - entry)
+  const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
+  const beR = ef.breakEvenPips != null && riskDist && riskDist > 0
+    ? (ef.breakEvenPips * pipSize) / riskDist
     : null;
   const bePrice = beR != null && riskSl != null ? priceAtR(direction, entry, riskSl, beR) : null;
 
@@ -329,7 +357,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     exitConfig.push({ label: "Max Hold", value: `${ef.maxHoldHours}h` });
   }
 
-  // Trigger colors and icons for exit attribution
+  // Trigger colors and icons
   const triggerColors: Record<string, string> = {
     trailing_enabled: "text-emerald-400", trailing_stop: "text-emerald-400",
     be_enabled: "text-yellow-400", break_even: "text-yellow-400",
@@ -346,55 +374,52 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   };
 
   return (
-    <div className="bg-secondary/20 border border-border/50 rounded-md p-3 space-y-3 text-[10px]">
+    <div className="bg-secondary/20 border border-border/50 rounded-lg p-4 space-y-4">
       {/* ── TOP BAR: Trade Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider ${
+        <div className="flex items-center gap-2.5">
+          <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-bold tracking-wider ${
             direction === "long"
               ? "bg-success/15 border border-success/40 text-success"
               : "bg-destructive/15 border border-destructive/40 text-destructive"
           }`}>
             {direction === "long" ? "BUY" : "SELL"}
           </span>
-          <span className="font-bold text-foreground text-[12px]">{p.symbol}</span>
-          <span className="text-muted-foreground text-[10px]">{parseFloat(p.size)?.toFixed(2)} lots</span>
-          <span className={`text-[10px] ${direction === "long" ? "text-success" : "text-destructive"}`}>
+          <span className="font-bold text-foreground text-sm">{p.symbol}</span>
+          <span className="text-muted-foreground text-xs">{parseFloat(p.size)?.toFixed(2)} lots</span>
+          <span className={`text-xs ${direction === "long" ? "text-success" : "text-destructive"}`}>
             {direction === "long" ? "▲" : "▼"}
           </span>
         </div>
-        <div className="flex items-center gap-3 text-[9px] font-mono">
-          <span className="text-muted-foreground">Entry <span className="text-foreground">{entry.toFixed(5)}</span></span>
-          <span className="text-muted-foreground">→</span>
-          <span className="text-muted-foreground">Now <span className="text-foreground">{current.toFixed(5)}</span></span>
-          <span className={`font-bold ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
+        <div className="flex items-center gap-4 text-xs font-mono">
+          <span className="text-muted-foreground">Entry <span className="text-foreground font-medium">{formatPrice(entry, p.symbol)}</span></span>
+          <span className="text-muted-foreground/50">→</span>
+          <span className="text-muted-foreground">Now <span className="text-foreground font-medium">{formatPrice(current, p.symbol)}</span></span>
+          <span className={`font-bold text-sm ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>
             {formatMoney(p.pnl, true)}
           </span>
-          <span className={`${pnlPips >= 0 ? "text-success/70" : "text-destructive/70"}`}>
+          <span className={`text-xs ${pnlPips >= 0 ? "text-success/70" : "text-destructive/70"}`}>
             {pnlPips >= 0 ? "+" : ""}{pnlPips.toFixed(1)} pips
           </span>
-          <span className="text-muted-foreground">Score</span>
-          <span className="text-primary font-bold">{p.signalScore}/10</span>
-          <span className="text-muted-foreground">ID</span>
-          <span className="text-muted-foreground/60">{p.orderId?.slice(0, 8)}</span>
+          <span className="text-muted-foreground/60">Score <span className="text-primary font-bold">{p.signalScore}/10</span></span>
+          <span className="text-muted-foreground/40">ID {p.orderId?.slice(0, 8)}</span>
         </div>
       </div>
 
       {/* ── TWO-COLUMN LAYOUT ── */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* ── LEFT COLUMN: Analysis ── */}
-        <div className="space-y-2">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Analysis</p>
+        <div className="space-y-3 min-w-0">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Analysis</p>
           <SignalReasoningCard signalReason={p.signalReason || ""} />
-          {/* Extra metadata */}
-          <div className="flex items-center gap-3 text-[9px] text-muted-foreground">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>Opened: <span className="font-mono text-foreground/70">{formatFullDateTime(p.openTime)}</span></span>
           </div>
         </div>
 
         {/* ── RIGHT COLUMN: Trade Management ── */}
-        <div className="space-y-2">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
+        <div className="space-y-3 min-w-0">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
 
           {/* R-Multiple Progress Bar */}
           {currentR != null && (
@@ -409,44 +434,42 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               bePrice={bePrice}
               partialPrice={partialPrice}
               direction={direction}
+              symbol={p.symbol}
             />
           )}
 
           {/* Management status rows */}
           {hasManagement && (
-            <div className="space-y-1">
-              {/* Trailing Stop */}
+            <div className="space-y-1.5">
               {(ef.trailingStopEnabled || ef.trailingStop) && (
                 <ManagementRow
                   label="Trailing"
                   active={!!ef.trailingStopActivated}
                   colorClass="emerald"
                   activeText={sl != null
-                    ? `SL moved to ${sl.toFixed(5)} (${currentR != null ? currentR.toFixed(2) : "?"}R locked)`
+                    ? `SL → ${formatPrice(sl, p.symbol)} (${currentR != null ? currentR.toFixed(2) : "?"}R)`
                     : "Active"
                   }
                   pendingText={ef.trailingStopActivation
-                    ? `Triggers ${ef.trailingStopActivation} · ${ef.trailingStopPips} pips`
-                    : `${ef.trailingStopPips ?? "?"} pips`
+                    ? `Triggers ${ef.trailingStopActivation} · ${ef.trailingStopPips}p`
+                    : `${ef.trailingStopPips ?? "?"}p step`
                   }
                 />
               )}
 
-              {/* Break Even */}
               {(ef.breakEvenEnabled || ef.breakEven) && (
                 <ManagementRow
                   label="Break Even"
                   active={!!ef.breakEvenActivated}
                   colorClass="yellow"
-                  activeText={`SL moved to entry (${entry.toFixed(5)})`}
+                  activeText={`SL → entry (${formatPrice(entry, p.symbol)})`}
                   pendingText={bePrice != null
-                    ? `Triggers at ${beR?.toFixed(1)}R → moves SL to ${entry.toFixed(5)}`
-                    : `${ef.breakEvenPips} pips from entry`
+                    ? `At ${beR?.toFixed(1)}R → SL to ${formatPrice(entry, p.symbol)}`
+                    : `${ef.breakEvenPips}p from entry`
                   }
                 />
               )}
 
-              {/* Partial TP */}
               {(ef.partialTPEnabled || ef.partialTP) && (
                 <ManagementRow
                   label="Partial TP"
@@ -454,7 +477,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                   colorClass="cyan"
                   activeText={`${ef.partialTPPercent ?? 50}% closed at ${partialR ?? "?"}R`}
                   pendingText={partialPrice != null
-                    ? `${ef.partialTPPercent ?? 50}% close at ${partialR}R (${partialPrice.toFixed(5)})`
+                    ? `${ef.partialTPPercent ?? 50}% @ ${partialR}R (${formatPrice(partialPrice, p.symbol)})`
                     : `${ef.partialTPPercent ?? 50}% @ ${ef.partialTPLevel ?? "?"}R`
                   }
                 />
@@ -464,7 +487,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
           {/* Exit config summary */}
           {exitConfig.length > 0 && (
-            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] px-2 py-1 bg-muted/20 rounded border border-border/20">
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs px-2.5 py-1.5 bg-muted/20 rounded-md border border-border/20">
               {exitConfig.map((c, i) => (
                 <span key={i} className="text-muted-foreground">
                   {c.label}: <span className="font-mono text-foreground/70">{c.value}</span>
@@ -475,16 +498,16 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
           {/* Exit attribution timeline */}
           {exitAttribution.length > 0 && (
-            <div className="space-y-0.5 pl-1">
+            <div className="space-y-1 pl-1">
               {exitAttribution.map((ea: any, i: number) => {
                 if (ea.trigger === "no_action") return null;
                 const color = triggerColors[ea.trigger] || "text-muted-foreground";
                 const icon = triggerIcons[ea.trigger] || "\u2022";
                 return (
-                  <div key={i} className={`flex items-center gap-1 text-[9px] ${color}`}>
-                    <span>{icon}</span>
-                    <span className="font-medium font-mono">{ea.rMultiple?.toFixed(2)}R</span>
-                    <span className="text-muted-foreground truncate max-w-[280px]">{ea.detail}</span>
+                  <div key={i} className={`flex items-start gap-1.5 text-xs ${color}`}>
+                    <span className="flex-shrink-0">{icon}</span>
+                    <span className="font-medium font-mono flex-shrink-0">{ea.rMultiple?.toFixed(2)}R</span>
+                    <span className="text-muted-foreground break-words">{ea.detail}</span>
                   </div>
                 );
               })}
@@ -493,11 +516,11 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
           {/* Legacy invalidation history */}
           {invalidHistory.length > 0 && exitAttribution.length === 0 && (
-            <div className="space-y-0.5 pl-1">
+            <div className="space-y-1 pl-1">
               {invalidHistory.map((ih: any, i: number) => (
-                <div key={i} className="flex items-center gap-1 text-[9px] text-destructive">
-                  <span>{"\uD83D\uDEE1"}</span>
-                  <span className="font-medium">SL Tightened</span>
+                <div key={i} className="flex items-start gap-1.5 text-xs text-destructive">
+                  <span className="flex-shrink-0">{"\uD83D\uDEE1"}</span>
+                  <span className="font-medium flex-shrink-0">SL Tightened</span>
                   <span className="text-muted-foreground">at {ih.rMultiple}R — {ih.reason}</span>
                 </div>
               ))}
