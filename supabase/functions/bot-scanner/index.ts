@@ -2596,8 +2596,13 @@ async function runScanForUser(supabase: any, userId: string) {
     }
 
     // Per-instrument session gate check (Fix #7)
+    // Fix: When current time falls in "Off-Hours" gap (e.g. 16:00-17:00 NY between NY close
+    // and Sydney open), allow scanning if user has all 3 core sessions enabled — their intent
+    // is clearly 24/5 scanning and the gap is an artefact of non-overlapping session windows.
     const pairAssetProfile = getAssetProfile(pair);
-    if (!pairAssetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) {
+    const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
+    const offHoursImplicitlyAllowed = normalizedSession === "off-hours" && coreSessionsEnabled;
+    if (!pairAssetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession) && !offHoursImplicitlyAllowed) {
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
       continue;
     }
