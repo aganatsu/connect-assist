@@ -3336,9 +3336,9 @@ async function runScanForUser(supabase: any, userId: string) {
         }
 
         const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
-          positionSizingMethod: pairConfig.positionSizingMethod,
-          fixedLotSize: pairConfig.fixedLotSize,
-          atrValue: analysis.atrValue,
+          positionSizingMethod: (pairConfig as any).positionSizingMethod,
+          fixedLotSize: (pairConfig as any).fixedLotSize,
+          atrValue: (analysis as any).atrValue,
         });
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
@@ -3647,9 +3647,9 @@ async function runScanForUser(supabase: any, userId: string) {
                      }
                      const cappedRisk = Math.min(pairConfig.riskPerTrade, MAX_BROKER_RISK_PERCENT);
                      brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair, {
-                       positionSizingMethod: pairConfig.positionSizingMethod,
-                       fixedLotSize: pairConfig.fixedLotSize,
-                       atrValue: analysis.atrValue,
+                       positionSizingMethod: (pairConfig as any).positionSizingMethod,
+                       fixedLotSize: (pairConfig as any).fixedLotSize,
+                       atrValue: (analysis as any).atrValue,
                      });
                      console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
                    } catch (balErr: any) {

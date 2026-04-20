@@ -138,6 +138,7 @@ export interface ReasoningFactor {
   present: boolean;
   weight: number;
   detail: string;
+  group?: string;
 }
 
 export interface GateResult {

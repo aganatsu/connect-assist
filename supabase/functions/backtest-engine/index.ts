@@ -315,11 +315,6 @@ function mapConfig(raw: any): any {
     useSMT: strategy.useSMT ?? true,
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
-    useVolumeProfile: strategy.useVolumeProfile ?? true,
-    useTrendDirection: strategy.useTrendDirection ?? true,
-    useDailyBias: strategy.useDailyBias ?? true,
-    useAMD: strategy.useAMD ?? true,
-    useFOTSI: strategy.useFOTSI ?? true,
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
     riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
@@ -2044,7 +2039,7 @@ Deno.serve(async (req) => {
         const size = calculatePositionSize(balance, config.riskPerTrade, entryPrice, sl, symbol, {
           positionSizingMethod: config.positionSizingMethod,
           fixedLotSize: config.fixedLotSize,
-          atrValue: analysis.atrValue ?? calculateATR(candles, config.slATRPeriod || 14),
+          atrValue: (analysis as any).atrValue ?? calculateATR(entryCandles.slice(Math.max(0, entryCandles.length - 100)), config.slATRPeriod || 14),
         });
 
         // ── Open Position ──

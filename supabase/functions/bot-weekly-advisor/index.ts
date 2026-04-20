@@ -805,6 +805,7 @@ function generateRegimeRecommendation(
       // Group divergent instruments by their regime
       const divergentByRegime: Record<string, string[]> = {};
       for (const ir of divergent) {
+        if (!ir.symbol) continue;
         if (!divergentByRegime[ir.regime]) divergentByRegime[ir.regime] = [];
         divergentByRegime[ir.regime].push(ir.symbol);
       }
@@ -826,7 +827,7 @@ function generateRegimeRecommendation(
           },
           confidence: "medium",
           evidence: divergent
-            .filter(ir => symbols.includes(ir.symbol))
+            .filter(ir => ir.symbol && symbols.includes(ir.symbol))
             .map(ir => `${ir.symbol}: ${ir.indicators.slice(0, 2).join("; ")}`)
             .join(" | "),
           risk_level: "low",
@@ -836,7 +837,7 @@ function generateRegimeRecommendation(
 
     // Summary recommendation showing the full instrument breakdown
     const summaryLines = regime.instrumentRegimes
-      .filter(ir => ir.regime !== "unknown")
+      .filter(ir => ir.symbol && ir.regime !== "unknown")
       .map(ir => `${ir.symbol}: ${ir.regime.replace(/_/g, " ")} (${ir.directionalBias}, ATR ${ir.atrTrend}, conf: ${(ir.confidence * 100).toFixed(0)}%)`)
       .join("; ");
 
