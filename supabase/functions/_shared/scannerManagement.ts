@@ -398,6 +398,7 @@ export async function manageOpenPositions(
 
       // ── 2. BREAK-EVEN ACTIVATION ──
       // If breakEven is enabled and position has moved enough pips in profit
+      // Check *Activated field (new format) — never re-trigger once activated
       if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple > 0) {
         const profitPipsAbs = Math.abs(profitPips);
         if (profitPipsAbs >= breakEvenPips) {
@@ -411,7 +412,6 @@ export async function manageOpenPositions(
               `Break-even activated at ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${breakEvenPips} pips) — SL moved to ${beSL.toFixed(5)}`,
             );
             updatedFlags.breakEvenActivated = true;
-            updatedFlags.breakEven = true;
             exitFlagsUpdated = true;
 
             const updatedSignal = {
@@ -436,14 +436,21 @@ export async function manageOpenPositions(
 
       // ── 3. TRAILING STOP ACTIVATION ──
       // If trailing is enabled in config and hasn't been activated yet
-      if (trailingEnabled && !exitFlags.trailingStop) {
+      // Use trailingStopActivated (new format). For backward compat with old
+      // positions that stored trailingStop as config intent (always true),
+      // we check the dedicated Activated field.
+      const trailingAlreadyActivated = exitFlags.trailingStopActivated === true;
+      if (trailingEnabled && !trailingAlreadyActivated) {
         const activationR = trailingActivation === "after_1r" ? 1.0
           : trailingActivation === "after_0.5r" ? 0.5
           : trailingActivation === "after_2r" ? 2.0
           : 1.0;
 
         if (rMultiple >= activationR) {
-          updatedFlags.trailingStop = true;
+          updatedFlags.trailingStopActivated = true;
+          updatedFlags.trailingStopLevel = pos.direction === "long"
+            ? currentPrice - (trailingPips * spec.pipSize)
+            : currentPrice + (trailingPips * spec.pipSize);
           updatedFlags.trailingStopPips = trailingPips;
           updatedFlags.trailingStopActivation = trailingActivation;
           exitFlagsUpdated = true;
@@ -462,8 +469,11 @@ export async function manageOpenPositions(
 
       // ── 4. PARTIAL TP ACTIVATION ──
       // If partial TP is enabled in config and hasn't been activated yet
-      if (partialTPEnabled && !exitFlags.partialTP && rMultiple >= partialTPLevel) {
-        updatedFlags.partialTP = true;
+      // Use partialTPActivated (new format). Old positions stored partialTP
+      // as config intent — check the dedicated Activated field.
+      const partialAlreadyActivated = exitFlags.partialTPActivated === true;
+      if (partialTPEnabled && !partialAlreadyActivated && rMultiple >= partialTPLevel) {
+        updatedFlags.partialTPActivated = true;
         updatedFlags.partialTPPercent = partialTPPercent;
         updatedFlags.partialTPLevel = partialTPLevel;
         exitFlagsUpdated = true;

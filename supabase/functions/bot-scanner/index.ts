@@ -2658,15 +2658,25 @@ async function runScanForUser(supabase: any, userId: string) {
         }
 
         // Build exit flags metadata to store on the position
+        // Intent fields (*Enabled) = user wants this feature
+        // Activation fields (*Activated) = feature has actually triggered (starts false)
         const exitFlags = {
-          trailingStop: pairConfig.trailingStopEnabled,
+          // Trailing stop
+          trailingStopEnabled: pairConfig.trailingStopEnabled,
           trailingStopPips: pairConfig.trailingStopPips,
           trailingStopActivation: pairConfig.trailingStopActivation,
-          breakEven: pairConfig.breakEvenEnabled,
+          trailingStopActivated: false,
+          trailingStopLevel: null as number | null,
+          // Break-even
+          breakEvenEnabled: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
-          partialTP: pairConfig.partialTPEnabled,
+          breakEvenActivated: false,
+          // Partial TP
+          partialTPEnabled: pairConfig.partialTPEnabled,
           partialTPPercent: pairConfig.partialTPPercent,
           partialTPLevel: pairConfig.partialTPLevel,
+          partialTPActivated: false,
+          // Time + ratio
           maxHoldHours: pairConfig.maxHoldHours,
           tpRatio: pairConfig.tpRatio,
         };

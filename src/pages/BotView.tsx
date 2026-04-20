@@ -425,29 +425,78 @@ export default function BotView() {
                                       const invalidHistory = sr.invalidationHistory || [];
                                       const setupType = sr.setupType || "";
                                       const ef = sr.exitFlags || {};
-                                      if (!setupType && promoHistory.length === 0) return null;
+                                      const exitAttribution: any[] = sr.exitAttribution || [];
+                                      // Show management section if any features are enabled or any actions taken
+                                      const hasManagement = ef.trailingStopEnabled || ef.breakEvenEnabled || ef.partialTPEnabled || exitAttribution.length > 0 || invalidHistory.length > 0;
+                                      if (!hasManagement) return null;
                                       return (
                                         <div className="mt-1.5 space-y-1">
                                           <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Trade Management</p>
+                                          {/* Feature status badges — pending vs active */}
                                           <div className="flex flex-wrap gap-1">
-
-                                            {ef.trailingStop && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 rounded">Trailing ON</span>}
-                                            {ef.partialTP && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 rounded">Partial TP</span>}
-                                            {ef.breakEven && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 rounded">BE Active</span>}
+                                            {ef.trailingStopEnabled && (
+                                              ef.trailingStopActivated
+                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 rounded">Trailing ACTIVE</span>
+                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/5 border border-emerald-500/20 text-emerald-400/50 rounded">Trailing (pending)</span>
+                                            )}
+                                            {ef.breakEvenEnabled && (
+                                              ef.breakEvenActivated
+                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/20 border border-yellow-500/50 text-yellow-400 rounded">BE ACTIVE</span>
+                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/5 border border-yellow-500/20 text-yellow-400/50 rounded">BE (pending)</span>
+                                            )}
+                                            {ef.partialTPEnabled && (
+                                              ef.partialTPActivated
+                                                ? <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/20 border border-cyan-500/50 text-cyan-400 rounded">Partial TP FILLED</span>
+                                                : <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/5 border border-cyan-500/20 text-cyan-400/50 rounded">Partial TP (pending)</span>
+                                            )}
+                                            {/* Backward compat: old positions with trailingStop/breakEven/partialTP as intent booleans */}
+                                            {!ef.trailingStopEnabled && ef.trailingStop && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 rounded">Trailing ON (legacy)</span>}
+                                            {!ef.breakEvenEnabled && ef.breakEven && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-yellow-500/15 border border-yellow-500/40 text-yellow-400 rounded">BE (legacy)</span>}
+                                            {!ef.partialTPEnabled && ef.partialTP && <span className="px-1.5 py-0.5 text-[9px] font-medium bg-cyan-500/15 border border-cyan-500/40 text-cyan-400 rounded">Partial TP (legacy)</span>}
                                           </div>
-                                          {promoHistory.length > 0 && (
+                                          {/* Exit attribution timeline — every management action taken */}
+                                          {exitAttribution.length > 0 && (
                                             <div className="text-[9px] space-y-0.5">
-                                              {promoHistory.map((ph: any, i: number) => (
-                                                <div key={i} className="flex items-center gap-1 text-emerald-400">
-                                                  <span>\uD83D\uDCC8</span>
-                                                  <span className="font-medium">{(ph.from || "").toUpperCase()} \u2192 {(ph.to || "").toUpperCase()}</span>
-                                                  <span className="text-muted-foreground">at {ph.rMultiple}R</span>
-                                                  <span className="text-muted-foreground truncate max-w-[200px]">{ph.reason}</span>
-                                                </div>
-                                              ))}
+                                              {exitAttribution.map((ea: any, i: number) => {
+                                                const triggerColors: Record<string, string> = {
+                                                  trailing_enabled: "text-emerald-400",
+                                                  trailing_stop: "text-emerald-400",
+                                                  be_enabled: "text-yellow-400",
+                                                  break_even: "text-yellow-400",
+                                                  partial_enabled: "text-cyan-400",
+                                                  partial_tp: "text-cyan-400",
+                                                  structure_invalidated: "text-destructive",
+                                                  session_close: "text-orange-400",
+                                                  max_hold_exceeded: "text-orange-400",
+                                                  no_action: "text-muted-foreground",
+                                                };
+                                                const triggerIcons: Record<string, string> = {
+                                                  trailing_enabled: "\u2197\uFE0F",
+                                                  trailing_stop: "\u2197\uFE0F",
+                                                  be_enabled: "\u2696\uFE0F",
+                                                  break_even: "\u2696\uFE0F",
+                                                  partial_enabled: "\uD83D\uDCB0",
+                                                  partial_tp: "\uD83D\uDCB0",
+                                                  structure_invalidated: "\uD83D\uDEE1\uFE0F",
+                                                  session_close: "\u23F0",
+                                                  max_hold_exceeded: "\u23F3",
+                                                  no_action: "\u2014",
+                                                };
+                                                if (ea.trigger === "no_action") return null;
+                                                const color = triggerColors[ea.trigger] || "text-muted-foreground";
+                                                const icon = triggerIcons[ea.trigger] || "\u2022";
+                                                return (
+                                                  <div key={i} className={`flex items-center gap-1 ${color}`}>
+                                                    <span>{icon}</span>
+                                                    <span className="font-medium">{ea.rMultiple?.toFixed(2)}R</span>
+                                                    <span className="text-muted-foreground truncate max-w-[300px]">{ea.detail}</span>
+                                                  </div>
+                                                );
+                                              })}
                                             </div>
                                           )}
-                                          {invalidHistory.length > 0 && (
+                                          {/* Legacy invalidation history (backward compat) */}
+                                          {invalidHistory.length > 0 && exitAttribution.length === 0 && (
                                             <div className="text-[9px] space-y-0.5">
                                               {invalidHistory.map((ih: any, i: number) => (
                                                 <div key={i} className="flex items-center gap-1 text-destructive">
