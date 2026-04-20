@@ -83,7 +83,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
   { tab: "instruments", label: "Volatility Filter (ATR)", keywords: ["atr", "volatility", "filter", "min", "max"] },
-  { tab: "instruments", label: "Max Spread (pips)", keywords: ["spread", "max", "pips"] },
+  { tab: "instruments", label: "Global Spread Override", keywords: ["spread", "max", "pips", "per-instrument", "auto"] },
   // Sessions
   { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "sydney"] },
   { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
@@ -141,7 +141,7 @@ const BASE_CONFIG = {
       "AUD/USD": true, "USD/CAD": true, "EUR/GBP": false, "NZD/USD": false,
       "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
     },
-    spreadFilterEnabled: true, maxSpreadPips: 3, volatilityFilterEnabled: false,
+    spreadFilterEnabled: true, maxSpreadPips: 0, volatilityFilterEnabled: false,
     minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8,
   },
   sessions: {
@@ -1135,14 +1135,35 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                     })}
                     {/* ── Spread Filter ── */}
                     <div className="border-t border-border pt-4 mt-4">
-                      <SectionHeader title="Spread Filter" description="Skip broker execution when the live bid/ask spread is too wide" />
+                      <SectionHeader title="Spread Filter" description="Skip broker execution when the live bid/ask spread is too wide. Each instrument has its own default max spread." />
                       <ToggleField label="Enable Spread Filter" description="Block live trades when spread exceeds the maximum" checked={config.instruments?.spreadFilterEnabled ?? true} onChange={v => updateField('instruments', 'spreadFilterEnabled', v)} />
-                      <FieldGroup label="Max Spread (pips)" description="Maximum allowed spread before skipping broker execution">
-                        <div className="flex items-center gap-4">
-                          <Slider value={[config.instruments?.maxSpreadPips ?? 3]} onValueChange={v => updateField('instruments', 'maxSpreadPips', v[0])} min={0.5} max={20} step={0.5} className="flex-1" disabled={!(config.instruments?.spreadFilterEnabled ?? true)} />
-                          <span className="text-sm font-mono font-bold w-12 text-right">{config.instruments?.maxSpreadPips ?? 3}</span>
-                        </div>
-                      </FieldGroup>
+                      {(config.instruments?.spreadFilterEnabled ?? true) && (
+                        <>
+                          <FieldGroup label="Global Spread Override (pips)" description="Set to 0 to use per-instrument defaults (recommended). Any value > 0 overrides all instruments.">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.instruments?.maxSpreadPips ?? 0]} onValueChange={v => updateField('instruments', 'maxSpreadPips', v[0])} min={0} max={20} step={0.5} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-16 text-right">{(config.instruments?.maxSpreadPips ?? 0) === 0 ? 'Auto' : `${config.instruments?.maxSpreadPips}p`}</span>
+                            </div>
+                          </FieldGroup>
+                          {/* Per-instrument spread defaults reference */}
+                          <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
+                            <p className="text-xs text-muted-foreground mb-2 font-medium">Per-instrument defaults (used when override = 0):</p>
+                            <div className="grid grid-cols-3 sm:grid-cols-4 gap-x-4 gap-y-1 text-xs">
+                              {[
+                                { pair: 'EUR/USD', max: 2 }, { pair: 'GBP/USD', max: 3 }, { pair: 'USD/JPY', max: 2 },
+                                { pair: 'AUD/USD', max: 3 }, { pair: 'NZD/USD', max: 3 }, { pair: 'USD/CAD', max: 3 },
+                                { pair: 'GBP/JPY', max: 5 }, { pair: 'EUR/JPY', max: 4 }, { pair: 'GBP/NZD', max: 6 },
+                                { pair: 'XAU/USD', max: 5 }, { pair: 'US30', max: 3 }, { pair: 'BTC/USD', max: 50 },
+                              ].map(({ pair, max }) => (
+                                <div key={pair} className="flex justify-between">
+                                  <span className="text-muted-foreground">{pair}</span>
+                                  <span className="font-mono font-medium">{max}p</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     {/* ── ATR Volatility Filter ── */}

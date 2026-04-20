@@ -166,36 +166,43 @@ export interface OpeningRangeResult {
 }
 
 // ─── Constants ──────────────────────────────────────────────────────
-export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: string; marginPerLot?: number }> = {
-  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800 },
-  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 700 },
-  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
-  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200 },
-  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
-  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
-  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
-  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500 },
-  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800 },
-  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 800 },
-  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000 },
-  "US30": { pipSize: 1.0, lotUnits: 1, type: "index", marginPerLot: 5000 },
-  "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000 },
-  "SPX500": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000 },
-  "XAU/USD": { pipSize: 0.01, lotUnits: 100, type: "commodity", marginPerLot: 2000 },
-  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, type: "commodity", marginPerLot: 1500 },
-  "US Oil": { pipSize: 0.01, lotUnits: 1000, type: "commodity", marginPerLot: 2000 },
-  "BTC/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 5000 },
-  "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000 },
+// maxSpread: maximum acceptable spread in pips before skipping execution
+// typicalSpread: average spread in pips used for R:R cost estimation at gate time
+export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: string; marginPerLot?: number; maxSpread: number; typicalSpread: number }> = {
+  // Forex Majors — tight spreads
+  "EUR/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 2, typicalSpread: 1.0 },
+  "GBP/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 3, typicalSpread: 1.5 },
+  "USD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 2, typicalSpread: 1.0 },
+  "AUD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 3, typicalSpread: 1.5 },
+  "NZD/USD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 700, maxSpread: 3, typicalSpread: 2.0 },
+  "USD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 3, typicalSpread: 1.5 },
+  "USD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 3, typicalSpread: 1.5 },
+  // Forex Crosses — moderate spreads
+  "EUR/GBP": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 4, typicalSpread: 2.0 },
+  "EUR/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 4, typicalSpread: 2.0 },
+  "GBP/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1500, maxSpread: 5, typicalSpread: 3.0 },
+  "EUR/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 4, typicalSpread: 2.5 },
+  "EUR/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 4, typicalSpread: 2.5 },
+  "EUR/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 4, typicalSpread: 2.0 },
+  "EUR/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1200, maxSpread: 5, typicalSpread: 3.0 },
+  "GBP/AUD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500, maxSpread: 5, typicalSpread: 3.5 },
+  "GBP/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500, maxSpread: 5, typicalSpread: 3.0 },
+  "GBP/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500, maxSpread: 5, typicalSpread: 3.0 },
+  "GBP/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1500, maxSpread: 6, typicalSpread: 4.0 },
+  "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.5 },
+  "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.0 },
+  "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 4, typicalSpread: 2.5 },
+  // Indices — point-based spreads
+  "US30": { pipSize: 1.0, lotUnits: 1, type: "index", marginPerLot: 5000, maxSpread: 3, typicalSpread: 2.0 },
+  "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000, maxSpread: 2, typicalSpread: 1.0 },
+  "SPX500": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000, maxSpread: 2, typicalSpread: 1.0 },
+  // Commodities
+  "XAU/USD": { pipSize: 0.01, lotUnits: 100, type: "commodity", marginPerLot: 2000, maxSpread: 5, typicalSpread: 3.0 },
+  "XAG/USD": { pipSize: 0.001, lotUnits: 5000, type: "commodity", marginPerLot: 1500, maxSpread: 4, typicalSpread: 2.5 },
+  "US Oil": { pipSize: 0.01, lotUnits: 1000, type: "commodity", marginPerLot: 2000, maxSpread: 5, typicalSpread: 3.0 },
+  // Crypto — wider spreads
+  "BTC/USD": { pipSize: 1, lotUnits: 1, type: "crypto", marginPerLot: 5000, maxSpread: 50, typicalSpread: 20.0 },
+  "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000, maxSpread: 5, typicalSpread: 2.0 },
 };
 
 export const YAHOO_SYMBOLS: Record<string, string> = {

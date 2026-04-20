@@ -1396,14 +1396,18 @@ function runBacktestSafetyGates(
     reason: hasSameDir ? `Already ${direction} on ${symbol}` : "No duplicate direction",
   });
 
-  // Gate 4: Min RR check
+  // Gate 4: Min RR check (spread-adjusted)
   let rrOk = true;
   if (analysis.stopLoss && analysis.takeProfit) {
     const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
-    const reward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const rr = risk > 0 ? reward / risk : 0;
-    rrOk = rr >= config.minRiskReward;
-    gates.push({ passed: rrOk, reason: `RR: ${rr.toFixed(2)} (min: ${config.minRiskReward})` });
+    const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
+    const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
+    const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
+    const effectiveReward = Math.max(0, rawReward - spreadCostInPrice);
+    const rawRR = risk > 0 ? rawReward / risk : 0;
+    const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
+    rrOk = effectiveRR >= config.minRiskReward;
+    gates.push({ passed: rrOk, reason: `RR: ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${pairSpec.typicalSpread}p) min: ${config.minRiskReward}` });
   } else {
     gates.push({ passed: false, reason: "No SL/TP calculated" });
   }

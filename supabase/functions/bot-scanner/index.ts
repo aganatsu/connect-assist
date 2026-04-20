@@ -80,7 +80,7 @@ const DEFAULTS = {
   },
   // ── Spread Filter ──
   spreadFilterEnabled: true,
-  maxSpreadPips: 3,
+  maxSpreadPips: 0, // 0 = use per-instrument defaults from SPECS.maxSpread
   // ── ATR Volatility Filter (H2) ──
   atrFilterEnabled: false,
   atrFilterMin: 0,   // min ATR in pips (0 = no min)
@@ -1960,15 +1960,21 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
-  // Gate 10: Min R:R
+  // Gate 10: Min R:R (spread-adjusted)
+  // Subtract typical spread cost from reward to get effective R:R.
+  // This prevents inflated R:R from passing the gate when spread eats into profit.
   if (analysis.stopLoss && analysis.takeProfit) {
     const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
-    const reward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const rr = risk > 0 ? reward / risk : 0;
-    if (rr < config.minRiskReward) {
-      gates.push({ passed: false, reason: `R:R ${rr.toFixed(2)} < ${config.minRiskReward} minimum` });
+    const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
+    const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
+    const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
+    const effectiveReward = Math.max(0, rawReward - spreadCostInPrice);
+    const rawRR = risk > 0 ? rawReward / risk : 0;
+    const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
+    if (effectiveRR < config.minRiskReward) {
+      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (spread cost ${pairSpec.typicalSpread}p) < ${config.minRiskReward} min` });
     } else {
-      gates.push({ passed: true, reason: `R:R ${rr.toFixed(2)}` });
+      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${pairSpec.typicalSpread}p)` });
     }
   } else {
     gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
@@ -2844,10 +2850,11 @@ async function runScanForUser(supabase: any, userId: string) {
                             if (oBid > 0 && oAsk > 0) {
                               const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
                               const oSpreadPips = (oAsk - oBid) / pairSpec.pipSize;
-                              console.log(`OANDA spread [${conn.display_name}] ${oandaSym}: bid=${oBid} ask=${oAsk} spread=${oSpreadPips.toFixed(2)} pips (max=${config.maxSpreadPips})`);
-                              if (oSpreadPips > config.maxSpreadPips) {
-                                console.warn(`OANDA spread too wide [${conn.display_name}]: ${oSpreadPips.toFixed(2)} > ${config.maxSpreadPips} — skipping`);
-                                mirrorResults.push(`${conn.display_name}: skipped (spread ${oSpreadPips.toFixed(1)} > ${config.maxSpreadPips})`);
+                              const effectiveMaxSpread = config.maxSpreadPips > 0 ? config.maxSpreadPips : pairSpec.maxSpread;
+                              console.log(`OANDA spread [${conn.display_name}] ${oandaSym}: bid=${oBid} ask=${oAsk} spread=${oSpreadPips.toFixed(2)} pips (max=${effectiveMaxSpread} [${config.maxSpreadPips > 0 ? 'user' : 'per-instrument'}])`);
+                              if (oSpreadPips > effectiveMaxSpread) {
+                                console.warn(`OANDA spread too wide [${conn.display_name}]: ${oSpreadPips.toFixed(2)} > ${effectiveMaxSpread} — skipping`);
+                                mirrorResults.push(`${conn.display_name}: skipped (spread ${oSpreadPips.toFixed(1)} > ${effectiveMaxSpread})`);
                                 continue;
                               }
                             }
@@ -2985,27 +2992,34 @@ async function runScanForUser(supabase: any, userId: string) {
                      console.warn(`Price fetch error [${conn.display_name}] ${brokerSymbol}: ${priceErr?.message}`);
                    }
 
-                   // Gate: skip this broker if spread exceeds configured maximum
-                   if (pairConfig.spreadFilterEnabled && brokerSpreadPips != null && brokerSpreadPips > pairConfig.maxSpreadPips) {
-                     console.warn(`Spread filter [${conn.display_name}]: ${brokerSpreadPips.toFixed(2)} pips > ${pairConfig.maxSpreadPips} max — skipping`);
-                     mirrorResults.push(`${conn.display_name}: skipped (spread ${brokerSpreadPips.toFixed(1)} > ${pairConfig.maxSpreadPips} max)`);
+                   // Gate: skip this broker if spread exceeds per-instrument or user-configured maximum
+                   const metaPairSpec = SPECS[pair] || SPECS["EUR/USD"];
+                   const metaEffectiveMaxSpread = pairConfig.maxSpreadPips > 0 ? pairConfig.maxSpreadPips : metaPairSpec.maxSpread;
+                   if (pairConfig.spreadFilterEnabled && brokerSpreadPips != null && brokerSpreadPips > metaEffectiveMaxSpread) {
+                     console.warn(`Spread filter [${conn.display_name}]: ${brokerSpreadPips.toFixed(2)} pips > ${metaEffectiveMaxSpread} max [${pairConfig.maxSpreadPips > 0 ? 'user' : 'per-instrument'}] — skipping`);
+                     mirrorResults.push(`${conn.display_name}: skipped (spread ${brokerSpreadPips.toFixed(1)} > ${metaEffectiveMaxSpread} max)`);
                      continue;
                    }
 
-                   // Adjust SL/TP for broker spread (widen SL by half-spread, tighten TP by half-spread)
+                   // Adjust SL/TP for broker spread:
+                   // SL widened by half-spread (prevents premature stop-out)
+                   // TP widened by half-spread (compensates for bid/ask exit)
                    let brokerSL = sl;
                    let brokerTP = tp;
                    if (brokerSpreadPips != null && brokerSpreadPips > 0) {
-                     const pairSpec = SPECS[pair] || SPECS["EUR/USD"];
-                     const halfSpread = (brokerSpreadPips * pairSpec.pipSize) / 2;
+                     const halfSpread = (brokerSpreadPips * metaPairSpec.pipSize) / 2;
                      if (analysis.direction === "long") {
-                       // Long: entry is at ask, SL needs extra room below
+                       // Long: entry at ask, SL hit at bid → widen SL down
                        brokerSL = sl - halfSpread;
+                       // Long: TP hit at bid → widen TP up to compensate
+                       brokerTP = tp + halfSpread;
                      } else {
-                       // Short: entry is at bid, SL needs extra room above
+                       // Short: entry at bid, SL hit at ask → widen SL up
                        brokerSL = sl + halfSpread;
+                       // Short: TP hit at ask → widen TP down to compensate
+                       brokerTP = tp - halfSpread;
                      }
-                     console.log(`SL adjusted for spread [${conn.display_name}]: ${sl} → ${brokerSL} (half-spread=${halfSpread.toFixed(6)})`);
+                     console.log(`SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${brokerSL}, TP ${tp} → ${brokerTP} (half-spread=${halfSpread.toFixed(6)})`);
                    }
 
                    const mt5Body: any = {
