@@ -116,7 +116,7 @@ export default function BotView() {
   });
   const scanMut = useMutation({
     mutationFn: () => scannerApi.manualScan(),
-    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(`Scan: ${data.signalsFound} signals, ${data.tradesPlaced} trades`); },
+    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(data.started ? "Scan started — results will appear shortly" : `Scan: ${data.signalsFound ?? 0} signals, ${data.tradesPlaced ?? 0} trades`); },
     onError: (err: any) => toast.error(err.message),
   });
 

@@ -137,7 +137,7 @@ export default function Dashboard() {
     const events: { time: string; type: string; message: string }[] = [];
     logs.slice(0, 10).forEach((log: any) => {
       const time = new Date(log.scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      events.push({ time, type: "scan", message: `Scanned ${log.pairs_scanned} pairs — ${log.signals_found} signals, ${log.trades_placed} trades` });
+      events.push({ time, type: "scan", message: `Scanned ${log.pairs_scanned ?? 0} pairs — ${log.signals_found ?? 0} signals, ${log.trades_placed ?? 0} trades` });
     });
     return events.slice(0, 20);
   }, [scanLogs]);
