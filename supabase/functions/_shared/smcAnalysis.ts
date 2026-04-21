@@ -1240,6 +1240,16 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   }
 
+  // ── ATR-based SL floor: ensure SL is at least 1.5× ATR ──
+  // This prevents micro-scalp SLs on structure-based method when swing points are very close.
+  if (atrValue > 0 && sl !== null) {
+    const atrFloorDistance = atrValue * 1.5; // 1.5× ATR
+    const currentSlDistance = Math.abs(lastPrice - sl);
+    if (currentSlDistance < atrFloorDistance) {
+      sl = direction === "long" ? lastPrice - atrFloorDistance : lastPrice + atrFloorDistance;
+    }
+  }
+
   const tpMethod: string = config.tpMethod || "rr_ratio";
   const slDistance = Math.abs(lastPrice - sl);
 

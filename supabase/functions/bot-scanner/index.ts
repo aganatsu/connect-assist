@@ -1816,16 +1816,26 @@ function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): nu
 }
 
 // ─── Minimum SL distance per asset class (in pips) ────────────────────────────────────
-// Prevents absurdly tight SLs that cause oversized positions
+// Prevents absurdly tight SLs that produce micro-scalp trades with 2-5 pip targets.
+// These floors ensure trades have room to breathe and TP targets are meaningful after spread.
 const MIN_SL_PIPS: Record<string, number> = {
-  // JPY crosses are volatile — minimum 20 pips
-  "GBP/JPY": 20, "EUR/JPY": 20, "USD/JPY": 15,
-  // Standard forex pairs
-  "EUR/USD": 10, "GBP/USD": 12, "AUD/USD": 10, "NZD/USD": 10,
-  "USD/CAD": 10, "USD/CHF": 10, "EUR/GBP": 10,
-  // Commodities & crypto have their own dynamics
-  "XAU/USD": 30, "BTC/USD": 100,
+  // JPY crosses — high volatility
+  "GBP/JPY": 35, "EUR/JPY": 30, "USD/JPY": 25,
+  "AUD/JPY": 25, "CAD/JPY": 25, "NZD/JPY": 25, "CHF/JPY": 25,
+  // GBP crosses — above-average volatility
+  "GBP/USD": 25, "GBP/AUD": 30, "GBP/CAD": 30, "GBP/NZD": 30, "GBP/CHF": 25,
+  // EUR crosses — moderate volatility
+  "EUR/USD": 20, "EUR/GBP": 15, "EUR/AUD": 25, "EUR/CAD": 25, "EUR/NZD": 25, "EUR/CHF": 18,
+  // USD crosses — moderate volatility
+  "AUD/USD": 18, "NZD/USD": 18, "USD/CAD": 18, "USD/CHF": 18,
+  // Minor crosses
+  "AUD/CAD": 20, "AUD/NZD": 20, "AUD/CHF": 20, "NZD/CAD": 20, "NZD/CHF": 20, "CAD/CHF": 18,
+  // Commodities & crypto
+  "XAU/USD": 50, "BTC/USD": 150,
 };
+// ATR-based dynamic SL floor: SL must be at least this multiple of ATR(14).
+// This adapts to current volatility — wider during active sessions, tighter during quiet periods.
+const ATR_SL_FLOOR_MULTIPLIER = 1.5;
 
 // ─── Position sizing ────────────────────────────────────────────────
 // rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
@@ -2887,12 +2897,19 @@ async function runScanForUser(supabase: any, userId: string) {
           }
         }
 
-        // Enforce minimum SL distance to prevent oversized positions from tight SLs
-        const minSlPips = MIN_SL_PIPS[pair] ?? 10;
-        const minSlDistance = minSlPips * spec.pipSize;
+        // ── Enforce minimum SL distance (two-layer floor) ──
+        // Layer 1: Per-instrument static floor (MIN_SL_PIPS)
+        const staticMinSlPips = MIN_SL_PIPS[pair] ?? 15;
+        // Layer 2: Dynamic ATR-based floor (adapts to current volatility)
+        const atrVal = (analysis as any).atrValue ?? 0;
+        const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
+        // Use whichever floor is larger
+        const effectiveMinSlPips = Math.max(staticMinSlPips, atrFloorPips);
+        const minSlDistance = effectiveMinSlPips * spec.pipSize;
         const actualSlDistance = Math.abs(analysis.lastPrice - sl);
         if (actualSlDistance < minSlDistance) {
-          console.log(`[${pair}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${minSlPips} pips. Widening SL.`);
+          const floorSource = atrFloorPips > staticMinSlPips ? `ATR(${atrFloorPips.toFixed(1)}p)` : `static(${staticMinSlPips}p)`;
+          console.log(`[${pair}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${effectiveMinSlPips.toFixed(1)} pips [${floorSource}]. Widening SL.`);
           if (analysis.direction === "long") {
             sl = analysis.lastPrice - minSlDistance;
           } else {
@@ -2903,6 +2920,25 @@ async function runScanForUser(supabase: any, userId: string) {
           tp = analysis.direction === "long"
             ? analysis.lastPrice + newRisk * config.tpRatio
             : analysis.lastPrice - newRisk * config.tpRatio;
+        }
+
+        // ── Minimum TP distance gate ──
+        // Reject trades where TP target is too small to be meaningful after spread.
+        // A 3-pip TP on EUR/USD with 1.5 pip spread means 50% of profit is spread cost.
+        const MIN_TP_PIPS: Record<string, number> = {
+          "GBP/JPY": 30, "EUR/JPY": 25, "USD/JPY": 20,
+          "GBP/USD": 20, "EUR/USD": 15, "AUD/USD": 15, "NZD/USD": 15,
+          "USD/CAD": 15, "USD/CHF": 15, "EUR/GBP": 12,
+          "XAU/USD": 40, "BTC/USD": 100,
+        };
+        const minTpPips = MIN_TP_PIPS[pair] ?? 12;
+        const actualTpPips = Math.abs(tp - analysis.lastPrice) / spec.pipSize;
+        if (actualTpPips < minTpPips) {
+          console.log(`[${pair}] TP too small: ${actualTpPips.toFixed(1)} pips < min ${minTpPips} pips. Trade not worth the spread cost. SKIPPING.`);
+          detail.status = "skipped_tp_too_small";
+          detail.skipReason = `TP ${actualTpPips.toFixed(1)}p < min ${minTpPips}p`;
+          results.push(detail);
+          continue;
         }
 
         const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
