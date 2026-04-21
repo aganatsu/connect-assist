@@ -823,8 +823,9 @@ Deno.serve(async (req) => {
             }
           }
 
-          // Check max hold hours
-          if (!closeReason && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0) {
+          // Check max hold hours (only if enabled)
+          const maxHoldOn = exitFlags.maxHoldEnabled !== false && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0;
+          if (!closeReason && maxHoldOn) {
             const openMs = new Date(pos.open_time).getTime();
             const elapsedHours = (Date.now() - openMs) / 3600000;
             if (elapsedHours >= exitFlags.maxHoldHours) {

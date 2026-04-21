@@ -136,7 +136,7 @@ const BASE_CONFIG = {
     trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
     partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
     breakEvenEnabled: true, breakEvenTriggerPips: 20,
-    timeBasedExitEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
+    timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
   },
   instruments: {
     allowedInstruments: {
@@ -1120,8 +1120,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
                       {/* ── Time-Based Exit ── */}
                       <div className="border border-border/60 p-3 space-y-3">
-                        <ToggleField label="Time-Based Exit" description="Auto-tighten SL or close after a maximum hold duration" checked={(config.exit?.timeBasedExitEnabled ?? (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0)} onChange={v => { updateField('exit', 'timeBasedExitEnabled', v); if (!v) { updateField('exit', 'timeExitHours', 0); updateField('exit', 'maxHoldHours', 0); } }} />
-                        {(config.exit?.timeBasedExitEnabled || (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0) && (
+                        <ToggleField label="Time-Based Exit" description="Auto-tighten SL or close after a maximum hold duration" checked={(config.exit?.maxHoldEnabled ?? config.exit?.timeBasedExitEnabled ?? (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0)} onChange={v => { updateField('exit', 'maxHoldEnabled', v); updateField('exit', 'timeBasedExitEnabled', v); if (!v) { updateField('exit', 'timeExitHours', 0); updateField('exit', 'maxHoldHours', 0); } }} />
+                        {(config.exit?.maxHoldEnabled || config.exit?.timeBasedExitEnabled || (config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 0) > 0) && (
                           <div className="pl-4 border-l-2 border-primary/20 space-y-3">
                             <FieldGroup label="Max Hold Time (hours)" description="After this duration, SL moves to breakeven if in profit, or position is flagged for review">
                               <div className="flex items-center gap-4">

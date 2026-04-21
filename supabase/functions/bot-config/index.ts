@@ -328,7 +328,7 @@ function getDefaultConfig() {
       trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
       partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
       breakEvenEnabled: true, breakEvenTriggerPips: 20,
-      timeBasedExitEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
+      timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
     },
     instruments: {
       allowedInstruments: {

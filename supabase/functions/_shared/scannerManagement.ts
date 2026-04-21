@@ -315,6 +315,7 @@ export async function manageOpenPositions(
   const partialTPLevel = config.partialTPLevel ?? 1.0;
   const breakEvenEnabled = config.breakEvenEnabled ?? true;
   const breakEvenPips = config.breakEvenPips ?? 20;
+  const maxHoldEnabled = config.maxHoldEnabled ?? false;
   const maxHoldHours = config.maxHoldHours ?? 0; // 0 = no limit
 
   for (const pos of positions) {
@@ -363,8 +364,8 @@ export async function manageOpenPositions(
       });
 
       // ── 1. MAX HOLD TIME CHECK ──
-      // If maxHoldHours is set and exceeded, flag for tightening
-      if (maxHoldHours > 0 && holdHours >= maxHoldHours) {
+      // If maxHoldEnabled and maxHoldHours is set and exceeded, flag for tightening
+      if (maxHoldEnabled && maxHoldHours > 0 && holdHours >= maxHoldHours) {
         // Move SL to breakeven or close if in profit
         if (rMultiple > 0) {
           const beSL = pos.direction === "long"

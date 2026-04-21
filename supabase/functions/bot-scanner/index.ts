@@ -99,6 +99,7 @@ const DEFAULTS = {
   partialTPEnabled: false,
   partialTPPercent: 50,
   partialTPLevel: 1.0,
+  maxHoldEnabled: false,
   maxHoldHours: 0,
   // ── Sessions ──
   killZoneOnly: false,
@@ -303,6 +304,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     breakEvenEnabled: true,
     breakEvenPips: 8,               // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: false,
+    maxHoldEnabled: true,
     maxHoldHours: 4,
   },
   day_trader: {
@@ -321,6 +323,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     partialTPEnabled: true,
     partialTPPercent: 50,
     partialTPLevel: 1.0,            // partial at 1R
+    maxHoldEnabled: true,
     maxHoldHours: 24,
   },
   swing_trader: {
@@ -339,6 +342,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     partialTPEnabled: true,
     partialTPPercent: 33,           // Changed: take 33% at 1R (keep more for the big move)
     partialTPLevel: 1.0,            // Changed from 1.5R: lock in profit earlier
+    maxHoldEnabled: false,
     maxHoldHours: 0,                // no time limit for swings
   },
 };
@@ -1961,7 +1965,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
     data = res.data;
   }
-  if (!data?.config_json) return { ...DEFAULTS, enableOB: true, enableFVG: true, enableLiquiditySweep: true, enableStructureBreak: true, cooldownMinutes: 0, closeOnReverse: false, trailingStopEnabled: false, partialTPEnabled: false, maxHoldHours: 0, killZoneOnly: false, maxConsecutiveLosses: 0, protectionMaxDailyLossDollar: 0 };
+  if (!data?.config_json) return { ...DEFAULTS, enableOB: true, enableFVG: true, enableLiquiditySweep: true, enableStructureBreak: true, cooldownMinutes: 0, closeOnReverse: false, trailingStopEnabled: false, partialTPEnabled: false, maxHoldEnabled: false, maxHoldHours: 0, killZoneOnly: false, maxConsecutiveLosses: 0, protectionMaxDailyLossDollar: 0 };
 
   const raw = data.config_json as any;
   const strategy = raw.strategy || {};
@@ -2079,6 +2083,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
+    maxHoldEnabled: exit.maxHoldEnabled ?? raw.maxHoldEnabled ?? DEFAULTS.maxHoldEnabled,
     maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
 
     // ── Instruments ──
@@ -3158,6 +3163,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           partialTPLevel: pairConfig.partialTPLevel,
           partialTPActivated: false,
           // Time + ratio
+          maxHoldEnabled: pairConfig.maxHoldEnabled,
           maxHoldHours: pairConfig.maxHoldHours,
           tpRatio: pairConfig.tpRatio,
         };
