@@ -127,9 +127,9 @@ export default function IctAnalysis() {
 
   return (
     <AppShell>
-      <div className="flex h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Instrument sidebar */}
-        <div className="w-36 shrink-0 border-r border-border pr-2 space-y-0.5 overflow-y-auto">
+        <div className="w-full md:w-36 shrink-0 md:border-r border-b md:border-b-0 border-border md:pr-2 pb-2 md:pb-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-y-auto">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Instruments</p>
           {SYMBOLS.map(s => (
             <button key={s} onClick={() => setSelectedSymbol(s)}
@@ -140,7 +140,7 @@ export default function IctAnalysis() {
         </div>
 
         {/* Analysis content */}
-        <div className="flex-1 overflow-y-auto pl-3 space-y-3">
+        <div className="flex-1 overflow-y-auto md:pl-3 pt-2 md:pt-0 space-y-3">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-xl font-bold">ICT Analysis — {selectedSymbol}</h1>

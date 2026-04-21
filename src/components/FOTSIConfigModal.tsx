@@ -148,8 +148,8 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
   if (!open || !config) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-card border border-border w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
+      <div className="bg-card border border-border w-full max-w-3xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -177,7 +177,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1">
             <Zap className="h-3 w-3 text-primary" /> Quick Presets
           </p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
             {Object.entries(PRESETS).map(([key, preset]) => (
               <button
                 type="button"
@@ -207,9 +207,9 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
         </div>
 
         {/* Body: Tab nav + content */}
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col md:flex-row flex-1 min-h-0">
           {/* Vertical Tab Nav */}
-          <div className="w-40 border-r border-border py-2 shrink-0 overflow-y-auto">
+          <div className="md:w-40 border-b md:border-b-0 md:border-r border-border py-2 shrink-0 overflow-x-auto md:overflow-y-auto flex md:flex-col">
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id;
               return (
@@ -231,7 +231,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-5">
             {activeTab === "divergence" && (
               <>
                 <SectionHeader

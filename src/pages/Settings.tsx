@@ -33,8 +33,8 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <div className="flex gap-6 min-h-[calc(100vh-7rem)]">
-        <div className="w-56 shrink-0 space-y-1">
+      <div className="flex flex-col md:flex-row gap-4 md:gap-6 min-h-[calc(100vh-7rem)]">
+        <div className="w-full md:w-56 shrink-0 space-y-1 flex md:flex-col flex-wrap gap-1">
           <h1 className="text-lg font-bold mb-4 flex items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
           {TABS.map(tab => {
             const Icon = tab.icon;
@@ -50,7 +50,7 @@ export default function SettingsPage() {
           </a>
           <button onClick={() => signOut()} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-destructive hover:bg-destructive/10 mt-4">Sign out</button>
         </div>
-        <div className="flex-1 max-w-2xl">
+        <div className="flex-1 max-w-2xl min-w-0">
           {activeTab === "risk" && <RiskSettings />}
           {activeTab === "bot" && <BotConfigSettings />}
           {activeTab === "preferences" && <PreferencesSettings />}

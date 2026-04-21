@@ -130,7 +130,7 @@ export default function JournalView() {
 
   return (
     <AppShell>
-      <div className="flex h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Main content */}
         <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
           <div className="flex items-center justify-between">
@@ -180,7 +180,7 @@ export default function JournalView() {
           </div>
 
           {/* Summary KPIs */}
-          <div className="grid grid-cols-3 lg:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
             {[
               { label: "Total", value: computedStats.total },
               { label: "Wins", value: computedStats.wins, color: "text-success" },
@@ -294,7 +294,7 @@ export default function JournalView() {
 
         {/* Trade Detail Panel (slide-in) */}
         {selectedTrade && (
-          <div className="flex-1 border-l border-border pl-3 ml-3 overflow-y-auto">
+          <div className="flex-1 border-t md:border-t-0 md:border-l border-border pt-3 md:pt-0 md:pl-3 md:ml-3 overflow-y-auto">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold">Trade Detail</h3>
               <button onClick={() => setSelectedTrade(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>

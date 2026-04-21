@@ -194,7 +194,7 @@ export default function BotView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Live Mode Banner */}
         {d.executionMode === "live" && (
           <div className="bg-destructive/20 border border-destructive text-destructive px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
@@ -218,7 +218,7 @@ export default function BotView() {
         )}
 
         {/* Bot Selector Tabs */}
-        <div className="flex items-center gap-0 border-b border-border mb-1">
+        <div className="flex items-center gap-0 border-b border-border mb-1 overflow-x-auto">
           <button
             onClick={() => setActiveBot("smc")}
             className={`px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors border-b-2 ${
@@ -247,7 +247,7 @@ export default function BotView() {
         </div>
 
         {/* Top Control Bar */}
-        <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap">
+        <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap text-[10px] md:text-[11px]">
           <div className="flex items-center gap-1">
             <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
               <Play className="h-3 w-3 mr-1" /> Start
@@ -307,7 +307,7 @@ export default function BotView() {
             return null;
           })()}
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
             {activeBot === "smc" ? (
               <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
                 {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
@@ -324,7 +324,7 @@ export default function BotView() {
               <AlertTriangle className="h-3 w-3 mr-1" /> Kill
             </Button>
 
-            <div className="flex gap-3 text-[10px] text-muted-foreground">
+            <div className="hidden md:flex gap-3 text-[10px] text-muted-foreground">
               <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
               <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
               <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
@@ -365,11 +365,11 @@ export default function BotView() {
         )}
 
         {/* Main workspace: 65/35 split */}
-        <div className="flex-1 flex gap-3 mt-2 min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
           {/* Left: Tabbed Positions (~65%) */}
-          <div className="flex-[2] flex flex-col min-h-0">
+          <div className="flex-[2] flex flex-col min-h-0 min-h-[300px] md:min-h-0">
             <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
-              <TabsList className="h-7 shrink-0">
+              <TabsList className="h-7 shrink-0 overflow-x-auto">
                 <TabsTrigger value="open" className="text-[11px] h-6">Open ({botPositions.length})</TabsTrigger>
                 <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
                 <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
@@ -385,7 +385,7 @@ export default function BotView() {
                     <p className="text-[10px] text-muted-foreground/70 mt-1">Click "+ Order" to place a trade or start the bot scanner</p>
                   </div>
                 ) : (
-                  <table className="w-full text-[11px] font-mono">
+                  <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[800px]">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                       <th className="text-center py-1 px-1 w-6">#</th>
                       <th className="text-left py-1 px-1">Opened</th>
@@ -479,7 +479,7 @@ export default function BotView() {
                         );
                       })}
                     </tbody>
-                  </table>
+                  </table></div>
                 )}
               </TabsContent>
               <TabsContent value="today" className="flex-1 overflow-auto mt-1">
@@ -501,7 +501,7 @@ export default function BotView() {
           </div>
 
           {/* Right sidebar (~35%) */}
-          <div className="flex-1 overflow-y-auto space-y-2">
+          <div className="flex-1 overflow-y-auto space-y-2 md:max-w-none">
             {/* FOTSI Meter (only when Bot #2 is active) */}
             {activeBot === "fotsi" && (
               <FOTSIMeter />
@@ -689,9 +689,9 @@ export default function BotView() {
         </div>
 
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className="h-56 border-t border-border mt-2 pt-2 shrink-0 flex gap-0 min-h-0">
+        <div className="md:h-56 border-t border-border mt-2 pt-2 shrink-0 flex flex-col md:flex-row gap-0 min-h-0">
           {/* Left: Latest Scan Pairs (60%) */}
-          <div className="w-[60%] flex flex-col min-h-0 border-r border-border pr-2">
+          <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
             <div className="flex items-center justify-between mb-1 gap-2">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
                 {activeBot === "fotsi" ? "FOTSI Scan Logs" : (safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`)}
@@ -835,7 +835,7 @@ export default function BotView() {
           </div>
 
           {/* Right: Detail Breakdown (40%) */}
-          <div className="w-[40%] flex flex-col min-h-0 pl-2">
+          <div className="w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
               {activeBot === "fotsi" ? "FOTSI Scan Detail" : "Detail Breakdown"}
             </p>
@@ -919,7 +919,7 @@ export default function BotView() {
 
         {/* Kill Switch Banner */}
         {d.killSwitchActive && (
-          <div className="fixed bottom-6 left-12 right-0 bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between z-50">
+          <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between z-50">
             <span className="text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
@@ -952,7 +952,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
   return (
     <>
-    <table className="w-full text-[11px] font-mono">
+    <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[700px]">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
         <th className="w-4 py-1 px-1"></th>
         <th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Closed</th>
@@ -1018,7 +1018,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
           );
         })}
       </tbody>
-    </table>
+    </table></div>
     {totalPages > 1 && (
       <div className="flex items-center justify-between px-2 py-2 border-t border-border">
         <span className="text-[10px] text-muted-foreground font-mono">

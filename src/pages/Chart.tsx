@@ -128,15 +128,15 @@ export default function Chart() {
 
   return (
     <AppShell>
-      <div className="flex gap-3 h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col md:flex-row gap-3 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Chart Area */}
         <div className="flex-1 flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <select value={selectedSymbol} onChange={(e) => setSelectedSymbol(e.target.value)}
               className="bg-card border border-border px-2 py-1 text-xs">
               {INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}
             </select>
-            <div className="flex gap-0.5">
+            <div className="flex gap-0.5 overflow-x-auto">
               {TIMEFRAMES.map(tf => (
                 <button key={tf.value} onClick={() => setSelectedTimeframe(tf.value)}
                   className={`px-2 py-1 text-[10px] font-medium transition-colors ${
@@ -144,7 +144,7 @@ export default function Chart() {
                   }`}>{tf.label}</button>
               ))}
             </div>
-            <div className="ml-auto flex items-center gap-2 text-[10px]">
+            <div className="ml-auto flex items-center gap-2 text-[10px] flex-wrap">
               <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
@@ -155,12 +155,12 @@ export default function Chart() {
               </button>
             </div>
           </div>
-          <div className="flex-1"><TradingViewChart instrument={instrument} timeframe={selectedTimeframe} /></div>
+          <div className="flex-1 min-h-[250px]"><TradingViewChart instrument={instrument} timeframe={selectedTimeframe} /></div>
         </div>
 
         {/* Analysis Panels */}
         {panelOpen && (
-          <div className="w-96 overflow-y-auto space-y-0">
+          <div className="w-full md:w-96 overflow-y-auto space-y-0 max-h-[50vh] md:max-h-none">
             <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk", "botscan"]}>
               {/* Unified Confluence */}
               <AccordionItem value="confluence">

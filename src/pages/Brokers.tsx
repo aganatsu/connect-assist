@@ -194,9 +194,9 @@ export default function BrokersPage() {
         </div>
 
         {/* Split view */}
-        <div className="flex-1 flex gap-4 min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row gap-4 min-h-0">
           {/* LEFT: connection list */}
-          <Card className="w-64 shrink-0 flex flex-col overflow-hidden">
+          <Card className="w-full md:w-64 shrink-0 flex flex-col overflow-hidden max-h-48 md:max-h-none">
             <div className="px-3 py-2 border-b border-border">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Connections ({connections.length})
@@ -239,7 +239,7 @@ export default function BrokersPage() {
           </Card>
 
           {/* RIGHT: detail panel */}
-          <div className="flex-1 min-w-0 overflow-auto">
+          <div className="flex-1 min-w-0 overflow-auto min-h-0">
             {showAddForm || connections.length === 0 ? (
               <AddConnectionForm
                 onCreated={(newId) => {

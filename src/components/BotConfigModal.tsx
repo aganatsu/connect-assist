@@ -357,15 +357,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
 
   return (
-    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-card border border-border w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
+      <div className="bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div>
-            <h2 className="text-base font-bold">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
+        <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border">
+          <div className="min-w-0">
+            <h2 className="text-sm md:text-base font-bold truncate">{connectionName ? `Config: ${connectionName}` : "Global Bot Configuration"}</h2>
             {connectionName && <p className="text-[10px] text-muted-foreground">Settings specific to this broker connection</p>}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2 shrink-0">
             {connectionId && (
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
             )}
@@ -382,7 +382,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
         <div className="px-6 py-3 border-b border-border bg-secondary/30">
           {/* Quick Presets (full config snapshots) */}
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><Zap className="h-3 w-3 text-primary" /> Quick Presets</p>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
             {Object.entries(PRESETS).map(([key, preset]) => (
               <button key={key} onClick={() => {
                 applyPresetConfig(preset.config, `${key.charAt(0).toUpperCase() + key.slice(1)} → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
@@ -408,7 +408,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 {showMyPresets ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
               </button>
               {showMyPresets && (
-                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                   {customPresets.map((cp: any) => (
                     <div key={cp.id} className="group relative p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
                       <button
@@ -534,9 +534,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
         </div>
 
         {/* Body: Tab nav + content */}
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-col md:flex-row flex-1 min-h-0">
           {/* Vertical Tab Nav */}
-          <div className="w-44 border-r border-border py-2 shrink-0 overflow-y-auto">
+          <div className="md:w-44 border-b md:border-b-0 md:border-r border-border py-2 shrink-0 overflow-x-auto md:overflow-y-auto flex md:flex-col">
             {filteredTabs.length === 0 && (
               <p className="px-4 py-3 text-[10px] text-muted-foreground italic">No matching tabs</p>
             )}
@@ -560,14 +560,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-3 md:p-6">
             <HighlightContext.Provider value={matchedLabels}>
             {config && filteredTabs.length > 0 && (
               <>
                 {effectiveActiveTab === "tradingStyle" && (
                   <div className="space-y-5">
                     <SectionHeader title="Trading Style" description="Choose how the bot trades — this overrides entry timeframe, TP/SL ratios, and hold duration" />
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {(["scalper", "day_trader", "swing_trader"] as TradingStyleMode[]).map(mode => {
                         const isActive = (config.tradingStyle?.mode || "day_trader") === mode;
                         const meta = STYLE_META[mode];

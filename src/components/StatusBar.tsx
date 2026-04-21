@@ -32,24 +32,24 @@ export function StatusBar() {
   }, []);
 
   return (
-    <div className="h-6 bg-card border-t border-border flex items-center justify-between px-3 text-[10px] text-muted-foreground select-none shrink-0">
-      <div className="flex items-center gap-4">
+    <div className="h-6 bg-card border-t border-border flex items-center justify-between px-2 md:px-3 text-[10px] text-muted-foreground select-none shrink-0">
+      <div className="flex items-center gap-2 md:gap-4">
         <span className="flex items-center gap-1">
           {online ? (
-            <><Wifi className="h-2.5 w-2.5 text-success" /> Connected</>
+            <><Wifi className="h-2.5 w-2.5 text-success" /><span className="hidden sm:inline"> Connected</span></>
           ) : (
-            <><WifiOff className="h-2.5 w-2.5 text-destructive" /> Disconnected</>
+            <><WifiOff className="h-2.5 w-2.5 text-destructive" /><span className="hidden sm:inline"> Disconnected</span></>
           )}
         </span>
         <span className={`font-medium ${isLive ? "text-destructive" : "text-warning"}`}>
-          {isLive ? "LIVE MODE" : "PAPER MODE"}
+          {isLive ? "LIVE" : "PAPER"}<span className="hidden sm:inline"> MODE</span>
         </span>
         {openPositions > 0 && (
           <span className="text-muted-foreground">{openPositions} open</span>
         )}
       </div>
-      <div className="flex items-center gap-4">
-        <span>Market Data</span>
+      <div className="flex items-center gap-2 md:gap-4">
+        <span className="hidden sm:inline">Market Data</span>
         <span className="font-mono">
           {time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </span>
