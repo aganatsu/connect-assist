@@ -403,7 +403,7 @@ export async function manageOpenPositions(
       // won't get stopped at BE on a normal pullback the way a 20-pip fixed trigger would.
       // breakEvenPips is now interpreted as a fallback; primary trigger is R-based.
       const beActivationR = breakEvenPips > 0 && riskPips > 0
-        ? Math.max(1.0, breakEvenPips / riskPips)  // At least 1R, or the pip equivalent in R terms
+        ? Math.min(2.0, Math.max(1.0, breakEvenPips / riskPips))  // At least 1R, capped at 2R max
         : 1.0;  // Default: activate BE at 1R
       if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
         const profitPipsAbs = Math.abs(profitPips);

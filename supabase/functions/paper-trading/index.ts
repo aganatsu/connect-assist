@@ -856,7 +856,7 @@ Deno.serve(async (req) => {
               : (entryPrice - currentPrice) / spec.pipSize;
             // R-based trigger (same logic as scannerManagement): at least 1R, or pip equivalent
             const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
-            const beActivationR = riskPips > 0 ? Math.max(1.0, exitFlags.breakEvenPips / riskPips) : 1.0;
+            const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, exitFlags.breakEvenPips / riskPips)) : 1.0;
             const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
             if (rMultiple >= beActivationR) {
               // Move SL to entry + 1 pip (same as scannerManagement)

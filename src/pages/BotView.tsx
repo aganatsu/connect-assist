@@ -417,7 +417,7 @@ export default function BotView() {
                         // BE status
                         const beEnabled = ef.breakEvenEnabled ?? ef.breakEven ?? false;
                         const beFired = ef.breakEvenActivated === true;
-                        const beActivationR = riskPips > 0 ? Math.max(1.0, (ef.breakEvenPips || 0) / riskPips) : 1.0;
+                        const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, (ef.breakEvenPips || 0) / riskPips)) : 1.0;
                         // Trail status
                         const trailEnabled = ef.trailingStopEnabled ?? ef.trailingStop ?? false;
                         const trailFired = ef.trailingStopActivated === true;
