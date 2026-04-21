@@ -775,6 +775,13 @@ Deno.serve(async (req) => {
         positions = refreshed || positions;
 
         // ── SL/TP Hit Detection + Exit Flag Logic (Fix #9, #13) ──
+        // Fetch live config once to allow global overrides (e.g. toggling maxHold off affects all open positions)
+        let liveConfig: any = {};
+        try {
+          const { data: cfgRow } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+          liveConfig = cfgRow?.config_json || {};
+        } catch {}
+        const liveExit = liveConfig.exit || {};
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
@@ -824,7 +831,10 @@ Deno.serve(async (req) => {
           }
 
           // Check max hold hours (only if enabled)
-          const maxHoldOn = exitFlags.maxHoldEnabled !== false && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0;
+          // Live config override: if user toggled maxHold off globally, respect it even for existing positions
+          const liveMaxHoldEnabled = liveExit.maxHoldEnabled ?? liveExit.timeBasedExitEnabled;
+          const perTradeMaxHold = exitFlags.maxHoldEnabled !== false && exitFlags.maxHoldHours && exitFlags.maxHoldHours > 0;
+          const maxHoldOn = liveMaxHoldEnabled !== false && perTradeMaxHold;
           if (!closeReason && maxHoldOn) {
             const openMs = new Date(pos.open_time).getTime();
             const elapsedHours = (Date.now() - openMs) / 3600000;
