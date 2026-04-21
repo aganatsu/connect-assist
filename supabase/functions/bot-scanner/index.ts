@@ -2946,7 +2946,7 @@ async function runScanForUser(supabase: any, userId: string) {
           console.log(`[${pair}] TP too small: ${actualTpPips.toFixed(1)} pips < min ${minTpPips} pips. Trade not worth the spread cost. SKIPPING.`);
           detail.status = "skipped_tp_too_small";
           detail.skipReason = `TP ${actualTpPips.toFixed(1)}p < min ${minTpPips}p`;
-          results.push(detail);
+          scanDetails.push(detail);
           continue;
         }
 
