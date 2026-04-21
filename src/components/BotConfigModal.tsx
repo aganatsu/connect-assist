@@ -251,7 +251,16 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
   const resetMut = useMutation({
     mutationFn: () => botConfigApi.reset(connectionId),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey }); setConfig(null); toast.success("Config reset"); },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey });
+      // The reset endpoint returns the default config — use it immediately
+      // so the UI doesn't go blank while waiting for the re-fetch.
+      if (data) setConfig(JSON.parse(JSON.stringify(data)));
+      toast.success("Config reset to defaults");
+    },
+    onError: (e: any) => {
+      toast.error(e?.message || "Failed to reset config");
+    },
   });
 
   const copyFromGlobalMut = useMutation({
