@@ -521,7 +521,15 @@ export function detectOptimalStyle(candles: Candle[], dailyCandles: Candle[]): s
 
 // ─── SMC Detection Functions ────────────────────────────────────────
 
-export function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[] {
+export function detectSwingPoints(candles: Candle[], lookback = 3, atrFilter = 0): SwingPoint[] {
+  // atrFilter: minimum swing size as a fraction of ATR (e.g., 0.3 = 30% of ATR).
+  // When > 0, filters out insignificant swings that are just noise.
+  let atrValue = 0;
+  if (atrFilter > 0 && candles.length >= 15) {
+    atrValue = calculateATR(candles, 14);
+  }
+  const minSwingSize = atrValue * atrFilter;
+
   const swings: SwingPoint[] = [];
   for (let i = lookback; i < candles.length - lookback; i++) {
     let isHigh = true, isLow = true;
@@ -529,40 +537,192 @@ export function detectSwingPoints(candles: Candle[], lookback = 3): SwingPoint[]
       if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) isHigh = false;
       if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) isLow = false;
     }
+    // ATR filter: only accept swings with sufficient magnitude
+    if (isHigh && minSwingSize > 0) {
+      // Swing high must be at least minSwingSize above the nearest lows in the window
+      let minLow = Infinity;
+      for (let j = -lookback; j <= lookback; j++) {
+        if (j !== 0) minLow = Math.min(minLow, candles[i + j].low);
+      }
+      if (candles[i].high - minLow < minSwingSize) isHigh = false;
+    }
+    if (isLow && minSwingSize > 0) {
+      let maxHigh = -Infinity;
+      for (let j = -lookback; j <= lookback; j++) {
+        if (j !== 0) maxHigh = Math.max(maxHigh, candles[i + j].high);
+      }
+      if (maxHigh - candles[i].low < minSwingSize) isLow = false;
+    }
     if (isHigh) swings.push({ index: i, price: candles[i].high, type: "high", datetime: candles[i].datetime });
     if (isLow) swings.push({ index: i, price: candles[i].low, type: "low", datetime: candles[i].datetime });
   }
   return swings;
 }
 
+// ─── Enhanced Market Structure Analysis ──────────────────────────────
+// Improvements over the original:
+// 1. ATR-filtered swings — filters out noise in volatile sessions
+// 2. Close-based BOS — requires candle body close through the level, not just wick
+// 3. Liquidity sweep detection — wick through + close back = sweep, not BOS
+//
+// Return shape is BACKWARD COMPATIBLE: { trend, swingPoints, bos, choch }
+// New optional fields: sweeps[], and closeBased flag on bos/choch entries
+
+export interface StructureBreak {
+  index: number;
+  type: "bullish" | "bearish";
+  price: number;
+  datetime: string;
+  closeBased: boolean;  // true = candle body closed through the level (strong)
+  level: number;        // the swing level that was broken
+}
+
+export interface LiquiditySweep {
+  index: number;
+  type: "bullish" | "bearish"; // bullish sweep = swept lows then reversed up
+  price: number;
+  datetime: string;
+  sweptLevel: number;   // the swing level that was swept
+  wickDepth: number;    // how far past the level the wick went
+}
+
 export function analyzeMarketStructure(candles: Candle[], structureLookback?: number) {
-  const swings = detectSwingPoints(candles, structureLookback && structureLookback > 0 ? structureLookback : 3);
-  const highs = swings.filter(s => s.type === "high"), lows = swings.filter(s => s.type === "low");
-  let currentTrend = "ranging";
-  const bos: any[] = [], choch: any[] = [];
+  // Use ATR-filtered swings (0.25 = swing must be at least 25% of ATR to count)
+  const atrFilterStrength = 0.25;
+  const swings = detectSwingPoints(
+    candles,
+    structureLookback && structureLookback > 0 ? structureLookback : 3,
+    candles.length >= 15 ? atrFilterStrength : 0
+  );
+  const highs = swings.filter(s => s.type === "high");
+  const lows = swings.filter(s => s.type === "low");
+  let currentTrend: "bullish" | "bearish" | "ranging" = "ranging";
+  const bos: StructureBreak[] = [];
+  const choch: StructureBreak[] = [];
+  const sweeps: LiquiditySweep[] = [];
 
+  // ── Process swing highs: check for bullish BOS/CHoCH or bearish sweeps ──
   for (let i = 1; i < highs.length; i++) {
-    if (highs[i].price > highs[i - 1].price) {
-      if (currentTrend === "bearish") choch.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
-      else bos.push({ index: highs[i].index, type: "bullish", price: highs[i].price, datetime: highs[i].datetime });
-      currentTrend = "bullish";
-    }
-  }
-  for (let i = 1; i < lows.length; i++) {
-    if (lows[i].price < lows[i - 1].price) {
-      if (currentTrend === "bullish") choch.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
-      else bos.push({ index: lows[i].index, type: "bearish", price: lows[i].price, datetime: lows[i].datetime });
-      currentTrend = "bearish";
+    const prevLevel = highs[i - 1].price;
+    const breakCandleIdx = highs[i].index;
+    const breakCandle = candles[breakCandleIdx];
+    if (!breakCandle) continue;
+
+    if (breakCandle.high > prevLevel) {
+      // Price exceeded the previous swing high — but HOW?
+      const closedThrough = breakCandle.close > prevLevel;
+
+      if (closedThrough) {
+        // REAL BOS/CHoCH: candle body closed above the previous swing high
+        const entry: StructureBreak = {
+          index: breakCandleIdx, type: "bullish", price: breakCandle.high,
+          datetime: breakCandle.datetime, closeBased: true, level: prevLevel,
+        };
+        if (currentTrend === "bearish") choch.push(entry);
+        else bos.push(entry);
+        currentTrend = "bullish";
+      } else {
+        // LIQUIDITY SWEEP: wick went above but close stayed below
+        // This is a bearish signal — smart money swept buy-side liquidity
+        sweeps.push({
+          index: breakCandleIdx, type: "bearish",
+          price: breakCandle.high, datetime: breakCandle.datetime,
+          sweptLevel: prevLevel, wickDepth: breakCandle.high - prevLevel,
+        });
+        // Do NOT update currentTrend — sweep is not a structural shift
+      }
     }
   }
 
+  // ── Process swing lows: check for bearish BOS/CHoCH or bullish sweeps ──
+  // Reset trend tracking for lows pass (we'll reconcile below)
+  let lowTrend: "bullish" | "bearish" | "ranging" = currentTrend;
+  for (let i = 1; i < lows.length; i++) {
+    const prevLevel = lows[i - 1].price;
+    const breakCandleIdx = lows[i].index;
+    const breakCandle = candles[breakCandleIdx];
+    if (!breakCandle) continue;
+
+    if (breakCandle.low < prevLevel) {
+      const closedThrough = breakCandle.close < prevLevel;
+
+      if (closedThrough) {
+        // REAL BOS/CHoCH: candle body closed below the previous swing low
+        const entry: StructureBreak = {
+          index: breakCandleIdx, type: "bearish", price: breakCandle.low,
+          datetime: breakCandle.datetime, closeBased: true, level: prevLevel,
+        };
+        if (lowTrend === "bullish") choch.push(entry);
+        else bos.push(entry);
+        lowTrend = "bearish";
+      } else {
+        // LIQUIDITY SWEEP: wick went below but close stayed above
+        // This is a bullish signal — smart money swept sell-side liquidity
+        sweeps.push({
+          index: breakCandleIdx, type: "bullish",
+          price: breakCandle.low, datetime: breakCandle.datetime,
+          sweptLevel: prevLevel, wickDepth: prevLevel - breakCandle.low,
+        });
+      }
+    }
+  }
+
+  // ── Separate sweep scan: check ALL candles between consecutive swing levels ──
+  // Sweeps can happen on non-swing candles (e.g., a candle wicks above a swing high
+  // but isn't itself a swing high because a later candle goes even higher).
+  // Scan between each pair of consecutive swing highs for bearish sweeps (buy-side)
+  for (let i = 0; i < highs.length; i++) {
+    const level = highs[i].price;
+    const startIdx = highs[i].index + 1;
+    const endIdx = (i + 1 < highs.length) ? highs[i + 1].index : candles.length;
+    for (let ci = startIdx; ci < endIdx; ci++) {
+      const c = candles[ci];
+      if (!c) continue;
+      // Wick went above the swing high but close stayed below
+      if (c.high > level && c.close <= level) {
+        // Avoid duplicating sweeps already found in the BOS/CHoCH pass
+        const alreadyFound = sweeps.some(s => s.index === ci && s.type === "bearish");
+        if (!alreadyFound) {
+          sweeps.push({
+            index: ci, type: "bearish",
+            price: c.high, datetime: c.datetime,
+            sweptLevel: level, wickDepth: c.high - level,
+          });
+        }
+      }
+    }
+  }
+  // Scan between each pair of consecutive swing lows for bullish sweeps (sell-side)
+  for (let i = 0; i < lows.length; i++) {
+    const level = lows[i].price;
+    const startIdx = lows[i].index + 1;
+    const endIdx = (i + 1 < lows.length) ? lows[i + 1].index : candles.length;
+    for (let ci = startIdx; ci < endIdx; ci++) {
+      const c = candles[ci];
+      if (!c) continue;
+      // Wick went below the swing low but close stayed above
+      if (c.low < level && c.close >= level) {
+        const alreadyFound = sweeps.some(s => s.index === ci && s.type === "bullish");
+        if (!alreadyFound) {
+          sweeps.push({
+            index: ci, type: "bullish",
+            price: c.low, datetime: c.datetime,
+            sweptLevel: level, wickDepth: level - c.low,
+          });
+        }
+      }
+    }
+  }
+
+  // ── Determine overall trend from the last 2 swing highs + lows ──
   let trend: "bullish" | "bearish" | "ranging" = "ranging";
   if (highs.length >= 2 && lows.length >= 2) {
     const rH = highs.slice(-2), rL = lows.slice(-2);
     if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) trend = "bullish";
     else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
   }
-  return { trend, swingPoints: swings, bos, choch };
+
+  return { trend, swingPoints: swings, bos, choch, sweeps };
 }
 
 export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {

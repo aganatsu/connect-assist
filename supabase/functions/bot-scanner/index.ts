@@ -645,19 +645,36 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const factors: ReasoningFactor[] = [];
 
   // ── Factor 1: Market Structure / BOS/CHoCH (max 1.5) ──
-  // Scores structure breaks only. Trend direction is scored separately in Factor 19.
+  // Enhanced: uses close-based BOS (candle body must close through level)
+  // and detects liquidity sweeps (wick-through + rejection ≠ real break).
   {
     let pts = 0;
     let detail = "";
     if (config.enableStructureBreak !== false) {
-      if (structure.choch.length > 0) {
+      // Count close-based (strong) vs wick-only breaks
+      const closeBasedChoch = structure.choch.filter((c: any) => c.closeBased);
+      const closeBasedBos = structure.bos.filter((b: any) => b.closeBased);
+      const sweepCount = structure.sweeps?.length || 0;
+
+      if (closeBasedChoch.length > 0) {
         pts = 1.5;
-        detail = `${structure.choch.length} CHoCH detected — trend reversal confirmed`;
-      } else if (structure.bos.length > 0) {
+        detail = `${closeBasedChoch.length} CHoCH (close-based) — strong trend reversal`;
+      } else if (structure.choch.length > 0) {
+        // CHoCH exists but only wick-based — weaker signal
         pts = 1.0;
-        detail = `${structure.bos.length} BOS detected — trend continuation`;
+        detail = `${structure.choch.length} CHoCH (wick-based, no close confirmation) — possible reversal`;
+      } else if (closeBasedBos.length > 0) {
+        pts = 1.0;
+        detail = `${closeBasedBos.length} BOS (close-based) — trend continuation confirmed`;
+      } else if (structure.bos.length > 0) {
+        pts = 0.5;
+        detail = `${structure.bos.length} BOS (wick-based only) — weak continuation`;
       } else {
         detail = "No BOS or CHoCH detected";
+      }
+      // Sweeps add context to the detail string
+      if (sweepCount > 0) {
+        detail += ` | ${sweepCount} liquidity sweep${sweepCount > 1 ? "s" : ""} detected`;
       }
     } else {
       detail = "BOS/CHoCH disabled";
