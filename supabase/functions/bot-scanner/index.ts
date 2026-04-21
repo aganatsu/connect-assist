@@ -277,7 +277,11 @@ function adjustSLTPForSpread(
   }
 }
 
-// ─── Trading Style Overrides ────────────────────────────────────────
+// ─── Trading Style Execution Profiles ───────────────────────────────────────────────────────
+// Each style has fundamentally different execution characteristics.
+// Key principle: BE and trailing are now R-based (see scannerManagement.ts),
+// so breakEvenPips here acts as a fallback — the actual trigger is max(1R, breakEvenPips/riskPips).
+// trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips).
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
     entryTimeframe: "5m",
@@ -285,12 +289,13 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 1.5,
     slBufferPips: 1,
     minConfluence: 5,
-    // Management: tight trailing, fast BE, no partial, short hold
+    // Scalper management: fast BE at 0.75R, tight trailing, no partial, short hold
+    // On 5m chart with ~10-15 pip SL, BE triggers at ~10 pips, trail at ~7 pips
     trailingStopEnabled: true,
-    trailingStopPips: 10,           // tight trail for scalps
-    trailingStopActivation: "after_0.5r",
+    trailingStopPips: 8,            // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_1r",  // Changed from 0.5R — let scalps reach 1R before trailing
     breakEvenEnabled: true,
-    breakEvenPips: 10,              // quick BE for scalps
+    breakEvenPips: 8,               // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: false,
     maxHoldHours: 4,
   },
@@ -300,10 +305,13 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 2.0,
     slBufferPips: 2,
     minConfluence: 5.5,
-    // Management: partial TP at 1R, moderate BE, no trailing by default
-    trailingStopEnabled: false,
+    // Day trader management: partial TP at 1R, then trailing kicks in, BE at 1R
+    // On 15m chart with ~20-30 pip SL, BE at ~20-30 pips, trail at ~10-15 pips
+    trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
+    trailingStopPips: 15,           // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_1.5r", // Activates after partial TP at 1R + buffer
     breakEvenEnabled: true,
-    breakEvenPips: 20,              // moderate BE for day trades
+    breakEvenPips: 20,              // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
     partialTPPercent: 50,
     partialTPLevel: 1.0,            // partial at 1R
@@ -315,15 +323,16 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     tpRatio: 3.0,
     slBufferPips: 5,
     minConfluence: 6.5,
-    // Management: wide trailing, wide BE, partial at 1.5R, long hold
+    // Swing management: wide breathing room, partial at 1R + 2R, trailing after 2R
+    // On 1h chart with ~40-60 pip SL, BE at ~40-60 pips, trail at ~20-30 pips
     trailingStopEnabled: true,
-    trailingStopPips: 30,           // wide trail for swings
-    trailingStopActivation: "after_1r",
+    trailingStopPips: 25,           // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_2r", // Changed from 1R — let swings develop before trailing
     breakEvenEnabled: true,
-    breakEvenPips: 50,              // wide BE — 50 pips so XAU noise doesn't trigger it
+    breakEvenPips: 40,              // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
-    partialTPPercent: 40,
-    partialTPLevel: 1.5,            // partial at 1.5R
+    partialTPPercent: 33,           // Changed: take 33% at 1R (keep more for the big move)
+    partialTPLevel: 1.0,            // Changed from 1.5R: lock in profit earlier
     maxHoldHours: 0,                // no time limit for swings
   },
 };

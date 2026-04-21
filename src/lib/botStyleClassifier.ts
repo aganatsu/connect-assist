@@ -20,6 +20,8 @@ export interface StyleOverrides {
   maxHoldHours: number;
 }
 
+// NOTE: breakEvenPips is now a fallback — actual BE trigger is R-based: max(1R, breakEvenPips/riskPips)
+// trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips)
 export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   scalper: {
     entryTimeframe: "5m",
@@ -28,10 +30,10 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     slBufferPips: 1,
     minConfluence: 5,
     trailingStopEnabled: true,
-    trailingStopPips: 10,
-    trailingStopActivation: "after_0.5r",
+    trailingStopPips: 8,              // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_1r",  // let scalps reach 1R before trailing
     breakEvenEnabled: true,
-    breakEvenPips: 10,
+    breakEvenPips: 8,                 // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: false,
     partialTPPercent: 50,
     partialTPLevel: 1.0,
@@ -43,11 +45,11 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     tpRatio: 2.0,
     slBufferPips: 2,
     minConfluence: 5.5,
-    trailingStopEnabled: false,
-    trailingStopPips: 15,
-    trailingStopActivation: "after_1r",
+    trailingStopEnabled: true,        // trailing AFTER partial TP
+    trailingStopPips: 15,             // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_1.5r", // activates after partial TP at 1R + buffer
     breakEvenEnabled: true,
-    breakEvenPips: 20,
+    breakEvenPips: 20,                // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
     partialTPPercent: 50,
     partialTPLevel: 1.0,
@@ -60,13 +62,13 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     slBufferPips: 5,
     minConfluence: 6.5,
     trailingStopEnabled: true,
-    trailingStopPips: 30,
-    trailingStopActivation: "after_1r",
+    trailingStopPips: 25,             // minimum trail; proportional (0.5× SL) may be larger
+    trailingStopActivation: "after_2r", // let swings develop before trailing
     breakEvenEnabled: true,
-    breakEvenPips: 50,
+    breakEvenPips: 40,                // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
-    partialTPPercent: 40,
-    partialTPLevel: 1.5,
+    partialTPPercent: 33,             // take 33% at 1R (keep more for the big move)
+    partialTPLevel: 1.0,              // lock in profit at 1R
     maxHoldHours: 0,  // no limit for swings
   },
 };
