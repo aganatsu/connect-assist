@@ -206,6 +206,45 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     ? (current - entry) / pipSize
     : (entry - current) / pipSize;
 
+  // Dollar per pip (derived from live P&L / pips)
+  const dollarPerPip = (Math.abs(pnlPips) > 0.01 && p.pnl != null)
+    ? Math.abs(p.pnl / pnlPips)
+    : null;
+
+  // Risk in pips (SL distance)
+  const riskPips = riskDist != null ? riskDist / pipSize : null;
+
+  // Trailing stop: activation pips & trail distance pips
+  const trailActivationR = ef.trailingStopActivation === "after_0.5r" ? 0.5
+    : ef.trailingStopActivation === "after_1r" ? 1.0
+    : ef.trailingStopActivation === "after_1.5r" ? 1.5
+    : ef.trailingStopActivation === "after_2r" ? 2.0
+    : null;
+  const trailActivationPips = trailActivationR != null && riskPips != null
+    ? trailActivationR * riskPips : null;
+  const trailActivationDollar = trailActivationPips != null && dollarPerPip != null
+    ? trailActivationPips * dollarPerPip : null;
+  const trailDistPips = ef.trailingStopPips ?? null;
+
+  // Break-even: trigger pips & dollar
+  const beTriggerPips = ef.breakEvenPips ?? null;
+  const beTriggerDollar = beTriggerPips != null && dollarPerPip != null
+    ? beTriggerPips * dollarPerPip : null;
+
+  // Partial TP: trigger pips & dollar
+  const partialTriggerPips = partialR != null && riskPips != null
+    ? partialR * riskPips : null;
+  const partialTriggerDollar = partialTriggerPips != null && dollarPerPip != null
+    ? partialTriggerPips * dollarPerPip : null;
+
+  // Format helper for pips + dollar
+  const fmtPipsDollar = (pips: number | null, dollar: number | null): string => {
+    if (pips == null) return "";
+    const pipStr = `+${pips.toFixed(1)}p`;
+    if (dollar != null) return `${pipStr} / ~${formatMoney(dollar, true)}`;
+    return pipStr;
+  };
+
   // Has any management features
   const hasManagement = ef.trailingStopEnabled || ef.breakEvenEnabled || ef.partialTPEnabled
     || ef.trailingStop || ef.breakEven || ef.partialTP;
@@ -333,7 +372,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               }
               lines={ef.trailingStopActivated
                 ? [
-                    sl != null ? `Current SL: ${formatPrice(sl, p.symbol)}` : "Active",
+                    sl != null ? `SL: ${formatPrice(sl, p.symbol)}` : "Active",
                     lockedR != null
                       ? (lockedR >= 0
                           ? `${lockedR.toFixed(2)}R locked${lockedPnl != null ? ` (${formatMoney(lockedPnl, true)})` : ""}`
@@ -341,10 +380,15 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                       : "",
                   ].filter(Boolean)
                 : [
-                    ef.trailingStopActivation
-                      ? `Triggers ${ef.trailingStopActivation}`
-                      : `${ef.trailingStopPips ?? "?"}p step`,
-                  ]
+                    trailActivationPips != null
+                      ? `Activates at ${trailActivationR}R (${fmtPipsDollar(trailActivationPips, trailActivationDollar)})`
+                      : (ef.trailingStopActivation
+                        ? `Triggers ${ef.trailingStopActivation}`
+                        : `${ef.trailingStopPips ?? "?"}p step`),
+                    trailDistPips != null
+                      ? `Trail: ${trailDistPips}p behind price${riskPips ? ` (${(trailDistPips / riskPips).toFixed(1)}× SL)` : ""}`
+                      : "",
+                  ].filter(Boolean)
               }
             />
           )}
@@ -362,9 +406,12 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
                 ? [`SL moved to entry (${formatPrice(entry, p.symbol)})`]
                 : [
                     bePrice != null
-                      ? `Trigger: ${beR?.toFixed(1)}R (${formatPrice(bePrice, p.symbol)})`
+                      ? `Trigger: ${beR?.toFixed(1)}R (${fmtPipsDollar(beTriggerPips, beTriggerDollar)})`
                       : `${ef.breakEvenPips} pips from entry`,
-                  ]
+                    bePrice != null
+                      ? `SL → ${formatPrice(entry, p.symbol)} at ${formatPrice(bePrice, p.symbol)}`
+                      : "",
+                  ].filter(Boolean)
               }
             />
           )}
@@ -381,8 +428,13 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               lines={(ef.partialTPActivated || p.partialTpFired)
                 ? [`${ef.partialTPPercent ?? 50}% closed at ${partialR ?? "?"}R`]
                 : [
-                    `${ef.partialTPPercent ?? 50}% @ ${partialR != null ? `${partialR}R` : `${ef.partialTPLevel ?? "?"}R`}`,
-                  ]
+                    partialTriggerPips != null
+                      ? `Close ${ef.partialTPPercent ?? 50}% at ${partialR}R (${fmtPipsDollar(partialTriggerPips, partialTriggerDollar)})`
+                      : `${ef.partialTPPercent ?? 50}% @ ${partialR != null ? `${partialR}R` : `${ef.partialTPLevel ?? "?"}R`}`,
+                    partialPrice != null
+                      ? `Target: ${formatPrice(partialPrice, p.symbol)}`
+                      : "",
+                  ].filter(Boolean)
               }
             />
           )}
