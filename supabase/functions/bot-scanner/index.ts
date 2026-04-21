@@ -725,6 +725,30 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Order Block", present: pts > 0, weight: s.displayWeight, detail: detail || "No active order blocks", group: "Order Flow Zones" }); }
   }
 
+  // ── Direction Determination (moved before Factors 3-4 so they can use actual direction) ──
+  // Depends only on structure.trend and pd.currentZone, both computed before scoring.
+  let direction: "long" | "short" | null = null;
+  const hasRecentBOS = structure.bos.length > 0;
+  const hasRecentCHoCH = structure.choch.length > 0;
+  const strongTrend = hasRecentBOS && !hasRecentCHoCH; // BOS without CHoCH = strong continuation
+
+  if (structure.trend === "bullish") {
+    if (pd.currentZone !== "premium") {
+      direction = "long"; // Normal: bullish trend + discount/equilibrium
+    } else if (strongTrend) {
+      direction = "long"; // Strong trend override: allow premium longs in strong uptrend
+    }
+  } else if (structure.trend === "bearish") {
+    if (pd.currentZone !== "discount") {
+      direction = "short"; // Normal: bearish trend + premium/equilibrium
+    } else if (strongTrend) {
+      direction = "short"; // Strong trend override: allow discount shorts in strong downtrend
+    }
+  } else if (structure.trend === "ranging") {
+    if (pd.currentZone === "discount") direction = "long";
+    else if (pd.currentZone === "premium") direction = "short";
+  }
+
   // ── Factor 3: Fair Value Gap (max 2.0) ──
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   // ICT: Consequent Encroachment (CE) = 50% of FVG is a key entry level.
@@ -748,9 +772,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         }
         return true;
       });
-      // Directional context: prefer FVGs aligned with structure trend
+      // Directional context: prefer FVGs aligned with trade direction (now available)
       // Bullish FVG (gap up) = support for longs; Bearish FVG (gap down) = resistance for shorts
-      const trendHint = structure.trend === "bullish" ? "bullish" : structure.trend === "bearish" ? "bearish" : null;
+      const trendHint = direction === "long" ? "bullish" : direction === "short" ? "bearish" : null;
       // Prefer directionally-aligned FVGs, but fall back to any FVG
       const alignedFVGs = trendHint ? activeFVGs.filter(f => f.type === trendHint) : activeFVGs;
       const fvgPool = alignedFVGs.length > 0 ? alignedFVGs : activeFVGs;
@@ -804,8 +828,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     //   - For longs: OTE = price at 21.4-38.2% (deep discount, 61.8-78.6% retracement)
     //   - For shorts: OTE = price at 61.8-78.6% (deep premium, 61.8-78.6% retracement)
 
-    // Use structure.trend as directional hint (direction variable isn't set yet)
-    const fibDirection = structure.trend === "bullish" ? "long" : structure.trend === "bearish" ? "short" : null;
+    // Use actual direction (now determined before Factor 3)
+    const fibDirection = direction;
 
     if (fibDirection === "long") {
       // Retracement from swing high: retrace% = 100 - fibPercent
@@ -1082,33 +1106,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  // Determine direction
-  // Improved: In strong trends (recent BOS), allow premium longs / discount shorts.
-  // Only block direction when in unfavorable zone AND no strong trend confirmation.
-  let direction: "long" | "short" | null = null;
-  const hasRecentBOS = structure.bos.length > 0;
-  const hasRecentCHoCH = structure.choch.length > 0;
-  const strongTrend = hasRecentBOS && !hasRecentCHoCH; // BOS without CHoCH = strong continuation
-
-  if (structure.trend === "bullish") {
-    if (pd.currentZone !== "premium") {
-      direction = "long"; // Normal: bullish trend + discount/equilibrium
-    } else if (strongTrend) {
-      direction = "long"; // Strong trend override: allow premium longs in strong uptrend
-    }
-    // else: bullish trend but in premium without strong confirmation → no direction
-  } else if (structure.trend === "bearish") {
-    if (pd.currentZone !== "discount") {
-      direction = "short"; // Normal: bearish trend + premium/equilibrium
-    } else if (strongTrend) {
-      direction = "short"; // Strong trend override: allow discount shorts in strong downtrend
-    }
-    // else: bearish trend but in discount without strong confirmation → no direction
-  } else if (structure.trend === "ranging") {
-    // Ranging market fallback: use premium/discount zone to pick direction
-    if (pd.currentZone === "discount") direction = "long";
-    else if (pd.currentZone === "premium") direction = "short";
-  }
+  // Direction was already determined above (before Factor 3) so all factors can use it.
 
   // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
   // Scores whether the entry timeframe trend aligns with the trade direction.
