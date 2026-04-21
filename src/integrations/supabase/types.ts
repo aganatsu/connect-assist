@@ -111,7 +111,9 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
+          commission_per_lot: number
           created_at: string
+          detected_commission_per_lot: number | null
           display_name: string
           id: string
           is_active: boolean
@@ -125,7 +127,9 @@ export type Database = {
           account_id: string
           api_key: string
           broker_type: string
+          commission_per_lot?: number
           created_at?: string
+          detected_commission_per_lot?: number | null
           display_name: string
           id?: string
           is_active?: boolean
@@ -139,7 +143,9 @@ export type Database = {
           account_id?: string
           api_key?: string
           broker_type?: string
+          commission_per_lot?: number
           created_at?: string
+          detected_commission_per_lot?: number | null
           display_name?: string
           id?: string
           is_active?: boolean
