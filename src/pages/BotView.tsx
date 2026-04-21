@@ -325,7 +325,7 @@ export default function BotView() {
             </Button>
 
             <div className="flex gap-3 text-[10px] text-muted-foreground">
-              <span>Interval: <strong className="text-foreground">{(() => { const s = botConfig?.scanner?.intervalSeconds ?? 30; return s >= 60 ? `${s / 60}m` : `${s}s`; })()}</strong></span>
+              <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
               <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
               <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
               <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
