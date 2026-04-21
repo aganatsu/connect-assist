@@ -310,6 +310,8 @@ function getDefaultConfig() {
       premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
+      // Normalized scoring: when true, score is percentage-based (auto-adjusts when factors are toggled)
+      normalizedScoring: false,
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",

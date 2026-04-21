@@ -46,6 +46,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
   { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
   { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
+  { tab: "strategy", label: "Normalized Scoring", keywords: ["normalize", "normalized", "percentage", "scoring", "scale", "auto-adjust", "factor toggle", "weight"] },
   { tab: "strategy", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "history", "advanced", "tuning"] },
   { tab: "strategy", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "advanced", "tuning"] },
   { tab: "strategy", label: "FVG Min Size", keywords: ["fvg", "min", "size", "pips", "filter", "advanced", "tuning"] },
@@ -118,6 +119,7 @@ const BASE_CONFIG = {
     fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
     liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
     regimeScoringEnabled: true, regimeScoringStrength: 1.0,
+    normalizedScoring: false,
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
@@ -679,6 +681,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                             <div className="text-muted-foreground/70">Range setups get the inverse. All values scaled by the multiplier above.</div>
                           </div>
                         </FieldGroup>
+                      )}
+                    </div>
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Score Normalization</p>
+                      <ToggleField label="Normalized Scoring" description="When enabled, the confluence score is calculated as a percentage of the maximum possible score from your enabled factors. This means disabling factors won't silently raise the effective threshold — 5.0 always means 50% of what's possible." checked={config.strategy?.normalizedScoring ?? false} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
+                      {(config.strategy?.normalizedScoring) && (
+                        <div className="rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
+                          <div><span className="text-emerald-500 font-medium">How it works:</span> Score = (raw points / max possible points) × 10</div>
+                          <div><span className="text-amber-500 font-medium">Example:</span> If you disable 4 factors, max drops from ~22 to ~16. A raw score of 8 becomes 5.0/10 (50%) instead of being clamped at 8.0/10.</div>
+                          <div className="text-muted-foreground/70">Your confluence threshold now consistently means "X% of enabled factors aligned" regardless of how many factors you toggle.</div>
+                        </div>
                       )}
                     </div>
                     <div className="border-t border-border pt-4 space-y-4">

@@ -107,6 +107,11 @@ const DEFAULTS = {
   protectionMaxDailyLossDollar: 0,
   // ── Strategy gates ──
   minFactorCount: 0,
+  // ── Normalized Scoring (opt-in) ──
+  // When true, raw score is normalized to percentage of enabled factors' max possible score,
+  // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
+  // minConfluence threshold always means "X% of enabled factors aligned".
+  normalizedScoring: false,
   useSMT: true,
   useFOTSI: true,
   // ── Per-pair scratch (set during scan) ──
@@ -1652,9 +1657,48 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     });
   }
 
-  // Preserve raw score before clamping (useful for debugging and comparing signal quality)
+  // ─── Normalized Scoring (opt-in) ─────────────────────────────────────────
+  // When config.normalizedScoring is true, we calculate the maximum possible
+  // score from enabled factors, then express the raw score as a percentage of
+  // that maximum, scaled to 0-10. This means disabling factors doesn't silently
+  // raise the effective threshold — 5.0 always means "50% of what's possible".
+  //
+  // enabledMax = sum of each factor's configured weight (after user overrides).
+  // Bonus factors (Po3 combo +1.0, OR enhancements +0.5 each) are included
+  // as fixed additions to enabledMax since they're always available.
+  // Penalty-only factors (Spread Quality, negative regime) are excluded from
+  // enabledMax since they can only subtract, not add.
   const rawScore = Math.round(score * 100) / 100;
-  score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
+
+  if (config.normalizedScoring) {
+    // Calculate the maximum possible score from enabled weighted factors
+    const weightedFactorKeys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
+    let enabledMax = 0;
+    for (const key of weightedFactorKeys) {
+      const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
+      const fw = config.factorWeights;
+      // If user set weight to 0, this factor contributes 0 to max
+      const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
+        ? Math.max(0, fw[key])
+        : defaultW;
+      enabledMax += effectiveW;
+    }
+    // Add fixed bonus potential: Po3 combo (1.0) + OR enhancements (up to 2.0)
+    enabledMax += 1.0; // Power of 3 combo
+    if (config.openingRange?.enabled) {
+      enabledMax += 2.0; // OR bias + Judas + key levels + premium/discount
+    }
+    // Normalize: express raw score as percentage of enabledMax, scaled to 0-10
+    if (enabledMax > 0) {
+      const normalizedPct = Math.max(0, rawScore) / enabledMax;
+      score = Math.max(0, Math.min(10, Math.round(normalizedPct * 100) / 10));
+    } else {
+      score = 0;
+    }
+  } else {
+    // Legacy absolute scoring: clamp raw score to 0-10
+    score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
+  }
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -1681,12 +1725,13 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   });
 
   const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
+  const scoringMode = config.normalizedScoring ? " [normalized]" : "";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned across ${activeGroups.length}/9 groups (score: ${score}/10). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors across ${activeGroups.length}/9 groups (score: ${score}/10)${fotsiSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned across ${activeGroups.length}/9 groups (score: ${score}/10${scoringMode}, raw: ${rawScore}). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
+    : `No signal: ${presentFactors.length}/${factors.length} factors across ${activeGroups.length}/9 groups (score: ${score}/10${scoringMode}, raw: ${rawScore})${fotsiSummary}`;
 
   return {
-    score, rawScore, direction, bias, summary, factors,
+    score, rawScore, normalizedScoring: !!config.normalizedScoring, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
@@ -1980,6 +2025,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // Regime scoring (UI writes under strategy.*; scanner reads at top level)
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
     regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
+    // Normalized scoring (opt-in: percentage-based scoring that auto-adjusts when factors are toggled)
+    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? false,
     // ── P1 tuning fields (now wired to scanner) ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
     fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
