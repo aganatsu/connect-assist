@@ -692,8 +692,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
 
   // ── Factor 2: Order Block (max 2.0) ──
-  // Displacement is scored ONLY via Factor 10 to avoid double-counting.
-  // OBs are now quality-gated: body-based zones, structure-break required, recency-filtered, capped at 5.
+  // OBs are quality-gated: displacement required for full score, FVG adjacency bonus.
+  // Without displacement, OB scores at most 0.75 (reduced from 2.0).
   {
     let pts = 0;
     let detail = "";
@@ -701,15 +701,23 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
       const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
       if (insideOB) {
-        pts = 2.0;
         const tags: string[] = [];
-        if ((insideOB as any).hasDisplacement) tags.push("displacement");
-        if ((insideOB as any).hasFVGAdjacency) tags.push("FVG adjacent");
-        detail = `Price inside ${insideOB.type} OB (body) at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
-        if (tags.length > 0) detail += ` [${tags.join(", ")}]`;
+        if (insideOB.hasDisplacement) {
+          // Full-quality OB: displacement confirmed
+          pts = 2.0;
+          tags.push("displacement ✓");
+        } else {
+          // Low-quality OB: no displacement — capped at 0.75
+          pts = 0.75;
+          tags.push("no displacement — reduced score");
+        }
+        if (insideOB.hasFVGAdjacency) tags.push("FVG adjacent");
+        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated) [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
-        pts = 0.5;
-        detail = `${activeOBs.length} quality-filtered OBs nearby (body zones, structure-break gated)`;
+        // OBs exist but price not inside any
+        const withDisp = activeOBs.filter(ob => ob.hasDisplacement).length;
+        pts = withDisp > 0 ? 0.5 : 0.25;
+        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement)`;
       }
     } else {
       detail = "Order Blocks disabled";
@@ -741,18 +749,32 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         }
         return true;
       });
-      const insideFVG = activeFVGs.find(f => lastPrice >= f.low && lastPrice <= f.high);
+      // Directional context: prefer FVGs aligned with structure trend
+      // Bullish FVG (gap up) = support for longs; Bearish FVG (gap down) = resistance for shorts
+      const trendHint = structure.trend === "bullish" ? "bullish" : structure.trend === "bearish" ? "bearish" : null;
+      // Prefer directionally-aligned FVGs, but fall back to any FVG
+      const alignedFVGs = trendHint ? activeFVGs.filter(f => f.type === trendHint) : activeFVGs;
+      const fvgPool = alignedFVGs.length > 0 ? alignedFVGs : activeFVGs;
+      const insideFVG = fvgPool.find(f => lastPrice >= f.low && lastPrice <= f.high);
       if (insideFVG) {
         const ce = (insideFVG.high + insideFVG.low) / 2; // Consequent Encroachment
         const fvgRange = insideFVG.high - insideFVG.low;
         const distFromCE = Math.abs(lastPrice - ce);
         const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15; // within 15% of CE
+        const isAligned = trendHint ? insideFVG.type === trendHint : true;
         if (nearCE) {
-          pts = 2.0;
-          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} — optimal entry`;
+          pts = isAligned ? 2.0 : 1.0; // Counter-directional FVG at CE gets half score
+          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}${isAligned ? " — optimal entry" : " — counter-directional, reduced"}`;
         } else {
-          pts = 1.5;
-          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
+          pts = isAligned ? 1.5 : 0.75;
+          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})${isAligned ? "" : " — counter-directional"}`;
+        }
+        // Recency bonus: FVGs closer to current price action are more relevant
+        const recencyIdx = insideFVG.index || 0;
+        const isRecent = recencyIdx >= candles.length - 15;
+        if (!isRecent && pts > 0.5) {
+          pts *= 0.75; // Decay older FVGs
+          detail += " [older FVG, reduced]";
         }
         if ((insideFVG as any).hasDisplacement) {
           detail += " [displacement-created, scored via Factor 10]";
@@ -853,24 +875,33 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
   }
 
-  // ── Factor 6: Judas Swing (max 0.5) ──
-  // ICT: Judas Swing is a confirmation signal, not a primary entry trigger.
+  // ── Factor 6: Judas Swing (max 0.75) ──
+  // ICT: Judas Swing is a manipulation move that sweeps liquidity before the real move.
+  // Improved: Now anchored to actual NY midnight open. Requires liquidity sweep for full score.
   {
     let pts = 0;
     let detail = judasSwing.description;
     if (judasSwing.detected && judasSwing.confirmed) {
-      if (session.isKillZone) {
+      // Check if a liquidity sweep also fired — Judas + sweep = high-quality manipulation signal
+      const hasSweep = liquidityPools.some(lp => lp.swept && lp.strength >= 2);
+      if (session.isKillZone && hasSweep) {
+        pts = 0.75;
+        detail += " — kill zone + liquidity sweep (high-quality manipulation)";
+      } else if (session.isKillZone) {
         pts = 0.5;
         detail += " — during kill zone (confirmed)";
+      } else if (hasSweep) {
+        pts = 0.4;
+        detail += " — with liquidity sweep but outside kill zone";
       } else {
         pts = 0.25;
-        detail += " — outside kill zone (lower probability)";
+        detail += " — outside kill zone, no sweep (lower probability)";
       }
     } else if (judasSwing.detected) {
       pts = 0.1;
       detail += " (unconfirmed)";
     }
-    { const s = applyWeightScale(pts, "judasSwing", 0.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "judasSwing", 0.75, config); pts = s.pts; score += pts;
     factors.push({ name: "Judas Swing", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
@@ -932,24 +963,41 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
-  // ── Factor 9: Liquidity Sweep (max 1.0) ──
-  // ICT: Liquidity sweeps are a cornerstone entry trigger. Increased weight per audit.
+  // ── Factor 9: Liquidity Sweep (max 1.5) ──
+  // ICT: Liquidity sweeps are a cornerstone entry trigger. Weight increased per audit.
+  // Now uses rejection confirmation and recency for higher-quality signals.
   {
     let pts = 0;
     let detail = "";
     if (config.enableLiquiditySweep !== false) {
-      const sweptPool = liquidityPools.find(lp => lp.swept && lp.strength >= 2);
-      if (sweptPool) {
-        // Higher-strength pools (more touches) are more significant
-        pts = sweptPool.strength >= 4 ? 1.0 : 0.75;
-        detail = `${sweptPool.type} liquidity swept at ${sweptPool.price.toFixed(5)} (${sweptPool.strength} touches)${sweptPool.strength >= 4 ? " — strong pool" : ""}`;
+      // Prefer swept pools with rejection confirmation (wick through + close back)
+      const sweptPools = liquidityPools.filter(lp => lp.swept && lp.strength >= 2);
+      // Sort: rejection-confirmed first, then by strength, then by recency
+      const sorted = sweptPools.sort((a, b) => {
+        if (a.rejectionConfirmed !== b.rejectionConfirmed) return a.rejectionConfirmed ? -1 : 1;
+        if (b.strength !== a.strength) return b.strength - a.strength;
+        return (b.sweptAtIndex || 0) - (a.sweptAtIndex || 0); // more recent first
+      });
+      const best = sorted[0];
+      if (best) {
+        // Recency check: sweep should be within last 20 candles for full score
+        const isRecent = best.sweptAtIndex != null && best.sweptAtIndex >= candles.length - 20;
+        if (best.rejectionConfirmed) {
+          // Sweep + rejection = high-quality signal
+          pts = isRecent ? 1.5 : 1.0;
+          detail = `${best.type} liquidity swept + rejected at ${best.price.toFixed(5)} (${best.strength} touches)${isRecent ? " — recent" : " — older sweep"}${best.strength >= 4 ? " — strong pool" : ""}`;
+        } else {
+          // Sweep without rejection = moderate signal (could be a real break, not a sweep)
+          pts = isRecent ? 0.75 : 0.5;
+          detail = `${best.type} liquidity swept at ${best.price.toFixed(5)} (${best.strength} touches) — no rejection candle${isRecent ? "" : " (older sweep)"}${best.strength >= 4 ? " — strong pool" : ""}`;
+        }
       } else {
         detail = "No recent liquidity sweep";
       }
     } else {
       detail = "Liquidity Sweeps disabled";
     }
-    { const s = applyWeightScale(pts, "liquiditySweep", 1.0, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "liquiditySweep", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Liquidity Sweep", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
@@ -1011,11 +1059,29 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   }
 
   // Determine direction
+  // Improved: In strong trends (recent BOS), allow premium longs / discount shorts.
+  // Only block direction when in unfavorable zone AND no strong trend confirmation.
   let direction: "long" | "short" | null = null;
-  if (structure.trend === "bullish" && pd.currentZone !== "premium") direction = "long";
-  else if (structure.trend === "bearish" && pd.currentZone !== "discount") direction = "short";
-  // Ranging market fallback: use premium/discount zone to pick direction
-  else if (structure.trend === "ranging") {
+  const hasRecentBOS = structure.bos.length > 0;
+  const hasRecentCHoCH = structure.choch.length > 0;
+  const strongTrend = hasRecentBOS && !hasRecentCHoCH; // BOS without CHoCH = strong continuation
+
+  if (structure.trend === "bullish") {
+    if (pd.currentZone !== "premium") {
+      direction = "long"; // Normal: bullish trend + discount/equilibrium
+    } else if (strongTrend) {
+      direction = "long"; // Strong trend override: allow premium longs in strong uptrend
+    }
+    // else: bullish trend but in premium without strong confirmation → no direction
+  } else if (structure.trend === "bearish") {
+    if (pd.currentZone !== "discount") {
+      direction = "short"; // Normal: bearish trend + premium/equilibrium
+    } else if (strongTrend) {
+      direction = "short"; // Strong trend override: allow discount shorts in strong downtrend
+    }
+    // else: bearish trend but in discount without strong confirmation → no direction
+  } else if (structure.trend === "ranging") {
+    // Ranging market fallback: use premium/discount zone to pick direction
     if (pd.currentZone === "discount") direction = "long";
     else if (pd.currentZone === "premium") direction = "short";
   }
@@ -1080,20 +1146,35 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   }
 
   // ── Factor 11: Breaker Block (max 1.0) ──
+  // Improved: ATR-based proximity instead of fixed 1% distance.
   {
     let pts = 0;
     let detail = "No active breaker block aligned with signal";
     if (config.useBreakerBlocks !== false && direction && breakerBlocks.length > 0) {
       const wantType = direction === "long" ? "bullish_breaker" : "bearish_breaker";
-      const aligned = breakerBlocks.find(b => b.type === wantType);
-      if (aligned) {
-        const mid = (aligned.high + aligned.low) / 2;
-        const distPct = Math.abs(lastPrice - mid) / lastPrice;
-        if (distPct <= 0.01) {
+      // Use ATR for proximity — 2× ATR is a reasonable "near" threshold
+      const breakerATR = calculateATR(candles, 14);
+      const atrThreshold = breakerATR * 2;
+      // Find the closest aligned breaker
+      const alignedBreakers = breakerBlocks.filter(b => b.type === wantType);
+      let bestBreaker = null;
+      let bestDist = Infinity;
+      for (const b of alignedBreakers) {
+        // Check if price is inside or near the breaker zone
+        const mid = (b.high + b.low) / 2;
+        const dist = Math.abs(lastPrice - mid);
+        if (dist < bestDist) { bestDist = dist; bestBreaker = b; }
+      }
+      if (bestBreaker) {
+        const isInside = lastPrice >= bestBreaker.low && lastPrice <= bestBreaker.high;
+        if (isInside) {
           pts = 1.0;
-          detail = `Price near ${aligned.type.replace("_", " ")} at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)}`;
+          detail = `Price inside ${bestBreaker.type.replace("_", " ")} at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+        } else if (bestDist <= atrThreshold) {
+          pts = 0.5;
+          detail = `Price within ${(bestDist / breakerATR).toFixed(1)}× ATR of ${bestBreaker.type.replace("_", " ")} at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
         } else {
-          detail = `${aligned.type.replace("_", " ")} exists at ${aligned.low.toFixed(5)}-${aligned.high.toFixed(5)} but price too far (${(distPct * 100).toFixed(2)}%)`;
+          detail = `${bestBreaker.type.replace("_", " ")} exists at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)} but price ${(bestDist / breakerATR).toFixed(1)}× ATR away`;
         }
       }
     } else if (config.useBreakerBlocks === false) {
@@ -1539,6 +1620,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
+  // Preserve raw score before clamping (useful for debugging and comparing signal quality)
+  const rawScore = Math.round(score * 100) / 100;
   score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
 
   // Calculate SL/TP using configurable methods
@@ -1571,7 +1654,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     : `No signal: ${presentFactors.length}/${factors.length} factors across ${activeGroups.length}/9 groups (score: ${score}/10)${fotsiSummary}`;
 
   return {
-    score, direction, bias, summary, factors,
+    score, rawScore, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,

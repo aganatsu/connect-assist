@@ -47,6 +47,8 @@ export interface OrderBlock {
   datetime: string;
   mitigated: boolean;
   mitigatedPercent: number;
+  hasDisplacement?: boolean;
+  hasFVGAdjacency?: boolean;
 }
 
 export interface FairValueGap {
@@ -56,6 +58,7 @@ export interface FairValueGap {
   type: "bullish" | "bearish";
   datetime: string;
   mitigated: boolean;
+  hasDisplacement?: boolean;
 }
 
 export interface LiquidityPool {
@@ -64,6 +67,8 @@ export interface LiquidityPool {
   strength: number;
   datetime: string;
   swept: boolean;
+  sweptAtIndex?: number;
+  rejectionConfirmed?: boolean;
 }
 
 export interface BreakerBlock {
@@ -601,67 +606,55 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   const choch: StructureBreak[] = [];
   const sweeps: LiquiditySweep[] = [];
 
-  // ── Process swing highs: check for bullish BOS/CHoCH or bearish sweeps ──
+  // ── Process all swing breaks chronologically to properly track trend transitions ──
+  // Merge highs and lows by their candle index so we process them in time order.
+  // This ensures currentTrend correctly reflects the full sequence of structural events.
+  type SwingEvent = { swingType: "high" | "low"; prevLevel: number; index: number };
+  const events: SwingEvent[] = [];
   for (let i = 1; i < highs.length; i++) {
-    const prevLevel = highs[i - 1].price;
-    const breakCandleIdx = highs[i].index;
-    const breakCandle = candles[breakCandleIdx];
+    events.push({ swingType: "high", prevLevel: highs[i - 1].price, index: highs[i].index });
+  }
+  for (let i = 1; i < lows.length; i++) {
+    events.push({ swingType: "low", prevLevel: lows[i - 1].price, index: lows[i].index });
+  }
+  events.sort((a, b) => a.index - b.index);
+
+  for (const evt of events) {
+    const breakCandle = candles[evt.index];
     if (!breakCandle) continue;
 
-    if (breakCandle.high > prevLevel) {
-      // Price exceeded the previous swing high — but HOW?
-      const closedThrough = breakCandle.close > prevLevel;
-
+    if (evt.swingType === "high" && breakCandle.high > evt.prevLevel) {
+      const closedThrough = breakCandle.close > evt.prevLevel;
       if (closedThrough) {
-        // REAL BOS/CHoCH: candle body closed above the previous swing high
         const entry: StructureBreak = {
-          index: breakCandleIdx, type: "bullish", price: breakCandle.high,
-          datetime: breakCandle.datetime, closeBased: true, level: prevLevel,
+          index: evt.index, type: "bullish", price: breakCandle.high,
+          datetime: breakCandle.datetime, closeBased: true, level: evt.prevLevel,
         };
         if (currentTrend === "bearish") choch.push(entry);
         else bos.push(entry);
         currentTrend = "bullish";
       } else {
-        // LIQUIDITY SWEEP: wick went above but close stayed below
-        // This is a bearish signal — smart money swept buy-side liquidity
         sweeps.push({
-          index: breakCandleIdx, type: "bearish",
+          index: evt.index, type: "bearish",
           price: breakCandle.high, datetime: breakCandle.datetime,
-          sweptLevel: prevLevel, wickDepth: breakCandle.high - prevLevel,
+          sweptLevel: evt.prevLevel, wickDepth: breakCandle.high - evt.prevLevel,
         });
-        // Do NOT update currentTrend — sweep is not a structural shift
       }
-    }
-  }
-
-  // ── Process swing lows: check for bearish BOS/CHoCH or bullish sweeps ──
-  // Reset trend tracking for lows pass (we'll reconcile below)
-  let lowTrend: "bullish" | "bearish" | "ranging" = currentTrend;
-  for (let i = 1; i < lows.length; i++) {
-    const prevLevel = lows[i - 1].price;
-    const breakCandleIdx = lows[i].index;
-    const breakCandle = candles[breakCandleIdx];
-    if (!breakCandle) continue;
-
-    if (breakCandle.low < prevLevel) {
-      const closedThrough = breakCandle.close < prevLevel;
-
+    } else if (evt.swingType === "low" && breakCandle.low < evt.prevLevel) {
+      const closedThrough = breakCandle.close < evt.prevLevel;
       if (closedThrough) {
-        // REAL BOS/CHoCH: candle body closed below the previous swing low
         const entry: StructureBreak = {
-          index: breakCandleIdx, type: "bearish", price: breakCandle.low,
-          datetime: breakCandle.datetime, closeBased: true, level: prevLevel,
+          index: evt.index, type: "bearish", price: breakCandle.low,
+          datetime: breakCandle.datetime, closeBased: true, level: evt.prevLevel,
         };
-        if (lowTrend === "bullish") choch.push(entry);
+        if (currentTrend === "bullish") choch.push(entry);
         else bos.push(entry);
-        lowTrend = "bearish";
+        currentTrend = "bearish";
       } else {
-        // LIQUIDITY SWEEP: wick went below but close stayed above
-        // This is a bullish signal — smart money swept sell-side liquidity
         sweeps.push({
-          index: breakCandleIdx, type: "bullish",
+          index: evt.index, type: "bullish",
           price: breakCandle.low, datetime: breakCandle.datetime,
-          sweptLevel: prevLevel, wickDepth: prevLevel - breakCandle.low,
+          sweptLevel: evt.prevLevel, wickDepth: evt.prevLevel - breakCandle.low,
         });
       }
     }
@@ -732,15 +725,37 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
   const recencyStart = Math.max(2, candles.length - OB_RECENCY);
   const candidates: (OrderBlock & { quality: number })[] = [];
 
+  // Pre-compute ATR for displacement detection within OB context
+  const atrPeriod = Math.min(14, candles.length - 1);
+  let avgRange = 0;
+  if (candles.length > atrPeriod) {
+    const atrSlice = candles.slice(candles.length - atrPeriod - 20, candles.length - 1);
+    avgRange = atrSlice.reduce((s, c) => s + (c.high - c.low), 0) / atrSlice.length;
+  }
+
   for (let i = recencyStart; i < candles.length; i++) {
     const prev = candles[i - 1], curr = candles[i];
+    // Bullish OB: bearish candle followed by bullish candle that closes above prev high
     if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
       const obHigh = Math.max(prev.open, prev.close);
       const obLow = Math.min(prev.open, prev.close);
       const ob: OrderBlock & { quality: number } = {
         index: i - 1, high: obHigh, low: obLow, type: "bullish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0,
+        hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
       };
+      // Check for displacement: the engulfing candle (curr) or next 2 candles must be a large-body move
+      // Displacement = body > 1.5x avg range AND body ratio > 60%
+      for (let d = i; d < Math.min(i + 3, candles.length); d++) {
+        const dc = candles[d];
+        const dcBody = Math.abs(dc.close - dc.open);
+        const dcRange = dc.high - dc.low;
+        if (dcRange > 0 && avgRange > 0 && dcBody / dcRange >= 0.6 && dcRange >= avgRange * 1.5 && dc.close > dc.open) {
+          ob.hasDisplacement = true;
+          break;
+        }
+      }
+      // Mitigation check
       for (let j = i + 1; j < candles.length; j++) {
         const mid = (ob.high + ob.low) / 2;
         if (candles[j].low <= mid) {
@@ -749,20 +764,35 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
           break;
         }
       }
+      // Quality scoring: structure break nearby = +2, displacement = +2, recency bonus
       if (structureBreaks && structureBreaks.length > 0) {
         const hasBreak = structureBreaks.some(b => b.type === "bullish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD);
         if (hasBreak) ob.quality += 2;
       } else { ob.quality += 1; }
-      ob.quality += (ob.index - recencyStart) / OB_RECENCY;
+      if (ob.hasDisplacement) ob.quality += 2;
+      ob.quality += (ob.index - recencyStart) / OB_RECENCY; // recency bonus
       candidates.push(ob);
     }
+    // Bearish OB: bullish candle followed by bearish candle that closes below prev low
     if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
       const obHigh = Math.max(prev.open, prev.close);
       const obLow = Math.min(prev.open, prev.close);
       const ob: OrderBlock & { quality: number } = {
         index: i - 1, high: obHigh, low: obLow, type: "bearish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0, quality: 0,
+        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0,
+        hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
       };
+      // Check for displacement: bearish large-body move away from OB
+      for (let d = i; d < Math.min(i + 3, candles.length); d++) {
+        const dc = candles[d];
+        const dcBody = Math.abs(dc.close - dc.open);
+        const dcRange = dc.high - dc.low;
+        if (dcRange > 0 && avgRange > 0 && dcBody / dcRange >= 0.6 && dcRange >= avgRange * 1.5 && dc.close < dc.open) {
+          ob.hasDisplacement = true;
+          break;
+        }
+      }
+      // Mitigation check
       for (let j = i + 1; j < candles.length; j++) {
         const mid = (ob.high + ob.low) / 2;
         if (candles[j].high >= mid) {
@@ -771,10 +801,12 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
           break;
         }
       }
+      // Quality scoring
       if (structureBreaks && structureBreaks.length > 0) {
         const hasBreak = structureBreaks.some(b => b.type === "bearish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD);
         if (hasBreak) ob.quality += 2;
       } else { ob.quality += 1; }
+      if (ob.hasDisplacement) ob.quality += 2;
       ob.quality += (ob.index - recencyStart) / OB_RECENCY;
       candidates.push(ob);
     }
@@ -785,13 +817,19 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
 
 export function detectFVGs(candles: Candle[]): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
-  for (let i = 2; i < candles.length; i++) {
+  // Only look at recent candles (last 50) to avoid stale FVGs from hours ago
+  const FVG_RECENCY = 50;
+  const startIdx = Math.max(2, candles.length - FVG_RECENCY);
+  for (let i = startIdx; i < candles.length; i++) {
     const c1 = candles[i - 2], c2 = candles[i - 1], c3 = candles[i];
+    // Bullish FVG: gap up — candle 3 low > candle 1 high, middle candle is bullish
     if (c3.low > c1.high && c2.close > c2.open) {
       const fvg: FairValueGap = { index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime, mitigated: false };
+      // Check if FVG has been filled (price returned into the gap)
       for (let j = i + 1; j < candles.length; j++) { if (candles[j].low <= fvg.low) { fvg.mitigated = true; break; } }
       fvgs.push(fvg);
     }
+    // Bearish FVG: gap down — candle 1 low > candle 3 high, middle candle is bearish
     if (c1.low > c3.high && c2.close < c2.open) {
       const fvg: FairValueGap = { index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime, mitigated: false };
       for (let j = i + 1; j < candles.length; j++) { if (candles[j].high >= fvg.high) { fvg.mitigated = true; break; } }
@@ -808,6 +846,7 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
   const last = candles[candles.length - 1];
   const usedH = new Set<number>(), usedL = new Set<number>();
 
+  // Buy-side liquidity (equal highs)
   for (let i = 0; i < candles.length; i++) {
     if (usedH.has(i)) continue;
     let count = 1;
@@ -815,8 +854,30 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       if (usedH.has(j)) continue;
       if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
     }
-    if (count >= minTouches) pools.push({ price: candles[i].high, type: "buy-side", strength: count, datetime: candles[i].datetime, swept: last.high > candles[i].high });
+    if (count >= minTouches) {
+      const poolPrice = candles[i].high;
+      let swept = false;
+      let sweptAtIndex: number | undefined;
+      let rejectionConfirmed = false;
+      // Find the FIRST candle that swept above this pool level
+      for (let k = i + 1; k < candles.length; k++) {
+        if (candles[k].high > poolPrice) {
+          swept = true;
+          sweptAtIndex = k;
+          // Rejection = wick above but close below the pool level
+          if (candles[k].close < poolPrice) {
+            rejectionConfirmed = true;
+          }
+          break;
+        }
+      }
+      // Recency filter: only include pools from the last 80 candles
+      if (i >= candles.length - 80 || swept) {
+        pools.push({ price: poolPrice, type: "buy-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed });
+      }
+    }
   }
+  // Sell-side liquidity (equal lows)
   for (let i = 0; i < candles.length; i++) {
     if (usedL.has(i)) continue;
     let count = 1;
@@ -824,7 +885,25 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       if (usedL.has(j)) continue;
       if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
     }
-    if (count >= minTouches) pools.push({ price: candles[i].low, type: "sell-side", strength: count, datetime: candles[i].datetime, swept: last.low < candles[i].low });
+    if (count >= minTouches) {
+      const poolPrice = candles[i].low;
+      let swept = false;
+      let sweptAtIndex: number | undefined;
+      let rejectionConfirmed = false;
+      for (let k = i + 1; k < candles.length; k++) {
+        if (candles[k].low < poolPrice) {
+          swept = true;
+          sweptAtIndex = k;
+          if (candles[k].close > poolPrice) {
+            rejectionConfirmed = true;
+          }
+          break;
+        }
+      }
+      if (i >= candles.length - 80 || swept) {
+        pools.push({ price: poolPrice, type: "sell-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed });
+      }
+    }
   }
   return pools.sort((a, b) => b.strength - a.strength);
 }
@@ -870,8 +949,12 @@ export function tagDisplacementQuality(
   displacementCandles: DisplacementCandle[],
 ) {
   for (const ob of orderBlocks) {
+    // Tag displacement from the displacement candle detector (supplements OB's own check)
     const hasNearby = displacementCandles.some(d => d.index > ob.index && d.index <= ob.index + 3);
-    (ob as any).hasDisplacement = hasNearby;
+    if (hasNearby) ob.hasDisplacement = true; // Don't overwrite if already true from OB detection
+    // Tag FVG adjacency: an OB with a nearby FVG in the same direction is higher quality
+    const hasFVG = fvgs.some(f => f.type === ob.type && Math.abs(f.index - ob.index) <= 3 && !f.mitigated);
+    ob.hasFVGAdjacency = hasFVG;
   }
   for (const fvg of fvgs) {
     const createdByDisp = displacementCandles.some(d => d.index === fvg.index);
@@ -972,25 +1055,76 @@ export function detectSMTDivergence(symbol: string, candles: Candle[], correlate
   return { detected: false, type: null, correlatedPair: corrPair, detail: `No swing-point SMT divergence vs ${corrPair}` };
 }
 
-export function detectJudasSwing(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
+export function detectJudasSwing(candles: Candle[], atMs?: number): { detected: boolean; type: "bullish" | "bearish" | null; confirmed: boolean; description: string } {
   const none = { detected: false, type: null as any, confirmed: false, description: "No Judas Swing" };
   if (candles.length < 20) return none;
-  const recent = candles.slice(-20);
-  const midnightOpen = recent[0].open;
-  const range = Math.max(...recent.map(c => c.high)) - Math.min(...recent.map(c => c.low));
-  const firstHalf = recent.slice(0, 10);
-  const currentClose = recent[recent.length - 1].close;
 
-  const firstHalfLow = Math.min(...firstHalf.map(c => c.low));
-  const dropBelow = midnightOpen - firstHalfLow;
-  if (dropBelow > range * 0.3 && currentClose > midnightOpen) {
-    return { detected: true, type: "bullish", confirmed: true, description: `Bullish Judas: false break below ${midnightOpen.toFixed(5)}, reversed above` };
+  // Find the actual NY midnight (00:00 ET) candle by scanning timestamps
+  let midnightIdx = -1;
+  let midnightOpen = 0;
+  for (let i = candles.length - 1; i >= Math.max(0, candles.length - 100); i--) {
+    const c = candles[i];
+    const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
+    const ny = toNYTime(utc);
+    // NY midnight = hour 0, minute 0 (or the first candle of the 00:00 hour)
+    if (ny.h === 0 && ny.m < 15) {
+      midnightIdx = i;
+      midnightOpen = c.open;
+      break;
+    }
   }
 
-  const firstHalfHigh = Math.max(...firstHalf.map(c => c.high));
-  const spikeAbove = firstHalfHigh - midnightOpen;
-  if (spikeAbove > range * 0.3 && currentClose < midnightOpen) {
-    return { detected: true, type: "bearish", confirmed: true, description: `Bearish Judas: false break above ${midnightOpen.toFixed(5)}, reversed below` };
+  // Fallback: if no midnight candle found, use the candle closest to Asian session start (20:00 NY)
+  if (midnightIdx < 0) {
+    for (let i = candles.length - 1; i >= Math.max(0, candles.length - 100); i--) {
+      const c = candles[i];
+      const utc = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z");
+      const ny = toNYTime(utc);
+      if (ny.h === 20 && ny.m < 15) {
+        midnightIdx = i;
+        midnightOpen = c.open;
+        break;
+      }
+    }
+  }
+
+  if (midnightIdx < 0) return none; // Can't find reference point
+
+  // Get candles from midnight to now
+  const postMidnight = candles.slice(midnightIdx);
+  if (postMidnight.length < 5) return none;
+
+  // Split into early session (first 40% = manipulation phase) and current
+  const splitIdx = Math.max(3, Math.floor(postMidnight.length * 0.4));
+  const earlyCandles = postMidnight.slice(0, splitIdx);
+  const currentClose = postMidnight[postMidnight.length - 1].close;
+  const totalRange = Math.max(...postMidnight.map(c => c.high)) - Math.min(...postMidnight.map(c => c.low));
+  if (totalRange === 0) return none;
+
+  const earlyLow = Math.min(...earlyCandles.map(c => c.low));
+  const earlyHigh = Math.max(...earlyCandles.map(c => c.high));
+
+  // Bullish Judas: early session drops below midnight open (liquidity sweep below), then reverses up
+  const dropBelow = midnightOpen - earlyLow;
+  if (dropBelow > totalRange * 0.25 && currentClose > midnightOpen) {
+    // Confirm: check if the sweep candle had a rejection wick (close back above midnight)
+    const sweepCandle = earlyCandles.find(c => c.low === earlyLow);
+    const hasRejection = sweepCandle ? sweepCandle.close > midnightOpen : false;
+    return {
+      detected: true, type: "bullish", confirmed: hasRejection,
+      description: `Bullish Judas: false break below midnight ${midnightOpen.toFixed(5)} (low ${earlyLow.toFixed(5)}), reversed to ${currentClose.toFixed(5)}${hasRejection ? " with rejection" : ""}`
+    };
+  }
+
+  // Bearish Judas: early session spikes above midnight open (liquidity sweep above), then reverses down
+  const spikeAbove = earlyHigh - midnightOpen;
+  if (spikeAbove > totalRange * 0.25 && currentClose < midnightOpen) {
+    const sweepCandle = earlyCandles.find(c => c.high === earlyHigh);
+    const hasRejection = sweepCandle ? sweepCandle.close < midnightOpen : false;
+    return {
+      detected: true, type: "bearish", confirmed: hasRejection,
+      description: `Bearish Judas: false break above midnight ${midnightOpen.toFixed(5)} (high ${earlyHigh.toFixed(5)}), reversed to ${currentClose.toFixed(5)}${hasRejection ? " with rejection" : ""}`
+    };
   }
 
   return none;
