@@ -390,12 +390,13 @@ export default function BotView() {
                       <th className="text-center py-1 px-1 w-6">#</th>
                       <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
                       <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
+                      <th className="text-right py-1 px-1">Pips</th>
                       <th className="text-right py-1 px-1">P&L</th>
                       <th className="text-right py-1 px-1">R</th>
                       <th className="text-center py-1 px-1">BE</th>
+                      <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
                       <th className="text-center py-1 px-1">Trail</th>
                       <th className="text-center py-1 px-1">Hold</th>
-                      <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
                       <th className="py-1 px-1"></th>
                     </tr></thead>
                     <tbody>
@@ -435,6 +436,7 @@ export default function BotView() {
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                             <td className="py-1.5 px-1 text-right">{entry.toFixed(5)}</td>
                             <td className="py-1.5 px-1 text-right">{current.toFixed(5)}</td>
+                            <td className={`py-1.5 px-1 text-right font-medium ${profitPips >= 0 ? "text-success" : "text-destructive"}`}>{profitPips >= 0 ? "+" : ""}{profitPips.toFixed(1)}</td>
                             <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
                             <td className={`py-1.5 px-1 text-right font-bold ${rMult >= 0 ? "text-success" : "text-destructive"}`}>{rMult >= 0 ? "+" : ""}{rMult.toFixed(1)}R</td>
                             <td className="py-1.5 px-1 text-center text-[10px]">
@@ -442,6 +444,8 @@ export default function BotView() {
                                 : beFired ? <span className="text-success" title="Break-even active">✅</span>
                                 : <span className="text-muted-foreground" title={`Triggers at ${beActivationR.toFixed(1)}R`}>⏳{beActivationR.toFixed(1)}R</span>}
                             </td>
+                            <td className="py-1.5 px-1 text-right">{sl !== null ? sl.toFixed(5) : "—"}</td>
+                            <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
                             <td className="py-1.5 px-1 text-center text-[10px]">
                               {!trailEnabled ? <span className="text-muted-foreground">—</span>
                                 : trailFired ? <span className={trailLevel ? "text-cyan-400" : "text-success"} title={trailLevel ? `Trail at ${trailLevel.toFixed(5)}` : "Trailing active"}>{trailLevel ? `🟢${trailLevel.toFixed(inst?.pipSize === 0.01 ? 3 : 5)}` : "🟢"}</span>
@@ -450,8 +454,6 @@ export default function BotView() {
                             <td className={`py-1.5 px-1 text-center text-[10px] ${holdEnabled ? (holdPct >= 0.9 ? "text-destructive" : holdPct >= 0.75 ? "text-yellow-500" : "text-muted-foreground") : "text-muted-foreground"}`}>
                               {!holdEnabled ? "Off" : `${holdHours.toFixed(1)}h/${ef.maxHoldHours}h`}
                             </td>
-                            <td className="py-1.5 px-1 text-right">{sl !== null ? sl.toFixed(5) : "—"}</td>
-                            <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
                                 onClick={() => {
@@ -465,7 +467,7 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={13} className="border-b border-border p-2">
+                              <td colSpan={14} className="border-b border-border p-2">
                                 <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                               </td>
                             </tr>
