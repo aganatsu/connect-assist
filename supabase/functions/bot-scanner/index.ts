@@ -89,6 +89,7 @@ const DEFAULTS = {
   newsFilterEnabled: true,
   newsFilterPauseMinutes: 30,
   // ── Entry behaviour ──
+  scanIntervalMinutes: 15, // how often to scan (cron runs every 5m, but skips if interval not elapsed)
   cooldownMinutes: 0,
   closeOnReverse: false,
   // ── Exit toggles ──
@@ -2007,6 +2008,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
 
     // ── Entry mappings ──
+    scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes,
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
     slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? DEFAULTS.slBufferPips,
@@ -2467,7 +2469,7 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       // Run in the background so the HTTP request returns immediately
       // (full scans can exceed the 150s edge-function idle timeout).
-      const scanPromise = runScanForUser(adminClient, userId).catch((e) => {
+      const scanPromise = runScanForUser(adminClient, userId, { isManualScan: true }).catch((e) => {
         console.error("[manual_scan] background error", e);
       });
       // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
@@ -2504,7 +2506,7 @@ Deno.serve(async (req) => {
   }
 });
 
-async function runScanForUser(supabase: any, userId: string) {
+async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
@@ -2530,6 +2532,30 @@ async function runScanForUser(supabase: any, userId: string) {
   let account: any = null;
   try {
   const config = await loadConfig(supabase, userId);
+
+  // ── Scan Interval Gate ──
+  // Skip this scan if not enough time has elapsed since the last scan.
+  // Manual scans (passed via context) always bypass this gate.
+  const intervalMinutes = config.scanIntervalMinutes || 15;
+  if (!opts?.isManualScan) {
+    const { data: lastScan } = await supabase
+      .from("scan_logs")
+      .select("created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastScan?.created_at) {
+      const elapsedMs = Date.now() - new Date(lastScan.created_at).getTime();
+      const elapsedMin = elapsedMs / 60_000;
+      if (elapsedMin < intervalMinutes) {
+        console.log(`[scan-interval] Skipping — only ${elapsedMin.toFixed(1)}min since last scan (interval: ${intervalMinutes}min)`);
+        // Release the scan lock before returning
+        await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+        return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `interval (${Math.ceil(intervalMinutes - elapsedMin)}min remaining)`, scanCycleId };
+      }
+    }
+  }
 
   // ── Resolve Trading Style ──
   const resolvedStyle = config.tradingStyle?.mode || "day_trader";

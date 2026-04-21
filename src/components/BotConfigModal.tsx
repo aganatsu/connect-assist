@@ -600,10 +600,26 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 {effectiveActiveTab === "strategy" && (
                   <div className="space-y-5">
                     <SectionHeader title="Strategy Settings" description="Configure how the bot identifies trade setups" />
-                    <FieldGroup label="Auto Scan Interval" description="Scan frequency is controlled by the server cron — this UI control is informational only">
-                      <div className="text-xs text-muted-foreground italic px-1">
-                        Scans run automatically on the server schedule. Manual scans always run on demand.
+                    <FieldGroup label="Auto Scan Interval" description="How often the bot scans for new setups. Manual scans always run on demand regardless of this setting.">
+                      <div className="flex items-center gap-4">
+                        <select
+                          value={config.entry?.scanIntervalMinutes ?? 15}
+                          onChange={e => updateField('entry', 'scanIntervalMinutes', Number(e.target.value))}
+                          className="flex-1 h-9 rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                        >
+                          <option value={5}>Every 5 minutes</option>
+                          <option value={10}>Every 10 minutes</option>
+                          <option value={15}>Every 15 minutes (default)</option>
+                          <option value={20}>Every 20 minutes</option>
+                          <option value={30}>Every 30 minutes</option>
+                          <option value={45}>Every 45 minutes</option>
+                          <option value={60}>Every 1 hour</option>
+                        </select>
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.entry?.scanIntervalMinutes ?? 15}m</span>
                       </div>
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        Server cron runs every 5 min. If interval hasn't elapsed since last scan, the cron cycle is skipped.
+                      </p>
                     </FieldGroup>
                     <FieldGroup label="Confluence Threshold" description="Minimum weighted score (1-10) required to consider a trade setup valid">
                       <div className="flex items-center gap-4">
