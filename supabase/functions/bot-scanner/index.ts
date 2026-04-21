@@ -123,7 +123,7 @@ const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   orderBlock: 2.0,
   fairValueGap: 2.0,
   premiumDiscountFib: 2.0,
-  sessionKillZone: 1.0,
+  sessionQuality: 1.5,  // Collapsed from Kill Zone + Silver Bullet + Macro
   judasSwing: 0.5,
   pdPwLevels: 1.0,
   reversalCandle: 0.5,
@@ -131,8 +131,7 @@ const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   displacement: 1.0,
   breakerBlock: 1.0,
   unicornModel: 1.5,
-  silverBullet: 1.0,
-  macroWindow: 1.0,
+  // silverBullet and macroWindow removed — absorbed into sessionQuality
   smtDivergence: 1.0,
   volumeProfile: 1.5,
   amdPhase: 1.0,
@@ -861,18 +860,43 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Premium/Discount & Fib", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
-  // ── Factor 5: Kill Zone (max 1.0, +0.5 combo bonus if Silver Bullet overlap) ──
-  // ICT: Kill zones are a timing filter — base 1.0 pts.
+  // ── Factor 5: Session Quality (max 1.5) ──
+  // Collapsed from Kill Zone + Silver Bullet + Macro into a single tiered factor.
+  // Tier 1 (1.5): SB + KZ + Macro | Tier 2 (1.25): SB + KZ | Tier 3 (1.0): KZ + Macro
+  // Tier 4 (0.75): KZ only | Tier 5 (0.5): Macro only | Tier 6 (0.25): active session | Tier 7 (0): nothing
   const silverBullet = detectSilverBullet();
+  const macroWindow = detectMacroWindow();
   {
-    let pts = session.isKillZone ? 1.0 : 0;
-    let detail = session.isKillZone ? `${session.name} Kill Zone — HIGH PROBABILITY window` : `${session.name} session — not in kill zone`;
-    if (session.isKillZone && silverBullet.active && config.useSilverBullet !== false) {
-      pts += 0.5;
-      detail += ` + ${silverBullet.window} overlap (combo bonus)`;
+    const inKZ = session.isKillZone;
+    const inSB = silverBullet.active && config.useSilverBullet !== false;
+    const inMacro = macroWindow.active && config.useMacroWindows !== false;
+    let pts = 0;
+    let tier = "";
+    let detail = "";
+    if (inKZ && inSB && inMacro) {
+      pts = 1.5; tier = "Tier 1 — Perfect";
+      detail = `${session.name} Kill Zone + ${silverBullet.window} + ${macroWindow.window} — all timing windows aligned`;
+    } else if (inKZ && inSB) {
+      pts = 1.25; tier = "Tier 2 — Excellent";
+      detail = `${session.name} Kill Zone + ${silverBullet.window} — strong timing confluence`;
+    } else if (inKZ && inMacro) {
+      pts = 1.0; tier = "Tier 3 — Good";
+      detail = `${session.name} Kill Zone + ${macroWindow.window} — good timing overlap`;
+    } else if (inKZ) {
+      pts = 0.75; tier = "Tier 4 — Acceptable";
+      detail = `${session.name} Kill Zone — standard high-probability window`;
+    } else if (inMacro) {
+      pts = 0.5; tier = "Tier 5 — Marginal";
+      detail = `${macroWindow.window} active (${macroWindow.minutesRemaining}min left) — macro reprice window only`;
+    } else if (session.name && session.name !== "Off-Hours") {
+      pts = 0.25; tier = "Tier 6 — Low";
+      detail = `${session.name} session active — no special timing window`;
+    } else {
+      pts = 0; tier = "Tier 7 — None";
+      detail = "Outside active trading sessions — no timing edge";
     }
-    { const s = applyWeightScale(pts, "sessionKillZone", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Session/Kill Zone", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
+    { const s = applyWeightScale(pts, "sessionQuality", 1.5, config); pts = s.pts; score += pts;
+    factors.push({ name: "Session Quality", present: pts > 0, weight: s.displayWeight, detail: `[${tier}] ${detail}`, group: "Timing" }); }
   }
 
   // ── Factor 6: Judas Swing (max 0.75) ──
@@ -1208,38 +1232,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Unicorn Model", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
   }
 
-  // ── Factor 13: Silver Bullet Window (max 1.0) ──
-  {
-    let pts = 0;
-    let detail = "Outside Silver Bullet macro window";
-    if (config.useSilverBullet === false) {
-      detail = "Silver Bullet disabled";
-    } else if (silverBullet.active) {
-      pts = 1.0;
-      detail = `${silverBullet.window} active — ${silverBullet.minutesRemaining}min remaining (ICT macro window)`;
-    }
-    { const s = applyWeightScale(pts, "silverBullet", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Silver Bullet", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
-  }
-
-  // ── Factor 14: ICT Macro Window (max 1.0; 0.5 base + 0.5 combo with Silver Bullet) ──
-  const macroWindow = detectMacroWindow();
-  {
-    let pts = 0;
-    let detail = "Outside ICT macro reprice window";
-    if (config.useMacroWindows === false) {
-      detail = "Macro Windows disabled";
-    } else if (macroWindow.active) {
-      pts = 0.5;
-      detail = `${macroWindow.window} active — ${macroWindow.minutesRemaining}min remaining`;
-      if (silverBullet.active && config.useSilverBullet !== false) {
-        pts += 0.5;
-        detail += ` + ${silverBullet.window} overlap (combo bonus)`;
-      }
-    }
-    { const s = applyWeightScale(pts, "macroWindow", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Macro Window", present: pts > 0, weight: s.displayWeight, detail, group: "Timing" }); }
-  }
+  // ── Factors 13 & 14 (Silver Bullet + Macro) absorbed into Factor 5 Session Quality ──
+  // silverBullet and macroWindow variables are declared at Factor 5 and remain available
+  // for the return object and Power of 3 combo check.
 
   // ── Factor 15: SMT Divergence (max 1.0) ──
   // Reads precomputed SMT result injected by scan loop via config._smtResult.
@@ -1475,19 +1470,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
     }
 
-    // Rule 4: Silver Bullet fires → absorbs Kill Zone (not additive)
-    const sb = findFactor("Silver Bullet");
-    const kz = findFactor("Session/Kill Zone");
-    if (sb && sb.present && kz && kz.present) {
-      score -= kz.weight;
-      kz.weight = 0;
-      kz.detail += " [zeroed: absorbed by Silver Bullet]";
-      // Boost SB to 1.5 to absorb the timing value
-      const sbBoost = 0.5;
-      sb.weight = Math.min(1.5, sb.weight + sbBoost);
-      score += sbBoost;
-      sb.detail += " [boosted: absorbed Kill Zone timing]";
-    }
+    // Rule 4 & 6 removed: Kill Zone / Silver Bullet / Macro are now a single Session Quality factor.
 
     // Rule 5: AMD distribution + sweep → absorbs Judas
     const amdFactor = findFactor("AMD Phase");
@@ -1499,12 +1482,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       judas.detail += " [zeroed: absorbed by AMD + Sweep sequence]";
     }
 
-    // Rule 6: Macro during Kill Zone → Macro reduced to 0.25
-    const macro = findFactor("Macro Window");
-    if (macro && macro.present && kz && kz.present && kz.weight > 0) {
-      // Only reduce if Kill Zone wasn't already zeroed by SB
-      adjustFactor("Macro Window", 0.25, "Kill Zone already scoring timing");
-    }
+    // Rule 6 removed: Macro absorbed into Session Quality.
   }
 
   // ─── Power of 3 Combo Bonus (+1.0) ─────────────────────────────────────────
