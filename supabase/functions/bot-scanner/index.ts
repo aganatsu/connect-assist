@@ -1598,6 +1598,52 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
+  // ─── Spread Quality Factor ─────────────────────────────────────────────────
+  // Compares the instrument's typical spread against its ATR to determine
+  // execution quality. A wide spread relative to ATR means more of the move
+  // is eaten by spread cost, reducing edge. This is a penalty-only factor:
+  // good spread = 0 (no penalty), bad spread = negative score adjustment.
+  // The live spread gate at execution time remains as a hard block.
+  {
+    const spreadSymbol = config._currentSymbol || "EUR/USD";
+    const spreadSpec = SPECS[spreadSymbol] || SPECS["EUR/USD"];
+    const typicalSpreadPrice = (spreadSpec.typicalSpread ?? 1) * spreadSpec.pipSize;
+    const spreadATR = calculateATR(candles, 14);
+    let spreadPts = 0;
+    let spreadDetail = "";
+    if (spreadATR > 0) {
+      const spreadToATR = typicalSpreadPrice / spreadATR;
+      // Tiers based on spread-to-ATR ratio:
+      // < 5%  → excellent execution, no penalty
+      // 5-10% → acceptable, minor penalty (-0.2)
+      // 10-20% → mediocre, moderate penalty (-0.5)
+      // > 20% → poor execution quality, heavy penalty (-1.0)
+      if (spreadToATR < 0.05) {
+        spreadPts = 0;
+        spreadDetail = `Excellent: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
+      } else if (spreadToATR < 0.10) {
+        spreadPts = -0.2;
+        spreadDetail = `Acceptable: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -0.2 penalty`;
+      } else if (spreadToATR < 0.20) {
+        spreadPts = -0.5;
+        spreadDetail = `Mediocre: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -0.5 penalty`;
+      } else {
+        spreadPts = -1.0;
+        spreadDetail = `Poor: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -1.0 penalty`;
+      }
+    } else {
+      spreadDetail = "ATR unavailable — no spread quality assessment";
+    }
+    if (spreadPts !== 0) score += spreadPts;
+    factors.push({
+      name: "Spread Quality",
+      present: spreadPts < 0,
+      weight: spreadPts,
+      detail: spreadDetail,
+      group: "Macro Confirmation",
+    });
+  }
+
   // Preserve raw score before clamping (useful for debugging and comparing signal quality)
   const rawScore = Math.round(score * 100) / 100;
   score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
