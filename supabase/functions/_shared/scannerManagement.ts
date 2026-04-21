@@ -406,36 +406,34 @@ export async function manageOpenPositions(
         : 1.0;  // Default: activate BE at 1R
       if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
         const profitPipsAbs = Math.abs(profitPips);
-        if (true) { // R-based trigger already validated above
-          const beSL = pos.direction === "long"
-            ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
-            : entryPrice - (spec.pipSize * 1);
-          const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
-          if (shouldMove) {
-            const attribution = makeAttribution(
-              "be_enabled",
-              `Break-even activated at ${rMultiple.toFixed(2)}R / ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${beActivationR.toFixed(2)}R) — SL moved to ${beSL.toFixed(5)}`,
-            );
-            updatedFlags.breakEvenActivated = true;
-            exitFlagsUpdated = true;
+        const beSL = pos.direction === "long"
+          ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
+          : entryPrice - (spec.pipSize * 1);
+        const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
+        if (shouldMove) {
+          const attribution = makeAttribution(
+            "be_enabled",
+            `Break-even activated at ${rMultiple.toFixed(2)}R / ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${beActivationR.toFixed(2)}R) — SL moved to ${beSL.toFixed(5)}`,
+          );
+          updatedFlags.breakEvenActivated = true;
+          exitFlagsUpdated = true;
 
-            const updatedSignal = {
-              ...signalData,
-              exitFlags: updatedFlags,
-              exitAttribution: [...(signalData.exitAttribution || []), attribution],
-            };
-            await supabase.from("paper_positions").update({
-              stop_loss: beSL.toString(),
-              signal_reason: JSON.stringify(updatedSignal),
-            }).eq("id", pos.id);
+          const updatedSignal = {
+            ...signalData,
+            exitFlags: updatedFlags,
+            exitAttribution: [...(signalData.exitAttribution || []), attribution],
+          };
+          await supabase.from("paper_positions").update({
+            stop_loss: beSL.toString(),
+            signal_reason: JSON.stringify(updatedSignal),
+          }).eq("id", pos.id);
 
-            actions.push({
-              positionId: pos.position_id, symbol, action: "be_enabled",
-              reason: attribution.detail, newSL: beSL, attribution,
-            });
-            console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}`);
-            continue;
-          }
+          actions.push({
+            positionId: pos.position_id, symbol, action: "be_enabled",
+            reason: attribution.detail, newSL: beSL, attribution,
+          });
+          console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}`);
+          continue;
         }
       }
 
@@ -566,8 +564,12 @@ export async function manageOpenPositions(
       }
 
       // ── 5. STRUCTURE INVALIDATION CHECK ──
-      // If the trade is underwater but not yet at SL, check if structure broke against it
-      if (rMultiple < 0 && rMultiple > -0.8) {
+      // If the trade is underwater but not yet at SL, check if structure broke against it.
+      // ONE-SHOT: only fires once per position to prevent progressive squeeze.
+      // Without this guard, repeated CHoCH detections would halve the SL distance
+      // every scan cycle, squeezing it to near-zero and guaranteeing a stop-out.
+      const structureInvalidationAlreadyFired = exitFlags.structureInvalidationFired === true;
+      if (!structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
         try {
           const checkCandles = await fetchCandlesFn(symbol, "15m", "2d").catch(() => [] as Candle[]);
           if (checkCandles.length >= 20) {
@@ -596,9 +598,13 @@ export async function manageOpenPositions(
               // Only tighten (never widen)
               const shouldTighten = pos.direction === "long" ? newSL > sl : newSL < sl;
               if (shouldTighten) {
+                // Mark as fired so this only happens once per position
+                updatedFlags.structureInvalidationFired = true;
+                exitFlagsUpdated = true;
+
                 const attribution = makeAttribution(
                   "structure_invalidated",
-                  `CHoCH against ${pos.direction} detected (${chochAgainst.length} events) — structure now ${currentStructure.trend} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)}`,
+                  `CHoCH against ${pos.direction} detected (${chochAgainst.length} events) — structure now ${currentStructure.trend} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)} (one-shot, won't repeat)`,
                   {
                     trend: currentStructure.trend,
                     chochCount: chochAgainst.length,
@@ -609,7 +615,7 @@ export async function manageOpenPositions(
                   exitFlags: updatedFlags,
                   invalidationHistory: [
                     ...(signalData.invalidationHistory || []),
-                    { at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: "CHoCH against trade direction" },
+                    { at: new Date().toISOString(), rMultiple: rMultiple.toFixed(2), reason: "CHoCH against trade direction (one-shot)" },
                   ],
                   exitAttribution: [...(signalData.exitAttribution || []), attribution],
                 };

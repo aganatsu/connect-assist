@@ -833,56 +833,123 @@ Deno.serve(async (req) => {
           }
 
           // Break even: move SL to entry if price moved enough in profit
-          if (!closeReason && exitFlags.breakEven && exitFlags.breakEvenPips > 0 && sl !== null) {
+          // Supports both new fields (breakEvenEnabled/breakEvenActivated) and legacy (breakEven boolean).
+          // New positions: scannerManagement handles R-based activation and sets breakEvenActivated.
+          // Legacy positions: this code handles the old fixed-pip trigger as fallback.
+          const beEnabled = exitFlags.breakEvenEnabled ?? exitFlags.breakEven ?? false;
+          const beAlreadyActivated = exitFlags.breakEvenActivated === true;
+          if (!closeReason && beEnabled && !beAlreadyActivated && exitFlags.breakEvenPips > 0 && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const profitPips = pos.direction === "long"
               ? (currentPrice - entryPrice) / spec.pipSize
               : (entryPrice - currentPrice) / spec.pipSize;
-            if (profitPips >= exitFlags.breakEvenPips) {
-              // Move SL to entry (break even)
-              const newSL = entryPrice;
+            // R-based trigger (same logic as scannerManagement): at least 1R, or pip equivalent
+            const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
+            const beActivationR = riskPips > 0 ? Math.max(1.0, exitFlags.breakEvenPips / riskPips) : 1.0;
+            const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
+            if (rMultiple >= beActivationR) {
+              // Move SL to entry + 1 pip (same as scannerManagement)
+              const newSL = pos.direction === "long"
+                ? entryPrice + spec.pipSize
+                : entryPrice - spec.pipSize;
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-                await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "be" }).eq("id", pos.id);
-                sl = newSL; // Update local reference
-                pos.close_reason = "be"; // keep local in sync for trail check below
-                // FIX 1: Sync break-even SL to broker
+                // Update exitFlags to mark activation (so scannerManagement won't re-fire)
+                const updatedExitFlags = { ...exitFlags, breakEvenActivated: true };
+                const updatedSignalReason = { ...JSON.parse(pos.signal_reason || "{}"), exitFlags: updatedExitFlags };
+                await supabase.from("paper_positions").update({
+                  stop_loss: newSL.toString(), close_reason: "be",
+                  signal_reason: JSON.stringify(updatedSignalReason),
+                }).eq("id", pos.id);
+                sl = newSL;
+                pos.close_reason = "be";
+                exitFlags.breakEvenActivated = true; // keep local in sync
                 const beModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
-                console.log(`Break-even broker SL sync [${pos.position_id}]: ${beModifyResults.join("; ")}`);
+                console.log(`Break-even activated [${pos.position_id}] at ${rMultiple.toFixed(2)}R: SL→${newSL} | broker: ${beModifyResults.join("; ")}`);
               }
             }
           }
 
           // Trailing stop: move SL to lock in profit as price moves favorably
-          if (!closeReason && exitFlags.trailingStop && exitFlags.trailingStopPips > 0 && sl !== null) {
+          // Supports both new fields (trailingStopEnabled/trailingStopActivated) and legacy (trailingStop boolean).
+          // For new positions, scannerManagement sets trailingStopActivated on first activation.
+          // This engine then handles the fast-tick ratcheting (every ~30s vs scanner's 5-15 min).
+          // For legacy positions, falls back to the old pip-based activation.
+          const trailEnabled = exitFlags.trailingStopEnabled ?? exitFlags.trailingStop ?? false;
+          const trailAlreadyActivated = exitFlags.trailingStopActivated === true;
+          if (!closeReason && trailEnabled && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const profitPips = pos.direction === "long"
               ? (currentPrice - entryPrice) / spec.pipSize
               : (entryPrice - currentPrice) / spec.pipSize;
-            // Determine activation threshold
-            const activationPips = exitFlags.trailingStopActivation === "after_1r" && exitFlags.tpRatio
-              ? Math.abs(entryPrice - sl) / spec.pipSize  // 1R in pips
-              : exitFlags.trailingStopPips * 2;           // default: activate after 2x trailing distance
-            if (profitPips >= activationPips) {
-              // Trail SL behind current price by trailingStopPips
-              const trailDistance = exitFlags.trailingStopPips * spec.pipSize;
+            const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
+
+            if (trailAlreadyActivated) {
+              // ── FAST RATCHET: Trail is already active, just tighten ──
+              // Use the proportional trail distance stored by scannerManagement,
+              // or fall back to max(configPips, 0.5 x riskPips)
+              const effectiveTrailPips = exitFlags.trailingStopPips
+                ? Math.max(exitFlags.trailingStopPips, riskPips * 0.5)
+                : riskPips * 0.5;
+              const trailDistance = effectiveTrailPips * spec.pipSize;
               const newSL = pos.direction === "long"
                 ? currentPrice - trailDistance
                 : currentPrice + trailDistance;
-              // Only move SL in favorable direction (never widen it)
+              // Only ratchet forward (never widen)
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
                 await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
-                sl = newSL; // Update local reference for SL check above
+                sl = newSL;
                 pos.close_reason = "trail";
-                // FIX 1: Sync trailing SL to broker
                 const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
-                console.log(`Trailing stop broker SL sync [${pos.position_id}]: ${trailModifyResults.join("; ")}`);
+                console.log(`Trail ratchet [${pos.position_id}]: SL→${newSL.toFixed(5)} (${effectiveTrailPips.toFixed(1)}p behind) | broker: ${trailModifyResults.join("; ")}`);
+              }
+            } else if (exitFlags.trailingStopPips > 0) {
+              // ── LEGACY ACTIVATION: Old positions without *Activated field ──
+              // Use R-based activation matching scannerManagement logic
+              const activationR = exitFlags.trailingStopActivation === "after_0.5r" ? 0.5
+                : exitFlags.trailingStopActivation === "after_1r" ? 1.0
+                : exitFlags.trailingStopActivation === "after_1.5r" ? 1.5
+                : exitFlags.trailingStopActivation === "after_2r" ? 2.0
+                : exitFlags.trailingStopActivation === "immediate" ? 0.0
+                : 1.0;
+              const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
+              // Check if partial TP should block trailing (same logic as scannerManagement)
+              const partialTPBlocksTrailing = (exitFlags.partialTPEnabled ?? exitFlags.partialTP ?? false)
+                && !(exitFlags.partialTPActivated === true || pos.partial_tp_fired);
+              if (rMultiple >= activationR && !partialTPBlocksTrailing) {
+                const proportionalTrailPips = Math.max(exitFlags.trailingStopPips, riskPips * 0.5);
+                const trailDistance = proportionalTrailPips * spec.pipSize;
+                const newSL = pos.direction === "long"
+                  ? currentPrice - trailDistance
+                  : currentPrice + trailDistance;
+                if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+                  // Mark as activated so future cycles use the fast ratchet path
+                  const updatedExitFlags = {
+                    ...exitFlags,
+                    trailingStopActivated: true,
+                    trailingStopLevel: newSL,
+                    trailingStopPips: Math.round(proportionalTrailPips * 10) / 10,
+                  };
+                  const updatedSignalReason = { ...JSON.parse(pos.signal_reason || "{}"), exitFlags: updatedExitFlags };
+                  await supabase.from("paper_positions").update({
+                    stop_loss: newSL.toString(), close_reason: "trail",
+                    signal_reason: JSON.stringify(updatedSignalReason),
+                  }).eq("id", pos.id);
+                  sl = newSL;
+                  pos.close_reason = "trail";
+                  Object.assign(exitFlags, updatedExitFlags); // keep local in sync
+                  const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
+                  console.log(`Trail activated [${pos.position_id}] at ${rMultiple.toFixed(2)}R: SL→${newSL.toFixed(5)} (${proportionalTrailPips.toFixed(1)}p) | broker: ${trailModifyResults.join("; ")}`);
+                }
               }
             }
           }
 
           // Partial take profit: close a portion of the position at first TP level
           // Guard: only fire once per position using partial_tp_fired flag (fixes runaway loop)
-          if (!closeReason && exitFlags.partialTP && exitFlags.partialTPPercent > 0 && exitFlags.partialTPLevel > 0 && tp !== null && sl !== null && !pos.partial_tp_fired) {
+          // Supports both new fields (partialTPEnabled/partialTPActivated) and legacy (partialTP boolean).
+          const partialEnabled = exitFlags.partialTPEnabled ?? exitFlags.partialTP ?? false;
+          const partialAlreadyActivated = exitFlags.partialTPActivated === true || pos.partial_tp_fired;
+          if (!closeReason && partialEnabled && !partialAlreadyActivated && exitFlags.partialTPPercent > 0 && exitFlags.partialTPLevel > 0 && tp !== null && sl !== null) {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const profitPips = pos.direction === "long"
               ? (currentPrice - entryPrice) / spec.pipSize
@@ -904,11 +971,15 @@ Deno.serve(async (req) => {
                 signal_score: pos.signal_score, order_id: pos.order_id,
                 stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
               });
-              // Update position size and set fired flag, then update balance
+              // Update position size, set fired flag + partialTPActivated in exitFlags
+              const updatedExitFlagsPartial = { ...exitFlags, partialTPActivated: true };
+              const updatedSignalReasonPartial = { ...JSON.parse(pos.signal_reason || "{}"), exitFlags: updatedExitFlagsPartial };
               await supabase.from("paper_positions").update({
                 size: remainSize.toString(),
                 partial_tp_fired: true,
+                signal_reason: JSON.stringify(updatedSignalReasonPartial),
               }).eq("id", pos.id);
+              exitFlags.partialTPActivated = true; // keep local in sync (unblocks trailing)
               // Determine which bot's account to update based on position's bot_id
               const posBotId = pos.bot_id || "smc";
               const acctQuery = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
