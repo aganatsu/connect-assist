@@ -2465,8 +2465,17 @@ Deno.serve(async (req) => {
 
     if (action === "manual_scan") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const result = await runScanForUser(adminClient, userId);
-      return respond(result);
+      // Run in the background so the HTTP request returns immediately
+      // (full scans can exceed the 150s edge-function idle timeout).
+      const scanPromise = runScanForUser(adminClient, userId).catch((e) => {
+        console.error("[manual_scan] background error", e);
+      });
+      // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(scanPromise);
+      }
+      return respond({ started: true, message: "Scan started in background" });
     }
 
      if (action === "scan" || action === "cron") {
