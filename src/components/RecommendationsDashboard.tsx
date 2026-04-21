@@ -540,7 +540,8 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     "Fair Value Gap": "fairValueGap",
     "Premium/Discount & Fib": "premiumDiscountFib",
     "Premium/Discount": "premiumDiscountFib",
-    "Session/Kill Zone": "sessionKillZone",
+    "Session Quality": "sessionQuality",
+    "Session/Kill Zone": "sessionQuality",  // legacy alias
     "Judas Swing": "judasSwing",
     "PD/PW Levels": "pdPwLevels",
     "Reversal Candle": "reversalCandle",
@@ -548,8 +549,9 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     "Displacement": "displacement",
     "Breaker Block": "breakerBlock",
     "Unicorn Model": "unicornModel",
-    "Silver Bullet": "silverBullet",
-    "Macro Window": "macroWindow",
+    "Silver Bullet": "sessionQuality",  // legacy alias — absorbed into Session Quality
+    "Macro Window": "sessionQuality",  // legacy alias — absorbed into Session Quality
+    "Spread Quality": "spreadQuality",
     "SMT Divergence": "smtDivergence",
     "Volume Profile": "volumeProfile",
     "AMD Phase": "amdPhase",

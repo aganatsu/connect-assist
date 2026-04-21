@@ -124,10 +124,10 @@ const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   fairValueGap: 2.0,
   premiumDiscountFib: 2.0,
   sessionQuality: 1.5,  // Collapsed from Kill Zone + Silver Bullet + Macro
-  judasSwing: 0.5,
+  judasSwing: 0.75,  // Increased: NY midnight-anchored + liquidity sweep confirmation
   pdPwLevels: 1.0,
   reversalCandle: 0.5,
-  liquiditySweep: 1.0,
+  liquiditySweep: 1.5,  // Increased: recency filter + rejection confirmation
   displacement: 1.0,
   breakerBlock: 1.0,
   unicornModel: 1.5,

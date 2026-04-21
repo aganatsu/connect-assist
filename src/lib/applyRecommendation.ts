@@ -47,8 +47,9 @@ function setPath(root: Json, path: string, value: any): Json {
 const FACTOR_TOGGLE_MAP: Record<string, string> = {
   "Breaker Block": "useBreakerBlocks",
   "Unicorn Model": "useUnicornModel",
-  "Silver Bullet": "useSilverBullet",
-  "Session/Kill Zone": "useKillZones",
+  "Session Quality": "useKillZones",  // Session Quality controls the kill zone toggle
+  "Session/Kill Zone": "useKillZones",  // legacy alias
+  "Silver Bullet": "useKillZones",  // legacy alias — absorbed into Session Quality
   "Judas Swing": "useJudasSwing",
   "AMD Phase": "useAMDPhase",
   "Reversal Candle": "useReversalCandle",
@@ -79,12 +80,17 @@ function resolveConfigPath(key: string): string | null {
   const WEIGHT_KEY_MAP: Record<string, string> = {
     "Market Structure": "marketStructure", "Order Block": "orderBlock",
     "Fair Value Gap": "fairValueGap", "Premium/Discount & Fib": "premiumDiscountFib",
-    "Premium/Discount": "premiumDiscountFib", "Session/Kill Zone": "sessionKillZone",
+    "Premium/Discount": "premiumDiscountFib",
+    "Session Quality": "sessionQuality",
+    "Session/Kill Zone": "sessionQuality",  // legacy alias
     "Judas Swing": "judasSwing", "PD/PW Levels": "pdPwLevels",
     "Reversal Candle": "reversalCandle", "Liquidity Sweep": "liquiditySweep",
     "Displacement": "displacement", "Breaker Block": "breakerBlock",
-    "Unicorn Model": "unicornModel", "Silver Bullet": "silverBullet",
-    "Macro Window": "macroWindow", "SMT Divergence": "smtDivergence",
+    "Unicorn Model": "unicornModel",
+    "Silver Bullet": "sessionQuality",  // legacy alias
+    "Macro Window": "sessionQuality",  // legacy alias
+    "Spread Quality": "spreadQuality",
+    "SMT Divergence": "smtDivergence",
     "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
     "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
     "Daily Bias": "dailyBias",

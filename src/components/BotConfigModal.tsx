@@ -33,8 +33,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Displacement Detection", keywords: ["displacement", "candle"] },
   { tab: "strategy", label: "Breaker Blocks", keywords: ["breaker", "flip", "failed ob"] },
   { tab: "strategy", label: "Unicorn Model", keywords: ["unicorn", "breaker", "fvg overlap"] },
-  { tab: "strategy", label: "Silver Bullet Windows", keywords: ["silver bullet", "ict", "window", "macro"] },
-  { tab: "strategy", label: "ICT Macro Windows", keywords: ["macro", "ict", "reprice"] },
+  { tab: "strategy", label: "Session Quality", keywords: ["session", "kill zone", "silver bullet", "macro", "timing", "ict"] },
   { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
   { tab: "strategy", label: "Volume Profile", keywords: ["volume", "profile", "poc", "hvn", "lvn", "tpo", "value area"] },
   { tab: "strategy", label: "Trend Direction", keywords: ["trend", "direction", "entry", "timeframe", "higher highs", "lower lows"] },
@@ -96,6 +95,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "protection", label: "Equity Circuit Breaker (%)", keywords: ["circuit breaker", "equity", "emergency", "stop"] },
   // Factor Weights
   { tab: "factorWeights", label: "Factor Weights", keywords: ["factor", "weight", "weights", "importance", "scoring", "tune", "ai", "advisor"] },
+  { tab: "factorWeights", label: "Spread Quality", keywords: ["spread", "quality", "penalty", "atr", "execution"] },
   // Opening Range
   { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
   { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
@@ -1336,18 +1336,17 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; gr
   { key: "unicornModel", name: "Unicorn Model", defaultWeight: 1.5, group: "Order Flow Zones", description: "Breaker + FVG overlap" },
   { key: "premiumDiscountFib", name: "Premium/Discount & Fib", defaultWeight: 2.0, group: "Premium/Discount", description: "Fibonacci OTE zones" },
   { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, group: "Premium/Discount", description: "Previous day/week levels" },
-  { key: "sessionKillZone", name: "Session/Kill Zone", defaultWeight: 1.0, group: "Timing", description: "Kill zone timing filter" },
-  { key: "silverBullet", name: "Silver Bullet", defaultWeight: 1.0, group: "Timing", description: "ICT macro windows" },
-  { key: "macroWindow", name: "Macro Window", defaultWeight: 1.0, group: "Timing", description: "Institutional reprice windows" },
-  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.5, group: "Price Action", description: "Fake breakout confirmation" },
+  { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, group: "Timing", description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
+  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, group: "Price Action", description: "NY midnight-anchored fake breakout + liquidity sweep" },
   { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 0.5, group: "Price Action", description: "Reversal at key levels" },
-  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.0, group: "Price Action", description: "Liquidity pool sweeps" },
+  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.5, group: "Price Action", description: "Liquidity pool sweeps with rejection confirmation" },
   { key: "displacement", name: "Displacement", defaultWeight: 1.0, group: "Price Action", description: "Strong institutional candles" },
   { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, group: "AMD / Power of 3", description: "Accumulation→Manipulation→Distribution" },
   { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, group: "Macro Confirmation", description: "Correlated pair divergence" },
   { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, group: "Macro Confirmation", description: "FOTSI alignment" },
   { key: "volumeProfile", name: "Volume Profile", defaultWeight: 1.5, group: "Volume Profile", description: "TPO-based POC/HVN/LVN" },
   { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.5, group: "Daily Bias", description: "HTF daily trend alignment" },
+  { key: "spreadQuality", name: "Spread Quality", defaultWeight: 0, group: "Execution Quality", description: "Penalty based on spread-to-ATR ratio (not weight-scalable)" },
 ];
 
 const FACTOR_GROUPS = [...new Set(FACTOR_WEIGHT_DEFS.map(f => f.group))];
@@ -1398,6 +1397,19 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
           <div key={group} className="border border-border p-4 space-y-3">
             <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{group}</p>
             {groupFactors.map(factor => {
+              // Spread Quality is a penalty-only factor — show info, no slider
+              if (factor.key === "spreadQuality") {
+                return (
+                  <div key={factor.key} className="space-y-1 p-2 -mx-2 opacity-70">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{factor.name}</span>
+                      <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">penalty only</Badge>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">{factor.description}</p>
+                    <p className="text-[10px] text-muted-foreground italic">Applies -0.2 to -1.0 penalty when spread exceeds 5% of ATR. Not adjustable via weights — controlled by the spread-to-ATR ratio of each instrument.</p>
+                  </div>
+                );
+              }
               const currentValue = fw[factor.key] ?? factor.defaultWeight;
               const isOverridden = fw[factor.key] !== undefined;
               const maxSlider = Math.max(factor.defaultWeight * 2, 3);
