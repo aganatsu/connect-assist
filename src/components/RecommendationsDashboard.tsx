@@ -793,15 +793,23 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     },
   });
 
-  // Clear all reviews
+  // Clear all reviews — delete each row by ID (RLS may block bulk delete by bot_id)
   const clearAllMutation = useMutation({
     mutationFn: async () => {
-      const mappedBotId = botId === "fotsi" ? "fotsi_mr" : "smc";
+      if (!recommendations || recommendations.length === 0) return;
+      const ids = recommendations.map(r => r.id);
+      // Try bulk delete by IDs first
       const { error } = await supabase
         .from("bot_recommendations")
         .delete()
-        .eq("bot_id", mappedBotId);
-      if (error) throw error;
+        .in("id", ids);
+      if (error) {
+        // Fallback: delete one by one
+        console.warn("Bulk delete failed, trying one by one:", error.message);
+        for (const id of ids) {
+          await supabase.from("bot_recommendations").delete().eq("id", id);
+        }
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
