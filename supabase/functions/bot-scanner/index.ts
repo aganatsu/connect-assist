@@ -2589,6 +2589,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       .from("scan_logs")
       .select("created_at")
       .eq("user_id", userId)
+      .eq("bot_id", BOT_ID)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -3538,6 +3539,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Log the scan
   await supabase.from("scan_logs").insert({
     user_id: userId,
+    bot_id: BOT_ID,
     pairs_scanned: config.instruments.length,
     signals_found: signalsFound,
     trades_placed: tradesPlaced,

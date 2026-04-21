@@ -739,18 +739,14 @@ async function runScan(
   if (!manualScan && config.scanIntervalMinutes > 0) {
     const { data: lastLog } = await supabase
       .from("scan_logs")
-      .select("scanned_at, details_json")
+      .select("scanned_at")
       .eq("user_id", userId)
+      .eq("bot_id", BOT_ID)
       .order("scanned_at", { ascending: false })
-      .limit(20);
-    const lastBot2 = (lastLog || []).find((l: any) => {
-      try {
-        const dj = typeof l.details_json === "string" ? JSON.parse(l.details_json) : l.details_json;
-        return dj?.bot === BOT_ID || dj?.botId === BOT_ID;
-      } catch { return false; }
-    });
-    if (lastBot2?.scanned_at) {
-      const elapsedMin = (now.getTime() - new Date(lastBot2.scanned_at).getTime()) / 60000;
+      .limit(1)
+      .maybeSingle();
+    if (lastLog?.scanned_at) {
+      const elapsedMin = (now.getTime() - new Date(lastLog.scanned_at).getTime()) / 60000;
       if (elapsedMin < config.scanIntervalMinutes) {
         log(`Auto-scan throttled: ${elapsedMin.toFixed(1)}min since last scan < ${config.scanIntervalMinutes}min interval`);
         await saveScanLog(supabase, userId, scanId, startTime, logs, 0, 0, 0, { skipReason: "interval_throttle", elapsedMin });
@@ -1258,6 +1254,7 @@ async function saveScanLog(
 
   const { error } = await supabase.from("scan_logs").insert({
     user_id: userId,
+    bot_id: BOT_ID,
     pairs_scanned: pairsFetched,
     signals_found: signals,
     trades_placed: trades,
