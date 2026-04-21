@@ -793,6 +793,24 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
     },
   });
 
+  // Clear all reviews
+  const clearAllMutation = useMutation({
+    mutationFn: async () => {
+      const mappedBotId = botId === "fotsi" ? "fotsi_mr" : "smc";
+      const { error } = await supabase
+        .from("bot_recommendations")
+        .delete()
+        .eq("bot_id", mappedBotId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bot-recommendations"] });
+      toast.success("All advisor history cleared.");
+    },
+    onError: (err: any) => {
+      toast.error(`Failed to clear: ${err.message}`);
+    },
+  });
   // Trigger manual review
   const triggerReviewMutation = useMutation({
     mutationFn: async (reviewType: "daily" | "weekly") => {
@@ -898,6 +916,26 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
             )}
             Run Weekly Review
           </Button>
+          {(recommendations?.length ?? 0) > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 text-[10px] px-2 text-muted-foreground hover:text-destructive"
+              onClick={() => {
+                if (window.confirm("Clear all advisor reviews and history?")) {
+                  clearAllMutation.mutate();
+                }
+              }}
+              disabled={clearAllMutation.isPending}
+            >
+              {clearAllMutation.isPending ? (
+                <Clock className="w-3 h-3 mr-1 animate-spin" />
+              ) : (
+                <XCircle className="w-3 h-3 mr-1" />
+              )}
+              Clear
+            </Button>
+          )}
         </div>
       </div>
 
