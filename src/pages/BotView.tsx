@@ -422,8 +422,9 @@ export default function BotView() {
                         const trailFired = ef.trailingStopActivated === true;
                         const trailActivationR = ef.trailingActivationR || 1.0;
                         const trailLevel = ef.currentTrailLevel ? parseFloat(ef.currentTrailLevel) : null;
-                        // Hold time
-                        const holdEnabled = ef.maxHoldEnabled !== false && ef.maxHoldHours && ef.maxHoldHours > 0;
+                        // Hold time — live config override: if user toggled maxHold off globally, show Off
+                        const liveMaxHoldOff = botConfig?.exit?.maxHoldEnabled === false || botConfig?.exit?.timeBasedExitEnabled === false;
+                        const holdEnabled = !liveMaxHoldOff && ef.maxHoldEnabled !== false && ef.maxHoldHours && ef.maxHoldHours > 0;
                         const openMs = new Date(p.openTime).getTime();
                         const holdHours = (Date.now() - openMs) / 3600000;
                         const holdPct = holdEnabled ? holdHours / ef.maxHoldHours : 0;
