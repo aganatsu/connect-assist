@@ -1088,8 +1088,9 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
         <div className="px-1 pb-2 space-y-1.5">
           {/* Factors */}
           {d.factors && (() => {
-            const enabledFactors = d.factors.filter((f: any) => f.weight > 0 || f.name === "Power of 3 Combo");
-            const disabledFactors = d.factors.filter((f: any) => f.weight === 0 && f.name !== "Power of 3 Combo");
+            const isDisabled = (f: any) => f.weight === 0 || (typeof f.detail === "string" && /disabled/i.test(f.detail));
+            const enabledFactors = d.factors.filter((f: any) => !isDisabled(f) || f.name === "Power of 3 Combo");
+            const disabledFactors = d.factors.filter((f: any) => isDisabled(f) && f.name !== "Power of 3 Combo");
             const primaryFactors = enabledFactors.filter((f: any) => f.name !== "Power of 3 Combo");
             const primaryPresent = primaryFactors.filter((f: any) => f.present).length;
             const ratio = primaryFactors.length > 0 ? primaryPresent / primaryFactors.length : 0;
@@ -1114,14 +1115,13 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
               ))}
               {disabledFactors.length > 0 && (
                 <>
-                  <div className="border-t border-dashed border-border/40 my-1.5" />
-                  <p className="text-[8px] uppercase tracking-wider text-muted-foreground/40">Disabled ({disabledFactors.length})</p>
+                  <div className="border-t border-dashed border-border/50 my-1.5" />
+                  <p className="text-[8px] uppercase tracking-wider text-muted-foreground/60 font-medium">Disabled ({disabledFactors.length})</p>
                   {disabledFactors.map((f: any, fi: number) => (
-                    <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-30">
-                      <span className="mt-0.5 text-muted-foreground/40">—</span>
+                    <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-50">
+                      <span className="mt-0.5 text-muted-foreground/60">—</span>
                       <div>
-                        <span className="text-muted-foreground/50 line-through">{f.name}</span>
-                        <span className="text-muted-foreground/30 ml-1 text-[8px]">(weight 0)</span>
+                        <span className="text-muted-foreground/70 line-through">{f.name}</span>
                       </div>
                     </div>
                   ))}
@@ -1183,8 +1183,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Factors */}
       {d.factors && (() => {
-        const enabledFactors = d.factors.filter((f: any) => f.weight > 0 || f.name === "Power of 3 Combo");
-        const disabledFactors = d.factors.filter((f: any) => f.weight === 0 && f.name !== "Power of 3 Combo");
+        const isDisabled = (f: any) => f.weight === 0 || (typeof f.detail === "string" && /disabled/i.test(f.detail));
+        const enabledFactors = d.factors.filter((f: any) => !isDisabled(f) || f.name === "Power of 3 Combo");
+        const disabledFactors = d.factors.filter((f: any) => isDisabled(f) && f.name !== "Power of 3 Combo");
         const primaryFactors = enabledFactors.filter((f: any) => f.name !== "Power of 3 Combo");
         const primaryPresent = primaryFactors.filter((f: any) => f.present).length;
         const ratio = primaryFactors.length > 0 ? primaryPresent / primaryFactors.length : 0;
@@ -1209,14 +1210,13 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           ))}
           {disabledFactors.length > 0 && (
             <>
-              <div className="border-t border-dashed border-border/40 my-1.5" />
-              <p className="text-[8px] uppercase tracking-wider text-muted-foreground/40">Disabled ({disabledFactors.length})</p>
+              <div className="border-t border-dashed border-border/50 my-1.5" />
+              <p className="text-[8px] uppercase tracking-wider text-muted-foreground/60 font-medium">Disabled ({disabledFactors.length})</p>
               {disabledFactors.map((f: any, fi: number) => (
-                <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-30">
-                  <span className="mt-0.5 text-muted-foreground/40">—</span>
+                <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-50">
+                  <span className="mt-0.5 text-muted-foreground/60">—</span>
                   <div>
-                    <span className="text-muted-foreground/50 line-through">{f.name}</span>
-                    <span className="text-muted-foreground/30 ml-1 text-[8px]">(weight 0)</span>
+                    <span className="text-muted-foreground/70 line-through">{f.name}</span>
                   </div>
                 </div>
               ))}

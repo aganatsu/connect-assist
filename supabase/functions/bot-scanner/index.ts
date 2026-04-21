@@ -1151,6 +1151,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "trendDirection", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Trend Direction", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
+  } else {
+    factors.push({ name: "Trend Direction", present: false, weight: 0, detail: "Trend Direction disabled", group: "Market Structure" });
   }
 
   // ── Factor 10: Displacement (max 1.0) ──
@@ -1334,6 +1336,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "volumeProfile", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
+  } else {
+    factors.push({ name: "Volume Profile", present: false, weight: 0, detail: "Volume Profile disabled", group: "Volume Profile" });
   }
 
   // Retain VWAP calculation for backward compatibility (not scored)
@@ -1374,7 +1378,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let pts = 0;
     let detail = "";
     const fotsi = config._fotsiResult as FOTSIResult | null;
-    if (fotsi && direction && config.useFOTSI !== false) {
+    if (config.useFOTSI === false) {
+      detail = "Currency Strength disabled";
+    } else if (fotsi && direction) {
       const currencies = parsePairCurrencies(config._currentSymbol || "");
       if (currencies) {
         const [base, quote] = currencies;
@@ -1425,6 +1431,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
+  } else {
+    factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
   }
 
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
