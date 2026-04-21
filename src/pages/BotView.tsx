@@ -388,6 +388,7 @@ export default function BotView() {
                   <table className="w-full text-[11px] font-mono">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                       <th className="text-center py-1 px-1 w-6">#</th>
+                      <th className="text-left py-1 px-1">Opened</th>
                       <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
                       <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
                       <th className="text-right py-1 px-1">Pips</th>
@@ -433,6 +434,7 @@ export default function BotView() {
                           <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
                             <td className="py-1.5 px-1 text-center text-muted-foreground text-[10px]">{idx + 1}</td>
+                            <td className="py-1.5 px-1 text-muted-foreground text-[10px] whitespace-nowrap">{new Date(p.openTime).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" })} {new Date(p.openTime).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</td>
                             <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                             <td className="py-1.5 px-1 text-right">{entry.toFixed(5)}</td>
@@ -468,7 +470,7 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={14} className="border-b border-border p-2">
+                              <td colSpan={15} className="border-b border-border p-2">
                                 <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                               </td>
                             </tr>
