@@ -264,7 +264,10 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
       ? parsed.factorScores
       : null;
 
-  const groupedFactors = factorScores ? buildGroupedFactors(factorScores) : null;
+  // Separate enabled (weight > 0) from disabled (weight === 0) factors
+  const enabledScores = factorScores ? factorScores.filter(f => f.weight > 0 || f.name === "Power of 3 Combo") : null;
+  const disabledScores = factorScores ? factorScores.filter(f => f.weight === 0 && f.name !== "Power of 3 Combo") : [];
+  const groupedFactors = enabledScores ? buildGroupedFactors(enabledScores) : null;
 
   const setupType: string | null = parsed?.setupType ?? null;
   const setupConfidence: number | null = parsed?.setupConfidence ?? null;
@@ -328,6 +331,24 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
               <GroupSection key={i} group={g} defaultOpen={g.passCount > 0} />
             ))}
           </div>
+          {disabledScores.length > 0 && (
+            <div className="mt-2">
+              <div className="border-t border-dashed border-border/30 mb-1.5" />
+              <p className="text-[8px] uppercase tracking-wider text-muted-foreground/40 mb-1">Disabled ({disabledScores.length})</p>
+              <div className="flex flex-wrap gap-1">
+                {disabledScores.map((f, i) => (
+                  <span
+                    key={`dis-${i}`}
+                    className="inline-flex items-center gap-1 rounded-full border border-border/20 px-1.5 py-0.5 text-[9px] font-mono opacity-30"
+                    title={`${f.name} — disabled (weight 0)`}
+                  >
+                    <span className="text-muted-foreground/40">—</span>
+                    <span className="truncate max-w-[120px] line-through text-muted-foreground/50">{f.name}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         /* ── LEGACY: Aligned factor chips from summary text ── */
