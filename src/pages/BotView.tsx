@@ -387,27 +387,71 @@ export default function BotView() {
                 ) : (
                   <table className="w-full text-[11px] font-mono">
                     <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
-                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Dir</th>
+                      <th className="text-center py-1 px-1 w-6">#</th>
+                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
                       <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
-                      <th className="text-right py-1 px-1">P&L</th><th className="text-right py-1 px-1">Size</th>
+                      <th className="text-right py-1 px-1">P&L</th>
+                      <th className="text-right py-1 px-1">R</th>
+                      <th className="text-center py-1 px-1">BE</th>
+                      <th className="text-center py-1 px-1">Trail</th>
+                      <th className="text-center py-1 px-1">Hold</th>
                       <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
-                      <th className="text-left py-1 px-1">Signal</th><th className="py-1 px-1"></th>
+                      <th className="py-1 px-1"></th>
                     </tr></thead>
                     <tbody>
-                      {botPositions.map((p: any, idx: number) => (
+                      {botPositions.map((p: any, idx: number) => {
+                        // Parse exitFlags for management columns
+                        let ef: any = {};
+                        try { const parsed = JSON.parse(p.signalReason || "{}"); ef = parsed.exitFlags || {}; } catch {}
+                        const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
+                        const pipSize = inst?.pipSize || 0.0001;
+                        const entry = parseFloat(p.entryPrice);
+                        const current = parseFloat(p.currentPrice);
+                        const sl = p.stopLoss ? parseFloat(p.stopLoss) : null;
+                        // R-multiple calculation
+                        const riskPips = sl !== null ? Math.abs(entry - sl) / pipSize : 0;
+                        const profitPips = p.direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;
+                        const rMult = riskPips > 0 ? profitPips / riskPips : 0;
+                        // BE status
+                        const beEnabled = ef.breakEvenEnabled ?? ef.breakEven ?? false;
+                        const beFired = ef.breakEvenActivated === true;
+                        const beActivationR = riskPips > 0 ? Math.max(1.0, (ef.breakEvenPips || 0) / riskPips) : 1.0;
+                        // Trail status
+                        const trailEnabled = ef.trailingStopEnabled ?? ef.trailingStop ?? false;
+                        const trailFired = ef.trailingStopActivated === true;
+                        const trailActivationR = ef.trailingActivationR || 1.0;
+                        const trailLevel = ef.currentTrailLevel ? parseFloat(ef.currentTrailLevel) : null;
+                        // Hold time
+                        const holdEnabled = ef.maxHoldEnabled !== false && ef.maxHoldHours && ef.maxHoldHours > 0;
+                        const openMs = new Date(p.openTime).getTime();
+                        const holdHours = (Date.now() - openMs) / 3600000;
+                        const holdPct = holdEnabled ? holdHours / ef.maxHoldHours : 0;
+                        return (
                         <React.Fragment key={p.id}>
                           <tr className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
+                            <td className="py-1.5 px-1 text-center text-muted-foreground text-[10px]">{idx + 1}</td>
                             <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
-                            <td className="py-1.5 px-1 text-[10px] text-muted-foreground">{formatBrokerTime(p.openTime)}</td>
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
-                            <td className="py-1.5 px-1 text-right">{parseFloat(p.entryPrice)?.toFixed(5)}</td>
-                            <td className="py-1.5 px-1 text-right">{parseFloat(p.currentPrice)?.toFixed(5)}</td>
+                            <td className="py-1.5 px-1 text-right">{entry.toFixed(5)}</td>
+                            <td className="py-1.5 px-1 text-right">{current.toFixed(5)}</td>
                             <td className={`py-1.5 px-1 text-right font-medium ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</td>
-                            <td className="py-1.5 px-1 text-right">{parseFloat(p.size)?.toFixed(2)}</td>
-                            <td className="py-1.5 px-1 text-right">{p.stopLoss ? parseFloat(p.stopLoss).toFixed(5) : "—"}</td>
+                            <td className={`py-1.5 px-1 text-right font-bold ${rMult >= 0 ? "text-success" : "text-destructive"}`}>{rMult >= 0 ? "+" : ""}{rMult.toFixed(1)}R</td>
+                            <td className="py-1.5 px-1 text-center text-[10px]">
+                              {!beEnabled ? <span className="text-muted-foreground">—</span>
+                                : beFired ? <span className="text-success" title="Break-even active">✅</span>
+                                : <span className="text-muted-foreground" title={`Triggers at ${beActivationR.toFixed(1)}R`}>⏳{beActivationR.toFixed(1)}R</span>}
+                            </td>
+                            <td className="py-1.5 px-1 text-center text-[10px]">
+                              {!trailEnabled ? <span className="text-muted-foreground">—</span>
+                                : trailFired ? <span className={trailLevel ? "text-cyan-400" : "text-success"} title={trailLevel ? `Trail at ${trailLevel.toFixed(5)}` : "Trailing active"}>{trailLevel ? `🟢${trailLevel.toFixed(inst?.pipSize === 0.01 ? 3 : 5)}` : "🟢"}</span>
+                                : <span className="text-muted-foreground" title={`Triggers at ${trailActivationR.toFixed(1)}R`}>⏳{trailActivationR.toFixed(1)}R</span>}
+                            </td>
+                            <td className={`py-1.5 px-1 text-center text-[10px] ${holdEnabled ? (holdPct >= 0.9 ? "text-destructive" : holdPct >= 0.75 ? "text-yellow-500" : "text-muted-foreground") : "text-muted-foreground"}`}>
+                              {!holdEnabled ? "Off" : `${holdHours.toFixed(1)}h/${ef.maxHoldHours}h`}
+                            </td>
+                            <td className="py-1.5 px-1 text-right">{sl !== null ? sl.toFixed(5) : "—"}</td>
                             <td className="py-1.5 px-1 text-right">{p.takeProfit ? parseFloat(p.takeProfit).toFixed(5) : "—"}</td>
-                            <td className="py-1.5 px-1 text-[10px] truncate max-w-[140px]"><SignalReasoningCard signalReason={p.signalReason || ""} compact /></td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
                               <button
                                 onClick={() => {
@@ -421,13 +465,14 @@ export default function BotView() {
                           </tr>
                           {expandedPosition === p.id && (
                             <tr>
-                              <td colSpan={11} className="border-b border-border p-2">
+                              <td colSpan={13} className="border-b border-border p-2">
                                 <ExpandedPositionCard position={p} onSaved={() => queryClient.invalidateQueries({ queryKey: ["paper-status"] })} />
                               </td>
                             </tr>
                           )}
                         </React.Fragment>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
