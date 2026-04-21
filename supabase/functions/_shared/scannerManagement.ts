@@ -396,12 +396,17 @@ export async function manageOpenPositions(
         }
       }
 
-      // ── 2. BREAK-EVEN ACTIVATION ──
-      // If breakEven is enabled and position has moved enough pips in profit
-      // Check *Activated field (new format) — never re-trigger once activated
-      if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple > 0) {
+      // ── 2. BREAK-EVEN ACTIVATION (R-based) ──
+      // Triggers when trade reaches a certain R-multiple, not a fixed pip count.
+      // This ensures BE activates proportionally to the trade's risk — a 40-pip SL trade
+      // won't get stopped at BE on a normal pullback the way a 20-pip fixed trigger would.
+      // breakEvenPips is now interpreted as a fallback; primary trigger is R-based.
+      const beActivationR = breakEvenPips > 0 && riskPips > 0
+        ? Math.max(1.0, breakEvenPips / riskPips)  // At least 1R, or the pip equivalent in R terms
+        : 1.0;  // Default: activate BE at 1R
+      if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
         const profitPipsAbs = Math.abs(profitPips);
-        if (profitPipsAbs >= breakEvenPips) {
+        if (true) { // R-based trigger already validated above
           const beSL = pos.direction === "long"
             ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
             : entryPrice - (spec.pipSize * 1);
@@ -409,7 +414,7 @@ export async function manageOpenPositions(
           if (shouldMove) {
             const attribution = makeAttribution(
               "be_enabled",
-              `Break-even activated at ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${breakEvenPips} pips) — SL moved to ${beSL.toFixed(5)}`,
+              `Break-even activated at ${rMultiple.toFixed(2)}R / ${profitPipsAbs.toFixed(1)} pips profit (trigger: ${beActivationR.toFixed(2)}R) — SL moved to ${beSL.toFixed(5)}`,
             );
             updatedFlags.breakEvenActivated = true;
             exitFlagsUpdated = true;
@@ -428,19 +433,23 @@ export async function manageOpenPositions(
               positionId: pos.position_id, symbol, action: "be_enabled",
               reason: attribution.detail, newSL: beSL, attribution,
             });
-            console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | +${profitPipsAbs.toFixed(1)} pips | SL→${beSL.toFixed(5)}`);
+            console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}`);
             continue;
           }
         }
       }
 
-      // ── 3. TRAILING STOP ACTIVATION + TIGHTENING ──
-      // Phase A: If trailing is enabled in config and hasn't been activated yet,
-      //          check if rMultiple has reached the activation threshold.
-      // Phase B: If trailing was already activated, ratchet the SL forward
-      //          as price moves further in profit (never move SL backwards).
+      // ── 3. TRAILING STOP ACTIVATION + TIGHTENING (R-proportional) ──
+      // Trail distance is now proportional to the SL distance (0.5× SL) instead of a fixed pip count.
+      // This ensures a 40-pip SL trade trails at 20 pips, while a 15-pip SL trade trails at 7.5 pips.
+      // If partial TP is enabled, trailing only activates AFTER partial TP has been triggered,
+      // letting the trade run freely to its first target.
       const trailingAlreadyActivated = exitFlags.trailingStopActivated === true;
-      if (trailingEnabled && !trailingAlreadyActivated) {
+      // Proportional trail distance: use config trailingPips as a minimum, but prefer 50% of SL distance
+      const proportionalTrailPips = Math.max(trailingPips, riskPips * 0.5);
+      // If partial TP is enabled, delay trailing activation until partial TP has fired
+      const partialTPBlocksTrailing = partialTPEnabled && !exitFlags.partialTPActivated;
+      if (trailingEnabled && !trailingAlreadyActivated && !partialTPBlocksTrailing) {
         // ── Phase A: First-time activation ──
         const activationR = trailingActivation === "after_1r" ? 1.0
           : trailingActivation === "after_0.5r" ? 0.5
@@ -451,11 +460,11 @@ export async function manageOpenPositions(
 
         if (rMultiple >= activationR) {
           const newTrailLevel = pos.direction === "long"
-            ? currentPrice - (trailingPips * spec.pipSize)
-            : currentPrice + (trailingPips * spec.pipSize);
+            ? currentPrice - (proportionalTrailPips * spec.pipSize)
+            : currentPrice + (proportionalTrailPips * spec.pipSize);
           updatedFlags.trailingStopActivated = true;
           updatedFlags.trailingStopLevel = newTrailLevel;
-          updatedFlags.trailingStopPips = trailingPips;
+          updatedFlags.trailingStopPips = Math.round(proportionalTrailPips * 10) / 10; // Store the actual proportional distance
           updatedFlags.trailingStopActivation = trailingActivation;
           exitFlagsUpdated = true;
 
@@ -464,7 +473,7 @@ export async function manageOpenPositions(
           if (shouldMoveSL) {
             const attribution = makeAttribution(
               "trailing_enabled",
-              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${trailingPips} pips) — SL moved to ${newTrailLevel.toFixed(5)}`,
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL moved to ${newTrailLevel.toFixed(5)}`,
             );
             const updatedSignal = {
               ...signalData,
@@ -480,12 +489,12 @@ export async function manageOpenPositions(
               positionId: pos.position_id, symbol, action: "trailing_enabled",
               reason: attribution.detail, newSL: newTrailLevel, attribution,
             });
-            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL→${newTrailLevel.toFixed(5)} (${trailingPips} pips trail)`);
+            console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL→${newTrailLevel.toFixed(5)} (${proportionalTrailPips.toFixed(1)} pips trail = 0.5× SL)`);
             continue;
           } else {
             const attribution = makeAttribution(
               "trailing_enabled",
-              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${trailingPips} pips) — SL already better, keeping ${sl.toFixed(5)}`,
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL already better, keeping ${sl.toFixed(5)}`,
             );
             actions.push({
               positionId: pos.position_id, symbol, action: "trailing_enabled",
