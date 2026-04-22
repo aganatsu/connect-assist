@@ -48,14 +48,35 @@ interface BacktestResponse {
   factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }>;
   gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>;
   dataCoverage?: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }>;
+  diagnostics?: {
+    totalCandlesEvaluated: number;
+    skippedNoYahooSymbol: number;
+    skippedInsufficientData: number;
+    skippedWeekend: number;
+    skippedSession: number;
+    skippedDay: number;
+    skippedNoDirection: number;
+    skippedBelowThreshold: number;
+    skippedGateBlocked: number;
+    skippedNoSLTP: number;
+    signalsGenerated: number;
+    tradesOpened: number;
+  };
+  config?: {
+    minConfluence: number;
+    enabledSessions: string[];
+    enabledDays: number[];
+    entryTimeframe: string;
+    scanIntervalMinutes: number;
+  };
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
 const SYMBOL_GROUPS: Record<string, string[]> = {
   "Forex Majors": ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "NZD/USD", "USD/CAD"],
   "Forex Crosses": ["EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "GBP/AUD", "EUR/NZD", "GBP/NZD", "AUD/NZD", "NZD/JPY", "CAD/JPY", "CHF/JPY", "EUR/CAD", "GBP/CAD", "AUD/CAD", "NZD/CAD", "EUR/CHF", "GBP/CHF", "AUD/CHF", "NZD/CHF", "CAD/CHF"],
-  "Indices": ["US30", "NAS100", "SPX500", "US2000"],
-  "Commodities": ["XAU/USD", "XAG/USD", "USOIL", "UKOIL"],
+  "Indices": ["US30", "NAS100", "SPX500"],
+  "Commodities": ["XAU/USD", "XAG/USD", "US Oil"],
   "Crypto": ["BTC/USD", "ETH/USD"],
 };
 const ALL_SYMBOLS = Object.values(SYMBOL_GROUPS).flat();
@@ -737,6 +758,58 @@ export default function Backtest() {
                 <p className="text-sm font-medium text-destructive">{error}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">Make sure the backtest-engine Edge Function is deployed.</p>
               </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════
+            ZERO-TRADE DIAGNOSTICS
+            ═══════════════════════════════════════════════════════════════ */}
+        {results && results.stats.totalTrades === 0 && results.diagnostics && (
+          <Card className="border-warning/50 bg-warning/5">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-warning" />
+                No Trades Generated — Diagnostic Report
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-xs text-muted-foreground">The backtest completed but produced zero trades. Here's where candles were filtered out:</p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[
+                  { label: "Candles Evaluated", value: results.diagnostics.totalCandlesEvaluated, warn: results.diagnostics.totalCandlesEvaluated === 0 },
+                  { label: "Skipped (No Data)", value: results.diagnostics.skippedInsufficientData, warn: results.diagnostics.skippedInsufficientData > 0 },
+                  { label: "Skipped (Weekend)", value: results.diagnostics.skippedWeekend, warn: false },
+                  { label: "Skipped (Session)", value: results.diagnostics.skippedSession, warn: results.diagnostics.skippedSession > 100 },
+                  { label: "Skipped (Day)", value: results.diagnostics.skippedDay, warn: results.diagnostics.skippedDay > 100 },
+                  { label: "No Direction", value: results.diagnostics.skippedNoDirection, warn: false },
+                  { label: "Below Threshold", value: results.diagnostics.skippedBelowThreshold, warn: results.diagnostics.skippedBelowThreshold > 0 && results.diagnostics.signalsGenerated === 0 },
+                  { label: "Gate Blocked", value: results.diagnostics.skippedGateBlocked, warn: results.diagnostics.skippedGateBlocked > 0 },
+                  { label: "No SL/TP", value: results.diagnostics.skippedNoSLTP, warn: results.diagnostics.skippedNoSLTP > 0 },
+                  { label: "Signals Passed", value: results.diagnostics.signalsGenerated, warn: results.diagnostics.signalsGenerated === 0 },
+                  { label: "Trades Opened", value: results.diagnostics.tradesOpened, warn: results.diagnostics.tradesOpened === 0 },
+                  { label: "No Yahoo Symbol", value: results.diagnostics.skippedNoYahooSymbol, warn: results.diagnostics.skippedNoYahooSymbol > 0 },
+                ].map(item => (
+                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+              {results.config && (
+                <div className="text-[10px] text-muted-foreground border-t border-border/30 pt-2 mt-2 space-y-0.5">
+                  <p><strong>Config used:</strong> threshold={results.config.minConfluence}%, sessions=[{results.config.enabledSessions.join(', ')}], days=[{results.config.enabledDays.join(',')}], tf={results.config.entryTimeframe}</p>
+                  {results.diagnostics.totalCandlesEvaluated === 0 && results.diagnostics.skippedSession > 0 && (
+                    <p className="text-warning font-medium">All candles were filtered by session — check that your session filter matches the data's trading hours.</p>
+                  )}
+                  {results.diagnostics.skippedInsufficientData > 0 && (
+                    <p className="text-warning font-medium">Some instruments had insufficient candle data. Yahoo only provides ~60 days of 15m data. Try a shorter date range or use 1h timeframe.</p>
+                  )}
+                  {results.diagnostics.skippedBelowThreshold > 50 && results.diagnostics.signalsGenerated === 0 && (
+                    <p className="text-warning font-medium">Many candles scored below the {results.config.minConfluence}% threshold. Try lowering the confluence threshold.</p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

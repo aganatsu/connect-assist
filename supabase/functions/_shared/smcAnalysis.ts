@@ -197,6 +197,13 @@ export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: st
   "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.5 },
   "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.0 },
   "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 4, typicalSpread: 2.5 },
+  "AUD/NZD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.5 },
+  "NZD/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 700, maxSpread: 4, typicalSpread: 2.5 },
+  "CHF/JPY": { pipSize: 0.01, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 4, typicalSpread: 2.5 },
+  "NZD/CAD": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 700, maxSpread: 4, typicalSpread: 2.5 },
+  "AUD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 800, maxSpread: 4, typicalSpread: 2.5 },
+  "NZD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 700, maxSpread: 5, typicalSpread: 3.0 },
+  "CAD/CHF": { pipSize: 0.0001, lotUnits: 100000, type: "forex", marginPerLot: 1000, maxSpread: 4, typicalSpread: 2.5 },
   // Indices — point-based spreads
   "US30": { pipSize: 1.0, lotUnits: 1, type: "index", marginPerLot: 5000, maxSpread: 3, typicalSpread: 2.0 },
   "NAS100": { pipSize: 0.25, lotUnits: 1, type: "index", marginPerLot: 3000, maxSpread: 2, typicalSpread: 1.0 },
@@ -280,7 +287,7 @@ export const DEFAULTS = {
   tpATRMultiple: 2.0,
   breakEvenEnabled: true,
   breakEvenPips: 20,
-  enabledSessions: ["London", "New York"],
+  enabledSessions: ["london", "newyork"],
   enabledDays: [1, 2, 3, 4, 5],
   instruments: [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",

@@ -514,7 +514,12 @@ function mapConfig(raw: any): any {
     partialTPPercent: exit.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? 1.0,
     maxHoldHours: exit.timeExitHours ?? 0,
-    enabledSessions: sessions.filter ?? DEFAULTS.enabledSessions,
+    enabledSessions: (Array.isArray(sessions.filter) && sessions.filter.length > 0
+      ? sessions.filter.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
+      : Array.isArray(raw?.enabledSessions)
+        ? raw.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
+        : DEFAULTS.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
+    ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     enabledDays: DEFAULTS.enabledDays,
     maxDrawdown: Math.min(risk.maxDrawdown ?? DEFAULTS.maxDrawdown, protection.circuitBreakerPct ?? 100),
@@ -1962,11 +1967,17 @@ Deno.serve(async (req) => {
     const range = monthsSpan > 12 ? "2y" : monthsSpan > 6 ? "1y" : monthsSpan > 3 ? "6mo" : "3mo";
 
     // Fetch entry TF and daily candles for each instrument
-    const entryInterval = config.entryTimeframe === "15min" ? "15m" : config.entryTimeframe === "5m" ? "5m" : config.entryTimeframe === "1h" ? "1h" : "15m";
+    // Map entryTimeframe to TwelveData/Yahoo interval format
+    // bot-config uses "15m", STYLE_OVERRIDES uses "15min", "5m", "1h"
+    const tfMap: Record<string, string> = {
+      "1m": "1m", "5m": "5m", "15m": "15m", "15min": "15m",
+      "30m": "30m", "30min": "30m", "1h": "1h", "4h": "4h",
+    };
+    const entryInterval = tfMap[config.entryTimeframe] || "15m";
     const candleData: Record<string, { entry: Candle[]; daily: Candle[]; smt?: Candle[] }> = {};
 
     for (const symbol of instruments) {
-      if (!YAHOO_SYMBOLS[symbol]) continue;
+      if (!YAHOO_SYMBOLS[symbol]) { diagnostics.skippedNoYahooSymbol++; continue; }
       const [entryCandles, dailyCandles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
@@ -2064,12 +2075,28 @@ Deno.serve(async (req) => {
     const factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }> = {};
     const gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }> = {};
 
+    // Diagnostic counters (helps debug zero-result runs)
+    const diagnostics = {
+      totalCandlesEvaluated: 0,
+      skippedNoYahooSymbol: 0,
+      skippedInsufficientData: 0,
+      skippedWeekend: 0,
+      skippedSession: 0,
+      skippedDay: 0,
+      skippedNoDirection: 0,
+      skippedBelowThreshold: 0,
+      skippedGateBlocked: 0,
+      skippedNoSLTP: 0,
+      signalsGenerated: 0,
+      tradesOpened: 0,
+    };
+
     // Minimum lookback for SMC analysis
     const LOOKBACK = 80;
     // Step size: evaluate every N candles (simulate scan frequency)
     // Dynamically set based on entry timeframe to match bot-scanner's scan interval
     const entryTF = config.entryTimeframe || "15m";
-    const tfMinutes: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 };
+    const tfMinutes: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "15min": 15, "30m": 30, "30min": 30, "1h": 60, "4h": 240, "1d": 1440 };
     const candleMinutes = tfMinutes[entryTF] || 15;
     const scanIntervalMinutes = config.scanIntervalMinutes || 15;
     const STEP = Math.max(1, Math.round(scanIntervalMinutes / candleMinutes));
@@ -2078,6 +2105,7 @@ Deno.serve(async (req) => {
       const data = candleData[symbol];
       if (!data || data.entry.length < LOOKBACK) {
         console.log(`[backtest] Skipping ${symbol}: insufficient data (${data?.entry.length || 0} candles)`);
+        diagnostics.skippedInsufficientData++;
         continue;
       }
 
@@ -2145,17 +2173,18 @@ Deno.serve(async (req) => {
         const candleDate = new Date(candleMs);
         const dow = candleDate.getUTCDay();
         const isFX = SPECS[symbol]?.type !== "crypto";
-        if (isFX && (dow === 0 || dow === 6)) continue;
+        if (isFX && (dow === 0 || dow === 6)) { diagnostics.skippedWeekend++; continue; }
 
         // Session/day filter
         const session = detectSession(candleMs);
         const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
         const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
         const assetProfile = getAssetProfile(symbol);
-        if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) continue;
+        if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) { diagnostics.skippedSession++; continue; }
 
         // Day of week filter (user-configured active days)
-        if (!config.enabledDays.includes(dow) && isFX) continue;
+        if (!config.enabledDays.includes(dow) && isFX) { diagnostics.skippedDay++; continue; }
+        diagnostics.totalCandlesEvaluated++;
 
         // Set per-instrument config
         config._currentSymbol = symbol;
@@ -2181,7 +2210,9 @@ Deno.serve(async (req) => {
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
 
         // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-        if (!analysis.direction || analysis.score < config.minConfluence) continue;
+        if (!analysis.direction) { diagnostics.skippedNoDirection++; continue; }
+        if (analysis.score < config.minConfluence) { diagnostics.skippedBelowThreshold++; continue; }
+        diagnostics.signalsGenerated++;
 
         // ── Safety Gates ──
         const gates = runBacktestSafetyGates(
@@ -2199,7 +2230,9 @@ Deno.serve(async (req) => {
           gateBreakdown[gName].blocked++;
         }
 
-        if (!allPassed || !analysis.stopLoss || !analysis.takeProfit) continue;
+        if (!allPassed) { diagnostics.skippedGateBlocked++; continue; }
+        if (!analysis.stopLoss || !analysis.takeProfit) { diagnostics.skippedNoSLTP++; continue; }
+        diagnostics.tradesOpened++;
 
         // ── Close on Reverse (apply spread cost to exit, mirrors entry) ──
         if (config.closeOnReverse) {
@@ -2338,6 +2371,7 @@ Deno.serve(async (req) => {
     const stats = calculateStats(allTrades, startingBalance, monthsSpan);
 
     console.log(`[backtest] Complete: ${allTrades.length} trades, PnL: $${stats.totalPnl.toFixed(2)}, WR: ${stats.winRate.toFixed(1)}%, PF: ${stats.profitFactor.toFixed(2)}, MaxDD: ${stats.maxDrawdownPct.toFixed(1)}%`);
+    console.log(`[backtest] Diagnostics: ${JSON.stringify(diagnostics)}`);
 
     // Build data coverage metadata
     const dataCoverage: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }> = {};
@@ -2362,6 +2396,14 @@ Deno.serve(async (req) => {
         factorBreakdown,
         gateBreakdown,
         dataCoverage,
+        diagnostics,
+        config: {
+          minConfluence: config.minConfluence,
+          enabledSessions: config.enabledSessions,
+          enabledDays: config.enabledDays,
+          entryTimeframe: config.entryTimeframe,
+          scanIntervalMinutes: config.scanIntervalMinutes,
+        },
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
