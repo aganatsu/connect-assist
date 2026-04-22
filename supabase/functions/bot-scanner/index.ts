@@ -34,7 +34,7 @@ import {
 const BOT_ID = "smc";
 // ─── Default Config (overridden by bot_configs) ─────────────────────
 const DEFAULTS = {
-  minConfluence: 5.5,
+  minConfluence: 55,  // Percentage (0-100) — must match normalizedScoring: true
   htfBiasRequired: true,
   htfBiasHardVeto: false,
   onlyBuyInDiscount: false,
@@ -293,7 +293,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1h",
     tpRatio: 1.5,
     slBufferPips: 1,
-    minConfluence: 5,
+    minConfluence: 40,  // Percentage — scalpers use lower threshold
     // Scalper management: fast BE at 0.75R, tight trailing, no partial, short hold
     // On 5m chart with ~10-15 pip SL, BE triggers at ~10 pips, trail at ~7 pips
     trailingStopEnabled: true,
@@ -310,7 +310,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1day",
     tpRatio: 2.0,
     slBufferPips: 2,
-    minConfluence: 5.5,
+    minConfluence: 55,  // Percentage — day traders use moderate threshold
     // Day trader management: partial TP at 1R, then trailing kicks in, BE at 1R
     // On 15m chart with ~20-30 pip SL, BE at ~20-30 pips, trail at ~10-15 pips
     trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
@@ -329,7 +329,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     htfTimeframe: "1w",
     tpRatio: 3.0,
     slBufferPips: 5,
-    minConfluence: 6.5,
+    minConfluence: 65,  // Percentage — swing traders require higher confluence
     // Swing management: wide breathing room, partial at 1R + 2R, trailing after 2R
     // On 1h chart with ~40-60 pip SL, BE at ~40-60 pips, trail at ~20-30 pips
     trailingStopEnabled: true,
@@ -1696,10 +1696,33 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // This prevents the "many weak signals" problem where 12 factors each score 20%.
   const rawScore = Math.round(score * 100) / 100;
 
-  // Calculate the maximum possible score from enabled weighted factors
+  // Calculate the maximum possible score from ENABLED weighted factors only.
+  // Factors disabled via toggles are excluded from the denominator so the
+  // percentage reflects "X% of what I actually turned on" — not "X% of everything".
+  const FACTOR_TOGGLE_MAP: Record<string, string> = {
+    marketStructure: "enableStructureBreak",
+    orderBlock: "enableOB",
+    fairValueGap: "enableFVG",
+    liquiditySweep: "enableLiquiditySweep",
+    displacement: "useDisplacement",
+    breakerBlock: "useBreakerBlocks",
+    unicornModel: "useUnicornModel",
+    smtDivergence: "useSMT",
+    volumeProfile: "useVolumeProfile",
+    amdPhase: "useAMD",
+    currencyStrength: "useFOTSI",
+    dailyBias: "useDailyBias",
+    // Factors without toggles (always enabled):
+    // premiumDiscountFib, sessionQuality, judasSwing, pdPwLevels, reversalCandle
+  };
   const weightedFactorKeys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
   let enabledMax = 0;
   for (const key of weightedFactorKeys) {
+    // Check if this factor has a toggle and if it's disabled
+    const toggleKey = FACTOR_TOGGLE_MAP[key];
+    if (toggleKey && (config as any)[toggleKey] === false) {
+      continue; // Skip disabled factors from the denominator
+    }
     const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
     const fw = config.factorWeights;
     const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
@@ -1708,7 +1731,11 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     enabledMax += effectiveW;
   }
   // Add fixed bonus potential: Po3 combo (1.0) + OR enhancements (up to 2.0)
-  enabledMax += 1.0;
+  // Po3 requires AMD + sweep/Judas + structure — only add if those are enabled
+  const po3Possible = (config as any).enableStructureBreak !== false
+    && (config as any).useAMD !== false
+    && (config as any).enableLiquiditySweep !== false;
+  if (po3Possible) enabledMax += 1.0;
   if (config.openingRange?.enabled) {
     enabledMax += 2.0;
   }
@@ -2049,7 +2076,15 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     ...DEFAULTS,
     // ── Strategy mappings ──
     // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
-    minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
+    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
+    minConfluence: (() => {
+      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence;
+      // If value is in legacy 0-10 range and normalizedScoring is on, scale to percentage
+      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw.normalizedScoring ?? true)) {
+        return raw_mc * 10;
+      }
+      return raw_mc;
+    })(),
     // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,

@@ -78,26 +78,29 @@ import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 
 // ─── Default Factor Weights (mirrors bot-scanner) ─────────────────────────
+// Factor weights synced with bot-scanner totals.
+// Bot-scanner uses merged "sessionQuality: 1.5" but backtest keeps separate
+// session/silverBullet/macroWindow factors (0.5 each = 1.5 total).
 const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
-  marketStructure: 2.5,
+  marketStructure: 2.5,  // Merged: BOS/CHoCH + Entry TF Trend Direction
   orderBlock: 2.0,
   fairValueGap: 2.0,
   premiumDiscountFib: 2.0,
-  sessionKillZone: 1.0,
-  judasSwing: 0.5,
+  sessionKillZone: 0.5,  // Part of session quality (0.5 + 0.5 + 0.5 = 1.5 total)
+  judasSwing: 0.75,  // NY midnight-anchored + liquidity sweep confirmation
   pdPwLevels: 1.0,
-  reversalCandle: 1.5,
-  liquiditySweep: 1.0,
+  reversalCandle: 1.5,  // Reversal candle is a primary ICT entry trigger
+  liquiditySweep: 1.5,  // Recency filter + rejection confirmation
   displacement: 1.0,
   breakerBlock: 1.0,
   unicornModel: 1.5,
-  silverBullet: 1.0,
-  macroWindow: 1.0,
+  silverBullet: 0.5,  // Part of session quality
+  macroWindow: 0.5,   // Part of session quality
   smtDivergence: 1.0,
-  volumeProfile: 0.75,
+  volumeProfile: 0.75,  // Synthetic TPO data, not real volume
   amdPhase: 1.0,
   currencyStrength: 1.5,
-  dailyBias: 1.0,
+  dailyBias: 1.0,  // HTF alignment
 };
 
 function resolveWeightScale(factorKey: string, config: any): number {
@@ -468,7 +471,14 @@ function mapConfig(raw: any): any {
 
   return {
     ...DEFAULTS,
-    minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence,
+    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
+    minConfluence: (() => {
+      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence;
+      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) {
+        return raw_mc * 10;
+      }
+      return raw_mc;
+    })(),
     // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
@@ -1457,13 +1467,39 @@ function runConfluenceAnalysis(
   }
 
   // ─── Percentage Normalization ──────────────────────────────────────
-  // Compute enabledMax from factors that have weight > 0 or are present
-  const enabledMax = factors.reduce((sum, f) => {
-    if (f.name === "Regime Alignment" || f.name === "Power of 3 Combo") return sum;
-    const w = f.weight;
-    if (w <= 0) return sum;
-    return sum + w;
-  }, 0) || 1;
+  // Compute enabledMax from ENABLED factors only (matches bot-scanner logic).
+  // Factors disabled via toggles are excluded from the denominator.
+  const FACTOR_TOGGLE_MAP: Record<string, string> = {
+    marketStructure: "enableStructureBreak",
+    orderBlock: "enableOB",
+    fairValueGap: "enableFVG",
+    liquiditySweep: "enableLiquiditySweep",
+    displacement: "useDisplacement",
+    breakerBlock: "useBreakerBlocks",
+    unicornModel: "useUnicornModel",
+    smtDivergence: "useSMT",
+    volumeProfile: "useVolumeProfile",
+    amdPhase: "useAMD",
+    currencyStrength: "useFOTSI",
+    dailyBias: "useDailyBias",
+  };
+  let enabledMax = 0;
+  for (const key of Object.keys(DEFAULT_FACTOR_WEIGHTS)) {
+    const toggleKey = FACTOR_TOGGLE_MAP[key];
+    if (toggleKey && (config as any)[toggleKey] === false) continue;
+    const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
+    const fw = config.factorWeights;
+    const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
+      ? Math.max(0, fw[key])
+      : defaultW;
+    enabledMax += effectiveW;
+  }
+  // Po3 bonus only possible if AMD + structure + sweep are all enabled
+  const po3Possible = (config as any).enableStructureBreak !== false
+    && (config as any).useAMD !== false
+    && (config as any).enableLiquiditySweep !== false;
+  if (po3Possible) enabledMax += 1.0;
+  if (!enabledMax) enabledMax = 1; // prevent division by zero
   // Compute strong factor count (factors scoring above 50% of their max weight)
   const strongFactorCount = factors.filter(f => {
     if (!f.present || f.weight <= 0) return false;
