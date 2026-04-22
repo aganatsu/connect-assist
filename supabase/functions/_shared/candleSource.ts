@@ -17,10 +17,14 @@ export interface Candle {
 }
 
 // ─── H8: TwelveData Rate Limiter ────────────────────────────────────
-// TwelveData Grow plan: 55 requests/minute. Track timestamps and throttle.
+// TwelveData Grow plan: 55 credits/minute. We use 50 as the effective
+// limit to provide a safety margin (some endpoints cost 2+ credits,
+// and the counter resets on the server side, not ours).
 const _tdRequestTimestamps: number[] = [];
-const TD_RATE_LIMIT = 55;
+const TD_RATE_LIMIT = 50;   // 50 of 55 — 5 credit safety margin
 const TD_RATE_WINDOW_MS = 60_000;
+const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Yahoo
+let _tdThrottleCount = 0;      // Track how many times we throttled this invocation
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
   const now = Date.now();
@@ -30,17 +34,26 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
   }
   if (_tdRequestTimestamps.length >= TD_RATE_LIMIT) {
     // Calculate wait time until oldest request expires
-    const waitMs = _tdRequestTimestamps[0] + TD_RATE_WINDOW_MS - now + 100; // +100ms buffer
-    if (waitMs > 10_000) {
-      // If wait is >10s, skip to Yahoo fallback instead of blocking
-      console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms, skipping to Yahoo`);
+    const waitMs = _tdRequestTimestamps[0] + TD_RATE_WINDOW_MS - now + 200; // +200ms buffer
+    if (waitMs > TD_MAX_WAIT_MS) {
+      // If wait is too long, skip to Yahoo fallback instead of blocking
+      _tdThrottleCount++;
+      console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms (>${TD_MAX_WAIT_MS}ms), skipping to Yahoo (throttle #${_tdThrottleCount})`);
       return false;
     }
-    console.log(`[candleSource] TwelveData rate limit: waiting ${waitMs}ms`);
+    _tdThrottleCount++;
+    console.log(`[candleSource] TwelveData rate limit: waiting ${waitMs}ms for slot (${_tdRequestTimestamps.length}/${TD_RATE_LIMIT} used, throttle #${_tdThrottleCount})`);
     await new Promise(r => setTimeout(r, waitMs));
   }
   _tdRequestTimestamps.push(Date.now());
   return true;
+}
+
+/** Reset throttle counter — call at start of each scan cycle for clean stats */
+export function resetThrottleStats(): { throttleCount: number } {
+  const stats = { throttleCount: _tdThrottleCount };
+  _tdThrottleCount = 0;
+  return stats;
 }
 
 // ─── M1: In-Memory Candle Cache ─────────────────────────────────────

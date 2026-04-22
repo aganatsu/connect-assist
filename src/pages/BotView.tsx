@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
-import { paperApi, scannerApi, fotsiScannerApi, fotsiConfigApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
+import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
 import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
@@ -18,8 +18,7 @@ import {
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
-import { FOTSIConfigModal } from "@/components/FOTSIConfigModal";
-import { FOTSIMeter } from "@/components/FOTSIMeter";
+
 import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
@@ -39,8 +38,7 @@ export default function BotView() {
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
   const [selectedScanIdx, setSelectedScanIdx] = useState(0);
-  const [activeBot, setActiveBot] = useState<"smc" | "fotsi">("smc");
-  const [fotsiConfigOpen, setFotsiConfigOpen] = useState(false);
+
   const [customBalanceInput, setCustomBalanceInput] = useState("");
   const [showSetBalance, setShowSetBalance] = useState(false);
 
@@ -176,33 +174,7 @@ export default function BotView() {
     onError: (err: any) => toast.error(`Scan request failed: ${err.message}`),
   });
 
-  // ── Bot #2 FOTSI queries ──
-  const { data: fotsiStatus } = useQuery({
-    queryKey: ["fotsi-status"],
-    queryFn: () => fotsiScannerApi.status(),
-    refetchInterval: 15000,
-    enabled: activeBot === "fotsi",
-  });
 
-  const { data: fotsiScanLogsData } = useQuery({
-    queryKey: ["fotsi-scan-logs"],
-    queryFn: () => fotsiScannerApi.scanLogs(),
-    refetchInterval: 30000,
-    enabled: activeBot === "fotsi",
-  });
-
-  const fotsiScanMut = useMutation({
-    mutationFn: () => fotsiScannerApi.scan(),
-    onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["fotsi-status"] });
-      queryClient.invalidateQueries({ queryKey: ["fotsi-scan-logs"] });
-      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
-      toast.success(`FOTSI Scan: ${data.signalsGenerated ?? 0} signals, ${data.tradesPlaced ?? 0} trades`);
-    },
-    onError: (err: any) => toast.error(err.message),
-  });
-
-  const fotsiLogs = fotsiScanLogsData?.logs ?? [];
 
   const orderMut = useMutation({
     mutationFn: () => paperApi.placeOrder({
@@ -237,11 +209,11 @@ export default function BotView() {
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
 
-  // Filter positions and trades by active bot tab
+  // Filter positions and trades (SMC bot only)
   const allPositions = d.positions || [];
   const allTradeHistory = d.tradeHistory || [];
-  const botPositions = allPositions.filter((p: any) => (p.botId || "smc") === activeBot);
-  const botTradeHistory = allTradeHistory.filter((t: any) => (t.botId || "smc") === activeBot);
+  const botPositions = allPositions.filter((p: any) => (p.botId || "smc") === "smc");
+  const botTradeHistory = allTradeHistory.filter((t: any) => (t.botId || "smc") === "smc");
 
   const closedToday = botTradeHistory.filter((t: any) => {
     const today = new Date().toISOString().split('T')[0];
@@ -275,31 +247,9 @@ export default function BotView() {
 
         {/* Bot Selector Tabs */}
         <div className="flex items-center gap-0 border-b border-border mb-1 overflow-x-auto">
-          <button
-            onClick={() => setActiveBot("smc")}
-            className={`px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors border-b-2 ${
-              activeBot === "smc"
-                ? "border-primary text-primary bg-primary/5"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Bot #1 — SMC Confluence
-          </button>
-          <button
-            onClick={() => setActiveBot("fotsi")}
-            className={`px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors border-b-2 ${
-              activeBot === "fotsi"
-                ? "border-primary text-primary bg-primary/5"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            Bot #2 — FOTSI Mean Reversion
-          </button>
-          {activeBot === "fotsi" && (
-            <div className="ml-3">
-              <FOTSIMeter compact />
-            </div>
-          )}
+          <span className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b-2 border-primary text-primary bg-primary/5">
+            SMC Confluence Bot
+          </span>
         </div>
 
         {/* Top Control Bar */}
@@ -321,7 +271,7 @@ export default function BotView() {
           <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
             <Plus className="h-3 w-3 mr-1" /> Order
           </Button>
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => activeBot === "fotsi" ? setFotsiConfigOpen(true) : setConfigOpen(true)}>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
             <Settings className="h-3 w-3 mr-1" /> Config
           </Button>
 
@@ -364,15 +314,9 @@ export default function BotView() {
           })()}
 
           <div className="ml-auto flex items-center gap-2 flex-wrap">
-            {activeBot === "smc" ? (
-              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
-                {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
-              </Button>
-            ) : (
-              <Button size="sm" variant="outline" className="h-7 text-[11px] border-primary/50 text-primary" onClick={() => fotsiScanMut.mutate()} disabled={fotsiScanMut.isPending}>
-                {fotsiScanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Activity className="h-3 w-3 mr-1" />} FOTSI Scan
-              </Button>
-            )}
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
+              {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
+            </Button>
             <div className="w-px h-5 bg-border" />
             <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
               if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
@@ -551,17 +495,14 @@ export default function BotView() {
                 <BrokerLog />
               </TabsContent>
               <TabsContent value="ai-advisor" className="flex-1 overflow-auto mt-1">
-                <RecommendationsDashboard botId={activeBot} />
+                <RecommendationsDashboard botId="smc" />
               </TabsContent>
             </Tabs>
           </div>
 
           {/* Right sidebar (~35%) */}
           <div className="flex-1 overflow-y-auto space-y-2 md:max-w-none">
-            {/* FOTSI Meter (only when Bot #2 is active) */}
-            {activeBot === "fotsi" && (
-              <FOTSIMeter />
-            )}
+
             {/* Account Summary */}
             {(() => {
               const positions = botPositions;
@@ -750,13 +691,13 @@ export default function BotView() {
           <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
             <div className="flex items-center justify-between mb-1 gap-2">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
-                {activeBot === "fotsi" ? "FOTSI Scan Logs" : (safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`)}
-                {activeBot === "smc" && currentScan?.scanned_at && (
+                {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
+                {currentScan?.scanned_at && (
                   <span className="ml-1 text-foreground font-mono">
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
-                {activeBot === "smc" && logs.length > 1 && (
+                {logs.length > 1 && (
                   <span className="inline-flex items-center gap-0.5 ml-1">
                     <button
                       onClick={() => { setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
@@ -779,17 +720,11 @@ export default function BotView() {
                     )}
                   </span>
                 )}
-                {activeBot === "fotsi" && fotsiLogs.length > 0 && fotsiLogs[0]?.created_at && (
-                  <span className="ml-2 text-foreground font-mono">
-                    — {formatTimeOnly(fotsiLogs[0].created_at)}
-                  </span>
-                )}
+
               </p>
               <div className="flex items-center gap-2 shrink-0">
-                {activeBot === "smc" && (
-                  <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
-                )}
-                {activeBot === "smc" && botConfig?.strategy && (
+                <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
+                {botConfig?.strategy && (
                   <Badge
                     variant="outline"
                     className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
@@ -798,24 +733,17 @@ export default function BotView() {
                     Gate: ≥{(botConfig.strategy?.confluenceThreshold ?? 55)}%
                   </Badge>
                 )}
-                {activeBot === "smc" && currentScan && (
+                {currentScan && (
                   <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
                     <DataSourceBadge source={latestSource} />
                     {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
                   </span>
                 )}
-                {activeBot === "fotsi" && fotsiLogs.length > 0 && (
-                  <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
-                    <Activity className="h-2.5 w-2.5 text-primary" />
-                    {fotsiLogs[0]?.instruments_scanned || 0} pairs · {fotsiLogs[0]?.signals_generated || 0} signals · {fotsiLogs[0]?.positions_opened || 0} trades
-                  </span>
-                )}
+
               </div>
             </div>
             <div className="flex-1 overflow-y-auto">
-              {activeBot === "smc" ? (
-                /* SMC Scan Results */
-                (() => {
+              {(() => {
                   if (latestDetailsClean.length === 0) {
                     return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
                   }
@@ -846,128 +774,21 @@ export default function BotView() {
                       })}
                     </div>
                   );
-                })()
-              ) : (
-                /* FOTSI Scan Logs */
-                (() => {
-                  if (fotsiLogs.length === 0) {
-                    return <p className="text-[10px] text-muted-foreground text-center py-8">No FOTSI scans yet — click "FOTSI Scan"</p>;
-                  }
-                  return (
-                    <div className="space-y-0">
-                      {fotsiLogs.slice(0, 20).map((log: any, i: number) => {
-                        const time = log.created_at ? formatTimeOnly(log.created_at) : "—";
-                        const dur = log.duration_ms ? `${(log.duration_ms / 1000).toFixed(1)}s` : "";
-                        return (
-                          <div
-                            key={log.scan_id || i}
-                            className={`flex items-center justify-between text-[10px] py-1.5 px-2 border-b border-border/30 hover:bg-secondary/20 cursor-pointer ${
-                              selectedPairIdx === i && activeBot === "fotsi" ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent"
-                            }`}
-                            onClick={() => setSelectedPairIdx(i)}
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-mono text-muted-foreground w-14 shrink-0">{time}</span>
-                              <Activity className="h-2.5 w-2.5 text-primary shrink-0" />
-                              <span>{log.instruments_scanned || 0} pairs</span>
-                              {(log.signals_generated || 0) > 0 && <span className="text-primary font-medium">⚡ {log.signals_generated} signals</span>}
-                              {(log.positions_opened || 0) > 0 && <span className="text-success font-medium">✓ {log.positions_opened} trades</span>}
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              {dur && <span className="text-[9px] text-muted-foreground font-mono">{dur}</span>}
-                              <Badge variant="outline" className={`text-[7px] px-1 py-0 h-3.5 ${
-                                log.status === "completed" ? "bg-success/10 border-success/30 text-success" : "bg-muted/20 border-border text-muted-foreground"
-                              }`}>{log.status || "done"}</Badge>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()
-              )}
+                })()}
             </div>
           </div>
 
           {/* Right: Detail Breakdown (40%) */}
           <div className="w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
-              {activeBot === "fotsi" ? "FOTSI Scan Detail" : "Detail Breakdown"}
-            </p>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
             <div className="flex-1 overflow-y-auto">
-              {activeBot === "smc" ? (
-                (() => {
+              {(() => {
                   const selected = latestDetailsClean[selectedPairIdx];
                   if (!selected) {
                     return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
                   }
                   return <ScanDetailInline signal={selected} />;
-                })()
-              ) : (
-                (() => {
-                  const log = fotsiLogs[selectedPairIdx];
-                  if (!log) {
-                    return <p className="text-[10px] text-muted-foreground text-center py-8">Select a scan log to view details</p>;
-                  }
-                  const details = log.details || {};
-                  const strengths = details.currency_strengths || {};
-                  const signals = details.signals || [];
-                  return (
-                    <div className="space-y-2">
-                      {/* Currency Strengths at scan time */}
-                      {Object.keys(strengths).length > 0 && (
-                        <div className="space-y-0.5">
-                          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Currency Strengths</p>
-                          <div className="grid grid-cols-4 gap-1">
-                            {Object.entries(strengths)
-                              .sort(([,a]: any, [,b]: any) => (b?.tsi ?? 0) - (a?.tsi ?? 0))
-                              .map(([ccy, data]: [string, any]) => {
-                                const tsi = data?.tsi ?? 0;
-                                const zone = tsi > 25 ? "OB" : tsi < -25 ? "OS" : "N";
-                                const zoneColor = zone === "OB" ? "text-success" : zone === "OS" ? "text-destructive" : "text-muted-foreground";
-                                return (
-                                  <div key={ccy} className="text-center">
-                                    <span className="text-[9px] font-bold">{ccy}</span>
-                                    <span className={`text-[9px] font-mono ml-1 ${zoneColor}`}>{tsi.toFixed(1)}</span>
-                                  </div>
-                                );
-                              })}
-                          </div>
-                        </div>
-                      )}
-                      {/* Signals generated */}
-                      {signals.length > 0 && (
-                        <div className="space-y-0.5">
-                          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Signals ({signals.length})</p>
-                          {signals.map((sig: any, si: number) => (
-                            <div key={si} className="flex items-center justify-between text-[9px] py-0.5 border-b border-border/20 last:border-0">
-                              <div className="flex items-center gap-1">
-                                {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : <TrendingDown className="h-2.5 w-2.5 text-destructive" />}
-                                <span className="font-medium">{sig.pair}</span>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-muted-foreground">spread: {sig.spread?.toFixed(1)}</span>
-                                <span className={sig.placed ? "text-success font-bold" : "text-muted-foreground"}>{sig.placed ? "PLACED" : "SKIP"}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {signals.length === 0 && (
-                        <p className="text-[9px] text-muted-foreground italic">No signals generated in this scan</p>
-                      )}
-                      {/* Scan metadata */}
-                      <div className="space-y-0.5 text-[9px]">
-                        <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Scan Info</p>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Duration</span><span className="font-mono">{log.duration_ms ? `${(log.duration_ms / 1000).toFixed(1)}s` : "—"}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Pairs Scanned</span><span className="font-mono">{log.instruments_scanned || 0}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Signals</span><span className="font-mono">{log.signals_generated || 0}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">Trades</span><span className="font-mono">{log.positions_opened || 0}</span></div>
-                      </div>
-                    </div>
-                  );
-                })()
-              )}
+                })()}
             </div>
           </div>
         </div>
@@ -983,7 +804,6 @@ export default function BotView() {
         )}
 
         <BotConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
-        <FOTSIConfigModal open={fotsiConfigOpen} onClose={() => setFotsiConfigOpen(false)} />
       </div>
     </AppShell>
   );

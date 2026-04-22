@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
-import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, type BrokerConn } from "../_shared/candleSource.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
   parsePairCurrencies, getFOTSIPairNames,
@@ -2794,6 +2794,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   console.log(`[scan ${scanCycleId}] Candle source: ${_scanBrokerConn ? "MetaAPI→TwelveData→Yahoo" : "TwelveData→Yahoo"}`);
   // Start tallying which feed actually serves each pair this cycle.
   beginScanSourceTally();
+  resetThrottleStats(); // Reset rate-limit throttle counter for clean per-scan stats
 
   const { data: openPositions } = await supabase.from("paper_positions").select("*")
     .eq("user_id", userId).eq("position_status", "open");
@@ -2890,9 +2891,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   try {
     const fotsiPairs = getFOTSIPairNames();
     const fotsiCandleMap: Record<string, any[]> = {};
-    // Batch fetch daily candles for all 28 FOTSI pairs in parallel (groups of 7 to avoid rate limits)
-    for (let i = 0; i < fotsiPairs.length; i += 7) {
-      const batch = fotsiPairs.slice(i, i + 7);
+    // Batch fetch daily candles for all 28 FOTSI pairs in groups of 5 with 1.2s
+    // inter-batch delay. At 50 req/min limit, 5 parallel requests per batch with
+    // ~1.2s spacing keeps us well under budget (~50 req in first minute).
+    const FOTSI_BATCH_SIZE = 5;
+    const FOTSI_BATCH_DELAY_MS = 1200;
+    for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
+      const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
       const batchResults = await Promise.all(
         batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
       );
@@ -2901,8 +2906,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           fotsiCandleMap[batch[j]] = batchResults[j];
         }
       }
-      // Small delay between batches to avoid rate limiting
-      if (i + 7 < fotsiPairs.length) await new Promise(r => setTimeout(r, 300));
+      // Delay between batches to stay within TwelveData rate limits
+      if (i + FOTSI_BATCH_SIZE < fotsiPairs.length) await new Promise(r => setTimeout(r, FOTSI_BATCH_DELAY_MS));
     }
     const fetchedCount = Object.keys(fotsiCandleMap).length;
     if (fetchedCount >= 20) { // Need at least 20 of 28 pairs for meaningful FOTSI
@@ -2943,8 +2948,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
 
-    // Delay between instruments to avoid rate limiting
-    if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 500));
+    // Delay between instruments to stay within TwelveData rate limits.
+    // Each instrument fetches 2-4 candle sets in parallel, so spacing
+    // instruments 1s apart keeps us at ~2-4 req/s = well under 50/min.
+    if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 1000));
 
     // Clone config per-instrument to prevent style mutation (Fix #6)
     let pairConfig = { ...config };
@@ -3595,6 +3602,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // End source tally and prepend a __meta entry so the UI can display
   // which feed served this scan cycle.
   const sourceTally = endScanSourceTally();
+  const throttleStats = resetThrottleStats();
   const detailsWithMeta = [
     {
       __meta: true,
@@ -3607,10 +3615,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
+      rateLimitThrottles: throttleStats.throttleCount,
     },
     ...scanDetails,
   ];
-  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, yahoo=${sourceTally.yahoo}, none=${sourceTally.none})`);
+  console.log(`[scan ${scanCycleId}] Primary candle source: ${sourceTally.primary} (meta=${sourceTally.metaapi}, td=${sourceTally.twelvedata}, yahoo=${sourceTally.yahoo}, none=${sourceTally.none}, throttles=${throttleStats.throttleCount})`);
 
   // Log the scan
   await supabase.from("scan_logs").insert({
