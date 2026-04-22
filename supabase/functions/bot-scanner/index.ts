@@ -3616,6 +3616,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       brokerConnected: !!_scanBrokerConn,
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
+      fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
     },
     ...scanDetails,
   ];

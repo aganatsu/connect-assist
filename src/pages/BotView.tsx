@@ -24,6 +24,7 @@ import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { ExpandedPositionCard } from "@/components/ExpandedPositionCard";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
@@ -570,6 +571,14 @@ export default function BotView() {
                 </>
               );
             })()}
+
+            {/* FOTSI Currency Strength Meter */}
+            <FOTSIStrengthMeter
+              strengths={latestMeta?.fotsiStrengths ?? null}
+              lastScanTime={currentScan?.scanned_at}
+              onRefresh={() => scanMut.mutate()}
+              isRefreshing={scanMut.isPending}
+            />
 
             {/* Engine Controls */}
             <Card>
