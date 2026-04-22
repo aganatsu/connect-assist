@@ -120,6 +120,10 @@ export default function BotView() {
       queryClient.invalidateQueries({ queryKey: ["paper-status"] });
       queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
 
+      // Reset to latest scan so the UI shows the new result, not the old one
+      setSelectedScanIdx(0);
+      setSelectedPairIdx(0);
+
       // Backend now returns the full scan result (not fire-and-forget).
       // Handle error responses from the backend
       if (data.error) {

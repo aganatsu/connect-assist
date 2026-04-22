@@ -2625,6 +2625,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
+  //
+  // For manual scans: force-clear any stale lock first. The user explicitly clicked
+  // "Scan Now" — they should never be blocked by a lock left behind by a crashed cron scan.
+  if (opts?.isManualScan) {
+    await supabase
+      .from("paper_accounts")
+      .update({ scan_lock_until: null })
+      .eq("user_id", userId);
+    console.log(`[scan-lock] manual scan — cleared any existing lock for ${userId}`);
+  }
+
   const lockHorizon = new Date(Date.now() + 90_000).toISOString();
   const nowIso = new Date().toISOString();
   const { data: lockRows, error: lockErr } = await supabase
