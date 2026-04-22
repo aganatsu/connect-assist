@@ -210,6 +210,36 @@ export default function BotView() {
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
 
+  // Extract FOTSI strengths: prefer __meta.fotsiStrengths (new), fallback to reconstructing from per-pair fotsi alignment data (legacy)
+  const fotsiStrengths: Record<string, number> | null = (() => {
+    // New format: scanner includes fotsiStrengths directly in __meta
+    if (latestMeta?.fotsiStrengths && typeof latestMeta.fotsiStrengths === "object") {
+      return latestMeta.fotsiStrengths;
+    }
+    // Legacy fallback: reconstruct from per-pair fotsi.baseTSI / fotsi.quoteTSI
+    const currencyValues: Record<string, number[]> = {};
+    for (const detail of latestDetailsClean) {
+      const fotsi = detail?.analysis?.fotsi || detail?.fotsi;
+      if (!fotsi || !detail?.pair) continue;
+      const parts = (detail.pair as string).split("/");
+      if (parts.length !== 2) continue;
+      const [base, quote] = parts;
+      if (typeof fotsi.baseTSI === "number") {
+        (currencyValues[base] ??= []).push(fotsi.baseTSI);
+      }
+      if (typeof fotsi.quoteTSI === "number") {
+        (currencyValues[quote] ??= []).push(fotsi.quoteTSI);
+      }
+    }
+    const keys = Object.keys(currencyValues);
+    if (keys.length < 4) return null; // Not enough data
+    const result: Record<string, number> = {};
+    for (const [k, vals] of Object.entries(currencyValues)) {
+      result[k] = vals.reduce((a, b) => a + b, 0) / vals.length;
+    }
+    return result;
+  })();
+
   // Filter positions and trades (SMC bot only)
   const allPositions = d.positions || [];
   const allTradeHistory = d.tradeHistory || [];
@@ -574,7 +604,7 @@ export default function BotView() {
 
             {/* FOTSI Currency Strength Meter */}
             <FOTSIStrengthMeter
-              strengths={latestMeta?.fotsiStrengths ?? null}
+              strengths={fotsiStrengths}
               lastScanTime={currentScan?.scanned_at}
               onRefresh={() => scanMut.mutate()}
               isRefreshing={scanMut.isPending}
