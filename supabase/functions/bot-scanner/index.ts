@@ -2812,6 +2812,137 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         for (const a of activeActions) {
           console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
         }
+        // ── BROKER SYNC: Mirror SL changes to MetaAPI immediately ──
+        // Without this, the Telegram fires but the broker SL stays stale until paper-trading cron picks it up.
+        if (account.execution_mode === "live") {
+          const slActions = activeActions.filter(a => a.newSL != null);
+          if (slActions.length > 0) {
+            const { data: liveConns } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+            if (liveConns && liveConns.length > 0) {
+              for (const a of slActions) {
+                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
+                if (!pos) continue;
+                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+                const connsToModify = mirroredIds.length > 0
+                  ? liveConns.filter((c: any) => mirroredIds.includes(c.id))
+                  : liveConns; // fallback: try all active connections
+                const tp = parseFloat(pos.take_profit || "0") || undefined;
+                for (const conn of connsToModify) {
+                  try {
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    // Find broker position by comment tag
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${a.positionId}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    let brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      // Fallback: match by symbol + direction
+                      const brokerSymbol = resolveSymbol(a.symbol, conn);
+                      brokerPos = brokerPositions.find((p: any) =>
+                        (p.symbol === brokerSymbol || p.symbol === a.symbol.replace("/", "") ||
+                         p.symbol?.replace(/[._\-]/g, "").toUpperCase() === a.symbol.replace("/", "").toUpperCase()) &&
+                        ((p.type === "POSITION_TYPE_BUY" && pos.direction === "long") ||
+                         (p.type === "POSITION_TYPE_SELL" && pos.direction === "short"))
+                      );
+                    }
+                    if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} SL modify`); continue; }
+                    // Apply safety buffer (1 pip) to avoid premature stops from spread
+                    const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
+                    const safetyBuffer = spec.pipSize;
+                    const adjustedSL = pos.direction === "long" ? a.newSL! - safetyBuffer : a.newSL! + safetyBuffer;
+                    const modifyBody: any = {
+                      actionType: "POSITION_MODIFY",
+                      positionId: brokerPos.id,
+                      stopLoss: adjustedSL,
+                    };
+                    if (tp && tp > 0) modifyBody.takeProfit = tp;
+                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+                    });
+                    if (res.ok) {
+                      console.log(`[mgmt-broker] ${conn.display_name}: SL modified to ${adjustedSL} for ${a.symbol} (${a.action})`);
+                    } else {
+                      console.warn(`[mgmt-broker] ${conn.display_name}: SL modify failed [${res.status}]: ${resBody.slice(0, 300)}`);
+                    }
+                  } catch (e: any) {
+                    console.warn(`[mgmt-broker] ${conn.display_name}: error modifying SL for ${a.symbol}: ${e?.message}`);
+                  }
+                }
+              }
+            }
+          }
+          // ── Partial TP broker sync ──
+          const partialActions = activeActions.filter(a => a.action === "partial_enabled");
+          if (partialActions.length > 0) {
+            const { data: liveConnsP } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+            if (liveConnsP && liveConnsP.length > 0) {
+              for (const a of partialActions) {
+                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
+                if (!pos) continue;
+                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+                const connsToClose = mirroredIds.length > 0
+                  ? liveConnsP.filter((c: any) => mirroredIds.includes(c.id))
+                  : liveConnsP;
+                // Parse partial TP percent from the action's attribution
+                const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
+                const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
+                for (const conn of connsToClose) {
+                  try {
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) continue;
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${a.positionId}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    let brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      const brokerSymbol = resolveSymbol(a.symbol, conn);
+                      brokerPos = brokerPositions.find((p: any) =>
+                        (p.symbol === brokerSymbol || p.symbol === a.symbol.replace("/", "") ||
+                         p.symbol?.replace(/[._\-]/g, "").toUpperCase() === a.symbol.replace("/", "").toUpperCase()) &&
+                        ((p.type === "POSITION_TYPE_BUY" && pos.direction === "long") ||
+                         (p.type === "POSITION_TYPE_SELL" && pos.direction === "short"))
+                      );
+                    }
+                    if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} partial close`); continue; }
+                    const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
+                    const closeVolume = Math.max(0.01, Math.round(brokerVolume * closeFraction * 100) / 100);
+                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id, volume: closeVolume }),
+                    });
+                    if (res.ok) {
+                      console.log(`[mgmt-broker] ${conn.display_name}: partial close ${closeVolume} lots for ${a.symbol}`);
+                    } else {
+                      console.warn(`[mgmt-broker] ${conn.display_name}: partial close failed [${res.status}]: ${resBody.slice(0, 300)}`);
+                    }
+                  } catch (e: any) {
+                    console.warn(`[mgmt-broker] ${conn.display_name}: error partial closing ${a.symbol}: ${e?.message}`);
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Send Telegram alerts for significant management actions
         if (telegramChatIds.length > 0) {
           for (const a of activeActions) {
