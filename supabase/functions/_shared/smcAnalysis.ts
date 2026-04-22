@@ -305,7 +305,7 @@ export const DEFAULTS = {
   killZoneOnly: false,
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
-  minFactorCount: 0,
+  // Legacy minFactorCount removed — single percentage threshold (minConfluence) only
   useSMT: true,
   useVolumeProfile: true,
   useTrendDirection: true,

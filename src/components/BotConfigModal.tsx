@@ -25,7 +25,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   // Strategy
   { tab: "strategy", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
   { tab: "strategy", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
-  { tab: "strategy", label: "Min Factor Count", keywords: ["factor", "factors", "count", "breadth"] },
+
   { tab: "strategy", label: "Order Blocks", keywords: ["ob", "order block", "smc", "institutional"] },
   { tab: "strategy", label: "Fair Value Gaps", keywords: ["fvg", "imbalance", "gap"] },
   { tab: "strategy", label: "Liquidity Sweeps", keywords: ["liquidity", "sweep", "pool"] },
@@ -115,7 +115,7 @@ const HighlightContext = createContext<Set<string>>(new Set());
 const BASE_CONFIG = {
   strategy: {
     enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-    minConfluenceScore: 55, minFactorCount: 0, minStrongFactors: 4, htfBiasRequired: true, obLookbackCandles: 20,
+    confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20,
     fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
     liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
     regimeScoringEnabled: true, regimeScoringStrength: 1.0,
@@ -171,7 +171,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "swing_trader" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 65, minFactorCount: 0, minStrongFactors: 6, regimeScoringStrength: 1.5 },
+      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 65, regimeScoringStrength: 1.5 },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxDailyLoss: 2, maxOpenPositions: 2, minRiskReward: 2.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 3.0, trailingStopEnabled: true, trailingStopPips: 20, breakEvenEnabled: true, breakEvenTriggerPips: 15, timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 120 },
@@ -183,7 +183,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "day_trader" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 55, minFactorCount: 0, minStrongFactors: 4 },
+      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 55 },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxDailyLoss: 3, maxOpenPositions: 4, minRiskReward: 1.5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: true, breakEvenTriggerPips: 20, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 24 },
       tradingStyle: { mode: "day_trader" },
@@ -194,7 +194,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "scalper" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 40, minFactorCount: 0, minStrongFactors: 3, regimeScoringEnabled: false },
+      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 40, regimeScoringEnabled: false },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxDailyLoss: 5, maxOpenPositions: 6, minRiskReward: 1.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4 },
@@ -590,7 +590,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                               <span>HTF Bias: <strong className="text-foreground">{params.htfTimeframe}</strong></span>
                               <span>TP Ratio: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
                               <span>SL Buffer: <strong className="text-foreground">{params.slBufferPips} pip</strong></span>
-                              <span>Min Score: <strong className="text-foreground">{params.minConfluence}</strong></span>
+                              <span>Threshold: <strong className="text-foreground">{params.confluenceThreshold}%</strong></span>
                               <span>Max Hold: <strong className="text-foreground">{params.maxHoldHours === 0 ? "None" : `${params.maxHoldHours}h`}</strong></span>
                             </div>
                             <div className="mt-1.5 pt-1.5 border-t border-border/50 grid grid-cols-3 gap-x-2 gap-y-0.5 text-[8px] text-muted-foreground">
@@ -632,38 +632,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         Server cron runs every 5 min. If interval hasn't elapsed since last scan, the cron cycle is skipped.
                       </p>
                     </FieldGroup>
-                    <FieldGroup label="Confluence Threshold" description={(config.strategy?.normalizedScoring ?? true) ? "Minimum percentage (0-100%) of enabled factor max required to trigger a trade" : "Minimum weighted score (1-10) required to consider a trade setup valid"}>
+                    <FieldGroup label="Confluence Threshold" description="Minimum percentage (0-100%) of enabled factor max required to trigger a trade">
                       <div className="flex items-center gap-4">
-                        {(config.strategy?.normalizedScoring ?? true) ? (
-                          <>
-                            <Slider value={[config.strategy?.confluenceThreshold ?? 55]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={20} max={90} step={5} className="flex-1" />
-                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
-                          </>
-                        ) : (
-                          <>
-                            <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={0.5} className="flex-1" />
-                            <span className="text-sm font-mono font-bold text-primary w-10 text-right">{(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}</span>
-                          </>
-                        )}
+                        <Slider value={[config.strategy?.confluenceThreshold ?? 55]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={20} max={90} step={5} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
                       </div>
                     </FieldGroup>
-                    <FieldGroup label="Min Strong Factors" description="Require at least N factors scoring above 50% of their individual max. Prevents trades from passing on many weak signals. 0 = off.">
-                      <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.minStrongFactors ?? 4]} onValueChange={v => updateField('strategy', 'minStrongFactors', v[0])} min={0} max={12} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minStrongFactors ?? 4}</span>
-                      </div>
-                      {(config.strategy?.minStrongFactors ?? 0) > 0 && (
-                        <p className="text-[10px] text-muted-foreground mt-1.5">
-                          Gate: ≥ {(config.strategy?.normalizedScoring ?? true) ? `${config.strategy?.confluenceThreshold ?? 55}%` : `${(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10`} score AND ≥ {config.strategy?.minStrongFactors ?? 4} strong factors.
-                        </p>
-                      )}
-                    </FieldGroup>
-                    <FieldGroup label="Min Factor Count (Legacy)" description="Require at least N factors to be present. 0 = off. Superseded by Min Strong Factors for most use cases.">
-                      <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={17} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/17</span>
-                      </div>
-                    </FieldGroup>
+                    {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
                       <ToggleField label="Fair Value Gaps" description="Identify FVG imbalances" checked={config.strategy?.useFVG ?? true} onChange={v => updateField('strategy', 'useFVG', v)} />
@@ -713,7 +688,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
                           <div><span className="text-emerald-500 font-medium">Active:</span> Score = (raw points / max possible) × 100%</div>
                           <div><span className="text-amber-500 font-medium">Example:</span> Raw 10.5 / max 19.0 = 55.3% confluence</div>
-                          <div className="text-muted-foreground/70">Disabling factors doesn't change the effective threshold. Combined with Min Strong Factors, this prevents both "silent threshold raise" and "many weak signals" problems.</div>
+                          <div className="text-muted-foreground/70">Disabling factors doesn't change the effective threshold. The percentage auto-adjusts so your confluence threshold always means the same quality level regardless of which factors are enabled.</div>
                         </div>
                       ) : (
                         <div className="rounded-md bg-amber-500/10 border border-amber-500/20 p-3 text-[11px] text-muted-foreground space-y-1">

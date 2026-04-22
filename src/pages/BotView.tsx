@@ -737,10 +737,9 @@ export default function BotView() {
                   <Badge
                     variant="outline"
                     className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
-                    title="Active confluence gate. Setups must clear both thresholds to fire."
+                    title="Active confluence gate. Setups must score above this percentage to trigger."
                   >
-                    Gate: ≥{(botConfig.strategy.confluenceThreshold ?? botConfig.strategy.minConfluenceScore ?? 5).toFixed(1)}
-                    {(botConfig.strategy.minFactorCount ?? 0) > 0 && ` · ≥${botConfig.strategy.minFactorCount}/20 factors`}
+                    Gate: ≥{(botConfig.strategy?.confluenceThreshold ?? 55)}%
                   </Badge>
                 )}
                 {activeBot === "smc" && currentScan && (

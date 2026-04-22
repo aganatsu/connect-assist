@@ -106,9 +106,7 @@ const DEFAULTS = {
   // ── Protection ──
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
-  // ── Strategy gates ──
-  minFactorCount: 0,
-  minStrongFactors: 4,  // Minimum number of factors scoring above 50% of their individual max
+  // ── Strategy gates ── (collapsed to single percentage threshold: minConfluence)
   // ── Normalized Scoring (opt-in) ──
   // When true, raw score is normalized to percentage of enabled factors' max possible score,
   // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
@@ -2052,8 +2050,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // ── Strategy mappings ──
     // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
     minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence,
-    // New: minimum count of present factors required (0 = off). Acts as an AND gate alongside score.
-    minFactorCount: strategy.minFactorCount ?? raw.minFactorCount ?? 0,
+    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     // UI writes: requireHTFBias; legacy DB: htfBiasRequired
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
@@ -3020,13 +3017,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
     };
 
-    const minFactorGate = (pairConfig.minFactorCount ?? 0) > 0;
-    const factorCountOk = !minFactorGate || (detail.factorCount >= (pairConfig.minFactorCount ?? 0));
-    // Strong factor gate: require minimum number of strongly-present factors
-    const minStrongFactors = pairConfig.minStrongFactors ?? 0;
-    const strongFactorOk = minStrongFactors <= 0 || (analysis.strongFactorCount >= minStrongFactors);
-
-    if (analysis.score >= adjustedMinConfluence && factorCountOk && strongFactorOk && analysis.direction && !isPaused) {
+    // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
+    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -3572,12 +3564,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         detail.reason = config.normalizedScoring
           ? `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold`
           : `Score ${analysis.score.toFixed(1)} < ${adjustedMinConfluence} threshold`;
-      } else if (minFactorGate && !factorCountOk) {
-        detail.status = "below_threshold";
-        detail.reason = `Only ${detail.factorCount}/${analysis.factors.length} factors (need ≥${pairConfig.minFactorCount})`;
-      } else if (!strongFactorOk) {
-        detail.status = "below_threshold";
-        detail.reason = `Only ${analysis.strongFactorCount} strong factors (need ≥${minStrongFactors})`;
       } else {
         detail.status = isPaused ? "paused" : "no_direction";
       }

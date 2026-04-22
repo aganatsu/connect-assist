@@ -148,7 +148,7 @@ export default function Backtest() {
   const [startingBalance, setStartingBalance] = useState(10000);
   const [tradingStyle, setTradingStyle] = useState("day_trader");
   const [slippagePips, setSlippagePips] = useState(0.5);
-  const [spreadPips, setSpreadPips] = useState(1.0);
+  const [spreadPips, setSpreadPips] = useState(0); // 0 = use per-instrument typicalSpread from SPECS
   const [selectedSymbols, setSelectedSymbols] = useState(["EUR/USD", "GBP/USD", "XAU/USD"]);
 
   // UI state
@@ -378,7 +378,7 @@ export default function Backtest() {
                   <label className="text-[10px] text-muted-foreground uppercase">Spread</label>
                   <input type="number" value={spreadPips} onChange={e => setSpreadPips(Number(e.target.value))}
                     min={0} max={10} step={0.1} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
-                  <span className="text-[9px] text-muted-foreground">pips</span>
+                  <span className="text-[9px] text-muted-foreground">pips (0=auto)</span>
                 </div>
                 <Separator orientation="vertical" className="h-5" />
                 <div className="flex items-center gap-2">

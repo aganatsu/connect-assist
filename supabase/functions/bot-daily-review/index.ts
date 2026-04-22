@@ -62,8 +62,7 @@ interface BotConfig {
   riskPerTrade: number;
   maxConcurrent: number;
   maxDailyLoss: number;
-  minConfluenceScore: number;
-  minFactorCount: number;
+  confluenceThreshold: number;
   maxHoldHours: number;
   cooldownMinutes: number;
   trailingStopEnabled: boolean;
@@ -610,7 +609,7 @@ Avg RR Achieved (winners): ${weeklyMetrics.avgRRAchieved.toFixed(2)}
   prompt += `\n=== CURRENT BOT CONFIGURATION ===\n`;
   prompt += `SL Method: ${config.slMethod}, ATR Multiple: ${config.slATRMultiple}\n`;
   prompt += `TP Method: ${config.tpMethod}, RR Ratio: ${config.tpRatio}\n`;
-  prompt += `Min Confluence Score: ${config.minConfluenceScore}, Min Factor Count: ${config.minFactorCount}\n`;
+  prompt += `Confluence Threshold: ${config.confluenceThreshold}%\n`;
   prompt += `Risk Per Trade: ${config.riskPerTrade}%, Max Concurrent: ${config.maxConcurrent}\n`;
   prompt += `Max Daily Loss: ${config.maxDailyLoss}%, Max Hold Hours: ${config.maxHoldHours}\n`;
   prompt += `Trailing Stop: ${config.trailingStopEnabled ? "ON" : "OFF"}, Break Even: ${config.breakEvenEnabled ? "ON" : "OFF"}\n`;
@@ -855,8 +854,7 @@ Deno.serve(async (req) => {
         riskPerTrade: configObj.risk?.riskPerTrade || configObj.riskPerTrade || 1.0,
         maxConcurrent: configObj.risk?.maxConcurrent || configObj.maxConcurrent || 3,
         maxDailyLoss: configObj.risk?.maxDailyLoss || configObj.maxDailyLoss || 5.0,
-        minConfluenceScore: configObj.strategy?.minConfluenceScore || configObj.minConfluenceScore || 5.0,
-        minFactorCount: configObj.strategy?.minFactorCount || configObj.minFactorCount || 5,
+        confluenceThreshold: configObj.strategy?.confluenceThreshold ?? configObj.strategy?.minConfluenceScore ?? configObj.confluenceThreshold ?? 55,
         maxHoldHours: configObj.risk?.maxHoldHours || configObj.maxHoldHours || 48,
         cooldownMinutes: configObj.risk?.cooldownMinutes || configObj.cooldownMinutes || 60,
         trailingStopEnabled: configObj.exit?.trailingStopEnabled ?? configObj.trailingStopEnabled ?? true,

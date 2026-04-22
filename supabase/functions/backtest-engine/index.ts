@@ -64,6 +64,7 @@ import {
   detectAMDPhase,
   detectOptimalStyle,
   computeOpeningRange,
+  classifyInstrumentRegime as sharedClassifyRegime,
 } from "../_shared/smcAnalysis.ts";
 
 import {
@@ -468,7 +469,7 @@ function mapConfig(raw: any): any {
   return {
     ...DEFAULTS,
     minConfluence: strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence,
-    minFactorCount: strategy.minFactorCount ?? raw?.minFactorCount ?? 0,
+    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
     enableOB: strategy.useOrderBlocks ?? true,
@@ -562,48 +563,8 @@ function mapConfig(raw: any): any {
 // Output: Percentage score (0-100%) + strongFactorCount
 
 // ─── Lightweight Regime Classification (for real-time scoring) ──────
-function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
-  if (!dailyCandles || dailyCandles.length < 20) {
-    return { regime: "unknown", confidence: 0, atrTrend: "unknown", bias: "neutral" };
-  }
-  const atrPeriod = Math.min(14, dailyCandles.length - 1);
-  const trs: number[] = [];
-  for (let i = dailyCandles.length - atrPeriod; i < dailyCandles.length; i++) {
-    const prev = dailyCandles[i - 1];
-    const curr = dailyCandles[i];
-    trs.push(Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close)));
-  }
-  const recentTrs = trs.slice(-5);
-  const olderTrs = trs.slice(0, Math.max(1, trs.length - 5));
-  const recentAtr = recentTrs.reduce((a, b) => a + b, 0) / recentTrs.length;
-  const olderAtr = olderTrs.reduce((a, b) => a + b, 0) / olderTrs.length;
-  const atrRatio = olderAtr > 0 ? recentAtr / olderAtr : 1;
-  const atrTrend = atrRatio > 1.15 ? "expanding" : atrRatio < 0.85 ? "contracting" : "stable";
-  const last7 = dailyCandles.slice(-7);
-  const last20 = dailyCandles.slice(-20);
-  const sma7 = last7.reduce((s, c) => s + c.close, 0) / last7.length;
-  const sma20 = last20.reduce((s, c) => s + c.close, 0) / last20.length;
-  const avgPrice = dailyCandles[dailyCandles.length - 1].close;
-  const smaDiff = avgPrice > 0 ? (sma7 - sma20) / avgPrice : 0;
-  const bias = Math.abs(smaDiff) > 0.005 ? (smaDiff > 0 ? "bullish" : "bearish") : "neutral";
-  const highs20 = last20.map(c => c.high);
-  const lows20 = last20.map(c => c.low);
-  const rangeHigh = Math.max(...highs20);
-  const rangeLow = Math.min(...lows20);
-  const rangePct = avgPrice > 0 ? ((rangeHigh - rangeLow) / avgPrice) * 100 : 0;
-  let regime = "transitional";
-  let confidence = 0.5;
-  if (atrTrend === "expanding" && Math.abs(smaDiff) > 0.008 && rangePct > 3) {
-    regime = "strong_trend"; confidence = Math.min(0.95, 0.6 + Math.abs(smaDiff) * 10 + (atrRatio - 1) * 0.5);
-  } else if (Math.abs(smaDiff) > 0.005 && rangePct > 2) {
-    regime = "mild_trend"; confidence = Math.min(0.85, 0.5 + Math.abs(smaDiff) * 8);
-  } else if (atrTrend === "contracting" && rangePct < 2 && Math.abs(smaDiff) < 0.003) {
-    regime = "choppy_range"; confidence = Math.min(0.9, 0.6 + (1 - atrRatio) * 0.5 + (2 - rangePct) * 0.1);
-  } else if (Math.abs(smaDiff) < 0.005 && rangePct < 3) {
-    regime = "mild_range"; confidence = Math.min(0.8, 0.5 + (3 - rangePct) * 0.1);
-  }
-  return { regime, confidence: Math.round(confidence * 100) / 100, atrTrend, bias };
-}
+// Local classifyInstrumentRegime removed — now uses shared sharedClassifyRegime from smcAnalysis.ts
+// The regimeAlignmentAdjustment function below still uses the shared regime output.
 
 function regimeAlignmentAdjustment(
   regime: string, confidence: number, direction: string | null,
@@ -1441,7 +1402,7 @@ function runConfluenceAnalysis(
   const regimeScoringStrength = typeof config.regimeScoringStrength === 'number' ? config.regimeScoringStrength : 1.0;
   {
     if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
-      const regimeInfo = classifyInstrumentRegime(dailyCandles);
+      const regimeInfo = sharedClassifyRegime(dailyCandles);
       const { adjustment, detail } = regimeAlignmentAdjustment(
         regimeInfo.regime, regimeInfo.confidence, direction, factors
       );
@@ -1453,7 +1414,7 @@ function runConfluenceAnalysis(
         name: "Regime Alignment",
         present: scaledAdjustment !== 0,
         weight: scaledAdjustment,
-        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}${regimeScoringStrength !== 1.0 ? ` [strength ${regimeScoringStrength}x]` : ''}`,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.directionalBias}) — ${detail}${regimeScoringStrength !== 1.0 ? ` [strength ${regimeScoringStrength}x]` : ''}`,
         group: "Macro Confirmation",
       });
     } else {
@@ -1577,6 +1538,7 @@ function runBacktestSafetyGates(
   dailyCandles: Candle[] | null,
   recentTrades: BacktestTrade[],
   currentCandleMs: number,
+  peakBalance?: number,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
 
@@ -1617,9 +1579,16 @@ function runBacktestSafetyGates(
     gates.push({ passed: false, reason: "No SL/TP calculated" });
   }
 
-  // Gate 5: Max drawdown
-  // (Simplified: use peak balance tracking from caller)
-  gates.push({ passed: true, reason: "Drawdown within limits" });
+  // Gate 5: Max drawdown (circuit breaker)
+  if (peakBalance && peakBalance > 0 && config.maxDrawdown > 0) {
+    const currentDrawdownPct = ((peakBalance - balance) / peakBalance) * 100;
+    gates.push({
+      passed: currentDrawdownPct < config.maxDrawdown,
+      reason: `Drawdown: ${currentDrawdownPct.toFixed(1)}% (max: ${config.maxDrawdown}%)`,
+    });
+  } else {
+    gates.push({ passed: true, reason: "Drawdown within limits" });
+  }
 
   // Gate 6: Daily loss limit (use candle date, not wall-clock)
   const currentDate = new Date(currentCandleMs).toISOString().slice(0, 10);
@@ -1973,7 +1942,7 @@ Deno.serve(async (req) => {
       config: rawConfig,
       tradingStyle,
       slippagePips = 0.5,
-      spreadPips = 1.0,
+      spreadPips = 0,  // 0 = use per-instrument typicalSpread from SPECS
     } = body;
 
     const config = mapConfig(rawConfig || {});
@@ -2098,7 +2067,12 @@ Deno.serve(async (req) => {
     // Minimum lookback for SMC analysis
     const LOOKBACK = 80;
     // Step size: evaluate every N candles (simulate scan frequency)
-    const STEP = 4; // Every 4 candles ≈ 1 hour on 15m TF
+    // Dynamically set based on entry timeframe to match bot-scanner's scan interval
+    const entryTF = config.entryTimeframe || "15m";
+    const tfMinutes: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440 };
+    const candleMinutes = tfMinutes[entryTF] || 15;
+    const scanIntervalMinutes = config.scanIntervalMinutes || 15;
+    const STEP = Math.max(1, Math.round(scanIntervalMinutes / candleMinutes));
 
     for (const symbol of instruments) {
       const data = candleData[symbol];
@@ -2167,6 +2141,12 @@ Deno.serve(async (req) => {
         // Timestamp for time-dependent factors
         const candleMs = new Date(candleTime.endsWith("Z") ? candleTime : candleTime + "Z").getTime();
 
+        // Weekend gap detection — skip FX/index weekend candles (matches bot-scanner behavior)
+        const candleDate = new Date(candleMs);
+        const dow = candleDate.getUTCDay();
+        const isFX = SPECS[symbol]?.type !== "crypto";
+        if (isFX && (dow === 0 || dow === 6)) continue;
+
         // Session/day filter
         const session = detectSession(candleMs);
         const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
@@ -2174,10 +2154,8 @@ Deno.serve(async (req) => {
         const assetProfile = getAssetProfile(symbol);
         if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) continue;
 
-        // Day of week filter
-        const candleDate = new Date(candleMs);
-        const dow = candleDate.getUTCDay();
-        if (!config.enabledDays.includes(dow) && SPECS[symbol]?.type !== "crypto") continue;
+        // Day of week filter (user-configured active days)
+        if (!config.enabledDays.includes(dow) && isFX) continue;
 
         // Set per-instrument config
         config._currentSymbol = symbol;
@@ -2202,18 +2180,14 @@ Deno.serve(async (req) => {
 
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
 
+        // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
         if (!analysis.direction || analysis.score < config.minConfluence) continue;
-        // Min factor count gate
-        const factorCount = analysis.factors.filter((f: any) => f.present).length;
-        if (config.minFactorCount > 0 && factorCount < config.minFactorCount) continue;
-        // Strong factor gate
-        const minStrongFactors = config.minStrongFactors ?? 4;
-        if (minStrongFactors > 0 && (analysis.strongFactorCount ?? 0) < minStrongFactors) continue;
 
         // ── Safety Gates ──
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config,
           balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades, candleMs,
+          peakBalance,
         );
         const blockedGates = gates.filter(g => !g.passed);
         const allPassed = blockedGates.length === 0;
@@ -2233,7 +2207,8 @@ Deno.serve(async (req) => {
           const toClose = openPositions.filter(p => p.symbol === symbol && p.direction === oppositeDir);
           for (const pos of toClose) {
             const posSpec = SPECS[pos.symbol] || SPECS["EUR/USD"];
-            const reverseSpread = spreadPips * posSpec.pipSize;
+            const reverseEffectiveSpread = spreadPips > 0 ? spreadPips : (posSpec.typicalSpread ?? 1);
+            const reverseSpread = reverseEffectiveSpread * posSpec.pipSize;
             // Closing a long pays the bid (lower); closing a short pays the ask (higher)
             const reverseExitPrice = pos.direction === "long"
               ? analysis.lastPrice - reverseSpread / 2
@@ -2284,8 +2259,9 @@ Deno.serve(async (req) => {
           }
         }
 
-        // ── Spread cost simulation ──
-        const spreadCost = spreadPips * spec.pipSize;
+        // ── Spread cost simulation (per-instrument from SPECS, user override if > 0) ──
+        const effectiveSpreadPips = spreadPips > 0 ? spreadPips : (spec.typicalSpread ?? 1);
+        const spreadCost = effectiveSpreadPips * spec.pipSize;
         const entryPrice = analysis.direction === "long"
           ? analysis.lastPrice + spreadCost / 2
           : analysis.lastPrice - spreadCost / 2;

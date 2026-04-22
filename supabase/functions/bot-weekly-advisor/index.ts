@@ -1063,7 +1063,7 @@ Current balance: $${balance.toFixed(2)} | Peak: $${peakBalance.toFixed(2)} | Dra
   const c = config;
   prompt += `SL: ${c.slMethod || "atr"} (ATR×${c.slATRMultiple || 2.0})\n`;
   prompt += `TP: ${c.tpMethod || "rr_ratio"} (RR ${c.tpRatio || 3.0})\n`;
-  prompt += `Min Score: ${c.minConfluenceScore || 5.0} | Min Factors: ${c.minFactorCount || 5}\n`;
+  prompt += `Confluence Threshold: ${c.confluenceThreshold || 55}%\n`;
   prompt += `Risk/Trade: ${c.riskPerTrade || 1.0}% | Max Concurrent: ${c.maxConcurrent || 3}\n`;
   prompt += `Max Daily Loss: ${c.maxDailyLoss || 5.0}% | Max Hold: ${c.maxHoldHours || 48}h\n`;
   prompt += `Trailing: ${c.trailingStopEnabled ? "ON" : "OFF"} | Break-Even: ${c.breakEvenEnabled ? "ON" : "OFF"}\n`;
@@ -1387,8 +1387,7 @@ Deno.serve(async (req) => {
         riskPerTrade: configObj.risk?.riskPerTrade || 1.0,
         maxConcurrent: configObj.risk?.maxConcurrent || 3,
         maxDailyLoss: configObj.risk?.maxDailyLoss || 5.0,
-        minConfluenceScore: configObj.strategy?.minConfluenceScore || 5.0,
-        minFactorCount: configObj.strategy?.minFactorCount || 5,
+        confluenceThreshold: configObj.strategy?.confluenceThreshold ?? configObj.strategy?.minConfluenceScore ?? 55,
         maxHoldHours: configObj.risk?.maxHoldHours || 48,
         trailingStopEnabled: configObj.exit?.trailingStopEnabled ?? true,
         breakEvenEnabled: configObj.exit?.breakEvenEnabled ?? true,

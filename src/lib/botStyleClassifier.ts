@@ -7,7 +7,7 @@ export interface StyleOverrides {
   htfTimeframe: string;
   tpRatio: number;
   slBufferPips: number;
-  minConfluence: number;
+  confluenceThreshold: number; // percentage (0-100%)
   // Management defaults (user can override per-broker):
   trailingStopEnabled: boolean;
   trailingStopPips: number;
@@ -28,7 +28,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     htfTimeframe: "1h",
     tpRatio: 1.5,
     slBufferPips: 1,
-    minConfluence: 5,
+    confluenceThreshold: 40,
     trailingStopEnabled: true,
     trailingStopPips: 8,              // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_1r",  // let scalps reach 1R before trailing
@@ -44,7 +44,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     htfTimeframe: "1d",
     tpRatio: 2.0,
     slBufferPips: 2,
-    minConfluence: 5.5,
+    confluenceThreshold: 55,
     trailingStopEnabled: true,        // trailing AFTER partial TP
     trailingStopPips: 15,             // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_1.5r", // activates after partial TP at 1R + buffer
@@ -60,7 +60,7 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     htfTimeframe: "1w",
     tpRatio: 3.0,
     slBufferPips: 5,
-    minConfluence: 6.5,
+    confluenceThreshold: 65,
     trailingStopEnabled: true,
     trailingStopPips: 25,             // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_2r", // let swings develop before trailing

@@ -235,8 +235,12 @@ function validateConfig(config: any): string[] {
   // Strategy validations
   const s = config.strategy;
   if (s) {
-    if (typeof s.minConfluenceScore === "number" && (s.minConfluenceScore < 0 || s.minConfluenceScore > 10)) {
-      errors.push("strategy.minConfluenceScore must be between 0 and 10");
+    if (typeof s.confluenceThreshold === "number" && (s.confluenceThreshold < 0 || s.confluenceThreshold > 100)) {
+      errors.push("strategy.confluenceThreshold must be between 0 and 100");
+    }
+    // Legacy validation (backward compat)
+    if (typeof s.minConfluenceScore === "number" && (s.minConfluenceScore < 0 || s.minConfluenceScore > 100)) {
+      errors.push("strategy.minConfluenceScore must be between 0 and 100");
     }
     if (typeof s.structureLookback === "number" && (s.structureLookback < 5 || s.structureLookback > 200)) {
       errors.push("strategy.structureLookback must be between 5 and 200");
@@ -300,9 +304,9 @@ function validateConfig(config: any): string[] {
 function getDefaultConfig() {
   return {
     strategy: {
-      // Recommended: 5.5-6.5 for balanced, 7.0+ for A+ only (0-10 scale, 20 factors)
+      // Confluence threshold is percentage-based (0-100%). 55% = balanced, 65% = conservative.
       enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-      minConfluenceScore: 6.0, minFactorCount: 0, htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
+      confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20, obMinBodyWickRatio: 0.5,
       obMustBeAtSwing: true, obInvalidationClose: true, obMitigationType: "touch",
       fvgMinSizePips: 5, fvgPremiumDiscountOnly: false, fvgFillPercentInvalidate: 75, fvgOnlyUnfilled: true,
       structureBreakConfirmation: "close", chochAsReversal: true, structureLookback: 50,
@@ -310,8 +314,8 @@ function getDefaultConfig() {
       premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true, zoneMethod: "fibonacci",
       htfBiasTimeframe: "1D", entryTimeframe: "15m", requireAllTFAligned: false, minTFsAligned: 2,
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-      // Normalized scoring: when true, score is percentage-based (auto-adjusts when factors are toggled)
-      normalizedScoring: false,
+      // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
+      normalizedScoring: true,
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
@@ -340,10 +344,7 @@ function getDefaultConfig() {
       minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8,
     },
     sessions: {
-      londonEnabled: true, londonStart: "08:00", londonEnd: "16:00",
-      newYorkEnabled: true, newYorkStart: "13:00", newYorkEnd: "21:00",
-      asianEnabled: false, asianStart: "00:00", asianEnd: "08:00",
-      sydneyEnabled: false, sydneyStart: "22:00", sydneyEnd: "06:00",
+      filter: ["london", "newyork"],
       activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
       newsFilterEnabled: true, newsFilterPauseMinutes: 30,
     },
