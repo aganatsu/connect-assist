@@ -219,7 +219,7 @@ export default function BotView() {
     // Legacy fallback: reconstruct from per-pair fotsi.baseTSI / fotsi.quoteTSI
     const currencyValues: Record<string, number[]> = {};
     for (const detail of latestDetailsClean) {
-      const fotsi = detail?.analysis?.fotsi || detail?.fotsi;
+      const fotsi = detail?.analysis_snapshot?.fotsi || detail?.analysis?.fotsi || detail?.fotsi;
       if (!fotsi || !detail?.pair) continue;
       const parts = (detail.pair as string).split("/");
       if (parts.length !== 2) continue;
