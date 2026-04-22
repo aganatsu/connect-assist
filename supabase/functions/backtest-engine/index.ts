@@ -1976,6 +1976,22 @@ Deno.serve(async (req) => {
     const entryInterval = tfMap[config.entryTimeframe] || "15m";
     const candleData: Record<string, { entry: Candle[]; daily: Candle[]; smt?: Candle[] }> = {};
 
+    // Diagnostic counters (declared early because pre-loop also references them)
+    const diagnostics = {
+      totalCandlesEvaluated: 0,
+      skippedNoYahooSymbol: 0,
+      skippedInsufficientData: 0,
+      skippedWeekend: 0,
+      skippedSession: 0,
+      skippedDay: 0,
+      skippedNoDirection: 0,
+      skippedBelowThreshold: 0,
+      skippedGateBlocked: 0,
+      skippedNoSLTP: 0,
+      signalsGenerated: 0,
+      tradesOpened: 0,
+    };
+
     for (const symbol of instruments) {
       if (!YAHOO_SYMBOLS[symbol]) { diagnostics.skippedNoYahooSymbol++; continue; }
       const [entryCandles, dailyCandles] = await Promise.all([
