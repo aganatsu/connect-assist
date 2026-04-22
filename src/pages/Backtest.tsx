@@ -62,6 +62,11 @@ interface BacktestResponse {
     skippedNoSLTP: number;
     signalsGenerated: number;
     tradesOpened: number;
+    // Actionable advice fields
+    highestScoreSeen: number;
+    enabledFactorCount: number;
+    totalFactorCount: number;
+    scoreDistribution: { below20: number; below40: number; below60: number; below80: number; above80: number };
   };
   config?: {
     minConfluence: number;
@@ -700,10 +705,10 @@ export default function Backtest() {
                   <SectionHeader title="Trading Sessions" description="Control which market sessions the bot trades during" icon={Clock} />
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
-                      { id: "asian", label: "Asian", time: "00:00–09:00 UTC" },
-                      { id: "london", label: "London", time: "07:00–16:00 UTC" },
-                      { id: "newyork", label: "New York", time: "12:00–21:00 UTC" },
-                      { id: "sydney", label: "Sydney", time: "21:00–06:00 UTC" },
+                      { id: "asian", label: "Asian", time: "8:00 PM – 2:00 AM ET" },
+                      { id: "london", label: "London", time: "2:00 AM – 8:30 AM ET" },
+                      { id: "newyork", label: "New York", time: "8:30 AM – 4:00 PM ET" },
+                      { id: "sydney", label: "Off-Hours", time: "4:00 PM – 8:00 PM ET" },
                     ].map(session => {
                       const enabled = config.sessions.filter?.includes(session.id) ?? true;
                       return (
@@ -843,7 +848,138 @@ export default function Backtest() {
         {/* ═══════════════════════════════════════════════════════════════
             ZERO-TRADE DIAGNOSTICS
             ═══════════════════════════════════════════════════════════════ */}
-        {results && results.stats.totalTrades === 0 && results.diagnostics && (
+        {results && results.stats.totalTrades === 0 && results.diagnostics && (() => {
+          const d = results.diagnostics!;
+          const cfg = results.config;
+          const total = d.totalCandlesFetched || 0;
+          const evaluated = d.totalCandlesEvaluated;
+          const sessionPct = total > 0 ? Math.round((d.skippedSession / total) * 100) : 0;
+          const noDirPct = evaluated > 0 ? Math.round((d.skippedNoDirection / evaluated) * 100) : 0;
+          const scored = evaluated - d.skippedNoDirection; // candles that got a score
+          const highScore = d.highestScoreSeen || 0;
+          const threshold = cfg?.minConfluence || 55;
+          const enabledFactors = d.enabledFactorCount || 0;
+          const totalFactors = d.totalFactorCount || 18;
+          const dist = d.scoreDistribution || { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 };
+
+          // ── Build prioritized advice ──
+          const advice: { priority: number; icon: string; title: string; detail: string; action: string }[] = [];
+
+          // Advice 1: Threshold too high (most common blocker)
+          if (d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 && highScore > 0) {
+            const suggestedThreshold = Math.max(20, Math.floor(highScore * 0.9));
+            advice.push({
+              priority: 1,
+              icon: "\u{1F3AF}",
+              title: "Threshold too high for current market",
+              detail: `Best score seen: ${highScore.toFixed(1)}% — but your threshold is ${threshold}%. ${scored} candle${scored !== 1 ? 's' : ''} scored below threshold.`,
+              action: `Lower confluence threshold to ~${suggestedThreshold}% to start seeing trades. You can always raise it later once you see what scores your config produces.`,
+            });
+          } else if (d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 && highScore === 0) {
+            advice.push({
+              priority: 1,
+              icon: "\u{1F3AF}",
+              title: "No candles scored above 0%",
+              detail: `${d.skippedBelowThreshold} candles were scored but none exceeded 0%. This usually means the scoring engine isn't finding any SMC patterns.`,
+              action: `Check that you have core factors enabled (Order Blocks, FVG, Structure Breaks). If using a very short date range, try extending it.`,
+            });
+          }
+
+          // Advice 2: Session filter removing too many candles
+          if (d.skippedSession > 0 && sessionPct > 50) {
+            const sessions = cfg?.enabledSessions || [];
+            const sessionList = sessions.length > 0 ? sessions.join(', ') : 'none';
+            advice.push({
+              priority: 2,
+              icon: "\u{1F570}\uFE0F",
+              title: `Session filter removed ${sessionPct}% of candles`,
+              detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${total.toLocaleString()} candles were outside these sessions.`,
+              action: sessions.includes('sydney')
+                ? `"Sydney" doesn't exist in the backend — it maps to Off-Hours (4:00–8:00 PM ET). Enable Asian session instead for broader coverage.`
+                : `Enable more sessions (Asian covers 8:00 PM–2:00 AM ET, London 2:00–8:30 AM ET, New York 8:30 AM–4:00 PM ET) to analyze more candles.`,
+            });
+          }
+
+          // Advice 3: Too few factors enabled
+          if (enabledFactors > 0 && enabledFactors < 5) {
+            advice.push({
+              priority: 3,
+              icon: "\u{1F9E9}",
+              title: `Only ${enabledFactors} of ${totalFactors} factors enabled`,
+              detail: `With few factors enabled, the maximum possible score is limited. Scores are normalized to enabled factors only, but having more factors gives the engine more ways to find confluence.`,
+              action: `Enable more core factors: Order Blocks, FVG, Structure Breaks, Liquidity Sweeps, and Displacement are the foundation. Each adds scoring opportunities.`,
+            });
+          }
+
+          // Advice 4: No direction on many candles
+          if (d.skippedNoDirection > 0 && noDirPct > 60) {
+            advice.push({
+              priority: 4,
+              icon: "\u{1F9ED}",
+              title: `${noDirPct}% of candles had no directional bias`,
+              detail: `${d.skippedNoDirection.toLocaleString()} candles couldn't determine a long/short direction. This is common in ranging/choppy markets.`,
+              action: `This is normal for ranging markets. Try different instruments with stronger trends, or extend the date range to include trending periods.`,
+            });
+          }
+
+          // Advice 5: Gate blocked
+          if (d.skippedGateBlocked > 0 && d.signalsGenerated > 0) {
+            advice.push({
+              priority: 5,
+              icon: "\u{1F6E1}\uFE0F",
+              title: `${d.skippedGateBlocked} signals blocked by safety gates`,
+              detail: `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
+              action: `Check your Risk and Protection settings. Common blockers: max concurrent trades too low, cooldown too long, or max daily drawdown too tight.`,
+            });
+          }
+
+          // Advice 6: No SL/TP
+          if (d.skippedNoSLTP > 0) {
+            advice.push({
+              priority: 6,
+              icon: "\u{1F4CF}",
+              title: `${d.skippedNoSLTP} signals had no valid SL/TP`,
+              detail: `The SL/TP calculator couldn't find valid levels for these signals. This can happen with structure-based SL when swing points are too far away.`,
+              action: `Try switching SL method to "ATR Based" or "Fixed Pips" for more consistent SL placement. Structure-based SL depends on clear swing points.`,
+            });
+          }
+
+          // Advice 7: Insufficient data
+          if (d.skippedInsufficientData > 0) {
+            advice.push({
+              priority: 7,
+              icon: "\u{1F4C9}",
+              title: `${d.skippedInsufficientData} instruments had insufficient data`,
+              detail: `Yahoo Finance provides limited historical data for intraday timeframes (~60 days for 15m, ~2 years for 1h).`,
+              action: `Shorten your date range, or switch to 1h timeframe for longer backtests. Daily timeframe has the most historical data.`,
+            });
+          }
+
+          // Advice 8: No Yahoo symbol
+          if (d.skippedNoYahooSymbol > 0) {
+            advice.push({
+              priority: 8,
+              icon: "\u274C",
+              title: `${d.skippedNoYahooSymbol} instruments have no Yahoo symbol mapping`,
+              detail: `These instruments were skipped because they don't have a Yahoo Finance ticker mapping in the backend.`,
+              action: `Remove unsupported instruments from your selection. Stick to major forex pairs, popular indices, gold, and BTC/ETH.`,
+            });
+          }
+
+          // Advice 9: All candles filtered (nothing to analyze)
+          if (evaluated === 0 && total > 0) {
+            advice.push({
+              priority: 0,
+              icon: "\u26A0\uFE0F",
+              title: "All candles were filtered out before analysis",
+              detail: `${total.toLocaleString()} candles were fetched but none survived the pre-analysis filters (weekend, session, day).`,
+              action: `Your session + day filters are too restrictive. Enable more sessions or check that your date range includes weekdays.`,
+            });
+          }
+
+          advice.sort((a, b) => a.priority - b.priority);
+
+          return (
           <Card className="border-warning/50 bg-warning/5">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
@@ -851,80 +987,133 @@ export default function Backtest() {
                 No Trades Generated — Diagnostic Report
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">The backtest completed but produced zero trades. Here's the filtering funnel:</p>
-              {/* Row 1: Total candles in range */}
-              <div className="grid grid-cols-1 gap-2">
-                <div className="px-3 py-2 border rounded text-center border-border/40">
-                  <p className="text-[10px] text-muted-foreground">Total Candles In Range</p>
-                  <p className="text-lg font-mono font-bold">{(results.diagnostics.totalCandlesFetched || 0).toLocaleString()}</p>
+            <CardContent className="space-y-4">
+              {/* ── Actionable Advice Section ── */}
+              {advice.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-warning">What to do</p>
+                  {advice.map((a, i) => (
+                    <div key={i} className="border border-warning/30 rounded-lg px-3 py-2.5 bg-warning/5 space-y-1">
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm mt-0.5">{a.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-foreground">{a.title}</p>
+                          <p className="text-[10px] text-muted-foreground leading-relaxed mt-0.5">{a.detail}</p>
+                          <p className="text-[10px] text-cyan font-medium leading-relaxed mt-1">{a.action}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── Score Distribution (when available) ── */}
+              {(dist.below20 > 0 || dist.below40 > 0 || dist.below60 > 0 || dist.below80 > 0 || dist.above80 > 0) && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Score Distribution</p>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[
+                      { label: "0–20%", value: dist.below20, color: "bg-red-500/70" },
+                      { label: "20–40%", value: dist.below40, color: "bg-orange-500/70" },
+                      { label: "40–60%", value: dist.below60, color: "bg-yellow-500/70" },
+                      { label: "60–80%", value: dist.below80, color: "bg-green-500/70" },
+                      { label: "80%+", value: dist.above80, color: "bg-cyan/70" },
+                    ].map(bucket => {
+                      const maxBucket = Math.max(dist.below20, dist.below40, dist.below60, dist.below80, dist.above80, 1);
+                      const barPct = Math.max(2, (bucket.value / maxBucket) * 100);
+                      return (
+                        <div key={bucket.label} className="text-center">
+                          <div className="h-12 flex items-end justify-center">
+                            <div className={`w-full rounded-t ${bucket.color}`} style={{ height: `${barPct}%` }} />
+                          </div>
+                          <p className="text-[9px] font-mono mt-0.5">{bucket.value}</p>
+                          <p className="text-[8px] text-muted-foreground">{bucket.label}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {highScore > 0 && (
+                    <p className="text-[10px] text-muted-foreground text-center">
+                      Highest score seen: <span className="font-mono font-bold text-foreground">{highScore.toFixed(1)}%</span>
+                      {' '}| Threshold: <span className="font-mono font-bold text-warning">{threshold}%</span>
+                      {highScore < threshold && (
+                        <span className="text-warning"> — gap of {(threshold - highScore).toFixed(1)}%</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* ── Filtering Funnel ── */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Filtering Funnel</p>
+                {/* Row 1: Total candles in range */}
+                <div className="grid grid-cols-1 gap-2">
+                  <div className="px-3 py-2 border rounded text-center border-border/40">
+                    <p className="text-[10px] text-muted-foreground">Total Candles In Range</p>
+                    <p className="text-lg font-mono font-bold">{total.toLocaleString()}</p>
+                  </div>
+                </div>
+                {/* Row 2: Pre-filters */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { label: "\u2796 Weekend", value: d.skippedWeekend, warn: false },
+                    { label: "\u2796 Session Filter", value: d.skippedSession, warn: sessionPct > 50 },
+                    { label: "\u2796 Day Filter", value: d.skippedDay, warn: d.skippedDay > 100 },
+                    { label: "\u2796 No Data", value: d.skippedInsufficientData, warn: d.skippedInsufficientData > 0 },
+                  ].map(item => (
+                    <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                      <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                      <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Row 3: Candles analyzed */}
+                <div className="grid grid-cols-1 gap-2">
+                  <div className={`px-3 py-2 border rounded text-center ${evaluated === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
+                    <p className="text-[10px] text-muted-foreground">Candles Analyzed (survived filters)</p>
+                    <p className={`text-lg font-mono font-bold ${evaluated === 0 ? 'text-warning' : 'text-primary'}`}>{evaluated.toLocaleString()}</p>
+                  </div>
+                </div>
+                {/* Row 4: Analysis results */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { label: "\u2796 No Direction", value: d.skippedNoDirection, warn: noDirPct > 60 },
+                    { label: "\u2796 Below Threshold", value: d.skippedBelowThreshold, warn: d.skippedBelowThreshold > 0 && d.signalsGenerated === 0 },
+                    { label: "\u2796 Gate Blocked", value: d.skippedGateBlocked, warn: d.skippedGateBlocked > 0 },
+                    { label: "\u2796 No SL/TP", value: d.skippedNoSLTP, warn: d.skippedNoSLTP > 0 },
+                  ].map(item => (
+                    <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                      <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                      <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Row 5: Final outcome */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {[
+                    { label: "Signals Passed", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
+                    { label: "Trades Opened", value: d.tradesOpened, warn: d.tradesOpened === 0 },
+                    { label: "No Yahoo Symbol", value: d.skippedNoYahooSymbol, warn: d.skippedNoYahooSymbol > 0 },
+                  ].map(item => (
+                    <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                      <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                      <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
-              {/* Row 2: Pre-filters (removed before analysis) */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {[
-                  { label: "\u2796 Weekend", value: results.diagnostics.skippedWeekend, warn: false },
-                  { label: "\u2796 Session Filter", value: results.diagnostics.skippedSession, warn: results.diagnostics.skippedSession > (results.diagnostics.totalCandlesFetched || 1) * 0.9 },
-                  { label: "\u2796 Day Filter", value: results.diagnostics.skippedDay, warn: results.diagnostics.skippedDay > 100 },
-                  { label: "\u2796 No Data", value: results.diagnostics.skippedInsufficientData, warn: results.diagnostics.skippedInsufficientData > 0 },
-                ].map(item => (
-                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
-                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
-                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
-                  </div>
-                ))}
-              </div>
-              {/* Row 3: Candles analyzed */}
-              <div className="grid grid-cols-1 gap-2">
-                <div className={`px-3 py-2 border rounded text-center ${results.diagnostics.totalCandlesEvaluated === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
-                  <p className="text-[10px] text-muted-foreground">Candles Analyzed (survived filters)</p>
-                  <p className={`text-lg font-mono font-bold ${results.diagnostics.totalCandlesEvaluated === 0 ? 'text-warning' : 'text-primary'}`}>{results.diagnostics.totalCandlesEvaluated.toLocaleString()}</p>
-                </div>
-              </div>
-              {/* Row 4: Analysis results */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {[
-                  { label: "\u2796 No Direction", value: results.diagnostics.skippedNoDirection, warn: false },
-                  { label: "\u2796 Below Threshold", value: results.diagnostics.skippedBelowThreshold, warn: results.diagnostics.skippedBelowThreshold > 0 && results.diagnostics.signalsGenerated === 0 },
-                  { label: "\u2796 Gate Blocked", value: results.diagnostics.skippedGateBlocked, warn: results.diagnostics.skippedGateBlocked > 0 },
-                  { label: "\u2796 No SL/TP", value: results.diagnostics.skippedNoSLTP, warn: results.diagnostics.skippedNoSLTP > 0 },
-                ].map(item => (
-                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
-                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
-                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
-                  </div>
-                ))}
-              </div>
-              {/* Row 5: Final outcome */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {[
-                  { label: "Signals Passed", value: results.diagnostics.signalsGenerated, warn: results.diagnostics.signalsGenerated === 0 },
-                  { label: "Trades Opened", value: results.diagnostics.tradesOpened, warn: results.diagnostics.tradesOpened === 0 },
-                  { label: "No Yahoo Symbol", value: results.diagnostics.skippedNoYahooSymbol, warn: results.diagnostics.skippedNoYahooSymbol > 0 },
-                ].map(item => (
-                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
-                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
-                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
-                  </div>
-                ))}
-              </div>
-              {results.config && (
-                <div className="text-[10px] text-muted-foreground border-t border-border/30 pt-2 mt-2 space-y-0.5">
-                  <p><strong>Config used:</strong> threshold={results.config.minConfluence}%, sessions=[{results.config.enabledSessions.join(', ')}], days=[{results.config.enabledDays.join(',')}], tf={results.config.entryTimeframe}</p>
-                  {results.diagnostics.totalCandlesEvaluated === 0 && results.diagnostics.skippedSession > 0 && (
-                    <p className="text-warning font-medium">All candles were filtered by session — check that your session filter matches the data's trading hours.</p>
-                  )}
-                  {results.diagnostics.skippedInsufficientData > 0 && (
-                    <p className="text-warning font-medium">Some instruments had insufficient candle data. Yahoo only provides ~60 days of 15m data. Try a shorter date range or use 1h timeframe.</p>
-                  )}
-                  {results.diagnostics.skippedBelowThreshold > 50 && results.diagnostics.signalsGenerated === 0 && (
-                    <p className="text-warning font-medium">Many candles scored below the {results.config.minConfluence}% threshold. Try lowering the confluence threshold.</p>
-                  )}
+
+              {/* ── Config Summary ── */}
+              {cfg && (
+                <div className="text-[10px] text-muted-foreground border-t border-border/30 pt-2 space-y-0.5">
+                  <p><strong>Config:</strong> threshold={threshold}%, sessions=[{cfg.enabledSessions.join(', ')}], days=[{cfg.enabledDays.join(',')}], tf={cfg.entryTimeframe}, factors={enabledFactors}/{totalFactors} enabled</p>
                 </div>
               )}
             </CardContent>
           </Card>
-        )}
+          );
+        })()}
 
         {/* ═══════════════════════════════════════════════════════════════
             RESULTS DASHBOARD

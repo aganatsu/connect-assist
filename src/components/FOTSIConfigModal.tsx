@@ -543,7 +543,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                     { key: "london", label: "London Session", time: "3:00 AM – 12:00 PM NY", emoji: "🇬🇧" },
                     { key: "newYork", label: "New York Session", time: "8:00 AM – 5:00 PM NY", emoji: "🇺🇸" },
                     { key: "asian", label: "Asian Session", time: "7:00 PM – 4:00 AM NY", emoji: "🇯🇵" },
-                    { key: "sydney", label: "Sydney Session", time: "5:00 PM – 2:00 AM NY", emoji: "🇦🇺" },
+                    { key: "sydney", label: "Off-Hours", time: "4:00 PM – 8:00 PM NY", emoji: "🕛" },
                   ].map((s) => (
                     <div key={s.key} className="flex items-center justify-between p-3 border border-border hover:border-border/80 transition-colors">
                       <div className="flex items-center gap-2">

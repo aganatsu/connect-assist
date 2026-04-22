@@ -2053,7 +2053,35 @@ async function runBacktestJob(runId: string, body: any) {
       skippedNoSLTP: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
+      // ── Actionable advice fields ──
+      highestScoreSeen: 0,           // Best confluence score across ALL scored candles
+      enabledFactorCount: 0,         // How many factors are enabled in config
+      totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
+      scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
     };
+
+    // Compute enabledFactorCount from config toggles
+    const DIAG_TOGGLE_MAP: Record<string, string> = {
+      marketStructure: "enableStructureBreak",
+      orderBlock: "enableOB",
+      fairValueGap: "enableFVG",
+      liquiditySweep: "enableLiquiditySweep",
+      displacement: "useDisplacement",
+      breakerBlock: "useBreakerBlocks",
+      unicornModel: "useUnicornModel",
+      smtDivergence: "useSMT",
+      volumeProfile: "useVolumeProfile",
+      amdPhase: "useAMD",
+      currencyStrength: "useFOTSI",
+      dailyBias: "useDailyBias",
+    };
+    let enabledCount = 0;
+    for (const key of Object.keys(DEFAULT_FACTOR_WEIGHTS)) {
+      const toggleKey = DIAG_TOGGLE_MAP[key];
+      if (toggleKey && (config as any)[toggleKey] === false) continue;
+      enabledCount++;
+    }
+    diagnostics.enabledFactorCount = enabledCount;
 
     for (const symbol of instruments) {
       if (!YAHOO_SYMBOLS[symbol]) { diagnostics.skippedNoYahooSymbol++; continue; }
@@ -2275,6 +2303,16 @@ async function runBacktestJob(runId: string, body: any) {
         (config as any)._fotsiResult = fotsiForBar;
 
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
+
+        // ── Track score diagnostics (even for rejected candles) ──
+        if (analysis.direction) {
+          if (analysis.score > diagnostics.highestScoreSeen) diagnostics.highestScoreSeen = analysis.score;
+          if (analysis.score < 20) diagnostics.scoreDistribution.below20++;
+          else if (analysis.score < 40) diagnostics.scoreDistribution.below40++;
+          else if (analysis.score < 60) diagnostics.scoreDistribution.below60++;
+          else if (analysis.score < 80) diagnostics.scoreDistribution.below80++;
+          else diagnostics.scoreDistribution.above80++;
+        }
 
         // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
         if (!analysis.direction) { diagnostics.skippedNoDirection++; continue; }

@@ -1243,7 +1243,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         { id: "asian", label: "Asian Session", desc: "8:00 PM – 2:00 AM ET (Tokyo / Hong Kong)" },
                         { id: "london", label: "London Session", desc: "2:00 AM – 8:30 AM ET (London open)" },
                         { id: "newyork", label: "New York Session", desc: "8:30 AM – 4:00 PM ET (NY open)" },
-                        { id: "sydney", label: "Sydney Session", desc: "5:00 PM – 2:00 AM ET (FX week open)" },
+                        { id: "sydney", label: "Off-Hours", desc: "4:00 PM – 8:00 PM ET (gap between NY close & Asian open)" },
                       ].map(session => {
                         // Derive enabled state: prefer filter array, fall back to legacy booleans
                         const filterArr = config.sessions?.filter;
