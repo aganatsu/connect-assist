@@ -528,6 +528,7 @@ export type Database = {
       }
       scan_logs: {
         Row: {
+          bot_id: string
           created_at: string
           details_json: Json | null
           id: string
@@ -538,6 +539,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          bot_id?: string
           created_at?: string
           details_json?: Json | null
           id?: string
@@ -548,6 +550,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          bot_id?: string
           created_at?: string
           details_json?: Json | null
           id?: string

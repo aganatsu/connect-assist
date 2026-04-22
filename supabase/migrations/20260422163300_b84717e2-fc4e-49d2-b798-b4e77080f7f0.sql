@@ -1,0 +1,2 @@
+ALTER TABLE public.scan_logs ADD COLUMN IF NOT EXISTS bot_id text NOT NULL DEFAULT 'smc';
+CREATE INDEX IF NOT EXISTS idx_scan_logs_user_bot_created ON public.scan_logs(user_id, bot_id, created_at DESC);
