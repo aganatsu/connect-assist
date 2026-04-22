@@ -116,8 +116,60 @@ export default function BotView() {
   });
   const scanMut = useMutation({
     mutationFn: () => scannerApi.manualScan(),
-    onSuccess: (data: any) => { queryClient.invalidateQueries({ queryKey: ["paper-status"] }); queryClient.invalidateQueries({ queryKey: ["scan-logs"] }); toast.success(data.started ? "Scan started — results will appear shortly" : `Scan: ${data.signalsFound ?? 0} signals, ${data.tradesPlaced ?? 0} trades`); },
-    onError: (err: any) => toast.error(err.message),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
+
+      // Backend now returns the full scan result (not fire-and-forget).
+      // Handle error responses from the backend
+      if (data.error) {
+        toast.error(`Scan failed: ${data.error}`);
+        return;
+      }
+
+      // Handle skip reasons (overlap, interval, day not enabled, no account, etc.)
+      if (data.skippedReason) {
+        const reason = data.skippedReason;
+        const friendlyReasons: Record<string, string> = {
+          overlap: "Another scan is still running — try again in a minute",
+          "Day not enabled": "Today is not an enabled trading day in your config",
+          "No paper account": "No paper trading account found — set one up first",
+        };
+        const msg = friendlyReasons[reason] || (reason.startsWith("interval") ? `Scan skipped — ${reason}` : `Scan skipped: ${reason}`);
+        toast.warning(msg, { duration: 5000 });
+        return;
+      }
+
+      // Show detailed results
+      const pairs = data.pairsScanned ?? 0;
+      const signals = data.signalsFound ?? 0;
+      const trades = data.tradesPlaced ?? 0;
+      const rejected = data.rejected ?? 0;
+
+      if (signals > 0 || trades > 0) {
+        toast.success(`Scan complete: ${pairs} pairs → ${signals} signal${signals !== 1 ? "s" : ""}, ${trades} trade${trades !== 1 ? "s" : ""} placed`, { duration: 5000 });
+      } else if (pairs > 0) {
+        // Scanned pairs but found nothing — show the details breakdown
+        const details: any[] = data.details || [];
+        const sessionSkipped = details.filter((d: any) => d.reason?.includes("session not enabled")).length;
+        const belowThreshold = details.filter((d: any) => d.reason?.includes("Below threshold") || d.reason?.includes("below threshold")).length;
+        const noDirection = details.filter((d: any) => d.reason?.includes("No direction")).length;
+        const insufficientData = details.filter((d: any) => d.reason?.includes("Insufficient")).length;
+
+        let detail = `${pairs} pairs scanned, 0 signals.`;
+        const reasons: string[] = [];
+        if (sessionSkipped > 0) reasons.push(`${sessionSkipped} session-filtered`);
+        if (belowThreshold > 0) reasons.push(`${belowThreshold} below threshold`);
+        if (noDirection > 0) reasons.push(`${noDirection} no direction`);
+        if (insufficientData > 0) reasons.push(`${insufficientData} insufficient data`);
+        if (reasons.length > 0) detail += " " + reasons.join(", ") + ".";
+
+        toast.info(detail, { duration: 6000 });
+      } else {
+        toast.info("Scan completed — no pairs were scanned", { duration: 4000 });
+      }
+    },
+    onError: (err: any) => toast.error(`Scan request failed: ${err.message}`),
   });
 
   // ── Bot #2 FOTSI queries ──
