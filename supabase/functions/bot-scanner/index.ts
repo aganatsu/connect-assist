@@ -1032,7 +1032,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
       const atKeyLevel = atOB || atFVG || atPDPW;
       // Check for displacement on the reversal candle
-      const hasDisp = displacement.detected;
+      const hasDisp = displacement.isDisplacement;
       if (atKeyLevel && hasDisp) {
         pts = 1.5;
         const levels: string[] = [];
