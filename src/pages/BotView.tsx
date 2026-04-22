@@ -813,7 +813,7 @@ export default function BotView() {
                               {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
                             </div>
                             <div className="flex items-center gap-1.5">
-                              <span className={`font-mono font-bold ${sig.score > 10 ? (sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground") : (sig.score >= 6 ? "text-success" : sig.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{sig.score > 10 ? `${sig.score.toFixed(1)}%` : sig.score?.toFixed(1)}</span>
+                              <span className={`font-mono font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
                               <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
                             </div>
                           </button>
