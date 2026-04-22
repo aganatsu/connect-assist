@@ -205,7 +205,15 @@ export default function BotView() {
   // Pull the candle-source meta entry that the scanner prepends to details_json
   // (so we can show which feed served the selected scan), and produce a filtered
   // list that excludes the meta row from rendering as a fake "pair".
-  const latestRawDetails: any[] = currentScan && Array.isArray(currentScan.details_json) ? currentScan.details_json : [];
+  const latestRawDetails: any[] = (() => {
+    if (!currentScan) return [];
+    let dj = currentScan.details_json;
+    // Supabase may return details_json as a JSON string — parse it safely
+    if (typeof dj === "string") {
+      try { dj = JSON.parse(dj); } catch { return []; }
+    }
+    return Array.isArray(dj) ? dj : [];
+  })();
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
   const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
