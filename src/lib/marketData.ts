@@ -68,11 +68,13 @@ export const TIMEFRAMES: { value: Timeframe; label: string }[] = [
   { value: '5min', label: '5M' },
 ];
 
+// Display-only session windows (UTC hours, approximate for chart overlays).
+// These are cosmetic — the actual gating uses _shared/sessions.ts (NY time).
 export const SESSIONS = [
-  { name: "Sydney", start: 21, end: 6, color: "hsl(270, 55%, 70%)" },
-  { name: "Asian", start: 0, end: 8, color: "hsl(280, 60%, 65%)" },
-  { name: "London", start: 7, end: 16, color: "hsl(210, 100%, 52%)" },
-  { name: "New York", start: 12, end: 21, color: "hsl(38, 92%, 50%)" },
+  { name: "Asian", start: 0, end: 7, color: "hsl(280, 60%, 65%)" },
+  { name: "London", start: 7, end: 13, color: "hsl(210, 100%, 52%)" },
+  { name: "New York", start: 13, end: 21, color: "hsl(38, 92%, 50%)" },
+  { name: "Off-Hours", start: 21, end: 0, color: "hsl(270, 55%, 70%)" },
 ];
 
 export const KILL_ZONES = [
@@ -83,12 +85,21 @@ export const KILL_ZONES = [
 ];
 
 export function getCurrentSession(): string {
-  const h = new Date().getUTCHours();
-  if (h >= 7 && h < 12) return "London";
-  if (h >= 12 && h < 16) return "London/NY Overlap";
-  if (h >= 16 && h < 21) return "New York";
-  if (h >= 21 || h < 6) return "Sydney/Asian";
-  return "Asian";
+  // Use Intl to get NY local hour (DST-aware), matching the canonical session boundaries.
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(new Date());
+  let h = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  if (h === 24) h = 0;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  const t = h + m / 60;
+  if (t >= 2 && t < 8.5) return "London";
+  if (t >= 8.5 && t < 16) return "New York";
+  if (t >= 16 && t < 20) return "Off-Hours";
+  return "Asian"; // 20:00 - 02:00 NY
 }
 
 export function isInKillzone(): { active: boolean; name: string } {

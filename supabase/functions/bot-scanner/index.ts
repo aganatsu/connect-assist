@@ -29,6 +29,13 @@ import {
   classifySetupType, manageOpenPositions,
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
+import {
+  detectSession as sharedDetectSession,
+  toNYTime as sharedToNYTime,
+  normalizeSessionFilter,
+  isSessionEnabled,
+  type SessionResult,
+} from "../_shared/sessions.ts";
 
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -417,65 +424,11 @@ function computeVolumeProfile(candles: Candle[], numBins = 50): VolumeProfileRes
 }
 
 
-// ─── DST-Aware New York Time Helper ─────────────────────────────────
-function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
-  const year = utc.getUTCFullYear();
-  const mar1 = new Date(Date.UTC(year, 2, 1));
-  const marSun2 = 14 - mar1.getUTCDay();
-  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0);
-  const nov1 = new Date(Date.UTC(year, 10, 1));
-  const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
-  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0);
-  const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
-  const offsetH = isEDT ? 4 : 5;
-  const nyMs = utc.getTime() - offsetH * 3600_000;
-  const ny = new Date(nyMs);
-  const h = ny.getUTCHours();
-  const m = ny.getUTCMinutes();
-  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
-}
-
-// ─── Session Detection (DST-aware, config-driven) ─────────────────
-const DEFAULT_SESSION_WINDOWS = {
-  sydney:  { start: 17, end: 26 },
-  asian:   { start: 20, end: 26 },
-  london:  { start: 2,  end: 8.5 },
-  newYork: { start: 8.5, end: 16 },
-};
-
-function parseHHMM(s: any, fallback: number): number {
-  if (typeof s !== "string") return fallback;
-  const m = s.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return fallback;
-  return Number(m[1]) + Number(m[2]) / 60;
-}
-
-function inWindow(t: number, start: number, end: number): boolean {
-  if (end > 24) {
-    return t >= start || t < (end - 24);
-  }
-  return t >= start && t < end;
-}
-
-function detectSession(_config?: any): { name: string; isKillZone: boolean } {
-  const ny = toNYTime(new Date());
-  const t = ny.t;
-  const lonStart = DEFAULT_SESSION_WINDOWS.london.start;
-  const lonEnd   = DEFAULT_SESSION_WINDOWS.london.end;
-  const nyStart  = DEFAULT_SESSION_WINDOWS.newYork.start;
-  const nyEnd    = DEFAULT_SESSION_WINDOWS.newYork.end;
-  const asiaStart = DEFAULT_SESSION_WINDOWS.asian.start;
-  const asiaEnd   = DEFAULT_SESSION_WINDOWS.asian.end;
-  const sydStart  = DEFAULT_SESSION_WINDOWS.sydney.start;
-  const sydEnd    = DEFAULT_SESSION_WINDOWS.sydney.end;
-  const inLondonKZ = t >= 2 && t < 5;
-  const inNYKZ = (t >= 8.5 && t < 11) || (t >= 11 && t < 12);
-  if (inWindow(t, lonStart, lonEnd))   return { name: "London",   isKillZone: inLondonKZ };
-  if (inWindow(t, nyStart,  nyEnd))    return { name: "New York", isKillZone: inNYKZ };
-  if (inWindow(t, asiaStart, asiaEnd)) return { name: "Asian",    isKillZone: false };
-  if (inWindow(t, sydStart, sydEnd))   return { name: "Sydney",   isKillZone: false };
-  return { name: "Off-Hours", isKillZone: false };
-}
+// ─── Session & Time Helpers (delegated to _shared/sessions.ts) ──────
+// All imported from _shared/sessions.ts — SINGLE SOURCE OF TRUTH.
+// Local aliases for backward compatibility with existing call sites.
+function toNYTime(utc: Date) { return sharedToNYTime(utc); }
+function detectSession(_config?: any): SessionResult { return sharedDetectSession(); }
 
 // ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
 function detectSilverBullet(): SilverBulletResult {
@@ -2189,16 +2142,19 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
         : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
 
     // ── Sessions ──
-    enabledSessions: (Array.isArray(sessions.filter) && sessions.filter.length > 0
-      ? sessions.filter.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
-      : sessions.asianEnabled !== undefined
-        ? [
-            ...(sessions.asianEnabled ? ["asian"] : []),
-            ...(sessions.londonEnabled ? ["london"] : []),
-            ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
-            ...(sessions.sydneyEnabled ? ["sydney"] : []),
-          ]
-        : (Array.isArray(raw.enabledSessions) ? raw.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, "")) : DEFAULTS.enabledSessions)
+    // Session filter: use shared normalizeSessionFilter for consistent parsing.
+    // Handles filter arrays, legacy boolean configs, and "sydney" → "offhours" migration.
+    enabledSessions: (
+      Array.isArray(sessions.filter)
+        ? normalizeSessionFilter(sessions.filter)
+        : sessions.asianEnabled !== undefined
+          ? normalizeSessionFilter([
+              ...(sessions.asianEnabled ? ["asian"] : []),
+              ...(sessions.londonEnabled ? ["london"] : []),
+              ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
+              ...(sessions.sydneyEnabled ? ["sydney"] : []),  // migrated to "offhours" by normalizeSessionFilter
+            ])
+          : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : DEFAULTS.enabledSessions)
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
@@ -2753,9 +2709,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   const session = detectSession(config);
-  // Session filter: normalize names for comparison
-  const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
-  const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
+  // Session filter: use filterKey directly from shared sessions module (no more manual normalization)
+  const normalizedSession = session.filterKey;
   // Session gate is now checked per-instrument inside the loop, not globally
   // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
   {
@@ -2953,9 +2908,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // and Sydney open), allow scanning if user has all 3 core sessions enabled — their intent
     // is clearly 24/5 scanning and the gap is an artefact of non-overlapping session windows.
     const pairAssetProfile = getAssetProfile(pair);
+    // Session gate: empty enabledSessions = NOTHING enabled (bot pauses).
+    // Off-hours is implicitly allowed when all 3 core sessions are enabled (user wants 24/5).
     const coreSessionsEnabled = ["asian", "london", "newyork"].every(s => config.enabledSessions.includes(s));
-    const offHoursImplicitlyAllowed = normalizedSession === "off-hours" && coreSessionsEnabled;
-    if (!pairAssetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession) && !offHoursImplicitlyAllowed) {
+    const offHoursImplicitlyAllowed = normalizedSession === "offhours" && coreSessionsEnabled;
+    if (!pairAssetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions) && !offHoursImplicitlyAllowed) {
       scanDetails.push({ pair, status: "skipped", reason: `${session.name} session not enabled for ${pair}` });
       continue;
     }

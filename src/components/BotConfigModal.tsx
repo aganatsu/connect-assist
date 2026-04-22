@@ -86,7 +86,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "instruments", label: "Volatility Filter (ATR)", keywords: ["atr", "volatility", "filter", "min", "max"] },
   { tab: "instruments", label: "Global Spread Override", keywords: ["spread", "max", "pips", "per-instrument", "auto"] },
   // Sessions
-  { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "sydney"] },
+  { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "off-hours", "offhours"] },
   { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
   { tab: "sessions", label: "Enable News Filter", keywords: ["news", "nfp", "fomc", "cpi", "economic", "filter"] },
   { tab: "sessions", label: "Pause Window (minutes)", keywords: ["news", "pause", "window", "minutes"] },
@@ -198,7 +198,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxDailyLoss: 5, maxOpenPositions: 6, minRiskReward: 1.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4 },
-      sessions: { ...BASE_CONFIG.sessions, filter: ["asian", "london", "newyork", "sydney"] },
+      sessions: { ...BASE_CONFIG.sessions, filter: ["asian", "london", "newyork", "offhours"] },
       tradingStyle: { mode: "scalper" },
     },
   },
@@ -1243,7 +1243,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         { id: "asian", label: "Asian Session", desc: "8:00 PM – 2:00 AM ET (Tokyo / Hong Kong)" },
                         { id: "london", label: "London Session", desc: "2:00 AM – 8:30 AM ET (London open)" },
                         { id: "newyork", label: "New York Session", desc: "8:30 AM – 4:00 PM ET (NY open)" },
-                        { id: "sydney", label: "Off-Hours", desc: "4:00 PM – 8:00 PM ET (gap between NY close & Asian open)" },
+                        { id: "offhours", label: "Off-Hours", desc: "4:00 PM – 8:00 PM ET (gap between NY close & Asian open)" },
                       ].map(session => {
                         // Derive enabled state: prefer filter array, fall back to legacy booleans
                         const filterArr = config.sessions?.filter;
@@ -1260,7 +1260,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                                 ...(sessions_cfg.asianEnabled ? ["asian"] : []),
                                 ...(sessions_cfg.londonEnabled ? ["london"] : []),
                                 ...(sessions_cfg.newYorkEnabled || sessions_cfg.newyorkEnabled ? ["newyork"] : []),
-                                ...(sessions_cfg.sydneyEnabled ? ["sydney"] : []),
+                                ...(sessions_cfg.sydneyEnabled || sessions_cfg.offHoursEnabled ? ["offhours"] : []),
                               ];
                           const updated = checked
                             ? [...new Set([...current, session.id])]

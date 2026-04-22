@@ -35,6 +35,14 @@ import {
   fetchCandlesWithFallback,
   type Candle,
 } from "../_shared/candleSource.ts";
+import {
+  detectSession as sharedDetectSession,
+  normalizeSessionFilter,
+  legacyBoolsToFilter,
+  isSessionEnabled,
+  type SessionResult,
+  type SessionFilterKey,
+} from "../_shared/sessions.ts";
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -72,12 +80,9 @@ const DEFAULTS = {
   maxHoldHours: 48,               // Max hold time
   breakEvenAfterTP1: true,        // Move SL to entry after TP1
 
-  // Session filter
+  // Session filter (canonical filter-array format)
   sessions: {
-    london: true,
-    newYork: true,
-    asian: false,
-    sydney: false,
+    filter: ["london", "newyork"] as SessionFilterKey[],
   },
   killZoneOnly: false,
 
@@ -182,22 +187,17 @@ function findRecentSwingLow(candles: Candle[], lookback: number = 20): number {
   return lowest;
 }
 
-// ─── Session detection ─────────────────────────────────────────────
-
-function toNYTime(date: Date): Date {
-  const utcMs = date.getTime();
-  const nyOffset = -4 * 60 * 60 * 1000; // EDT (simplified)
-  return new Date(utcMs + nyOffset);
-}
-
-function detectSession(now: Date): { london: boolean; newYork: boolean; asian: boolean; sydney: boolean } {
-  const ny = toNYTime(now);
-  const h = ny.getUTCHours();
+// ─── Session detection (delegated to _shared/sessions.ts) ───────────
+// Wrapper that returns the old boolean shape for backward compat with
+// scan-log serialization, but internally uses the shared module.
+function detectSession(_now: Date): SessionResult & { london: boolean; newYork: boolean; asian: boolean; offHours: boolean } {
+  const session = sharedDetectSession();
   return {
-    sydney: h >= 17 || h < 2,    // 5pm - 2am NY
-    asian: h >= 19 || h < 4,     // 7pm - 4am NY
-    london: h >= 3 && h < 12,    // 3am - 12pm NY
-    newYork: h >= 8 && h < 17,   // 8am - 5pm NY
+    ...session,
+    london: session.filterKey === "london",
+    newYork: session.filterKey === "newyork",
+    asian: session.filterKey === "asian",
+    offHours: session.filterKey === "offhours",
   };
 }
 
@@ -543,11 +543,23 @@ function loadConfig(raw: Record<string, unknown> | null): Config {
     partialClosePercent: Number(c.partialClosePercent ?? DEFAULTS.partialClosePercent),
     maxHoldHours: Number(c.maxHoldHours ?? DEFAULTS.maxHoldHours),
     breakEvenAfterTP1: c.breakEvenAfterTP1 !== undefined ? Boolean(c.breakEvenAfterTP1) : DEFAULTS.breakEvenAfterTP1,
+    // Session config: support both new filter-array and legacy boolean formats.
+    // Legacy booleans (london: true, sydney: true) are migrated to filter array.
     sessions: {
-      london: (c.sessions as Record<string, boolean>)?.london ?? DEFAULTS.sessions.london,
-      newYork: (c.sessions as Record<string, boolean>)?.newYork ?? DEFAULTS.sessions.newYork,
-      asian: (c.sessions as Record<string, boolean>)?.asian ?? DEFAULTS.sessions.asian,
-      sydney: (c.sessions as Record<string, boolean>)?.sydney ?? DEFAULTS.sessions.sydney,
+      filter: (() => {
+        const raw = c.sessions as Record<string, any> | undefined;
+        if (!raw) return [...DEFAULTS.sessions.filter];
+        // New format: sessions.filter array
+        if (Array.isArray(raw.filter)) return normalizeSessionFilter(raw.filter);
+        // Legacy format: boolean keys
+        return legacyBoolsToFilter({
+          london: raw.london,
+          newYork: raw.newYork,
+          asian: raw.asian,
+          sydney: raw.sydney,
+          offHours: raw.offHours,
+        });
+      })(),
     },
     killZoneOnly: c.killZoneOnly !== undefined ? Boolean(c.killZoneOnly) : DEFAULTS.killZoneOnly,
     ema50Period: Number(c.ema50Period ?? DEFAULTS.ema50Period),
@@ -758,11 +770,7 @@ async function runScan(
   }
 
   const session = detectSession(now);
-  const inActiveSession =
-    (config.sessions.london && session.london) ||
-    (config.sessions.newYork && session.newYork) ||
-    (config.sessions.asian && session.asian) ||
-    (config.sessions.sydney && session.sydney);
+  const inActiveSession = isSessionEnabled(session, config.sessions.filter);
 
   if (!manualScan && !inActiveSession) {
     log("Outside active sessions — skipping scan");

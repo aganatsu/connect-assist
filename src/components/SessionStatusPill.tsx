@@ -45,19 +45,19 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
     return () => clearInterval(id);
   }, []);
 
-  const current = detectSession(now, sessions);
+  const current = detectSession(now);
   const enabled = isCurrentSessionEnabled(now, sessions);
   const counts = countFromDetails(scanDetails);
 
-  // CASE 1: at least one pair scanned in latest log → green pill, with optional split note
+  // CASE 1: at least one pair scanned in latest log → green pill
   if (enabled || (counts && counts.scanned > 0)) {
     return (
       <span
         className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-success/10 text-success border border-success/30 ${className}`}
-        title={`Bot is scanning during ${current} session`}
+        title={`Bot is scanning during ${current.name} session`}
       >
         <Activity className="h-2.5 w-2.5" />
-        Scanning · {current}
+        Scanning · {current.name}
         {counts && (
           <span className="text-success/80">
             · {counts.scanned}/{counts.total} pairs
@@ -94,10 +94,10 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
   return (
     <span
       className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-warning/10 text-warning border border-warning/30 ${className}`}
-      title={`Currently ${current}. Next enabled session: ${next.name} at ${formatNYTime(next.startsAt)} NY`}
+      title={`Currently ${current.name}. Next enabled session: ${next.name} at ${formatNYTime(next.startsAt)} NY`}
     >
       <Clock className="h-2.5 w-2.5" />
-      Paused · {current} · resumes in {formatCountdown(next.msUntil)} ({next.name} @ {formatNYTime(next.startsAt)} NY)
+      Paused · {current.name} · resumes in {formatCountdown(next.msUntil)} ({next.name} @ {formatNYTime(next.startsAt)} NY)
     </span>
   );
 }

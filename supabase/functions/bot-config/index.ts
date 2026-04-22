@@ -296,6 +296,36 @@ function validateConfig(config: any): string[] {
     if (typeof sess.newsFilterPauseMinutes === "number" && (sess.newsFilterPauseMinutes < 0 || sess.newsFilterPauseMinutes > 240)) {
       errors.push("sessions.newsFilterPauseMinutes must be between 0 and 240");
     }
+    // Validate sessions.filter array — only canonical keys allowed
+    if (Array.isArray(sess.filter)) {
+      const VALID_SESSION_KEYS = ["asian", "london", "newyork", "offhours"];
+      // Auto-migrate known legacy values before validation
+      const migrationMap: Record<string, string> = {
+        "sydney": "offhours",
+        "off-hours": "offhours",
+        "off_hours": "offhours",
+        "new_york": "newyork",
+        "new york": "newyork",
+      };
+      const migrated: string[] = [];
+      for (const item of sess.filter) {
+        if (typeof item !== "string") {
+          errors.push(`sessions.filter contains non-string value: ${JSON.stringify(item)}`);
+          continue;
+        }
+        const normalized = item.toLowerCase().trim().replace(/\s+/g, "");
+        const mapped = migrationMap[normalized] ?? normalized;
+        if (!VALID_SESSION_KEYS.includes(mapped)) {
+          errors.push(`sessions.filter contains unknown session key: "${item}". Valid keys: ${VALID_SESSION_KEYS.join(", ")}`);
+        } else {
+          migrated.push(mapped);
+        }
+      }
+      // Auto-fix: deduplicate and replace with migrated values
+      if (errors.length === 0) {
+        sess.filter = [...new Set(migrated)];
+      }
+    }
   }
 
   return errors;

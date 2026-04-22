@@ -58,7 +58,6 @@ import {
   calculatePositionSize,
   calcPnl,
   getQuoteToUSDRate,
-  detectSession,
   detectSilverBullet,
   detectMacroWindow,
   detectAMDPhase,
@@ -66,6 +65,12 @@ import {
   computeOpeningRange,
   classifyInstrumentRegime as sharedClassifyRegime,
 } from "../_shared/smcAnalysis.ts";
+import {
+  detectSession,
+  normalizeSessionFilter,
+  isSessionEnabled,
+  type SessionResult,
+} from "../_shared/sessions.ts";
 
 import {
   type FOTSIResult,
@@ -524,11 +529,13 @@ function mapConfig(raw: any): any {
     partialTPPercent: exit.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? 1.0,
     maxHoldHours: exit.timeExitHours ?? 0,
-    enabledSessions: (Array.isArray(sessions.filter) && sessions.filter.length > 0
-      ? sessions.filter.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
-      : Array.isArray(raw?.enabledSessions)
-        ? raw.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
-        : DEFAULTS.enabledSessions.map((s: string) => s.toLowerCase().replace(/\s+/g, ""))
+    // Session filter: use shared normalizeSessionFilter for consistent parsing + migration.
+    enabledSessions: (
+      Array.isArray(sessions.filter)
+        ? normalizeSessionFilter(sessions.filter)
+        : Array.isArray(raw?.enabledSessions)
+          ? normalizeSessionFilter(raw.enabledSessions)
+          : [...DEFAULTS.enabledSessions]
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     enabledDays: DEFAULTS.enabledDays,
@@ -2270,12 +2277,10 @@ async function runBacktestJob(runId: string, body: any) {
         const isFX = SPECS[symbol]?.type !== "crypto";
         if (isFX && (dow === 0 || dow === 6)) { diagnostics.skippedWeekend++; continue; }
 
-        // Session/day filter
+        // Session/day filter — uses shared sessions module
         const session = detectSession(candleMs);
-        const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Off-Hours": "off-hours" };
-        const normalizedSession = sessionNameMap[session.name] || session.name.toLowerCase();
         const assetProfile = getAssetProfile(symbol);
-        if (!assetProfile.skipSessionGate && config.enabledSessions.length > 0 && !config.enabledSessions.includes(normalizedSession)) { diagnostics.skippedSession++; continue; }
+        if (!assetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
 
         // Day of week filter (user-configured active days)
         if (!config.enabledDays.includes(dow) && isFX) { diagnostics.skippedDay++; continue; }

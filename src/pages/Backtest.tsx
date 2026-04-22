@@ -708,7 +708,7 @@ export default function Backtest() {
                       { id: "asian", label: "Asian", time: "8:00 PM – 2:00 AM ET" },
                       { id: "london", label: "London", time: "2:00 AM – 8:30 AM ET" },
                       { id: "newyork", label: "New York", time: "8:30 AM – 4:00 PM ET" },
-                      { id: "sydney", label: "Off-Hours", time: "4:00 PM – 8:00 PM ET" },
+                      { id: "offhours", label: "Off-Hours", time: "4:00 PM – 8:00 PM ET" },
                     ].map(session => {
                       const enabled = config.sessions.filter?.includes(session.id) ?? true;
                       return (
@@ -894,9 +894,7 @@ export default function Backtest() {
               icon: "\u{1F570}\uFE0F",
               title: `Session filter removed ${sessionPct}% of candles`,
               detail: `Only [${sessionList}] sessions are enabled. ${d.skippedSession.toLocaleString()} of ${total.toLocaleString()} candles were outside these sessions.`,
-              action: sessions.includes('sydney')
-                ? `"Sydney" doesn't exist in the backend — it maps to Off-Hours (4:00–8:00 PM ET). Enable Asian session instead for broader coverage.`
-                : `Enable more sessions (Asian covers 8:00 PM–2:00 AM ET, London 2:00–8:30 AM ET, New York 8:30 AM–4:00 PM ET) to analyze more candles.`,
+              action: `Enable more sessions to analyze more candles. Asian covers 8:00 PM–2:00 AM ET, London 2:00–8:30 AM ET, New York 8:30 AM–4:00 PM ET, Off-Hours 4:00–8:00 PM ET.`,
             });
           }
 

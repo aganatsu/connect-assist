@@ -38,10 +38,7 @@ const DEFAULTS = {
   maxHoldHours: 48,
   breakEvenAfterTP1: true,
   sessions: {
-    london: true,
-    newYork: true,
-    asian: false,
-    sydney: false,
+    filter: ["london", "newyork"] as string[],
   },
   killZoneOnly: false,
   ema50Period: 50,
@@ -108,7 +105,21 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
     if (open) {
       if (rawConfig) {
         // Merge with defaults to fill any missing fields
-        setConfig({ ...DEFAULTS, ...rawConfig, sessions: { ...DEFAULTS.sessions, ...(rawConfig?.sessions || {}) } });
+        // Merge sessions: support both new filter-array and legacy boolean formats
+        const rawSess = rawConfig?.sessions || {};
+        let sessFilter: string[];
+        if (Array.isArray(rawSess.filter)) {
+          // Canonical format — normalize sydney → offhours
+          sessFilter = rawSess.filter.map((s: string) => s === "sydney" ? "offhours" : s === "newYork" ? "newyork" : s.toLowerCase());
+        } else {
+          // Legacy boolean format — convert to filter array
+          sessFilter = [];
+          if (rawSess.london) sessFilter.push("london");
+          if (rawSess.newYork) sessFilter.push("newyork");
+          if (rawSess.asian) sessFilter.push("asian");
+          if (rawSess.sydney || rawSess.offHours) sessFilter.push("offhours");
+        }
+        setConfig({ ...DEFAULTS, ...rawConfig, sessions: { filter: sessFilter } });
       } else {
         setConfig({ ...DEFAULTS });
       }
@@ -139,10 +150,15 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
     setConfig((prev) => (prev ? { ...prev, [key]: value } : prev));
   };
 
-  const updateSession = (key: string, value: boolean) => {
-    setConfig((prev) =>
-      prev ? { ...prev, sessions: { ...prev.sessions, [key]: value } } : prev
-    );
+  const updateSession = (key: string, checked: boolean) => {
+    setConfig((prev) => {
+      if (!prev) return prev;
+      const current: string[] = Array.isArray(prev.sessions?.filter) ? [...prev.sessions.filter] : [];
+      const updated = checked
+        ? [...new Set([...current, key])]
+        : current.filter((s: string) => s !== key);
+      return { ...prev, sessions: { ...prev.sessions, filter: updated } };
+    });
   };
 
   if (!open || !config) return null;
@@ -540,10 +556,10 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
 
                 <div className="space-y-3">
                   {[
-                    { key: "london", label: "London Session", time: "3:00 AM – 12:00 PM NY", emoji: "🇬🇧" },
-                    { key: "newYork", label: "New York Session", time: "8:00 AM – 5:00 PM NY", emoji: "🇺🇸" },
-                    { key: "asian", label: "Asian Session", time: "7:00 PM – 4:00 AM NY", emoji: "🇯🇵" },
-                    { key: "sydney", label: "Off-Hours", time: "4:00 PM – 8:00 PM NY", emoji: "🕛" },
+                    { key: "asian", label: "Asian Session", time: "8:00 PM – 2:00 AM ET", emoji: "🇯🇵" },
+                    { key: "london", label: "London Session", time: "2:00 AM – 8:30 AM ET", emoji: "🇬🇧" },
+                    { key: "newyork", label: "New York Session", time: "8:30 AM – 4:00 PM ET", emoji: "🇺🇸" },
+                    { key: "offhours", label: "Off-Hours", time: "4:00 PM – 8:00 PM ET", emoji: "🕛" },
                   ].map((s) => (
                     <div key={s.key} className="flex items-center justify-between p-3 border border-border hover:border-border/80 transition-colors">
                       <div className="flex items-center gap-2">
@@ -554,7 +570,7 @@ export function FOTSIConfigModal({ open, onClose }: FOTSIConfigModalProps) {
                         </div>
                       </div>
                       <Switch
-                        checked={config.sessions[s.key as keyof typeof config.sessions]}
+                        checked={Array.isArray(config.sessions?.filter) ? config.sessions.filter.includes(s.key) : false}
                         onCheckedChange={(v) => updateSession(s.key, v)}
                       />
                     </div>

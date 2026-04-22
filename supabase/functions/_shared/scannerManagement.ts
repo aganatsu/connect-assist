@@ -298,7 +298,7 @@ export async function manageOpenPositions(
   scanCycleId: string,
   // Injected dependencies to avoid circular imports:
   fetchCandlesFn: (symbol: string, interval: string, range: string) => Promise<Candle[]>,
-  detectSessionFn: (config?: any) => { name: string; isKillZone: boolean },
+  detectSessionFn: (config?: any) => { name: string; isKillZone: boolean; filterKey?: string },
 ): Promise<ManagementAction[]> {
   const actions: ManagementAction[] = [];
   if (!positions || positions.length === 0) return actions;
@@ -645,10 +645,10 @@ export async function manageOpenPositions(
       // defeats their purpose.
       if (tradingStyle === "scalper" && rMultiple > 0.3) {
         const currentSession = detectSessionFn(config);
-        const sessionNameMap: Record<string, string> = { "Asian": "asian", "London": "london", "New York": "newyork", "Sydney": "sydney", "Off-Hours": "off-hours" };
-        const normalizedCurrentSession = sessionNameMap[currentSession.name] || currentSession.name.toLowerCase();
+        // Use filterKey directly from session result (canonical: asian, london, newyork, offhours)
+        const normalizedCurrentSession = currentSession.filterKey || currentSession.name.toLowerCase().replace(/[\s-]/g, "");
 
-        if (normalizedCurrentSession === "off-hours") {
+        if (normalizedCurrentSession === "offhours" || normalizedCurrentSession === "off-hours") {
           const beSL = pos.direction === "long"
             ? entryPrice + (spec.pipSize * 1)
             : entryPrice - (spec.pipSize * 1);
