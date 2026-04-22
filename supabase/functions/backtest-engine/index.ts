@@ -2091,22 +2091,6 @@ Deno.serve(async (req) => {
     const factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }> = {};
     const gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }> = {};
 
-    // Diagnostic counters (helps debug zero-result runs)
-    const diagnostics = {
-      totalCandlesEvaluated: 0,
-      skippedNoYahooSymbol: 0,
-      skippedInsufficientData: 0,
-      skippedWeekend: 0,
-      skippedSession: 0,
-      skippedDay: 0,
-      skippedNoDirection: 0,
-      skippedBelowThreshold: 0,
-      skippedGateBlocked: 0,
-      skippedNoSLTP: 0,
-      signalsGenerated: 0,
-      tradesOpened: 0,
-    };
-
     // Minimum lookback for SMC analysis
     const LOOKBACK = 80;
     // Step size: evaluate every N candles (simulate scan frequency)
