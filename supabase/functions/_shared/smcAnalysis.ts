@@ -249,9 +249,9 @@ export function getAssetProfile(symbol: string) {
 }
 
 export const STYLE_OVERRIDES: Record<string, any> = {
-  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 5 },
-  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 5.5 },
-  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 6.5 },
+  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 45 },
+  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 55 },
+  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 65 },
 };
 
 export const DEFAULTS = {
@@ -259,7 +259,7 @@ export const DEFAULTS = {
   htfTimeframe: "1day",
   htfBiasRequired: true,
   htfBiasHardVeto: false,
-  minConfluence: 5.5,
+  minConfluence: 55,
   onlyBuyInDiscount: true,
   onlySellInPremium: true,
   riskPerTrade: 1,

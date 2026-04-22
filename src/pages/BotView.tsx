@@ -783,7 +783,7 @@ export default function BotView() {
                               {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
                             </div>
                             <div className="flex items-center gap-1.5">
-                              <span className={`font-mono font-bold ${sig.score >= 6 ? "text-success" : sig.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{sig.score?.toFixed(1)}</span>
+                              <span className={`font-mono font-bold ${sig.score > 10 ? (sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground") : (sig.score >= 6 ? "text-success" : sig.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{sig.score > 10 ? `${sig.score.toFixed(1)}%` : sig.score?.toFixed(1)}</span>
                               <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
                             </div>
                           </button>
@@ -1003,7 +1003,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       </div>
                       <SignalReasoningCard signalReason={t.signalReason || ""} />
                       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
-                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore}/10</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
@@ -1079,7 +1079,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
           <span className="font-medium">{d.pair}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`font-mono font-bold ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}</span>
+          <span className={`font-mono font-bold ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : d.score?.toFixed(1)}</span>
           <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
           <ChevronDown className={`h-2.5 w-2.5 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`} />
         </div>
@@ -1171,7 +1171,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
         <span className="text-[11px] font-bold">{d.pair}</span>
         <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
-        <span className={`text-[10px] font-mono font-bold ml-auto ${d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground"}`}>{d.score?.toFixed(1)}/10</span>
+        <span className={`text-[10px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
       {d.reason && (

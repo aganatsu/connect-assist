@@ -19,9 +19,9 @@ export type FactorGroup = {
 };
 
 export type UnifiedConfluence = {
-  total: number; // 0-10
-  smcScore: number; // 0-10  (legacy compat — same as total for new format)
-  extScore: number; // 0-10  (legacy compat — same as total for new format)
+  total: number; // 0-100 percentage (new) or 0-10 (legacy)
+  smcScore: number; // same as total for new format, 0-10 for legacy
+  extScore: number; // same as total for new format, 0-10 for legacy
   direction: 'BUY' | 'SELL' | 'NEUTRAL';
   groups: FactorGroup[];
   passCount: number;
@@ -42,15 +42,15 @@ const GROUP_ORDER: string[] = [
 ];
 
 const GROUP_CAPS: Record<string, number> = {
-  'Market Structure': 3.0,
-  'Daily Bias': 1.5,
+  'Market Structure': 2.5,
+  'Daily Bias': 1.0,
   'Order Flow Zones': 3.0,
   'Premium/Discount & Fib': 2.5,
   'Timing': 1.5,
-  'Price Action': 2.0,
+  'Price Action': 2.5,
   'AMD / Power of 3': 1.5,
   'Macro Confirmation': 2.0,
-  'Volume Profile': 1.5,
+  'Volume Profile': 0.75,
 };
 
 // ─── New-format parser ──────────────────────────────────────────────

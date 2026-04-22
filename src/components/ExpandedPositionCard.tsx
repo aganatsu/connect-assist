@@ -256,15 +256,17 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   const factorMatch = summaryText.match(/(\d+)\/(\d+)\s+factors/i);
   const factorCount = factorMatch ? parseInt(factorMatch[1], 10) : null;
   const factorTotal = factorMatch ? parseInt(factorMatch[2], 10) : null;
-  const scoreMatch = summaryText.match(/score:\s*([\d.]+)\/10/i);
-  const summaryScore = scoreMatch ? parseFloat(scoreMatch[1]) : null;
+  // Try percentage format first (new), then legacy /10 format
+  const pctMatch = summaryText.match(/score:\s*([\d.]+)%/i);
+  const legacyScoreMatch = summaryText.match(/score:\s*([\d.]+)\/10/i);
+  const summaryScore = pctMatch ? parseFloat(pctMatch[1]) : (legacyScoreMatch ? parseFloat(legacyScoreMatch[1]) : null);
 
   // Setup info
   const setupType: string | null = sr.setupType ?? null;
   const setupConfidence: number | null = sr.setupConfidence ?? null;
 
   // Aligned factors — extract from factorScores or summary text
-  // Summary format: "BUY: 9/22 factors ... (score: 8/10). Market Structure: MS+Trend | Order Flow: Breaker | FOTSI: aligned"
+  // Summary format: "BUY: 9/17 factors ... (score: 72.5%). Market Structure: MS+Trend | Order Flow: Breaker | FOTSI: aligned"
   // Each segment after ". " is "GroupName: Factor1+Factor2" separated by " | "
   let alignedFactors: string[] = [];
   if (Array.isArray(sr.factorScores) && sr.factorScores.length > 0) {
@@ -354,7 +356,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           <span className="text-muted-foreground/40">|</span>
           <span className="text-muted-foreground">P&L: <span className={`font-bold ${p.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(p.pnl, true)}</span></span>
           <span className="text-muted-foreground/40">|</span>
-          <span className="text-muted-foreground">Score: <span className="text-primary font-bold">{p.signalScore}/10</span></span>
+          <span className="text-muted-foreground">Score: <span className="text-primary font-bold">{Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}</span></span>
         </div>
       </div>
 
@@ -457,8 +459,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               </span>
             )}
             <span className="text-[11px] text-foreground/80 font-mono">
-              {factorCount != null ? `${factorCount}/${factorTotal} factors` : ""}
-              {summaryScore != null ? ` \u00B7 score ${summaryScore}/10` : ""}
+              {factorCount != null ? `${factorCount} factors${factorTotal ? ` (of ${factorTotal})` : ""}` : ""}
+              {summaryScore != null ? ` \u00B7 score ${summaryScore > 10 ? `${summaryScore.toFixed(1)}%` : `${summaryScore}/10`}` : ""}
             </span>
           </div>
           {setupType && (

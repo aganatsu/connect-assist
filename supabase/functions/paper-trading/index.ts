@@ -641,12 +641,13 @@ function generatePostMortem(
   // Determine outcome
   const outcome = pnl > 0 ? "Win" : pnl < 0 ? "Loss" : "Breakeven";
 
-  // Parse factors from signal reason (all 17 ICT factors)
+  // Parse factors from signal reason (17 ICT factors — Trend Direction merged into Market Structure)
   const factorNames = [
     "Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount",
-    "Session/Kill Zone", "Judas Swing", "PD/PW Levels", "Reversal Candle", "Liquidity Sweep",
+    "Session Quality", "Judas Swing", "PD/PW Levels", "Reversal Candle", "Liquidity Sweep",
     "Displacement", "Breaker Block", "Unicorn Model", "Silver Bullet",
     "Macro Window", "SMT Divergence", "VWAP", "AMD Phase",
+    "Currency Strength", "Daily Bias", "Volume Profile",
   ];
   const presentFactors = factorNames.filter(f => signalReason.includes(f));
   const absentFactors = factorNames.filter(f => !signalReason.includes(f));
@@ -674,9 +675,11 @@ function generatePostMortem(
     whatFailed = absentFactors.length > 0
       ? `Not all factors were present: missing ${absentFactors.join(", ")}`
       : "All factors aligned — textbook setup";
-    lessonLearned = signalScore >= 7
+    lessonLearned = signalScore >= 65
       ? "High-confluence setup played out as expected. Continue targeting similar setups."
-      : "Trade won despite moderate confluence. Consider if the setup was fortunate or skill-based.";
+      : signalScore >= 10
+      ? "Trade won despite moderate confluence. Consider if the setup was fortunate or skill-based."
+      : "Trade won — note: score may be in legacy 0-10 format if from an older scan.";
   } else if (outcome === "Loss") {
     whatWorked = presentFactors.length > 0
       ? `These factors were correctly identified: ${presentFactors.join(", ")}`
@@ -684,8 +687,8 @@ function generatePostMortem(
     whatFailed = closeReason === "sl_hit"
       ? "Stop loss was hit — market structure changed after entry or SL was too tight"
       : `Trade closed with loss: ${closeReason}`;
-    lessonLearned = signalScore < 7
-      ? `Confluence score was ${signalScore}/10. Consider raising minimum threshold to reduce weak signals.`
+    lessonLearned = signalScore < 55
+      ? `Confluence score was ${signalScore > 10 ? signalScore.toFixed(1) + "%" : signalScore.toFixed(1) + "/10"}. Consider raising minimum threshold to reduce weak signals.`
       : "Setup had good confluence but market conditions shifted. Review if HTF bias was truly aligned.";
   } else {
     whatWorked = "Trade reached breakeven — partial validation of the setup";

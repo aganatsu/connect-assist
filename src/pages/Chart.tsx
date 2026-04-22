@@ -175,8 +175,8 @@ export default function Chart() {
                         'bg-muted text-muted-foreground'
                       }`}>{unified.direction}</span>
                       <span className={`font-mono font-bold ${
-                        unified.total >= 6.5 ? 'text-success' : unified.total >= 4 ? 'text-warning' : 'text-destructive'
-                      }`}>{unified.total.toFixed(1)}/10</span>
+                        (unified.total > 10 ? (unified.total >= 65 ? 'text-success' : unified.total >= 40 ? 'text-warning' : 'text-destructive') : (unified.total >= 6.5 ? 'text-success' : unified.total >= 4 ? 'text-warning' : 'text-destructive'))
+                      }`}>{unified.total > 10 ? `${unified.total.toFixed(1)}%` : `${unified.total.toFixed(1)}/10`}</span>
                     </span>
                   </span>
                 </AccordionTrigger>
@@ -184,9 +184,9 @@ export default function Chart() {
                   <div className="bg-secondary/30 border border-border p-2 space-y-2 text-[11px]">
                     {/* Sub-score breakdown */}
                     <div className="flex items-center justify-between text-[10px] text-muted-foreground border-b border-border/50 pb-1.5">
-                      <span>SMC <span className="font-mono text-foreground">{unified.smcScore}/10</span></span>
+                      <span>SMC <span className="font-mono text-foreground">{unified.smcScore > 10 ? `${unified.smcScore.toFixed(1)}%` : `${unified.smcScore}/10`}</span></span>
                       <span>·</span>
-                      <span>Extended <span className="font-mono text-foreground">{unified.extScore}/10</span></span>
+                      <span>Extended <span className="font-mono text-foreground">{unified.extScore > 10 ? `${unified.extScore.toFixed(1)}%` : `${unified.extScore}/10`}</span></span>
                       <span>·</span>
                       <span>{unified.passCount}/{unified.totalFactors} factors</span>
                     </div>
@@ -224,8 +224,8 @@ export default function Chart() {
                     <Radio className="h-3.5 w-3.5 text-primary" />
                     Bot Scan (live)
                     {botScanSignal?.signal?.score != null && (
-                      <span className={`font-mono font-bold ml-auto ${botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground'}`}>
-                        {Number(botScanSignal.signal.score).toFixed(1)}/10
+                      <span className={`font-mono font-bold ml-auto ${Number(botScanSignal.signal.score) > 10 ? (Number(botScanSignal.signal.score) >= 60 ? 'text-success' : Number(botScanSignal.signal.score) >= 40 ? 'text-warning' : 'text-muted-foreground') : (botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground')}`}>
+                        {Number(botScanSignal.signal.score) > 10 ? `${Number(botScanSignal.signal.score).toFixed(1)}%` : `${Number(botScanSignal.signal.score).toFixed(1)}/10`}
                       </span>
                     )}
                   </span>

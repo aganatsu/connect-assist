@@ -147,7 +147,7 @@ export default function IctAnalysis() {
               {analysis && (
                 <div>
                   <p className="text-xs text-muted-foreground">
-                    Confluence: <span className="text-primary font-mono font-bold">{analysis.confluenceScore}/10</span>
+                    Confluence: <span className="text-primary font-mono font-bold">{analysis.confluenceScore > 10 ? `${analysis.confluenceScore.toFixed(1)}%` : `${analysis.confluenceScore}/10`}</span>
                     {" · "}Bias: <span className={analysis.bias === "bullish" ? "text-success" : analysis.bias === "bearish" ? "text-destructive" : ""}>{analysis.bias}</span>
                     {analysis.direction && <span className="ml-2 text-[10px] font-bold uppercase px-1.5 py-0.5 border border-primary/30 bg-primary/10 text-primary">{analysis.direction === "long" ? "BUY" : "SELL"}</span>}
                   </p>

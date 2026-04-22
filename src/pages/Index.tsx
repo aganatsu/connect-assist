@@ -230,7 +230,7 @@ export default function Dashboard() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[11px] font-mono text-primary font-bold">{sig.score?.toFixed(1)}/10</span>
+                  <span className="text-[11px] font-mono text-primary font-bold">{sig.score > 10 ? `${sig.score.toFixed(1)}%` : `${sig.score?.toFixed(1)}/10`}</span>
                   <span className="text-[10px] text-muted-foreground">{sig.status === 'trade_placed' ? '✓ Placed' : sig.status === 'rejected' ? '✗ Rejected' : 'Skip'}</span>
                 </div>
                 {(sig.summary || sig.trend) && (

@@ -403,11 +403,11 @@ export default function Backtest() {
                 {/* ── Strategy Tab ── */}
                 <TabsContent value="strategy" className="mt-3 space-y-3">
                   <SectionHeader title="Confluence Factors" description="Toggle each SMC factor on/off to test its impact on performance" icon={Crosshair} />
-                  <FieldRow label="Min Confluence Score" description="Minimum total score to trigger a trade">
+                  <FieldRow label="Min Confluence Score" description="Minimum percentage score to trigger a trade">
                     <div className="flex items-center gap-3">
                       <Slider value={[config.strategy.confluenceThreshold]} onValueChange={v => updateConfig("strategy", "confluenceThreshold", v[0])}
-                        min={0} max={10} step={0.5} className="flex-1" />
-                      <span className="text-xs font-mono font-bold w-8 text-right">{config.strategy.confluenceThreshold}</span>
+                        min={0} max={100} step={5} className="flex-1" />
+                      <span className="text-xs font-mono font-bold w-10 text-right">{config.strategy.confluenceThreshold}%</span>
                     </div>
                   </FieldRow>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
@@ -893,7 +893,7 @@ export default function Backtest() {
                               </td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.entryTime.slice(0, 16).replace('T', ' ')}</td>
                               <td className="py-1.5 px-1.5 text-muted-foreground">{t.exitTime.slice(0, 16).replace('T', ' ')}</td>
-                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore.toFixed(1)}</Badge></td>
+                              <td className="py-1.5 px-1.5 text-right"><Badge variant="outline" className="text-[9px] px-1.5">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</Badge></td>
                               <td className={`py-1.5 px-1.5 text-right font-mono font-medium ${t.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(t.pnl, true)}</td>
                               <td className={`py-1.5 px-1.5 text-right font-mono ${t.pnlPips >= 0 ? 'text-success' : 'text-destructive'}`}>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)}</td>
                               <td className="py-1.5 px-1.5"><span className={`text-[10px] ${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span></td>

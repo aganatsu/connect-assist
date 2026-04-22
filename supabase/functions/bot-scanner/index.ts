@@ -108,11 +108,12 @@ const DEFAULTS = {
   protectionMaxDailyLossDollar: 0,
   // ── Strategy gates ──
   minFactorCount: 0,
+  minStrongFactors: 4,  // Minimum number of factors scoring above 50% of their individual max
   // ── Normalized Scoring (opt-in) ──
   // When true, raw score is normalized to percentage of enabled factors' max possible score,
   // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
   // minConfluence threshold always means "X% of enabled factors aligned".
-  normalizedScoring: false,
+  normalizedScoring: true,  // Percentage-based scoring is now the default
   useSMT: true,
   useFOTSI: true,
   // ── Per-pair scratch (set during scan) ──
@@ -126,25 +127,24 @@ const DEFAULTS = {
 };
 // ─── Default Factor Weights ─────────────────────────────────────────────────
 const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
-  marketStructure: 1.5,
+  marketStructure: 2.5,  // Merged: BOS/CHoCH + Entry TF Trend Direction (was 1.5 + 1.5 separate)
   orderBlock: 2.0,
   fairValueGap: 2.0,
   premiumDiscountFib: 2.0,
   sessionQuality: 1.5,  // Collapsed from Kill Zone + Silver Bullet + Macro
-  judasSwing: 0.75,  // Increased: NY midnight-anchored + liquidity sweep confirmation
+  judasSwing: 0.75,  // NY midnight-anchored + liquidity sweep confirmation
   pdPwLevels: 1.0,
-  reversalCandle: 0.5,
-  liquiditySweep: 1.5,  // Increased: recency filter + rejection confirmation
+  reversalCandle: 1.5,  // Bumped: reversal candle is a primary ICT entry trigger
+  liquiditySweep: 1.5,  // Recency filter + rejection confirmation
   displacement: 1.0,
   breakerBlock: 1.0,
   unicornModel: 1.5,
-  // silverBullet and macroWindow removed — absorbed into sessionQuality
   smtDivergence: 1.0,
-  volumeProfile: 1.5,
+  volumeProfile: 0.75,  // Reduced: synthetic TPO data, not real volume
   amdPhase: 1.0,
   currencyStrength: 1.5,
-  trendDirection: 1.5,
-  dailyBias: 1.5,
+  // trendDirection removed — merged into marketStructure
+  dailyBias: 1.0,  // Reduced: HTF alignment is valuable but shouldn't dominate
 };
 /** Resolve a factor's weight multiplier from config overrides. */
 function resolveWeightScale(factorKey: string, config: any): number {
@@ -662,9 +662,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   let score = 0;
   const factors: ReasoningFactor[] = [];
 
-  // ── Factor 1: Market Structure / BOS/CHoCH (max 1.5) ──
-  // Enhanced: uses close-based BOS (candle body must close through level)
-  // and detects liquidity sweeps (wick-through + rejection ≠ real break).
+  // ── Factor 1: Market Structure (merged BOS/CHoCH + Trend Direction) (max 2.5) ──
+  // Combines structural breaks with entry-TF trend alignment into a single factor.
+  // This eliminates the previous double-count between Factor 1 and Factor 19.
   {
     let pts = 0;
     let detail = "";
@@ -674,30 +674,47 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const closeBasedBos = structure.bos.filter((b: any) => b.closeBased);
       const sweepCount = structure.sweeps?.length || 0;
 
+      // Base structure score (0-1.5)
+      let structurePts = 0;
       if (closeBasedChoch.length > 0) {
-        pts = 1.5;
+        structurePts = 1.5;
         detail = `${closeBasedChoch.length} CHoCH (close-based) — strong trend reversal`;
       } else if (structure.choch.length > 0) {
-        // CHoCH exists but only wick-based — weaker signal
-        pts = 1.0;
+        structurePts = 1.0;
         detail = `${structure.choch.length} CHoCH (wick-based, no close confirmation) — possible reversal`;
       } else if (closeBasedBos.length > 0) {
-        pts = 1.0;
+        structurePts = 1.0;
         detail = `${closeBasedBos.length} BOS (close-based) — trend continuation confirmed`;
       } else if (structure.bos.length > 0) {
-        pts = 0.5;
+        structurePts = 0.5;
         detail = `${structure.bos.length} BOS (wick-based only) — weak continuation`;
       } else {
         detail = "No BOS or CHoCH detected";
       }
-      // Sweeps add context to the detail string
       if (sweepCount > 0) {
         detail += ` | ${sweepCount} liquidity sweep${sweepCount > 1 ? "s" : ""} detected`;
       }
+
+      pts = structurePts;
+
+      // Trend alignment bonus/penalty (adds up to +1.0 or -0.5)
+      // Note: direction is determined later, so we use structure.trend as a proxy here.
+      // This will be re-evaluated after direction is set (see post-direction trend adjustment below).
+      // For now, if structure has a clear trend, we can score alignment with the trend itself.
+      if (structure.trend !== "ranging" && structurePts > 0) {
+        // Trend is clear and structure confirms it — bonus
+        pts += 1.0;
+        detail += ` | Entry TF trend ${structure.trend} — aligned`;
+      } else if (structure.trend === "ranging" && structurePts > 0) {
+        pts += 0.25;
+        detail += " | Ranging market — partial trend credit";
+      }
+      // Cap at 2.5
+      pts = Math.min(2.5, pts);
     } else {
       detail = "BOS/CHoCH disabled";
     }
-    { const s = applyWeightScale(pts, "marketStructure", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "marketStructure", 2.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
   }
 
@@ -732,10 +749,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         if (insideOB.hasFVGAdjacency) tags.push("FVG adjacent");
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated) [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
-        // OBs exist but price not inside any
+        // OBs exist but price not inside any — no score (ICT: entry requires price AT the level)
         const withDisp = activeOBs.filter(ob => ob.hasDisplacement).length;
-        pts = withDisp > 0 ? 0.5 : 0.25;
-        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement)`;
+        pts = 0;
+        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement) — not at level, no score`;
       }
     } else {
       detail = "Order Blocks disabled";
@@ -822,8 +839,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           detail += " [displacement-created, scored via Factor 10]";
         }
       } else if (activeFVGs.length > 0) {
-        pts = 0.5;
-        detail = `${activeFVGs.length} qualifying FVGs in range${_minPips > 0 ? ` (≥${_minPips} pips)` : ""}`;
+        // FVGs exist but price not inside any — no score (ICT: entry requires price AT the level)
+        pts = 0;
+        detail = `${activeFVGs.length} qualifying FVGs in range${_minPips > 0 ? ` (≥${_minPips} pips)` : ""} — not at level, no score`;
       }
     } else {
       detail = "FVGs disabled";
@@ -996,8 +1014,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
-  // ── Factor 8: Reversal Candle (max 0.5) ──
-  // ICT: reversal candles matter when they form at a key level (OB, FVG, PD/PW).
+  // ── Factor 8: Reversal Candle (max 1.5) ──
+  // ICT: reversal candles are a PRIMARY entry trigger — the actual "pull the trigger" signal.
+  // Bumped from 0.5 to 1.5 to match ICT importance.
   {
     let pts = 0;
     let detail = "No reversal pattern";
@@ -1014,19 +1033,31 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       ].some(lvl => Math.abs(lastMid - lvl) / lastMid <= 0.002) : false;
 
       const atKeyLevel = atOB || atFVG || atPDPW;
-      if (atKeyLevel) {
-        pts = 0.5;
+      // Check for displacement on the reversal candle
+      const hasDisp = displacement.detected;
+      if (atKeyLevel && hasDisp) {
+        pts = 1.5;
         const levels: string[] = [];
         if (atOB) levels.push("OB");
         if (atFVG) levels.push("FVG");
         if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")})`;
+        detail = `${reversalCandle.type} reversal + displacement at key level (${levels.join(", ")}) — high-conviction entry`;
+      } else if (atKeyLevel) {
+        pts = 1.0;
+        const levels: string[] = [];
+        if (atOB) levels.push("OB");
+        if (atFVG) levels.push("FVG");
+        if (atPDPW) levels.push("PD/PW level");
+        detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")}) — no displacement`;
+      } else if (hasDisp) {
+        pts = 0.5;
+        detail = `${reversalCandle.type} reversal with displacement but not at a key level`;
       } else {
         pts = 0.25;
-        detail = `${reversalCandle.type} reversal candle detected but not at a key level`;
+        detail = `${reversalCandle.type} reversal candle detected but not at a key level, no displacement`;
       }
     }
-    { const s = applyWeightScale(pts, "reversalCandle", 0.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
@@ -1127,32 +1158,23 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // Direction was already determined above (before Factor 3) so all factors can use it.
 
-  // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
-  // Scores whether the entry timeframe trend aligns with the trade direction.
-  // Penalizes counter-trend trades. Separate from BOS/CHoCH (Factor 1).
-  if (config.useTrendDirection !== false) {
-    let pts = 0;
-    let detail = "";
-    if (direction && structure.trend !== "ranging") {
+  // Factor 19 (Trend Direction) has been merged into Factor 1 (Market Structure).
+  // The entry-TF trend alignment is now scored as part of the Market Structure factor.
+  // Post-direction counter-trend penalty: if direction is now known and opposes structure.trend,
+  // apply a penalty to the Market Structure factor.
+  {
+    const msFactor = factors.find(f => f.name === "Market Structure");
+    if (msFactor && direction && structure.trend !== "ranging") {
       const trendAligned = (direction === "long" && structure.trend === "bullish")
         || (direction === "short" && structure.trend === "bearish");
-      if (trendAligned) {
-        pts = 1.5;
-        detail = `Entry TF ${structure.trend} trend aligned with ${direction} direction`;
-      } else {
-        pts = -0.5;
-        detail = `Counter-trend: ${direction} against ${structure.trend} trend (penalty)`;
+      if (!trendAligned && msFactor.present) {
+        // Counter-trend penalty: reduce Market Structure score
+        const penalty = 0.5;
+        score -= penalty;
+        msFactor.weight = Math.max(0, msFactor.weight - penalty);
+        msFactor.detail += ` | Counter-trend penalty: ${direction} against ${structure.trend} (-${penalty})`;
       }
-    } else if (direction && structure.trend === "ranging") {
-      pts = 0.5;
-      detail = `Ranging market — direction set via P/D zone fallback (${direction})`;
-    } else {
-      detail = "No direction determined — trend scoring skipped";
     }
-    { const s = applyWeightScale(pts, "trendDirection", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Trend Direction", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
-  } else {
-    factors.push({ name: "Trend Direction", present: false, weight: 0, detail: "Trend Direction disabled", group: "Market Structure" });
   }
 
   // ── Factor 10: Displacement (max 1.0) ──
@@ -1332,9 +1354,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           detail += " + FVG at LVN (cross-validated)";
         }
       }
-      pts = Math.min(1.5, pts);
+      pts = Math.min(0.75, pts);
     }
-    { const s = applyWeightScale(pts, "volumeProfile", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "volumeProfile", 0.75, config); pts = s.pts; score += pts;
     factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
   } else {
     factors.push({ name: "Volume Profile", present: false, weight: 0, detail: "Volume Profile disabled", group: "Volume Profile" });
@@ -1401,9 +1423,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Currency Strength", present: pts !== 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
   }
 
-  // ── Factor 20: Daily Bias / HTF Trend (max 1.5) ──
-  // Scores whether the daily timeframe trend aligns with the trade direction.
-  // Promoted from safety gate to scored factor — trend alignment is a core confluence.
+  // ── Factor 17: Daily Bias / HTF Trend (max 1.0) ──
+  // Reduced from 1.5 to 1.0: HTF alignment is valuable but shouldn't dominate.
   if (config.useDailyBias !== false) {
     let pts = 0;
     let detail = "";
@@ -1414,14 +1435,14 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         const htfAligned = (direction === "long" && dailyTrend === "bullish")
           || (direction === "short" && dailyTrend === "bearish");
         if (htfAligned) {
-          pts = 1.5;
-          detail = `Daily ${dailyTrend} trend aligned with ${direction} — high conviction`;
+          pts = 1.0;
+          detail = `Daily ${dailyTrend} trend aligned with ${direction} — HTF confirmation`;
         } else {
           pts = -0.5;
           detail = `Counter-HTF: ${direction} against daily ${dailyTrend} trend (penalty)`;
         }
       } else {
-        pts = 0.5;
+        pts = 0.25;
         detail = `Daily trend ranging — partial credit (no HTF directional bias)`;
       }
     } else if (!dailyCandles || dailyCandles.length < 20) {
@@ -1429,7 +1450,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     } else {
       detail = "No direction determined — HTF bias skipped";
     }
-    { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "dailyBias", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
   } else {
     factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
@@ -1518,11 +1539,11 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     const amdF = findFactor("AMD Phase");
     const sweepF = findFactor("Liquidity Sweep");
     const judasF = findFactor("Judas Swing");
-    const trendF = findFactor("Trend Direction");
+    const msF = findFactor("Market Structure");
 
     const amdPresent = amdF && amdF.present;
     const sweepOrJudas = (sweepF && sweepF.present) || (judasF && judasF.present);
-    const trendAligned = trendF && trendF.present;
+    const trendAligned = msF && msF.present;
 
     if (amdPresent && sweepOrJudas && trendAligned) {
       const po3Bonus = 1.0;
@@ -1539,7 +1560,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         name: "Power of 3 Combo",
         present: false,
         weight: 0,
-        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Trend=${trendAligned ? "✓" : "✗"}`,
+        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Structure=${trendAligned ? "✓" : "✗"}`,
         group: "AMD / Power of 3",
       });
     }
@@ -1549,15 +1570,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Each factor group has a hard cap to prevent any single group from dominating.
   {
     const GROUP_CAPS: Record<string, number> = {
-      "Market Structure": 3.0,
-      "Daily Bias": 1.5,
+      "Market Structure": 2.5,  // Merged: single factor now, cap matches max
+      "Daily Bias": 1.0,  // Reduced from 1.5
       "Order Flow Zones": 3.0,
       "Premium/Discount & Fib": 2.5,
       "Timing": 1.5,
-      "Price Action": 2.0,
+      "Price Action": 2.5,  // Increased: Reversal Candle bumped to 1.5
       "AMD / Power of 3": 1.5,
       "Macro Confirmation": 2.0,
-      "Volume Profile": 1.5,
+      "Volume Profile": 0.75,  // Reduced from 1.5
     };
 
     // Sum weights per group
@@ -1669,41 +1690,72 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     });
   }
 
-  // ─── Normalized Scoring (opt-in) ─────────────────────────────────────────
-  // When config.normalizedScoring is true, we calculate the maximum possible
-  // score from enabled factors, then express the raw score as a percentage of
-  // that maximum, scaled to 0-10. This means disabling factors doesn't silently
-  // raise the effective threshold — 5.0 always means "50% of what's possible".
+  // ─── Percentage Scoring + Strong Factor Gate ─────────────────────────────────
+  // Score is now expressed as a percentage (0-100) of enabled factors' max.
+  // This replaces the old 0-10 scale. 55% always means "55% of what's possible".
   //
-  // enabledMax = sum of each factor's configured weight (after user overrides).
-  // Bonus factors (Po3 combo +1.0, OR enhancements +0.5 each) are included
-  // as fixed additions to enabledMax since they're always available.
-  // Penalty-only factors (Spread Quality, negative regime) are excluded from
-  // enabledMax since they can only subtract, not add.
+  // Strong Factor Count: number of factors scoring above 50% of their individual max.
+  // This prevents the "many weak signals" problem where 12 factors each score 20%.
   const rawScore = Math.round(score * 100) / 100;
 
+  // Calculate the maximum possible score from enabled weighted factors
+  const weightedFactorKeys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
+  let enabledMax = 0;
+  for (const key of weightedFactorKeys) {
+    const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
+    const fw = config.factorWeights;
+    const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
+      ? Math.max(0, fw[key])
+      : defaultW;
+    enabledMax += effectiveW;
+  }
+  // Add fixed bonus potential: Po3 combo (1.0) + OR enhancements (up to 2.0)
+  enabledMax += 1.0;
+  if (config.openingRange?.enabled) {
+    enabledMax += 2.0;
+  }
+
+  // Calculate strong factor count: factors scoring above 50% of their individual max
+  // Exclude penalty-only factors (Spread Quality, negative Regime) from strong count
+  const strongFactorCount = factors.filter(f => {
+    if (!f.present || f.weight <= 0) return false;
+    // Find the factor's individual max from DEFAULT_FACTOR_WEIGHTS
+    // Map factor names to weight keys
+    const nameToKey: Record<string, string> = {
+      "Market Structure": "marketStructure",
+      "Order Block": "orderBlock",
+      "Fair Value Gap": "fairValueGap",
+      "Premium/Discount": "premiumDiscountFib",
+      "Session Quality": "sessionQuality",
+      "Judas Swing": "judasSwing",
+      "PD/PW Levels": "pdPwLevels",
+      "Reversal Candle": "reversalCandle",
+      "Liquidity Sweep": "liquiditySweep",
+      "Displacement": "displacement",
+      "Breaker Block": "breakerBlock",
+      "Unicorn Model": "unicornModel",
+      "SMT Divergence": "smtDivergence",
+      "Volume Profile": "volumeProfile",
+      "AMD Phase": "amdPhase",
+      "Currency Strength": "currencyStrength",
+      "Daily Bias": "dailyBias",
+    };
+    const key = nameToKey[f.name];
+    if (!key) return false; // Bonus/penalty factors (Po3 Combo, Regime, Spread) don't count
+    const maxW = DEFAULT_FACTOR_WEIGHTS[key] || 1;
+    const fw = config.factorWeights;
+    const effectiveMax = (fw && fw[key] !== undefined && fw[key] !== null)
+      ? Math.max(0, fw[key])
+      : maxW;
+    if (effectiveMax <= 0) return false;
+    return f.weight >= effectiveMax * 0.5;
+  }).length;
+
   if (config.normalizedScoring) {
-    // Calculate the maximum possible score from enabled weighted factors
-    const weightedFactorKeys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-    let enabledMax = 0;
-    for (const key of weightedFactorKeys) {
-      const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
-      const fw = config.factorWeights;
-      // If user set weight to 0, this factor contributes 0 to max
-      const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
-        ? Math.max(0, fw[key])
-        : defaultW;
-      enabledMax += effectiveW;
-    }
-    // Add fixed bonus potential: Po3 combo (1.0) + OR enhancements (up to 2.0)
-    enabledMax += 1.0; // Power of 3 combo
-    if (config.openingRange?.enabled) {
-      enabledMax += 2.0; // OR bias + Judas + key levels + premium/discount
-    }
-    // Normalize: express raw score as percentage of enabledMax, scaled to 0-10
+    // Percentage scoring: express raw score as percentage of enabledMax
     if (enabledMax > 0) {
-      const normalizedPct = Math.max(0, rawScore) / enabledMax;
-      score = Math.max(0, Math.min(10, Math.round(normalizedPct * 100) / 10));
+      const pct = Math.max(0, rawScore) / enabledMax * 100;
+      score = Math.round(pct * 10) / 10; // e.g., 72.3%
     } else {
       score = 0;
     }
@@ -1726,9 +1778,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   });
 
   const presentFactors = factors.filter(f => f.present);
+  const enabledFactors = factors.filter(f => f.weight !== 0 || f.present);
   const bias = direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral";
 
-  // Build grouped summary for the new 9-group structure
+  // Build grouped summary
   const groupNames = [...new Set(factors.filter(f => f.group).map(f => f.group!))];
   const activeGroups = groupNames.filter(g => factors.some(f => f.group === g && f.present));
   const groupSummaryParts = activeGroups.map(g => {
@@ -1737,13 +1790,14 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   });
 
   const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
-  const scoringMode = config.normalizedScoring ? " [normalized]" : "";
+  const scoringMode = config.normalizedScoring ? "%" : "/10";
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${presentFactors.length}/${factors.length} factors aligned across ${activeGroups.length}/9 groups (score: ${score}/10${scoringMode}, raw: ${rawScore}). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
-    : `No signal: ${presentFactors.length}/${factors.length} factors across ${activeGroups.length}/9 groups (score: ${score}/10${scoringMode}, raw: ${rawScore})${fotsiSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}${scoringMode} confluence (${strongFactorCount} strong, ${presentFactors.length}/${enabledFactors.length} present). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
+    : `No signal: ${score}${scoringMode} confluence (${strongFactorCount} strong, ${presentFactors.length}/${enabledFactors.length} present)${fotsiSummary}`;
 
   return {
-    score, rawScore, normalizedScoring: !!config.normalizedScoring, direction, bias, summary, factors,
+    score, rawScore, normalizedScoring: !!config.normalizedScoring, enabledMax,
+    strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
@@ -2940,6 +2994,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       bias: analysis.bias,
       summary: analysis.summary,
       factorCount: analysis.factors.filter(f => f.present).length,
+      strongFactorCount: analysis.strongFactorCount || 0,
+      enabledMax: analysis.enabledMax || 0,
       factors: analysis.factors,
       // ── analysis_snapshot: per-factor + new-factor breakdown for dashboard ──
       analysis_snapshot: {
@@ -2966,8 +3022,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     const minFactorGate = (pairConfig.minFactorCount ?? 0) > 0;
     const factorCountOk = !minFactorGate || (detail.factorCount >= (pairConfig.minFactorCount ?? 0));
+    // Strong factor gate: require minimum number of strongly-present factors
+    const minStrongFactors = pairConfig.minStrongFactors ?? 0;
+    const strongFactorOk = minStrongFactors <= 0 || (analysis.strongFactorCount >= minStrongFactors);
 
-    if (analysis.score >= adjustedMinConfluence && factorCountOk && analysis.direction && !isPaused) {
+    if (analysis.score >= adjustedMinConfluence && factorCountOk && strongFactorOk && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates
@@ -3508,11 +3567,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         detail.rejectionReasons = failedGates.map(g => g.reason);
       }
     } else {
-      if (analysis.score < config.minConfluence) {
+      if (analysis.score < adjustedMinConfluence) {
         detail.status = "below_threshold";
+        detail.reason = config.normalizedScoring
+          ? `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold`
+          : `Score ${analysis.score.toFixed(1)} < ${adjustedMinConfluence} threshold`;
       } else if (minFactorGate && !factorCountOk) {
         detail.status = "below_threshold";
         detail.reason = `Only ${detail.factorCount}/${analysis.factors.length} factors (need ≥${pairConfig.minFactorCount})`;
+      } else if (!strongFactorOk) {
+        detail.status = "below_threshold";
+        detail.reason = `Only ${analysis.strongFactorCount} strong factors (need ≥${minStrongFactors})`;
       } else {
         detail.status = isPaused ? "paused" : "no_direction";
       }

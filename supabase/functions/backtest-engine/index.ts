@@ -78,14 +78,14 @@ import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 
 // ─── Default Factor Weights (mirrors bot-scanner) ─────────────────────────
 const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
-  marketStructure: 1.5,
+  marketStructure: 2.5,
   orderBlock: 2.0,
   fairValueGap: 2.0,
   premiumDiscountFib: 2.0,
   sessionKillZone: 1.0,
   judasSwing: 0.5,
   pdPwLevels: 1.0,
-  reversalCandle: 0.5,
+  reversalCandle: 1.5,
   liquiditySweep: 1.0,
   displacement: 1.0,
   breakerBlock: 1.0,
@@ -93,11 +93,10 @@ const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   silverBullet: 1.0,
   macroWindow: 1.0,
   smtDivergence: 1.0,
-  volumeProfile: 1.5,
+  volumeProfile: 0.75,
   amdPhase: 1.0,
   currencyStrength: 1.5,
-  trendDirection: 1.5,
-  dailyBias: 1.5,
+  dailyBias: 1.0,
 };
 
 function resolveWeightScale(factorKey: string, config: any): number {
@@ -383,15 +382,16 @@ function mapConfig(raw: any): any {
 // and group caps. Accepts a timestamp so time-dependent factors (session, silver bullet,
 // macro, AMD) are evaluated at the candle's time, not "now".
 //
-// GROUP 1: Market Structure (cap 3.0)  — BOS/CHoCH (1.5) + Trend Direction (1.5)
-// GROUP 2: Daily Bias (cap 1.5)        — Daily Bias/HTF (1.5)
+// GROUP 1: Market Structure (cap 2.5)  — BOS/CHoCH + Trend (merged, 2.5)
+// GROUP 2: Daily Bias (cap 1.0)        — Daily Bias/HTF (1.0)
 // GROUP 3: Order Flow Zones (cap 3.0)  — OB (2.0) + FVG (2.0) + Breaker (1.0) + Unicorn (1.5)
 // GROUP 4: P/D & Fib (cap 2.5)        — P/D+Fib (2.0) + PD/PW Levels (1.0)
 // GROUP 5: Timing (cap 1.5)           — Kill Zone (1.0) + Silver Bullet (1.0) + Macro (0.5)
-// GROUP 6: Price Action (cap 2.0)     — Judas (0.5) + Reversal (0.5) + Sweep (1.0) + Displacement (1.0)
+// GROUP 6: Price Action (cap 2.5)     — Judas (0.5) + Reversal (1.5) + Sweep (1.0) + Displacement (1.0)
 // GROUP 7: AMD / Power of 3 (cap 1.5) — AMD (1.0) + Po3 Combo (+1.0)
 // GROUP 8: Macro Confirmation (cap 2.0)— SMT (1.0) + Currency Strength (1.5)
-// GROUP 9: Volume Profile (cap 1.5)   — Volume Profile (1.5)
+// GROUP 9: Volume Profile (cap 0.75)  — Volume Profile (0.75)
+// Output: Percentage score (0-100%) + strongFactorCount
 
 // ─── Lightweight Regime Classification (for real-time scoring) ──────
 function classifyInstrumentRegime(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
@@ -524,28 +524,45 @@ function runConfluenceAnalysis(
     ? computeOpeningRange(hourlyCandles, config.openingRange.candleCount || 24)
     : null;
 
-  // ── Factor Scoring (20 factors, 9 groups — mirrors bot-scanner) ──
+  // ── Factor Scoring (19 factors, 9 groups — mirrors bot-scanner, percentage output) ──
   let score = 0;
   const factors: BacktestReasoningFactor[] = [];
 
-  // ── Factor 1: Market Structure / BOS/CHoCH (max 1.5) ──
+  // ── Factor 1: Market Structure + Trend (merged, max 2.5) ──
   {
     let pts = 0;
     let detail = "";
     if (config.enableStructureBreak !== false) {
-      if (structure.choch.length > 0) {
+      const hasChoch = structure.choch.length > 0;
+      const hasBos = structure.bos.length > 0;
+      // Determine trend alignment (will be set after direction is computed later, so use structure.trend)
+      const trendAligned = (structure.trend === "bullish" || structure.trend === "bearish");
+      const isRanging = structure.trend === "ranging";
+      if (hasChoch && trendAligned) {
+        pts = 2.5;
+        detail = `${structure.choch.length} CHoCH + ${structure.trend} trend aligned — strong reversal`;
+      } else if (hasChoch && isRanging) {
+        pts = 2.0;
+        detail = `${structure.choch.length} CHoCH in ranging market`;
+      } else if (hasChoch) {
+        pts = 2.0;
+        detail = `${structure.choch.length} CHoCH detected`;
+      } else if (hasBos && trendAligned) {
+        pts = 2.0;
+        detail = `${structure.bos.length} BOS + ${structure.trend} trend aligned — continuation`;
+      } else if (hasBos && isRanging) {
         pts = 1.5;
-        detail = `${structure.choch.length} CHoCH detected — trend reversal confirmed`;
-      } else if (structure.bos.length > 0) {
+        detail = `${structure.bos.length} BOS in ranging market`;
+      } else if (hasBos) {
         pts = 1.0;
-        detail = `${structure.bos.length} BOS detected — trend continuation`;
+        detail = `${structure.bos.length} BOS detected`;
       } else {
         detail = "No BOS or CHoCH detected";
       }
     } else {
       detail = "BOS/CHoCH disabled";
     }
-    { const s = applyWeightScale(pts, "marketStructure", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "marketStructure", 2.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
   }
 
@@ -564,8 +581,8 @@ function runConfluenceAnalysis(
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated)`;
         if (tags.length > 0) detail += ` [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
-        pts = 0.5;
-        detail = `${activeOBs.length} quality-filtered OBs nearby`;
+        pts = 0;
+        detail = `${activeOBs.length} quality-filtered OBs nearby (not at level)`;
       }
     } else {
       detail = "Order Blocks disabled";
@@ -605,8 +622,8 @@ function runConfluenceAnalysis(
           detail += " [displacement-created, scored via Factor 10]";
         }
       } else if (activeFVGs.length > 0) {
-        pts = 0.5;
-        detail = `${activeFVGs.length} unfilled FVGs in range`;
+        pts = 0;
+        detail = `${activeFVGs.length} unfilled FVGs in range (not at level)`;
       }
     } else {
       detail = "FVGs disabled";
@@ -720,7 +737,7 @@ function runConfluenceAnalysis(
     factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
-  // ── Factor 8: Reversal Candle (max 0.5) ──
+  // ── Factor 8: Reversal Candle (max 1.5) ──
   {
     let pts = 0;
     let detail = "No reversal pattern";
@@ -734,18 +751,18 @@ function runConfluenceAnalysis(
       ].some(lvl => Math.abs(lastMid - lvl) / lastMid <= 0.002) : false;
       const atKeyLevel = atOB || atFVG || atPDPW;
       if (atKeyLevel) {
-        pts = 0.5;
+        pts = 1.5;
         const levels: string[] = [];
         if (atOB) levels.push("OB");
         if (atFVG) levels.push("FVG");
         if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversal.type} reversal at key level (${levels.join(", ")})`;
+        detail = `${reversal.type} reversal at key level (${levels.join(", ")}) — high conviction`;
       } else {
-        pts = 0.25;
+        pts = 0.75;
         detail = `${reversal.type} reversal candle detected but not at a key level`;
       }
     }
-    { const s = applyWeightScale(pts, "reversalCandle", 0.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
@@ -827,29 +844,7 @@ function runConfluenceAnalysis(
     else if (pd.currentZone === "premium") direction = "short";
   }
 
-  // ── Factor 19: Trend Direction — Entry TF (max 1.5) ──
-  {
-    let pts = 0;
-    let detail = "";
-    if (config.useTrendDirection !== false && direction && structure.trend !== "ranging") {
-      const trendAligned = (direction === "long" && structure.trend === "bullish")
-        || (direction === "short" && structure.trend === "bearish");
-      if (trendAligned) {
-        pts = 1.5;
-        detail = `Entry TF ${structure.trend} trend aligned with ${direction} direction`;
-      } else {
-        pts = -0.5;
-        detail = `Counter-trend: ${direction} against ${structure.trend} trend (penalty)`;
-      }
-    } else if (direction && structure.trend === "ranging") {
-      pts = 0.5;
-      detail = `Ranging market — direction set via P/D zone fallback (${direction})`;
-    } else {
-      detail = "No direction determined — trend scoring skipped";
-    }
-    { const s = applyWeightScale(pts, "trendDirection", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Trend Direction", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
-  }
+  // (Factor 19 Trend Direction removed — merged into Factor 1 Market Structure)
 
   // ── Factor 10: Displacement (max 1.0) ──
   {
@@ -1032,7 +1027,7 @@ function runConfluenceAnalysis(
       }
       pts = Math.min(1.5, pts);
     }
-    { const s = applyWeightScale(pts, "volumeProfile", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "volumeProfile", 0.75, config); pts = s.pts; score += pts;
     factors.push({ name: "Volume Profile", present: pts > 0, weight: s.displayWeight, detail, group: "Volume Profile" }); }
   }
 
@@ -1112,7 +1107,7 @@ function runConfluenceAnalysis(
     } else {
       detail = "No direction determined — HTF bias skipped";
     }
-    { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "dailyBias", 1.0, config); pts = s.pts; score += pts;
     factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
   }
 
@@ -1207,13 +1202,13 @@ function runConfluenceAnalysis(
     const amdF = findFactor("AMD Phase");
     const sweepF = findFactor("Liquidity Sweep");
     const judasF = findFactor("Judas Swing");
-    const trendF = findFactor("Trend Direction");
+    const msF = findFactor("Market Structure");
 
     const amdPresent = amdF && amdF.present;
     const sweepOrJudas = (sweepF && sweepF.present) || (judasF && judasF.present);
-    const trendAligned = trendF && trendF.present;
+    const msAligned = msF && msF.present;
 
-    if (amdPresent && sweepOrJudas && trendAligned) {
+    if (amdPresent && sweepOrJudas && msAligned) {
       const po3Bonus = 1.0;
       score += po3Bonus;
       factors.push({
@@ -1228,7 +1223,7 @@ function runConfluenceAnalysis(
         name: "Power of 3 Combo",
         present: false,
         weight: 0,
-        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} Trend=${trendAligned ? "✓" : "✗"}`,
+        detail: `Incomplete: AMD=${amdPresent ? "✓" : "✗"} Sweep/Judas=${sweepOrJudas ? "✓" : "✗"} MS=${msAligned ? "✓" : "✗"}`,
         group: "AMD / Power of 3",
       });
     }
@@ -1237,15 +1232,15 @@ function runConfluenceAnalysis(
   // ─── Group Caps Enforcement ─────────────────────────────────────────
   {
     const GROUP_CAPS: Record<string, number> = {
-      "Market Structure": 3.0,
-      "Daily Bias": 1.5,
+      "Market Structure": 2.5,
+      "Daily Bias": 1.0,
       "Order Flow Zones": 3.0,
       "Premium/Discount & Fib": 2.5,
       "Timing": 1.5,
-      "Price Action": 2.0,
+      "Price Action": 2.5,
       "AMD / Power of 3": 1.5,
       "Macro Confirmation": 2.0,
-      "Volume Profile": 1.5,
+      "Volume Profile": 0.75,
     };
 
     const groupTotals: Record<string, number> = {};
@@ -1304,8 +1299,49 @@ function runConfluenceAnalysis(
     }
   }
 
-  // Final clamp
-  score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
+  // ─── Re-run group caps after regime scoring ─────────────────────────
+  {
+    const GROUP_CAPS_POST: Record<string, number> = {
+      "Market Structure": 2.5, "Daily Bias": 1.0, "Order Flow Zones": 3.0,
+      "Premium/Discount & Fib": 2.5, "Timing": 1.5, "Price Action": 2.5,
+      "AMD / Power of 3": 1.5, "Macro Confirmation": 2.0, "Volume Profile": 0.75,
+    };
+    const groupTotals2: Record<string, number> = {};
+    for (const f of factors) {
+      if (f.present && f.group) groupTotals2[f.group] = (groupTotals2[f.group] || 0) + f.weight;
+    }
+    for (const [group, cap] of Object.entries(GROUP_CAPS_POST)) {
+      const total = groupTotals2[group] || 0;
+      if (total > cap) {
+        const excess = total - cap;
+        score -= excess;
+        const gf = factors.filter(f => f.group === group && f.present && f.weight > 0);
+        const sf = cap / total;
+        for (const f of gf) { f.weight = Math.round(f.weight * sf * 100) / 100; }
+      }
+    }
+  }
+
+  // ─── Percentage Normalization ──────────────────────────────────────
+  // Compute enabledMax from factors that have weight > 0 or are present
+  const enabledMax = factors.reduce((sum, f) => {
+    if (f.name === "Regime Alignment" || f.name === "Power of 3 Combo") return sum;
+    const w = f.weight;
+    if (w <= 0) return sum;
+    return sum + w;
+  }, 0) || 1;
+  // Compute strong factor count (factors scoring above 50% of their max weight)
+  const strongFactorCount = factors.filter(f => {
+    if (!f.present || f.weight <= 0) return false;
+    if (f.name === "Regime Alignment" || f.name === "Power of 3 Combo") return false;
+    const maxW = DEFAULT_FACTOR_WEIGHTS[Object.keys(DEFAULT_FACTOR_WEIGHTS).find(k =>
+      f.name.toLowerCase().replace(/[\s\/]/g, '') === k.toLowerCase().replace(/[\s\/]/g, '')
+    ) || ''] || f.weight;
+    return f.weight >= maxW * 0.5;
+  }).length;
+  // Convert to percentage (0-100)
+  const rawPct = enabledMax > 0 ? (score / enabledMax) * 100 : 0;
+  score = Math.max(0, Math.min(100, Math.round(rawPct * 10) / 10));
 
   // ── HTF Bias Gate (safety gate, separate from Factor 20 scoring) ──
   if (config.htfBiasRequired && direction) {
@@ -1337,6 +1373,7 @@ function runConfluenceAnalysis(
 
   return {
     score,
+    strongFactorCount,
     direction,
     factors,
     structure,
@@ -1357,7 +1394,7 @@ function runConfluenceAnalysis(
     takeProfit: sltp.takeProfit,
     lastPrice,
     bias: direction === "long" ? "bullish" : direction === "short" ? "bearish" : "neutral",
-    summary: `Score ${score.toFixed(1)} | ${structure.trend} | ${pd.currentZone} | ${session.name}`,
+    summary: `${score.toFixed(1)}% (${strongFactorCount} strong) | ${structure.trend} | ${pd.currentZone} | ${session.name}`,
   };
 }
 
@@ -1981,10 +2018,12 @@ Deno.serve(async (req) => {
         const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
 
         if (!analysis.direction || analysis.score < config.minConfluence) continue;
-
         // Min factor count gate
         const factorCount = analysis.factors.filter((f: any) => f.present).length;
         if (config.minFactorCount > 0 && factorCount < config.minFactorCount) continue;
+        // Strong factor gate
+        const minStrongFactors = config.minStrongFactors ?? 4;
+        if (minStrongFactors > 0 && (analysis.strongFactorCount ?? 0) < minStrongFactors) continue;
 
         // ── Safety Gates ──
         const gates = runBacktestSafetyGates(

@@ -72,8 +72,14 @@ function parseSummary(summary: string): ParsedSummary {
     result.total = parseInt(factorMatch[2], 10);
   }
 
-  const scoreMatch = summary.match(/score:\s*([\d.]+)\/10/i);
-  if (scoreMatch) result.score = parseFloat(scoreMatch[1]);
+  // Try percentage format first (new), then legacy /10 format
+  const pctMatch = summary.match(/score:\s*([\d.]+)%/i);
+  if (pctMatch) {
+    result.score = parseFloat(pctMatch[1]);
+  } else {
+    const scoreMatch = summary.match(/score:\s*([\d.]+)\/10/i);
+    if (scoreMatch) result.score = parseFloat(scoreMatch[1]);
+  }
 
   // Split off after first ". " — that's where factor list starts
   const afterPeriod = summary.split(/\.\s+/).slice(1).join(". ");
@@ -253,7 +259,7 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
       <span className={`text-[10px] font-mono ${dirColor}`}>
         {s.direction ?? "—"}
         {s.factorCount !== null ? ` · ${s.factorCount} factors` : ""}
-        {s.score !== null ? ` (${s.score})` : ""}
+        {s.score !== null ? ` (${s.score > 10 ? `${s.score.toFixed(1)}%` : s.score})` : ""}
       </span>
     );
   }
@@ -311,11 +317,11 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
           </span>
         )}
         {s.score !== null && (
-          <span className={`font-mono font-bold text-[11px] ${dirColor}`}>{s.score}/10</span>
+          <span className={`font-mono font-bold text-[11px] ${dirColor}`}>{s.score > 10 ? `${s.score.toFixed(1)}%` : `${s.score}/10`}</span>
         )}
         {s.factorCount !== null && s.total !== null && (
           <span className="text-[9px] text-muted-foreground font-mono">
-            {s.factorCount}/{s.total} factors aligned
+            {s.factorCount} factors aligned{s.total ? ` (of ${s.total})` : ""}
           </span>
         )}
 

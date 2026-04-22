@@ -115,11 +115,11 @@ const HighlightContext = createContext<Set<string>>(new Set());
 const BASE_CONFIG = {
   strategy: {
     enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
-    minConfluenceScore: 6.0, minFactorCount: 0, htfBiasRequired: true, obLookbackCandles: 20,
+    minConfluenceScore: 55, minFactorCount: 0, minStrongFactors: 4, htfBiasRequired: true, obLookbackCandles: 20,
     fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
     liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
     regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-    normalizedScoring: false,
+    normalizedScoring: true,
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
@@ -171,7 +171,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "swing_trader" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 6.5, minFactorCount: 7, regimeScoringStrength: 1.5 },
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 65, minFactorCount: 0, minStrongFactors: 6, regimeScoringStrength: 1.5 },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxDailyLoss: 2, maxOpenPositions: 2, minRiskReward: 2.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 3.0, trailingStopEnabled: true, trailingStopPips: 20, breakEvenEnabled: true, breakEvenTriggerPips: 15, timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 120 },
@@ -183,7 +183,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "day_trader" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 5.5, minFactorCount: 5 },
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 55, minFactorCount: 0, minStrongFactors: 4 },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxDailyLoss: 3, maxOpenPositions: 4, minRiskReward: 1.5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: true, breakEvenTriggerPips: 20, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 24 },
       tradingStyle: { mode: "day_trader" },
@@ -194,7 +194,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     tradingStyle: "scalper" as const,
     config: {
       ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 4.0, minFactorCount: 3, regimeScoringEnabled: false },
+      strategy: { ...BASE_CONFIG.strategy, minConfluenceScore: 40, minFactorCount: 0, minStrongFactors: 3, regimeScoringEnabled: false },
       risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxDailyLoss: 5, maxOpenPositions: 6, minRiskReward: 1.0 },
       entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
       exit: { ...BASE_CONFIG.exit, tpRRRatio: 1.5, trailingStopEnabled: false, breakEvenEnabled: false, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4 },
@@ -632,22 +632,37 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         Server cron runs every 5 min. If interval hasn't elapsed since last scan, the cron cycle is skipped.
                       </p>
                     </FieldGroup>
-                    <FieldGroup label="Confluence Threshold" description="Minimum weighted score (1-10) required to consider a trade setup valid">
+                    <FieldGroup label="Confluence Threshold" description={(config.strategy?.normalizedScoring ?? true) ? "Minimum percentage (0-100%) of enabled factor max required to trigger a trade" : "Minimum weighted score (1-10) required to consider a trade setup valid"}>
                       <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={0.5} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}</span>
+                        {(config.strategy?.normalizedScoring ?? true) ? (
+                          <>
+                            <Slider value={[config.strategy?.confluenceThreshold ?? 55]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={20} max={90} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
+                          </>
+                        ) : (
+                          <>
+                            <Slider value={[config.strategy?.confluenceThreshold ?? 5]} onValueChange={v => updateField('strategy', 'confluenceThreshold', v[0])} min={1} max={10} step={0.5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-10 text-right">{(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}</span>
+                          </>
+                        )}
                       </div>
                     </FieldGroup>
-                    <FieldGroup label="Min Factor Count" description="Require at least N of 20 factors to align (in addition to score threshold). 0 = off. Score is weighted but count enforces breadth.">
+                    <FieldGroup label="Min Strong Factors" description="Require at least N factors scoring above 50% of their individual max. Prevents trades from passing on many weak signals. 0 = off.">
                       <div className="flex items-center gap-4">
-                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={20} step={1} className="flex-1" />
-                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/20</span>
+                        <Slider value={[config.strategy?.minStrongFactors ?? 4]} onValueChange={v => updateField('strategy', 'minStrongFactors', v[0])} min={0} max={12} step={1} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minStrongFactors ?? 4}</span>
                       </div>
-                      {(config.strategy?.minFactorCount ?? 0) > 0 && (
+                      {(config.strategy?.minStrongFactors ?? 0) > 0 && (
                         <p className="text-[10px] text-muted-foreground mt-1.5">
-                          Gate: ≥ {(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10 score AND ≥ {config.strategy?.minFactorCount}/20 factors. Tip: During kill zones, 10–14/20 factors typically score 6.0–8.5. Outside kill zones, expect 6–9 factors and 4.0–6.0 scores.
+                          Gate: ≥ {(config.strategy?.normalizedScoring ?? true) ? `${config.strategy?.confluenceThreshold ?? 55}%` : `${(config.strategy?.confluenceThreshold ?? 5).toFixed(1)}/10`} score AND ≥ {config.strategy?.minStrongFactors ?? 4} strong factors.
                         </p>
                       )}
+                    </FieldGroup>
+                    <FieldGroup label="Min Factor Count (Legacy)" description="Require at least N factors to be present. 0 = off. Superseded by Min Strong Factors for most use cases.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.minFactorCount ?? 0]} onValueChange={v => updateField('strategy', 'minFactorCount', v[0])} min={0} max={17} step={1} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-10 text-right">{config.strategy?.minFactorCount ?? 0}/17</span>
+                      </div>
                     </FieldGroup>
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
@@ -660,9 +675,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="Silver Bullet Windows" description="ICT macro windows (London 08-09, AM 15-16, PM 19-20 UTC). +1.0 pt, +0.5 combo bonus when overlapping a kill zone" checked={config.strategy?.useSilverBullet ?? true} onChange={v => updateField('strategy', 'useSilverBullet', v)} />
                       <ToggleField label="ICT Macro Windows" description="8 institutional reprice windows (~20min each). +0.5 pt, +0.5 combo bonus when overlapping a Silver Bullet" checked={config.strategy?.useMacroWindows ?? true} onChange={v => updateField('strategy', 'useMacroWindows', v)} />
                       <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD). +1.0 pt when one sweeps liquidity but the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
-                      <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection. +1.5 pts when price at key volume node" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
-                      <ToggleField label="Trend Direction" description="Entry timeframe trend via HH/HL (bullish) or LH/LL (bearish). +1.5 pts when trend aligns with trade direction" checked={config.strategy?.useTrendDirection ?? true} onChange={v => updateField('strategy', 'useTrendDirection', v)} />
-                      <ToggleField label="Daily Bias" description="Higher timeframe daily bias confirmation. +1.5 pts when daily candle structure aligns with trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
+                      <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection. +0.75 pts when price at key volume node" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
+                      <ToggleField label="Daily Bias" description="Higher timeframe daily bias confirmation. +1.0 pts when daily candle structure aligns with trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
                       <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +1.0 pt when bias-aligned phase detected. Power of 3 combo bonus (+1.0) when AMD + Sweep/Judas + Trend all align" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
                       <ToggleField label="FOTSI Currency Strength" description="Scores trades by currency flow (+1.5 pts when buying strong vs weak). Blocks trades when TSI exceeds +50 (overbought) or -50 (oversold) — prevents buying exhausted currencies" checked={config.strategy?.useFOTSI ?? true} onChange={v => updateField('strategy', 'useFOTSI', v)} />
                     </div>
@@ -694,12 +708,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                     </div>
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Score Normalization</p>
-                      <ToggleField label="Normalized Scoring" description="When enabled, the confluence score is calculated as a percentage of the maximum possible score from your enabled factors. This means disabling factors won't silently raise the effective threshold — 5.0 always means 50% of what's possible." checked={config.strategy?.normalizedScoring ?? false} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
-                      {(config.strategy?.normalizedScoring) && (
-                        <div className="rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
-                          <div><span className="text-emerald-500 font-medium">How it works:</span> Score = (raw points / max possible points) × 10</div>
-                          <div><span className="text-amber-500 font-medium">Example:</span> If you disable 4 factors, max drops from ~22 to ~16. A raw score of 8 becomes 5.0/10 (50%) instead of being clamped at 8.0/10.</div>
-                          <div className="text-muted-foreground/70">Your confluence threshold now consistently means "X% of enabled factors aligned" regardless of how many factors you toggle.</div>
+                      <ToggleField label="Percentage Scoring" description="Score expressed as a percentage (0-100%) of the maximum possible from your enabled factors. 55% always means 55% of what's possible, regardless of which factors are enabled." checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
+                      {(config.strategy?.normalizedScoring ?? true) ? (
+                        <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
+                          <div><span className="text-emerald-500 font-medium">Active:</span> Score = (raw points / max possible) × 100%</div>
+                          <div><span className="text-amber-500 font-medium">Example:</span> Raw 10.5 / max 19.0 = 55.3% confluence</div>
+                          <div className="text-muted-foreground/70">Disabling factors doesn't change the effective threshold. Combined with Min Strong Factors, this prevents both "silent threshold raise" and "many weak signals" problems.</div>
+                        </div>
+                      ) : (
+                        <div className="rounded-md bg-amber-500/10 border border-amber-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
+                          <div><span className="text-amber-500 font-medium">Legacy mode:</span> Score clamped to 0-10 scale</div>
+                          <div className="text-muted-foreground/70">Warning: Disabling factors silently raises the effective threshold. Consider switching to percentage scoring.</div>
                         </div>
                       )}
                     </div>
@@ -1366,8 +1385,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 
 // ─── Factor Weights Tab ───────────────────────────────────────────────────
 const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; group: string; description: string }[] = [
-  { key: "marketStructure", name: "Market Structure", defaultWeight: 1.5, group: "Market Structure", description: "BOS/CHoCH detection" },
-  { key: "trendDirection", name: "Trend Direction", defaultWeight: 1.5, group: "Market Structure", description: "Entry TF trend alignment" },
+  { key: "marketStructure", name: "Market Structure", defaultWeight: 2.5, group: "Market Structure", description: "BOS/CHoCH + entry TF trend alignment (merged)" },
   { key: "orderBlock", name: "Order Block", defaultWeight: 2.0, group: "Order Flow Zones", description: "Institutional order blocks" },
   { key: "fairValueGap", name: "Fair Value Gap", defaultWeight: 2.0, group: "Order Flow Zones", description: "FVG imbalances" },
   { key: "breakerBlock", name: "Breaker Block", defaultWeight: 1.0, group: "Order Flow Zones", description: "Failed OB flip zones" },
@@ -1376,14 +1394,14 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; gr
   { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, group: "Premium/Discount", description: "Previous day/week levels" },
   { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, group: "Timing", description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
   { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, group: "Price Action", description: "NY midnight-anchored fake breakout + liquidity sweep" },
-  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 0.5, group: "Price Action", description: "Reversal at key levels" },
+  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 1.5, group: "Price Action", description: "Reversal at key levels — primary entry trigger" },
   { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.5, group: "Price Action", description: "Liquidity pool sweeps with rejection confirmation" },
   { key: "displacement", name: "Displacement", defaultWeight: 1.0, group: "Price Action", description: "Strong institutional candles" },
   { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, group: "AMD / Power of 3", description: "Accumulation→Manipulation→Distribution" },
   { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, group: "Macro Confirmation", description: "Correlated pair divergence" },
   { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, group: "Macro Confirmation", description: "FOTSI alignment" },
-  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 1.5, group: "Volume Profile", description: "TPO-based POC/HVN/LVN" },
-  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.5, group: "Daily Bias", description: "HTF daily trend alignment" },
+  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 0.75, group: "Volume Profile", description: "TPO-based POC/HVN/LVN (reduced: synthetic data)" },
+  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.0, group: "Daily Bias", description: "HTF daily trend alignment" },
   { key: "spreadQuality", name: "Spread Quality", defaultWeight: 0, group: "Execution Quality", description: "Penalty based on spread-to-ATR ratio (not weight-scalable)" },
 ];
 
