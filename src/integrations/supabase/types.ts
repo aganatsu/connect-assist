@@ -14,6 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
+      backtest_runs: {
+        Row: {
+          completed_at: string | null
+          config: Json
+          created_at: string
+          error_message: string | null
+          id: string
+          progress: number
+          progress_message: string | null
+          results: Json | null
+          started_at: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          config?: Json
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          progress?: number
+          progress_message?: string | null
+          results?: Json | null
+          started_at?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          config?: Json
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          progress?: number
+          progress_message?: string | null
+          results?: Json | null
+          started_at?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       bot_configs: {
         Row: {
           config_json: Json
