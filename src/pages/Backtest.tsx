@@ -47,6 +47,7 @@ interface BacktestResponse {
   stats: BacktestStats;
   factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }>;
   gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>;
+  dataCoverage?: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }>;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -754,6 +755,31 @@ export default function Backtest() {
 
             {/* ── Overview Tab ── */}
             <TabsContent value="overview" className="space-y-4 mt-4">
+              {/* Data Coverage Banner */}
+              {results.dataCoverage && (() => {
+                const entries = Object.entries(results.dataCoverage);
+                const totalCandles = entries.reduce((s, [, v]) => s + v.entryCandles, 0);
+                const lowData = entries.some(([, v]) => v.entryCandles < 200);
+                return (
+                  <div className={`rounded-lg border px-4 py-3 text-xs ${lowData ? 'border-warning/50 bg-warning/5' : 'border-border/50 bg-secondary/30'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      {lowData ? <AlertTriangle className="h-3.5 w-3.5 text-warning" /> : <Info className="h-3.5 w-3.5 text-muted-foreground" />}
+                      <span className="font-medium text-foreground">
+                        {lowData ? 'Limited data coverage — results may be unreliable' : 'Data Coverage'}
+                      </span>
+                      <span className="text-muted-foreground ml-auto">{totalCandles.toLocaleString()} total candles</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1 text-muted-foreground">
+                      {entries.map(([sym, cov]) => (
+                        <div key={sym} className="flex justify-between">
+                          <span>{sym}</span>
+                          <span className={cov.entryCandles < 200 ? 'text-warning' : ''}>{cov.entryCandles.toLocaleString()} bars ({cov.dateRange.split(' to ')[0]} → {cov.dateRange.split(' to ')[1]})</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
                 {[
                   { label: "Total Trades", value: results.stats.totalTrades, sub: `${results.stats.tradesPerMonth.toFixed(1)}/mo` },

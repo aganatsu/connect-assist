@@ -275,14 +275,182 @@ interface OpenPosition {
   currentSL: number;
 }
 
-// ─── Candle Fetching ────────────────────────────────────────────────
-// Fetch historical candles via Yahoo Finance (same source as live bot)
-async function fetchHistoricalCandles(symbol: string, interval: string, range: string): Promise<Candle[]> {
+// ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
+// Symbol mappings (duplicated from candleSource since they're not exported)
+const BT_TWELVE_DATA_SYMBOLS: Record<string, string> = {
+  "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
+  "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
+  "USD/CHF": "USD/CHF",
+  "EUR/GBP": "EUR/GBP", "EUR/JPY": "EUR/JPY", "GBP/JPY": "GBP/JPY",
+  "EUR/AUD": "EUR/AUD", "EUR/CAD": "EUR/CAD", "EUR/CHF": "EUR/CHF",
+  "EUR/NZD": "EUR/NZD", "GBP/AUD": "GBP/AUD", "GBP/CAD": "GBP/CAD",
+  "GBP/CHF": "GBP/CHF", "GBP/NZD": "GBP/NZD", "AUD/CAD": "AUD/CAD",
+  "AUD/JPY": "AUD/JPY", "CAD/JPY": "CAD/JPY",
+  "AUD/CHF": "AUD/CHF", "AUD/NZD": "AUD/NZD", "CAD/CHF": "CAD/CHF",
+  "CHF/JPY": "CHF/JPY", "NZD/CAD": "NZD/CAD", "NZD/CHF": "NZD/CHF",
+  "NZD/JPY": "NZD/JPY",
+  "US30": "DJI", "NAS100": "IXIC", "SPX500": "SPX",
+  "XAU/USD": "XAU/USD", "XAG/USD": "XAG/USD", "US Oil": "WTI/USD",
+  "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
+};
+
+const BT_TD_INTERVAL: Record<string, string> = {
+  "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
+  "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
+};
+
+// Fetch candles from TwelveData using date-range params (up to 5000 per request)
+async function fetchTwelveDataRange(
+  symbol: string, interval: string, startDate: string, endDate: string,
+): Promise<Candle[]> {
+  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
+  if (!apiKey) return [];
+  const tdSymbol = BT_TWELVE_DATA_SYMBOLS[symbol];
+  if (!tdSymbol) return [];
+  const tdInterval = BT_TD_INTERVAL[interval] || "15min";
+
+  // TwelveData supports start_date/end_date with outputsize up to 5000
+  const allCandles: Candle[] = [];
+  let currentStart = startDate;
+  const maxPerRequest = 5000;
+
+  // Paginate: fetch chunks until we reach endDate
+  for (let page = 0; page < 20; page++) { // safety limit: 20 pages = 100k candles max
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&start_date=${encodeURIComponent(currentStart)}&end_date=${encodeURIComponent(endDate)}&outputsize=${maxPerRequest}&apikey=${apiKey}&order=ASC`;
+    try {
+      const res = await fetch(url);
+      if (res.status === 429) {
+        console.warn(`[backtest] TwelveData 429, waiting 10s...`);
+        await new Promise(r => setTimeout(r, 10000));
+        continue; // retry same page
+      }
+      if (!res.ok) break;
+      const data = await res.json();
+      if (data?.status === "error" || !Array.isArray(data?.values)) {
+        if (data?.message) console.warn(`[backtest] TwelveData: ${data.message}`);
+        break;
+      }
+      const chunk = data.values.map((v: any) => ({
+        datetime: typeof v.datetime === "string" && v.datetime.length === 10
+          ? `${v.datetime}T00:00:00Z`
+          : `${v.datetime.replace(" ", "T")}Z`,
+        open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close),
+        volume: v.volume != null ? Number(v.volume) : undefined,
+      })).filter((c: Candle) =>
+        Number.isFinite(c.open) && Number.isFinite(c.high) &&
+        Number.isFinite(c.low) && Number.isFinite(c.close)
+      );
+      if (chunk.length === 0) break;
+      allCandles.push(...chunk);
+      console.log(`[backtest] TwelveData page ${page + 1}: ${chunk.length} candles for ${symbol} ${interval} (total: ${allCandles.length})`);
+      if (chunk.length < maxPerRequest) break; // last page
+      // Move start to after last candle
+      const lastDt = chunk[chunk.length - 1].datetime;
+      currentStart = lastDt; // TwelveData handles overlap dedup
+      await new Promise(r => setTimeout(r, 1000)); // rate limit between pages
+    } catch (e: any) {
+      console.warn(`[backtest] TwelveData fetch error page ${page}: ${e?.message}`);
+      break;
+    }
+  }
+  return allCandles;
+}
+
+// Yahoo fallback with appropriate range string
+async function fetchYahooRange(symbol: string, interval: string, range: string): Promise<Candle[]> {
+  const ySym = YAHOO_SYMBOLS[symbol];
+  if (!ySym) return [];
+  const yahooInt: Record<string, string> = {
+    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+    "1h": "60m", "4h": "60m", "1d": "1d", "1w": "1wk",
+  };
+  const yInterval = yahooInt[interval] || "15m";
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ySym}?interval=${yInterval}&range=${range}`;
   try {
-    const result = await fetchCandlesWithFallback({ symbol, interval, limit: 500 });
+    const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return [];
+    const ts: number[] = result.timestamp || [];
+    const q = result.indicators?.quote?.[0];
+    if (!q) return [];
+    const candles: Candle[] = [];
+    for (let i = 0; i < ts.length; i++) {
+      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
+      if (o == null || h == null || l == null || c == null) continue;
+      candles.push({
+        datetime: new Date(ts[i] * 1000).toISOString(),
+        open: Number(o), high: Number(h), low: Number(l), close: Number(c),
+        volume: q.volume?.[i] ?? undefined,
+      });
+    }
+    // Aggregate to 4h if needed
+    if (interval === "4h" && candles.length > 0) {
+      const out: Candle[] = [];
+      let bucket: Candle | null = null;
+      let count = 0;
+      for (const c of candles) {
+        if (!bucket) { bucket = { ...c }; count = 1; }
+        else {
+          bucket.high = Math.max(bucket.high, c.high);
+          bucket.low = Math.min(bucket.low, c.low);
+          bucket.close = c.close;
+          bucket.volume = (bucket.volume || 0) + (c.volume || 0);
+          count++;
+        }
+        if (count >= 4) { out.push(bucket); bucket = null; count = 0; }
+      }
+      if (bucket) out.push(bucket);
+      return out;
+    }
+    return candles;
+  } catch (e: any) {
+    console.warn(`[backtest] Yahoo fetch error: ${e?.message}`);
+    return [];
+  }
+}
+
+// Main backtest candle fetcher: tries TwelveData date-range first, Yahoo fallback
+async function fetchHistoricalCandles(
+  symbol: string, interval: string, range: string,
+  startDate?: string, endDate?: string,
+): Promise<Candle[]> {
+  // If we have date range, use TwelveData's date-range API for full coverage
+  if (startDate && endDate) {
+    // Add lookback buffer: fetch extra candles before startDate for analysis window
+    const startMs = new Date(startDate).getTime();
+    const lookbackMs = interval === "1d" ? 60 * 24 * 3600 * 1000 : // 60 days for daily
+                       interval === "4h" ? 30 * 24 * 3600 * 1000 : // 30 days for 4h
+                       interval === "1h" ? 14 * 24 * 3600 * 1000 : // 14 days for 1h
+                       7 * 24 * 3600 * 1000; // 7 days for 15m/5m
+    const bufferedStart = new Date(startMs - lookbackMs).toISOString().slice(0, 10);
+
+    const tdCandles = await fetchTwelveDataRange(symbol, interval, bufferedStart, endDate);
+    if (tdCandles.length >= 30) {
+      console.log(`[backtest] ${symbol} ${interval}: ${tdCandles.length} candles from TwelveData (${bufferedStart} → ${endDate})`);
+      return tdCandles;
+    }
+  }
+
+  // Fallback: Yahoo with range string
+  const yahooRangeMap: Record<string, string> = {
+    "3mo": "3mo", "6mo": "6mo", "1y": "1y", "2y": "2y",
+  };
+  const yRange = yahooRangeMap[range] || range;
+  const yahooCandles = await fetchYahooRange(symbol, interval, yRange);
+  if (yahooCandles.length >= 30) {
+    console.log(`[backtest] ${symbol} ${interval}: ${yahooCandles.length} candles from Yahoo (range: ${yRange})`);
+    return yahooCandles;
+  }
+
+  // Last resort: use the shared fetcher with a large limit
+  try {
+    const result = await fetchCandlesWithFallback({ symbol, interval, limit: 5000 });
+    console.log(`[backtest] ${symbol} ${interval}: ${result.candles.length} candles from shared fetcher (${result.source})`);
     return result.candles;
   } catch (e: any) {
-    console.warn(`[backtest] fetchCandles failed for ${symbol} ${interval} ${range}: ${e?.message}`);
+    console.warn(`[backtest] All sources failed for ${symbol} ${interval}: ${e?.message}`);
     return [];
   }
 }
@@ -1528,7 +1696,7 @@ function runBacktestSafetyGates(
   return gates;
 }
 
-// ─── Exit Engine (mirrors paper-trading exit logic) ─────────────────
+// ─── Exit Engine (improved: BE/trail before SL check, same-candle SL/TP disambiguation) ───
 function processExits(
   positions: OpenPosition[],
   candle: Candle,
@@ -1547,29 +1715,77 @@ function processExits(
     const tp = pos.takeProfit;
     const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
 
-    // ── SL Hit (gap-through + slippage) ──
-    if (pos.direction === "long" && candle.low <= sl) {
-      closeReason = "sl_hit";
-      const gapPrice = Math.min(sl, candle.low);
-      exitPrice = gapPrice - slippagePips * spec.pipSize;
-    } else if (pos.direction === "short" && candle.high >= sl) {
-      closeReason = "sl_hit";
-      const gapPrice = Math.max(sl, candle.high);
-      exitPrice = gapPrice + slippagePips * spec.pipSize;
-    }
-
-    // ── TP Hit ──
-    if (!closeReason) {
-      if (pos.direction === "long" && candle.high >= tp) {
-        closeReason = "tp_hit";
-        exitPrice = tp;
-      } else if (pos.direction === "short" && candle.low <= tp) {
-        closeReason = "tp_hit";
-        exitPrice = tp;
+    // ── Step 1: Move SL up via Break Even (before checking SL hit) ──
+    // This mirrors live behavior: BE fires intra-candle before SL check
+    if (pos.exitFlags.breakEven && pos.exitFlags.breakEvenPips > 0) {
+      // Use candle high/low to check if BE activation was reached at any point
+      const bestPips = pos.direction === "long"
+        ? (candle.high - pos.entryPrice) / spec.pipSize
+        : (pos.entryPrice - candle.low) / spec.pipSize;
+      if (bestPips >= pos.exitFlags.breakEvenPips) {
+        const newSL = pos.direction === "long"
+          ? pos.entryPrice + 1 * spec.pipSize  // entry + 1 pip
+          : pos.entryPrice - 1 * spec.pipSize; // entry - 1 pip
+        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+          sl = newSL;
+        }
       }
     }
 
-    // ── Max Hold Hours ──
+    // ── Step 2: Move SL up via Trailing Stop (before checking SL hit) ──
+    if (pos.exitFlags.trailingStop && pos.exitFlags.trailingStopPips > 0) {
+      const bestPips = pos.direction === "long"
+        ? (candle.high - pos.entryPrice) / spec.pipSize
+        : (pos.entryPrice - candle.low) / spec.pipSize;
+      const activationPips = pos.exitFlags.trailingStopActivation === "after_1r" && pos.exitFlags.tpRatio
+        ? Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize
+        : pos.exitFlags.trailingStopPips * 2;
+      if (bestPips >= activationPips) {
+        const trailDist = pos.exitFlags.trailingStopPips * spec.pipSize;
+        // Trail from the best price the candle reached
+        const bestPrice = pos.direction === "long" ? candle.high : candle.low;
+        const newSL = pos.direction === "long"
+          ? bestPrice - trailDist
+          : bestPrice + trailDist;
+        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
+          sl = newSL;
+        }
+      }
+    }
+
+    // ── Step 3: Check SL and TP hits (with same-candle disambiguation) ──
+    const slHit = pos.direction === "long" ? candle.low <= sl : candle.high >= sl;
+    const tpHit = pos.direction === "long" ? candle.high >= tp : candle.low <= tp;
+
+    if (slHit && tpHit) {
+      // Both SL and TP hit on same candle — disambiguate using proximity to open
+      // Whichever level is closer to the open price was likely hit first
+      const slDist = Math.abs(candle.open - sl);
+      const tpDist = Math.abs(candle.open - tp);
+      if (slDist <= tpDist) {
+        // SL was closer to open → SL hit first
+        closeReason = "sl_hit";
+        const gapPrice = pos.direction === "long" ? Math.min(sl, candle.low) : Math.max(sl, candle.high);
+        exitPrice = pos.direction === "long"
+          ? gapPrice - slippagePips * spec.pipSize
+          : gapPrice + slippagePips * spec.pipSize;
+      } else {
+        // TP was closer to open → TP hit first
+        closeReason = "tp_hit";
+        exitPrice = tp;
+      }
+    } else if (slHit) {
+      closeReason = "sl_hit";
+      const gapPrice = pos.direction === "long" ? Math.min(sl, candle.low) : Math.max(sl, candle.high);
+      exitPrice = pos.direction === "long"
+        ? gapPrice - slippagePips * spec.pipSize
+        : gapPrice + slippagePips * spec.pipSize;
+    } else if (tpHit) {
+      closeReason = "tp_hit";
+      exitPrice = tp;
+    }
+
+    // ── Step 4: Max Hold Hours ──
     if (!closeReason && pos.exitFlags.maxHoldHours > 0) {
       const entryMs = new Date(pos.entryTime).getTime();
       const candleMs = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z").getTime();
@@ -1579,39 +1795,7 @@ function processExits(
       }
     }
 
-    // ── Break Even ──
-    if (!closeReason && pos.exitFlags.breakEven && pos.exitFlags.breakEvenPips > 0) {
-      const profitPips = pos.direction === "long"
-        ? (candle.close - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.close) / spec.pipSize;
-      if (profitPips >= pos.exitFlags.breakEvenPips) {
-        const newSL = pos.entryPrice;
-        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-          sl = newSL;
-        }
-      }
-    }
-
-    // ── Trailing Stop ──
-    if (!closeReason && pos.exitFlags.trailingStop && pos.exitFlags.trailingStopPips > 0) {
-      const profitPips = pos.direction === "long"
-        ? (candle.close - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.close) / spec.pipSize;
-      const activationPips = pos.exitFlags.trailingStopActivation === "after_1r" && pos.exitFlags.tpRatio
-        ? Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize
-        : pos.exitFlags.trailingStopPips * 2;
-      if (profitPips >= activationPips) {
-        const trailDist = pos.exitFlags.trailingStopPips * spec.pipSize;
-        const newSL = pos.direction === "long"
-          ? candle.close - trailDist
-          : candle.close + trailDist;
-        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-          sl = newSL;
-        }
-      }
-    }
-
-    // ── Partial TP (exit at trigger price, not candle close) ──
+    // ── Step 5: Partial TP (exit at trigger price, not candle close) ──
     if (!closeReason && pos.exitFlags.partialTP && !pos.partialTPFired && pos.exitFlags.partialTPPercent > 0) {
       const slDistPips = Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize;
       const triggerPips = slDistPips * (pos.exitFlags.partialTPLevel || 1.0);
@@ -1815,14 +1999,15 @@ Deno.serve(async (req) => {
     for (const symbol of instruments) {
       if (!YAHOO_SYMBOLS[symbol]) continue;
       const [entryCandles, dailyCandles] = await Promise.all([
-        fetchHistoricalCandles(symbol, entryInterval, range),
-        fetchHistoricalCandles(symbol, "1d", "2y"),
+        fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
+        fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
       ]);
+      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry candles, ${dailyCandles.length} daily candles`);
       // Fetch SMT correlated pair
       const smtPair = SMT_PAIRS[symbol];
       let smtCandles: Candle[] | undefined;
       if (smtPair && YAHOO_SYMBOLS[smtPair] && config.useSMT) {
-        smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range);
+        smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, startDate, endDate);
       }
       candleData[symbol] = { entry: entryCandles, daily: dailyCandles, smt: smtCandles };
       // Rate limit
@@ -1840,7 +2025,7 @@ Deno.serve(async (req) => {
       for (let i = 0; i < fotsiPairs.length; i += 7) {
         const batch = fotsiPairs.slice(i, i + 7);
         const results = await Promise.all(
-          batch.map(p => fetchHistoricalCandles(p, "1d", "2y").catch(() => [] as Candle[]))
+          batch.map(p => fetchHistoricalCandles(p, "1d", "2y", startDate, endDate).catch(() => [] as Candle[]))
         );
         for (let j = 0; j < batch.length; j++) {
           if (results[j] && results[j].length >= 30) fotsiCandleMap[batch[j]] = results[j];
@@ -2178,6 +2363,21 @@ Deno.serve(async (req) => {
 
     console.log(`[backtest] Complete: ${allTrades.length} trades, PnL: $${stats.totalPnl.toFixed(2)}, WR: ${stats.winRate.toFixed(1)}%, PF: ${stats.profitFactor.toFixed(2)}, MaxDD: ${stats.maxDrawdownPct.toFixed(1)}%`);
 
+    // Build data coverage metadata
+    const dataCoverage: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }> = {};
+    for (const symbol of instruments) {
+      const data = candleData[symbol];
+      if (data) {
+        const firstDate = data.entry[0]?.datetime?.slice(0, 10) || "?";
+        const lastDate = data.entry[data.entry.length - 1]?.datetime?.slice(0, 10) || "?";
+        dataCoverage[symbol] = {
+          entryCandles: data.entry.length,
+          dailyCandles: data.daily.length,
+          dateRange: `${firstDate} to ${lastDate}`,
+        };
+      }
+    }
+
     return new Response(
       JSON.stringify({
         trades: allTrades,
@@ -2185,6 +2385,7 @@ Deno.serve(async (req) => {
         stats,
         factorBreakdown,
         gateBreakdown,
+        dataCoverage,
       }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
