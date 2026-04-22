@@ -1931,14 +1931,39 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
   };
 }
 
-// ─── Main Handler ───────────────────────────────────────────────────
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+// ─── Supabase Admin Client (for persisting results) ─────────────────
+function getAdminClient() {
+  const url = Deno.env.get("SUPABASE_URL")!;
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  return createClient(url, key);
+}
+
+function respond(data: any, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+// ─── Background Job Runner ──────────────────────────────────────────
+async function runBacktestJob(runId: string, body: any) {
+  const db = getAdminClient();
+  const updateProgress = async (progress: number, message: string) => {
+    await db.from("backtest_runs").update({
+      progress,
+      progress_message: message,
+      status: "running",
+    }).eq("id", runId).then(() => {});
+  };
 
   try {
-    const body = await req.json();
+    await db.from("backtest_runs").update({
+      status: "running",
+      started_at: new Date().toISOString(),
+      progress: 5,
+      progress_message: "Parsing configuration...",
+    }).eq("id", runId);
+
     const {
       instruments = DEFAULTS.instruments,
       startDate,
@@ -1947,7 +1972,7 @@ Deno.serve(async (req) => {
       config: rawConfig,
       tradingStyle,
       slippagePips = 0.5,
-      spreadPips = 0,  // 0 = use per-instrument typicalSpread from SPECS
+      spreadPips = 0,
     } = body;
 
     const config = mapConfig(rawConfig || {});
@@ -1957,9 +1982,10 @@ Deno.serve(async (req) => {
       config.minConfluence = userMinConf;
     }
 
-    console.log(`[backtest] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}`);
+    console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}`);
 
     // ── Fetch Historical Data ──
+    await updateProgress(10, `Fetching candles for ${instruments.length} instruments...`);
     // Determine range based on date span
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
@@ -2011,6 +2037,7 @@ Deno.serve(async (req) => {
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
+    await updateProgress(30, "Building FOTSI currency strength timeline...");
     // Avoids lookahead bias: each historical bar uses FOTSI computed from
     // daily candles up to (and including) that date only.
     const fotsiTimeline = new Map<string, FOTSIResult>();
@@ -2054,6 +2081,7 @@ Deno.serve(async (req) => {
       console.warn(`[backtest] FOTSI computation error: ${e?.message}`);
     }
 
+    await updateProgress(50, "FOTSI timeline built. Building rate map...");
     // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
     // Use the last close from already-fetched candle data for major pairs.
     const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
@@ -2079,6 +2107,7 @@ Deno.serve(async (req) => {
     }
     console.log(`[backtest] rateMap: ${JSON.stringify(btRateMap)}`);
 
+    await updateProgress(55, "Running backtest simulation...");
     // ── Sliding Window Backtest Loop ──
     const allTrades: BacktestTrade[] = [];
     let openPositions: OpenPosition[] = [];
@@ -2341,6 +2370,7 @@ Deno.serve(async (req) => {
       }
     }
 
+    await updateProgress(85, `Closing remaining positions... (${allTrades.length} trades so far)`);
     // ── Close any remaining open positions at last candle ──
     for (const pos of openPositions) {
       const data = candleData[pos.symbol];
@@ -2370,8 +2400,10 @@ Deno.serve(async (req) => {
     // ── Calculate Stats ──
     const stats = calculateStats(allTrades, startingBalance, monthsSpan);
 
-    console.log(`[backtest] Complete: ${allTrades.length} trades, PnL: $${stats.totalPnl.toFixed(2)}, WR: ${stats.winRate.toFixed(1)}%, PF: ${stats.profitFactor.toFixed(2)}, MaxDD: ${stats.maxDrawdownPct.toFixed(1)}%`);
-    console.log(`[backtest] Diagnostics: ${JSON.stringify(diagnostics)}`);
+    await updateProgress(90, "Calculating statistics...");
+
+    console.log(`[backtest:${runId}] Complete: ${allTrades.length} trades, PnL: $${stats.totalPnl.toFixed(2)}, WR: ${stats.winRate.toFixed(1)}%, PF: ${stats.profitFactor.toFixed(2)}, MaxDD: ${stats.maxDrawdownPct.toFixed(1)}%`);
+    console.log(`[backtest:${runId}] Diagnostics: ${JSON.stringify(diagnostics)}`);
 
     // Build data coverage metadata
     const dataCoverage: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }> = {};
@@ -2388,32 +2420,141 @@ Deno.serve(async (req) => {
       }
     }
 
-    return new Response(
-      JSON.stringify({
-        trades: allTrades,
-        equityCurve,
-        stats,
-        factorBreakdown,
-        gateBreakdown,
-        dataCoverage,
-        diagnostics,
-        config: {
-          minConfluence: config.minConfluence,
-          enabledSessions: config.enabledSessions,
-          enabledDays: config.enabledDays,
-          entryTimeframe: config.entryTimeframe,
-          scanIntervalMinutes: config.scanIntervalMinutes,
-        },
-      }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+    const resultPayload = {
+      trades: allTrades,
+      equityCurve,
+      stats,
+      factorBreakdown,
+      gateBreakdown,
+      dataCoverage,
+      diagnostics,
+      config: {
+        minConfluence: config.minConfluence,
+        enabledSessions: config.enabledSessions,
+        enabledDays: config.enabledDays,
+        entryTimeframe: config.entryTimeframe,
+        scanIntervalMinutes: config.scanIntervalMinutes,
       },
-    );
+    };
+
+    await db.from("backtest_runs").update({
+      status: "completed",
+      progress: 100,
+      progress_message: `Done — ${allTrades.length} trades`,
+      results: resultPayload,
+      completed_at: new Date().toISOString(),
+    }).eq("id", runId);
+
+    console.log(`[backtest:${runId}] Results persisted to backtest_runs`);
   } catch (error: any) {
-    console.error(`[backtest] Error: ${error?.message}`, error?.stack);
-    return new Response(
-      JSON.stringify({ error: error?.message || "Backtest failed" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    console.error(`[backtest:${runId}] Error: ${error?.message}`, error?.stack);
+    const db = getAdminClient();
+    await db.from("backtest_runs").update({
+      status: "failed",
+      progress: 0,
+      progress_message: "Failed",
+      error_message: error?.message || "Backtest failed",
+      completed_at: new Date().toISOString(),
+    }).eq("id", runId).then(() => {});
+  }
+}
+
+// ─── Main Handler (action-based routing) ────────────────────────────
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const body = await req.json().catch(() => ({}));
+    const action = body.action || "start";
+    const db = getAdminClient();
+
+    // ── Auth: extract user ID from JWT ──
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const authHeader = req.headers.get("Authorization");
+    let userId: string | null = null;
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.replace("Bearer ", "");
+      if (token !== Deno.env.get("SUPABASE_ANON_KEY")) {
+        const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data, error } = await userClient.auth.getUser(token);
+        if (!error && data?.user?.id) {
+          userId = data.user.id;
+        }
+      }
+    }
+
+    // ── Action: start — kick off a new backtest in the background ──
+    if (action === "start") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+
+      // Insert a pending run
+      const { data: run, error: insertErr } = await db.from("backtest_runs").insert({
+        user_id: userId,
+        status: "pending",
+        progress: 0,
+        progress_message: "Queued...",
+        config: body,
+      }).select("id").single();
+
+      if (insertErr || !run) {
+        console.error("[backtest] Failed to create run:", insertErr);
+        return respond({ error: "Failed to create backtest run" }, 500);
+      }
+
+      const runId = run.id;
+      console.log(`[backtest] Created run ${runId} for user ${userId}`);
+
+      // Fire and forget — the heavy work runs in the background
+      const jobPromise = runBacktestJob(runId, body).catch((e) => {
+        console.error(`[backtest:${runId}] background error`, e);
+      });
+      // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(jobPromise);
+      }
+
+      return respond({ runId, status: "pending", message: "Backtest started in background" });
+    }
+
+    // ── Action: status — poll a specific run ──
+    if (action === "status") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const runId = body.runId;
+      if (!runId) return respond({ error: "runId required" }, 400);
+
+      const { data: run, error: fetchErr } = await db.from("backtest_runs")
+        .select("id, status, progress, progress_message, results, error_message, created_at, started_at, completed_at")
+        .eq("id", runId)
+        .eq("user_id", userId)
+        .single();
+
+      if (fetchErr || !run) return respond({ error: "Run not found" }, 404);
+      return respond(run);
+    }
+
+    // ── Action: list — recent runs for the user ──
+    if (action === "list") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const limit = body.limit || 10;
+
+      const { data: runs, error: listErr } = await db.from("backtest_runs")
+        .select("id, status, progress, progress_message, error_message, created_at, started_at, completed_at, config")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (listErr) return respond({ error: "Failed to list runs" }, 500);
+      return respond(runs || []);
+    }
+
+    return respond({ error: "Unknown action. Use: start, status, list" }, 400);
+  } catch (error: any) {
+    console.error(`[backtest] Handler error: ${error?.message}`, error?.stack);
+    return respond({ error: error?.message || "Backtest failed" }, 500);
   }
 });

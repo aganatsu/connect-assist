@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,7 @@ import {
   PolarAngleAxis, PolarRadiusAxis, Radar,
 } from "recharts";
 import { INSTRUMENTS, formatMoney } from "@/lib/marketData";
-import { botConfigApi, invokeFunction } from "@/lib/api";
+import { botConfigApi, backtestApi } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface BacktestTrade {
@@ -177,10 +177,13 @@ export default function Backtest() {
   const [configTab, setConfigTab] = useState("strategy");
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
   const [error, setError] = useState("");
   const [results, setResults] = useState<BacktestResponse | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [expandedTrade, setExpandedTrade] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // C4: Load live config + canonical defaults on mount
   useEffect(() => {
@@ -247,26 +250,78 @@ export default function Backtest() {
     });
   }, []);
 
-  // Run backtest
+  // Stop polling helper
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => { stopPolling(); };
+  }, [stopPolling]);
+
+  // Poll a run for status updates
+  const startPolling = useCallback((runId: string) => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const run = await backtestApi.status(runId);
+        if (!run) return;
+
+        setProgress(run.progress_message || "Processing...");
+        setProgressPct(run.progress || 0);
+
+        if (run.status === "completed" && run.results) {
+          stopPolling();
+          setResults(run.results as BacktestResponse);
+          setActiveTab("overview");
+          setIsRunning(false);
+          setActiveRunId(null);
+          setProgress("");
+          setProgressPct(0);
+        } else if (run.status === "failed") {
+          stopPolling();
+          setError(run.error_message || "Backtest failed.");
+          setIsRunning(false);
+          setActiveRunId(null);
+          setProgress("");
+          setProgressPct(0);
+        }
+      } catch (e: any) {
+        console.error("Poll error:", e);
+        // Don't stop polling on transient errors
+      }
+    }, 2000);
+  }, [stopPolling]);
+
+  // Run backtest (background mode)
   const runBacktest = useCallback(async () => {
     if (selectedSymbols.length === 0) { setError("Select at least one instrument."); return; }
     setIsRunning(true); setError(""); setResults(null);
-    setProgress(`Running backtest on ${selectedSymbols.length} instruments...`);
+    setProgress("Starting backtest...");
+    setProgressPct(0);
     try {
-      const response = await invokeFunction<BacktestResponse>("backtest-engine", {
+      const response = await backtestApi.start({
         instruments: selectedSymbols, startDate, endDate, startingBalance,
         config, tradingStyle, slippagePips, spreadPips,
       });
       if ((response as any)?.error) throw new Error((response as any).error);
-      setResults(response);
-      setActiveTab("overview");
-      setProgress("");
+      const runId = response.runId;
+      if (!runId) throw new Error("No runId returned from backtest-engine");
+      setActiveRunId(runId);
+      setProgress("Queued — waiting for engine to start...");
+      startPolling(runId);
     } catch (e: any) {
-      console.error("Backtest error:", e);
-      setError(e?.message || "Backtest failed. Check console for details.");
+      console.error("Backtest start error:", e);
+      setError(e?.message || "Failed to start backtest. Check console for details.");
       setProgress("");
-    } finally { setIsRunning(false); }
-  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, config]);
+      setProgressPct(0);
+      setIsRunning(false);
+    }
+  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, config, startPolling]);
 
   // ── Derived Data ──
   const monthlyPnl = useMemo(() => {
@@ -380,10 +435,21 @@ export default function Backtest() {
                     {TRADING_STYLES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                 </div>
-                <div className="flex items-end">
-                  <Button onClick={runBacktest} disabled={isRunning} className="w-full" size="sm">
+                <div className="flex items-end gap-2">
+                  <Button onClick={runBacktest} disabled={isRunning} className="flex-1" size="sm">
                     {isRunning ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Running...</> : <><Play className="h-3 w-3 mr-1" /> Run Backtest</>}
                   </Button>
+                  {isRunning && (
+                    <Button variant="outline" size="sm" onClick={() => {
+                      stopPolling();
+                      setIsRunning(false);
+                      setActiveRunId(null);
+                      setProgress("");
+                      setProgressPct(0);
+                    }}>
+                      <XCircle className="h-3 w-3 mr-1" /> Cancel
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -740,11 +806,22 @@ export default function Backtest() {
         {/* Progress / Error */}
         {isRunning && (
           <Card className="border-cyan/30 bg-cyan/5">
-            <CardContent className="py-4 flex items-center gap-3">
-              <Loader2 className="h-5 w-5 animate-spin text-cyan" />
-              <div>
-                <p className="text-sm font-medium">{progress || "Processing..."}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">This may take 30-120 seconds depending on instruments and date range.</p>
+            <CardContent className="py-4 space-y-3">
+              <div className="flex items-center gap-3">
+                <Loader2 className="h-5 w-5 animate-spin text-cyan flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">{progress || "Processing..."}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {activeRunId ? `Run ID: ${activeRunId.slice(0, 8)}...` : "Submitting..."}
+                  </p>
+                </div>
+                <span className="text-sm font-mono font-bold text-cyan">{progressPct}%</span>
+              </div>
+              <div className="w-full bg-secondary/50 rounded-full h-2 overflow-hidden">
+                <div
+                  className="h-full bg-cyan rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${Math.max(2, progressPct)}%` }}
+                />
               </div>
             </CardContent>
           </Card>

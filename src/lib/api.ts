@@ -160,7 +160,7 @@ export const paperApi = {
 
 // ── Backtest Engine ──
 export const backtestApi = {
-  run: (params: {
+  start: (params: {
     instruments: string[];
     startDate: string;
     endDate: string;
@@ -169,7 +169,17 @@ export const backtestApi = {
     tradingStyle?: string;
     slippagePips?: number;
     spreadPips?: number;
-  }) => invokeFunction("backtest-engine", params),
+  }) => invokeFunction<{ runId: string; status: string; message: string }>("backtest-engine", { action: "start", ...params }),
+  status: (runId: string) => invokeFunction<{
+    id: string; status: string; progress: number; progress_message: string;
+    results: any; error_message: string | null;
+    created_at: string; started_at: string | null; completed_at: string | null;
+  }>("backtest-engine", { action: "status", runId }),
+  list: (limit = 10) => invokeFunction<Array<{
+    id: string; status: string; progress: number; progress_message: string;
+    error_message: string | null; created_at: string; started_at: string | null;
+    completed_at: string | null; config: any;
+  }>>("backtest-engine", { action: "list", limit }),
 };
 
 // ── Bot Scanner (Bot #1 — SMC) ──
