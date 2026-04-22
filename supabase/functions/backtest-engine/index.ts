@@ -2040,6 +2040,7 @@ async function runBacktestJob(runId: string, body: any) {
 
     // Diagnostic counters (declared early because pre-loop also references them)
     const diagnostics = {
+      totalCandlesFetched: 0,
       totalCandlesEvaluated: 0,
       skippedNoYahooSymbol: 0,
       skippedInsufficientData: 0,
@@ -2188,6 +2189,7 @@ async function runBacktestJob(runId: string, body: any) {
 
         // Skip if outside date range
         if (candleTime < startDate || candleTime > endDate) continue;
+        diagnostics.totalCandlesFetched++;
 
         // ── Process exits on every candle for open positions on this symbol ──
         const symbolPositions = openPositions.filter(p => p.symbol === symbol);

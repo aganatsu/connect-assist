@@ -49,6 +49,7 @@ interface BacktestResponse {
   gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>;
   dataCoverage?: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }>;
   diagnostics?: {
+    totalCandlesFetched: number;
     totalCandlesEvaluated: number;
     skippedNoYahooSymbol: number;
     skippedInsufficientData: number;
@@ -851,18 +852,52 @@ export default function Backtest() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-xs text-muted-foreground">The backtest completed but produced zero trades. Here's where candles were filtered out:</p>
+              <p className="text-xs text-muted-foreground">The backtest completed but produced zero trades. Here's the filtering funnel:</p>
+              {/* Row 1: Total candles in range */}
+              <div className="grid grid-cols-1 gap-2">
+                <div className="px-3 py-2 border rounded text-center border-border/40">
+                  <p className="text-[10px] text-muted-foreground">Total Candles In Range</p>
+                  <p className="text-lg font-mono font-bold">{(results.diagnostics.totalCandlesFetched || 0).toLocaleString()}</p>
+                </div>
+              </div>
+              {/* Row 2: Pre-filters (removed before analysis) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: "\u2796 Weekend", value: results.diagnostics.skippedWeekend, warn: false },
+                  { label: "\u2796 Session Filter", value: results.diagnostics.skippedSession, warn: results.diagnostics.skippedSession > (results.diagnostics.totalCandlesFetched || 1) * 0.9 },
+                  { label: "\u2796 Day Filter", value: results.diagnostics.skippedDay, warn: results.diagnostics.skippedDay > 100 },
+                  { label: "\u2796 No Data", value: results.diagnostics.skippedInsufficientData, warn: results.diagnostics.skippedInsufficientData > 0 },
+                ].map(item => (
+                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Row 3: Candles analyzed */}
+              <div className="grid grid-cols-1 gap-2">
+                <div className={`px-3 py-2 border rounded text-center ${results.diagnostics.totalCandlesEvaluated === 0 ? 'border-warning/50 bg-warning/10' : 'border-primary/30 bg-primary/5'}`}>
+                  <p className="text-[10px] text-muted-foreground">Candles Analyzed (survived filters)</p>
+                  <p className={`text-lg font-mono font-bold ${results.diagnostics.totalCandlesEvaluated === 0 ? 'text-warning' : 'text-primary'}`}>{results.diagnostics.totalCandlesEvaluated.toLocaleString()}</p>
+                </div>
+              </div>
+              {/* Row 4: Analysis results */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { label: "\u2796 No Direction", value: results.diagnostics.skippedNoDirection, warn: false },
+                  { label: "\u2796 Below Threshold", value: results.diagnostics.skippedBelowThreshold, warn: results.diagnostics.skippedBelowThreshold > 0 && results.diagnostics.signalsGenerated === 0 },
+                  { label: "\u2796 Gate Blocked", value: results.diagnostics.skippedGateBlocked, warn: results.diagnostics.skippedGateBlocked > 0 },
+                  { label: "\u2796 No SL/TP", value: results.diagnostics.skippedNoSLTP, warn: results.diagnostics.skippedNoSLTP > 0 },
+                ].map(item => (
+                  <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
+                    <p className="text-[10px] text-muted-foreground">{item.label}</p>
+                    <p className={`text-sm font-mono font-bold ${item.warn ? 'text-warning' : ''}`}>{item.value.toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Row 5: Final outcome */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {[
-                  { label: "Candles Evaluated", value: results.diagnostics.totalCandlesEvaluated, warn: results.diagnostics.totalCandlesEvaluated === 0 },
-                  { label: "Skipped (No Data)", value: results.diagnostics.skippedInsufficientData, warn: results.diagnostics.skippedInsufficientData > 0 },
-                  { label: "Skipped (Weekend)", value: results.diagnostics.skippedWeekend, warn: false },
-                  { label: "Skipped (Session)", value: results.diagnostics.skippedSession, warn: results.diagnostics.skippedSession > 100 },
-                  { label: "Skipped (Day)", value: results.diagnostics.skippedDay, warn: results.diagnostics.skippedDay > 100 },
-                  { label: "No Direction", value: results.diagnostics.skippedNoDirection, warn: false },
-                  { label: "Below Threshold", value: results.diagnostics.skippedBelowThreshold, warn: results.diagnostics.skippedBelowThreshold > 0 && results.diagnostics.signalsGenerated === 0 },
-                  { label: "Gate Blocked", value: results.diagnostics.skippedGateBlocked, warn: results.diagnostics.skippedGateBlocked > 0 },
-                  { label: "No SL/TP", value: results.diagnostics.skippedNoSLTP, warn: results.diagnostics.skippedNoSLTP > 0 },
                   { label: "Signals Passed", value: results.diagnostics.signalsGenerated, warn: results.diagnostics.signalsGenerated === 0 },
                   { label: "Trades Opened", value: results.diagnostics.tradesOpened, warn: results.diagnostics.tradesOpened === 0 },
                   { label: "No Yahoo Symbol", value: results.diagnostics.skippedNoYahooSymbol, warn: results.diagnostics.skippedNoYahooSymbol > 0 },
