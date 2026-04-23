@@ -28,6 +28,7 @@ import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
+import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -1046,6 +1047,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
         <div className="flex items-center gap-1.5">
           {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
           <span className="font-medium">{d.pair}</span>
+          {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
         </div>
         <div className="flex items-center gap-1.5">
           <span className={`font-mono font-bold ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : d.score?.toFixed(1)}</span>
@@ -1055,51 +1057,11 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       </button>
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
-          {/* Factors */}
-          {d.factors && (() => {
-            const isDisabled = (f: any) => f.weight === 0 || (typeof f.detail === "string" && /disabled/i.test(f.detail));
-            const enabledFactors = d.factors.filter((f: any) => !isDisabled(f) || f.name === "Power of 3 Combo");
-            const disabledFactors = d.factors.filter((f: any) => isDisabled(f) && f.name !== "Power of 3 Combo");
-            const primaryFactors = enabledFactors.filter((f: any) => f.name !== "Power of 3 Combo");
-            const primaryPresent = primaryFactors.filter((f: any) => f.present).length;
-            const ratio = primaryFactors.length > 0 ? primaryPresent / primaryFactors.length : 0;
-            return (
-            <div className="space-y-0.5">
-              <p
-                className={`text-[8px] uppercase tracking-wider ${
-                  ratio >= 0.6 ? "text-success" : ratio >= 0.4 ? "text-warning" : "text-muted-foreground"
-                }`}
-                title={`${primaryPresent} primary factors present out of ${primaryFactors.length} total (Power of 3 Combo is an enhancement). Score is weighted, grouped into 9 categories with anti-double-count rules, capped at 10.`}
-              >
-                Factors ({primaryPresent}/{primaryFactors.length})
-              </p>
-              {enabledFactors.map((f: any, fi: number) => (
-                <div key={fi} className="flex items-start gap-1 text-[9px]">
-                  <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
-                  <div>
-                    <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
-                    {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
-                  </div>
-                </div>
-              ))}
-              {disabledFactors.length > 0 && (
-                <>
-                  <div className="border-t border-dashed border-border/50 my-1.5" />
-                  <p className="text-[8px] uppercase tracking-wider text-muted-foreground/60 font-medium">Disabled ({disabledFactors.length})</p>
-                  {disabledFactors.map((f: any, fi: number) => (
-                    <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-50">
-                      <span className="mt-0.5 text-muted-foreground/60">—</span>
-                      <div>
-                        <span className="text-muted-foreground/70 line-through">{f.name}</span>
-                      </div>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
-            );
-          })()}
-          {/* Risk Gates */}
+          {/* Tier-Grouped Factors */}
+          {d.factors && (
+            <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
+          )}
+          {/* Risk Gates (legacy gates from runSafetyGates — tier gates are shown inside TierFactorBreakdown) */}
           {d.gates && (
             <div className="space-y-0.5">
               <p className="text-[8px] text-muted-foreground uppercase tracking-wider">Risk Gates</p>
@@ -1143,6 +1105,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[10px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
+      {/* Tier score summary */}
+      {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
+
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
@@ -1150,52 +1115,12 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Factors */}
-      {d.factors && (() => {
-        const isDisabled = (f: any) => f.weight === 0 || (typeof f.detail === "string" && /disabled/i.test(f.detail));
-        const enabledFactors = d.factors.filter((f: any) => !isDisabled(f) || f.name === "Power of 3 Combo");
-        const disabledFactors = d.factors.filter((f: any) => isDisabled(f) && f.name !== "Power of 3 Combo");
-        const primaryFactors = enabledFactors.filter((f: any) => f.name !== "Power of 3 Combo");
-        const primaryPresent = primaryFactors.filter((f: any) => f.present).length;
-        const ratio = primaryFactors.length > 0 ? primaryPresent / primaryFactors.length : 0;
-        return (
-        <div className="space-y-0.5">
-          <p
-            className={`text-[8px] uppercase tracking-wider font-bold ${
-              ratio >= 0.6 ? "text-success" : ratio >= 0.4 ? "text-warning" : "text-muted-foreground"
-            }`}
-            title={`${primaryPresent} primary factors present out of ${primaryFactors.length} total (Power of 3 Combo is an enhancement). Score is weighted, grouped into 9 categories with anti-double-count rules, capped at 10.`}
-          >
-            Factors ({primaryPresent}/{primaryFactors.length})
-          </p>
-          {enabledFactors.map((f: any, fi: number) => (
-            <div key={fi} className="flex items-start gap-1 text-[9px]">
-              <span className={`mt-0.5 ${f.present ? "text-success" : "text-muted-foreground/50"}`}>{f.present ? "✓" : "✗"}</span>
-              <div>
-                <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>{f.name}</span>
-                {f.detail && <span className="text-muted-foreground ml-1">— {f.detail}</span>}
-              </div>
-            </div>
-          ))}
-          {disabledFactors.length > 0 && (
-            <>
-              <div className="border-t border-dashed border-border/50 my-1.5" />
-              <p className="text-[8px] uppercase tracking-wider text-muted-foreground/60 font-medium">Disabled ({disabledFactors.length})</p>
-              {disabledFactors.map((f: any, fi: number) => (
-                <div key={`dis-${fi}`} className="flex items-start gap-1 text-[9px] opacity-50">
-                  <span className="mt-0.5 text-muted-foreground/60">—</span>
-                  <div>
-                    <span className="text-muted-foreground/70 line-through">{f.name}</span>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-        );
-      })()}
+      {/* Tier-Grouped Factors */}
+      {d.factors && (
+        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} />
+      )}
 
-      {/* Risk Gates */}
+      {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
       {d.gates && (
         <div className="space-y-0.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
@@ -1217,7 +1142,6 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           ))}
         </div>
       )}
-
 
       {/* Summary */}
       {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}

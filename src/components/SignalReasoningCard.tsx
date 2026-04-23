@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -23,34 +24,10 @@ interface FactorScore {
   weight: number;
   detail?: string;
   group?: string;
+  tier?: number;
 }
 
-// ─── Group ordering (mirrors confluenceUnify.ts / backend) ──────────
-const GROUP_ORDER: string[] = [
-  "Market Structure",
-  "Daily Bias",
-  "Order Flow Zones",
-  "Premium/Discount & Fib",
-  "Timing",
-  "Price Action",
-  "AMD / Power of 3",
-  "Macro Confirmation",
-  "Volume Profile",
-];
-
-const GROUP_ICONS: Record<string, string> = {
-  "Market Structure": "📐",
-  "Daily Bias": "📊",
-  "Order Flow Zones": "🧱",
-  "Premium/Discount & Fib": "📏",
-  "Timing": "⏰",
-  "Price Action": "🕯",
-  "AMD / Power of 3": "⚡",
-  "Macro Confirmation": "🔍",
-  "Volume Profile": "📈",
-};
-
-// ─── Summary text parser (unchanged from original) ──────────────────
+// ─── Summary text parser ────────────────────────────────────────────
 
 function parseSummary(summary: string): ParsedSummary {
   const result: ParsedSummary = {
@@ -94,119 +71,6 @@ function parseSummary(summary: string): ParsedSummary {
   }
 
   return result;
-}
-
-// ─── Grouped Factor Breakdown ───────────────────────────────────────
-
-interface GroupedFactors {
-  name: string;
-  icon: string;
-  items: FactorScore[];
-  passCount: number;
-  totalWeight: number;
-  passWeight: number;
-}
-
-function buildGroupedFactors(factors: FactorScore[]): GroupedFactors[] {
-  const groupMap = new Map<string, FactorScore[]>();
-  for (const f of factors) {
-    const g = f.group || "Other";
-    if (!groupMap.has(g)) groupMap.set(g, []);
-    groupMap.get(g)!.push(f);
-  }
-
-  const result: GroupedFactors[] = [];
-  const seen = new Set<string>();
-
-  // Canonical order first
-  for (const gName of GROUP_ORDER) {
-    const items = groupMap.get(gName);
-    if (items && items.length > 0) {
-      result.push({
-        name: gName,
-        icon: GROUP_ICONS[gName] || "📋",
-        items,
-        passCount: items.filter((i) => i.present).length,
-        totalWeight: items.reduce((s, i) => s + i.weight, 0),
-        passWeight: items.filter((i) => i.present).reduce((s, i) => s + i.weight, 0),
-      });
-      seen.add(gName);
-    }
-  }
-
-  // Any extra groups
-  for (const [gName, items] of groupMap) {
-    if (!seen.has(gName)) {
-      result.push({
-        name: gName,
-        icon: "📋",
-        items,
-        passCount: items.filter((i) => i.present).length,
-        totalWeight: items.reduce((s, i) => s + i.weight, 0),
-        passWeight: items.filter((i) => i.present).reduce((s, i) => s + i.weight, 0),
-      });
-    }
-  }
-
-  return result;
-}
-
-// ─── Sub-components ─────────────────────────────────────────────────
-
-function FactorChip({ factor }: { factor: FactorScore }) {
-  const passClasses = factor.present
-    ? "bg-success/15 border-success/40 text-success"
-    : "bg-muted/30 border-border/40 text-muted-foreground";
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-mono ${passClasses}`}
-      title={factor.detail || factor.name}
-    >
-      <span className={factor.present ? "" : "opacity-50"}>
-        {factor.present ? "✓" : "✗"}
-      </span>
-      <span className="truncate max-w-[120px]">{factor.name}</span>
-      <span className="opacity-60">({factor.weight})</span>
-    </span>
-  );
-}
-
-function GroupSection({ group, defaultOpen }: { group: GroupedFactors; defaultOpen: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const hasAnyPass = group.passCount > 0;
-  const headerColor = hasAnyPass ? "text-foreground" : "text-muted-foreground";
-
-  return (
-    <div className="border border-border/40 rounded-md overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className={`w-full flex items-center justify-between px-2 py-1 text-[9px] font-bold tracking-wide uppercase hover:bg-muted/30 transition-colors ${headerColor}`}
-      >
-        <span className="flex items-center gap-1.5">
-          <span>{group.icon}</span>
-          <span>{group.name}</span>
-          <span className="text-[8px] font-normal text-muted-foreground">
-            ({group.passCount}/{group.items.length})
-          </span>
-        </span>
-        <span className="flex items-center gap-2">
-          <span className="text-[8px] font-mono text-muted-foreground">
-            {group.passWeight.toFixed(1)}/{group.totalWeight.toFixed(1)} pts
-          </span>
-          <span className="text-[8px]">{open ? "▾" : "▸"}</span>
-        </span>
-      </button>
-      {open && (
-        <div className="px-2 py-1.5 border-t border-border/30 flex flex-wrap gap-1">
-          {group.items.map((f, i) => (
-            <FactorChip key={i} factor={f} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ─── Main Component ─────────────────────────────────────────────────
@@ -264,17 +128,14 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
     );
   }
 
-  // Check for new grouped factor data
+  // Check for factor data
   const factorScores: FactorScore[] | null =
     Array.isArray(parsed?.factorScores) && parsed.factorScores.length > 0
       ? parsed.factorScores
       : null;
 
-  // Separate enabled from disabled factors (weight=0 OR detail contains "disabled")
-  const isFactorDisabled = (f: FactorScore) => f.weight === 0 || (typeof f.detail === "string" && /disabled/i.test(f.detail));
-  const enabledScores = factorScores ? factorScores.filter(f => !isFactorDisabled(f) || f.name === "Power of 3 Combo") : null;
-  const disabledScores = factorScores ? factorScores.filter(f => isFactorDisabled(f) && f.name !== "Power of 3 Combo") : [];
-  const groupedFactors = enabledScores ? buildGroupedFactors(enabledScores) : null;
+  // Extract tieredScoring metadata if available
+  const tieredScoring: TieredScoringMeta | null = parsed?.tieredScoring ?? null;
 
   const setupType: string | null = parsed?.setupType ?? null;
   const setupConfidence: number | null = parsed?.setupConfidence ?? null;
@@ -324,39 +185,12 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
             {s.factorCount} factors aligned{s.total ? ` (of ${s.total})` : ""}
           </span>
         )}
-
+        {tieredScoring && <TierScoreSummary tieredScoring={tieredScoring} />}
       </div>
 
-      {/* ── NEW: Grouped Factor Breakdown ── */}
-      {groupedFactors && groupedFactors.length > 0 ? (
-        <div>
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">
-            Factor Breakdown ({groupedFactors.length} groups)
-          </p>
-          <div className="space-y-1">
-            {groupedFactors.map((g, i) => (
-              <GroupSection key={i} group={g} defaultOpen={g.passCount > 0} />
-            ))}
-          </div>
-          {disabledScores.length > 0 && (
-            <div className="mt-2">
-              <div className="border-t border-dashed border-border/50 mb-1.5" />
-              <p className="text-[8px] uppercase tracking-wider text-muted-foreground/60 mb-1 font-medium">Disabled ({disabledScores.length})</p>
-              <div className="flex flex-wrap gap-1">
-                {disabledScores.map((f, i) => (
-                  <span
-                    key={`dis-${i}`}
-                    className="inline-flex items-center gap-1 rounded-full border border-border/30 px-1.5 py-0.5 text-[9px] font-mono opacity-50"
-                    title={`${f.name} — disabled`}
-                  >
-                    <span className="text-muted-foreground/60">—</span>
-                    <span className="truncate max-w-[120px] line-through text-muted-foreground/70">{f.name}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+      {/* ── Tier-Grouped Factor Breakdown ── */}
+      {factorScores && factorScores.length > 0 ? (
+        <TierFactorBreakdown factors={factorScores} tieredScoring={tieredScoring} />
       ) : (
         /* ── LEGACY: Aligned factor chips from summary text ── */
         s.alignedFactors.length > 0 && (

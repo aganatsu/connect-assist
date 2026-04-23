@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { formatMoney } from "@/lib/marketData";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
+import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -463,6 +464,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               {summaryScore != null ? ` \u00B7 score ${summaryScore > 10 ? `${summaryScore.toFixed(1)}%` : `${summaryScore}/10`}` : ""}
             </span>
           </div>
+          {sr.tieredScoring && <div className="mt-1"><TierScoreSummary tieredScoring={sr.tieredScoring} /></div>}
           {setupType && (
             <div className="text-[11px] text-foreground/70 font-mono mt-0.5">
               Setup: {setupType}{setupConfidence != null ? ` ${Math.round(setupConfidence * 100)}% conf` : ""}
@@ -485,8 +487,10 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
         )}
       </div>
 
-      {/* ═══ ROW 4: Aligned Factors (pills) ═══ */}
-      {alignedFactors.length > 0 && (
+      {/* ═══ ROW 4: Factor Breakdown (Tier-Grouped or Legacy Pills) ═══ */}
+      {Array.isArray(sr.factorScores) && sr.factorScores.length > 0 ? (
+        <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring ?? null} compact />
+      ) : alignedFactors.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">
           {alignedFactors.map((f, i) => (
             <span
@@ -497,7 +501,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
             </span>
           ))}
         </div>
-      )}
+      ) : null}
 
       {/* ═══ ROW 5: Exit Attribution Timeline ═══ */}
       {exitAttribution.length > 0 && (
