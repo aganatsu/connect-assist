@@ -1578,11 +1578,12 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  // ─── Spread Quality (info-only, separate gate — no score adjustment) ─────────
+  // ─── Spread Quality (INFO-ONLY — never rejects a trade) ─────────────────────
   // Compares the instrument's typical spread against its ATR.
-  // Does NOT adjust the confluence score — spread is a separate pass/fail gate.
-  // The live spread gate at execution time remains as a hard block.
-  let spreadGatePassed = true;
+  // This is informational only — the bot uses Yahoo Finance indicative spreads,
+  // not the user's actual broker spread (which is typically near-zero on ECN accounts).
+  // The live spread check at execution time (via broker API) remains as the real guard.
+  let spreadGatePassed = true; // Always true — info-only, never blocks
   let spreadGateReason = "";
   {
     const spreadSymbol = config._currentSymbol || "EUR/USD";
@@ -1599,11 +1600,11 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       } else if (spreadToATR < 0.20) {
         spreadDetail = `Mediocre: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       } else {
-        spreadDetail = `Poor: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
-        spreadGatePassed = false;
-        spreadGateReason = `Spread too wide: ${(spreadToATR * 100).toFixed(1)}% of ATR`;
+        spreadDetail = `Wide (indicative): spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR — info only, not blocking`;
+        // spreadGatePassed remains true — info-only, does not reject
+        spreadGateReason = `Spread wide (indicative): ${(spreadToATR * 100).toFixed(1)}% of ATR — info only`;
       }
-      if (spreadGatePassed) {
+      if (!spreadGateReason) {
         spreadGateReason = `Spread OK: ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       }
     } else {
@@ -1611,9 +1612,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
     factors.push({
       name: "Spread Quality",
-      present: !spreadGatePassed,
+      present: false, // Always false — info-only, never contributes to score
       weight: 0, // No score impact — info only
-      detail: `${spreadDetail} [info-only gate]`,
+      detail: `${spreadDetail} [info-only — broker spread used at execution]`,
       group: "Macro Confirmation",
     });
   }
@@ -1782,7 +1783,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const gatesSummary = [
     tier1GatePassed ? null : "TIER1_GATE_FAIL",
     regimeGatePassed ? null : "REGIME_GATE_FAIL",
-    spreadGatePassed ? null : "SPREAD_GATE_FAIL",
+    // Spread gate is info-only — never blocks
   ].filter(Boolean);
   const gatesStr = gatesSummary.length > 0 ? ` | Gates: ${gatesSummary.join(", ")}` : "";
 
@@ -2573,14 +2574,11 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 21: Spread Quality (separate gate, not a score penalty)
+  // Gate 21: Spread Quality (INFO-ONLY — never rejects, uses indicative Yahoo data)
+  // Real spread check happens at execution time via broker API.
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
-    if (!ts.spreadGatePassed) {
-      gates.push({ passed: false, reason: ts.spreadGateReason });
-    } else {
-      gates.push({ passed: true, reason: ts.spreadGateReason || "Spread gate: OK" });
-    }
+    gates.push({ passed: true, reason: `[Info] ${ts.spreadGateReason || "Spread data unavailable"}` });
   }
 
   return gates;

@@ -1496,7 +1496,7 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
         );
       })}
 
-      {/* Spread & Regime Gates (not weight-adjustable) */}
+      {/* Gates (not weight-adjustable) */}
       <div className="border border-border p-4 space-y-3">
         <div>
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">GATES (Pass/Fail)</p>
@@ -1516,12 +1516,19 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
           </div>
           <p className="text-[10px] text-muted-foreground">Market regime must align with trade direction (e.g., trending market for trend trades). Fails if regime conflicts.</p>
         </div>
-        <div className="space-y-1 p-2 -mx-2 opacity-70">
+      </div>
+
+      {/* Spread Quality (info-only) */}
+      <div className="border border-border/50 p-4 space-y-2 opacity-60">
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">INFO ONLY</p>
+        </div>
+        <div className="space-y-1 p-2 -mx-2">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium">Spread Quality</span>
-            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
+            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono text-muted-foreground">info</Badge>
           </div>
-          <p className="text-[10px] text-muted-foreground">Spread must not exceed the configured ATR threshold. Fails if spread is too wide relative to instrument volatility. Configured in the Strategy tab.</p>
+          <p className="text-[10px] text-muted-foreground">Shows indicative spread-to-ATR ratio from Yahoo Finance data. Does not block trades — your actual broker spread (ECN/raw) is checked at execution time. Displayed for awareness only.</p>
         </div>
       </div>
     </div>

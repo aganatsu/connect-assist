@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ChevronDown, ShieldCheck, ShieldX } from "lucide-react";
+import { ChevronDown, Info, ShieldCheck, ShieldX } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -162,11 +162,15 @@ export function TierScoreSummary({ tieredScoring }: { tieredScoring: TieredScori
 
 export function TierGates({ tieredScoring }: { tieredScoring: TieredScoringMeta }) {
   const ts = tieredScoring;
-  const gates = [
-    { passed: ts.tier1GatePassed, reason: ts.tier1GateReason, label: "Tier 1 Gate" },
-    { passed: ts.regimeGatePassed, reason: ts.regimeGateReason, label: "Regime Gate" },
-    { passed: ts.spreadGatePassed, reason: ts.spreadGateReason, label: "Spread Gate" },
-  ].filter(g => g.reason); // only show gates that have a reason
+  const gates: { passed: boolean; reason: string; infoOnly?: boolean }[] = [
+    { passed: ts.tier1GatePassed, reason: ts.tier1GateReason },
+    { passed: ts.regimeGatePassed, reason: ts.regimeGateReason },
+  ].filter(g => g.reason);
+
+  // Spread is info-only — always show but with info icon, never as a failure
+  if (ts.spreadGateReason) {
+    gates.push({ passed: true, reason: ts.spreadGateReason, infoOnly: true });
+  }
 
   if (gates.length === 0) return null;
 
@@ -174,8 +178,13 @@ export function TierGates({ tieredScoring }: { tieredScoring: TieredScoringMeta 
     <div className="space-y-0.5">
       <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Tier Gates</p>
       {gates.map((g, i) => (
-        <div key={i} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-          <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+        <div key={i} className={`flex items-center gap-1 text-[9px] ${
+          g.infoOnly ? "text-muted-foreground/70" : g.passed ? "text-muted-foreground" : "text-destructive"
+        }`}>
+          <span>{
+            g.infoOnly ? <Info className="h-2.5 w-2.5" /> :
+            g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />
+          }</span>
           <span>{g.reason}</span>
         </div>
       ))}
