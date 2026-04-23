@@ -1517,71 +1517,54 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  // ─── Group Caps Enforcement ─────────────────────────────────────────────────
-  // Each factor group has a hard cap to prevent any single group from dominating.
-  {
-    const GROUP_CAPS: Record<string, number> = {
-      "Market Structure": 2.5,  // Merged: single factor now, cap matches max
-      "Daily Bias": 1.0,  // Reduced from 1.5
-      "Order Flow Zones": 3.0,
-      "Premium/Discount & Fib": 2.5,
-      "Timing": 1.5,
-      "Price Action": 2.5,  // Increased: Reversal Candle bumped to 1.5
-      "AMD / Power of 3": 1.5,
-      "Macro Confirmation": 2.0,
-      "Volume Profile": 0.75,  // Reduced from 1.5
-    };
+  // ─── Tiered Factor Classification ─────────────────────────────────────────────
+  // No group caps. Factors are classified into tiers for scoring:
+  // Tier 1 (Core Setup ×2): Must have at least 2 to consider a trade
+  // Tier 2 (Confirmation ×1): Adds confidence to the setup
+  // Tier 3 (Bonus ×0.5): Nice to have, never required
+  const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality"]);
+  // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
+  // Unicorn Model, Volume Profile, AMD Phase, Judas Swing
+  // (Regime Alignment and Spread Quality are separate gates, not scored)
 
-    // Sum weights per group
-    const groupTotals: Record<string, number> = {};
-    for (const f of factors) {
-      if (f.present && f.group) {
-        groupTotals[f.group] = (groupTotals[f.group] || 0) + f.weight;
-      }
-    }
-
-    // Apply caps — if a group exceeds its cap, proportionally reduce its factors
-    for (const [group, cap] of Object.entries(GROUP_CAPS)) {
-      const total = groupTotals[group] || 0;
-      if (total > cap) {
-        const excess = total - cap;
-        score -= excess;
-        // Proportionally reduce each factor in the group
-        const groupFactors = factors.filter(f => f.group === group && f.present && f.weight > 0);
-        const scaleFactor = cap / total;
-        for (const f of groupFactors) {
-          const newWeight = Math.round(f.weight * scaleFactor * 100) / 100;
-          f.weight = newWeight;
-          f.detail += ` [group-capped: ${group} limited to ${cap}]`;
-        }
-      }
+  // Tag each factor with its tier for display
+  for (const f of factors) {
+    if (TIER_1_FACTORS.has(f.name)) {
+      (f as any).tier = 1;
+    } else if (TIER_2_FACTORS.has(f.name)) {
+      (f as any).tier = 2;
+    } else {
+      (f as any).tier = 3;
     }
   }
 
-  // ─── Regime-Aware Scoring (Factor 21: Market Regime Alignment) ──────
-  // Uses dailyCandles to classify the instrument's current regime, then
-  // applies a small penalty or bonus based on setup-regime alignment.
-  // This runs AFTER group caps but BEFORE the final 0-10 clamp.
-  // Controlled by config.regimeScoringEnabled (default true) and
-  // config.regimeScoringStrength (multiplier, default 1.0).
+  // ─── Regime Classification (info-only, separate gate — no score adjustment) ──────
+  // Classifies the instrument's current regime for display and optional gate blocking.
+  // Does NOT adjust the confluence score — regime is a separate pass/fail gate.
   const regimeScoringEnabled = config.regimeScoringEnabled !== false;
-  const regimeScoringStrength = typeof config.regimeScoringStrength === 'number' ? config.regimeScoringStrength : 1.0;
   let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null = null;
+  let regimeGatePassed = true;
+  let regimeGateReason = "";
   {
     if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
       regimeInfo = classifyInstrumentRegimeLocal(dailyCandles);
       const { adjustment, detail } = regimeAlignmentAdjustment(
         regimeInfo.regime, regimeInfo.confidence, direction, factors
       );
-      const scaledAdjustment = +(adjustment * regimeScoringStrength).toFixed(2);
-      if (scaledAdjustment !== 0) {
-        score += scaledAdjustment;
+      // Regime is now info-only for the score — but we track it for the gate
+      // If adjustment is heavily negative (< -1.0), regime gate fails
+      if (adjustment < -1.0) {
+        regimeGatePassed = false;
+        regimeGateReason = `Regime mismatch: ${regimeInfo.regime.replace("_", " ")} — ${detail}`;
+      } else {
+        regimeGateReason = `Regime OK: ${regimeInfo.regime.replace("_", " ")} — ${detail}`;
       }
       factors.push({
         name: "Regime Alignment",
-        present: scaledAdjustment !== 0,
-        weight: scaledAdjustment,
-        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail}${regimeScoringStrength !== 1.0 ? ` [strength ${regimeScoringStrength}x]` : ''}`,
+        present: true,
+        weight: 0, // No score impact — info only
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail} [info-only gate]`,
         group: "Macro Confirmation",
       });
     } else {
@@ -1595,63 +1578,72 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  // ─── Spread Quality Factor ─────────────────────────────────────────────────
-  // Compares the instrument's typical spread against its ATR to determine
-  // execution quality. A wide spread relative to ATR means more of the move
-  // is eaten by spread cost, reducing edge. This is a penalty-only factor:
-  // good spread = 0 (no penalty), bad spread = negative score adjustment.
+  // ─── Spread Quality (info-only, separate gate — no score adjustment) ─────────
+  // Compares the instrument's typical spread against its ATR.
+  // Does NOT adjust the confluence score — spread is a separate pass/fail gate.
   // The live spread gate at execution time remains as a hard block.
+  let spreadGatePassed = true;
+  let spreadGateReason = "";
   {
     const spreadSymbol = config._currentSymbol || "EUR/USD";
     const spreadSpec = SPECS[spreadSymbol] || SPECS["EUR/USD"];
     const typicalSpreadPrice = (spreadSpec.typicalSpread ?? 1) * spreadSpec.pipSize;
     const spreadATR = calculateATR(candles, 14);
-    let spreadPts = 0;
     let spreadDetail = "";
     if (spreadATR > 0) {
       const spreadToATR = typicalSpreadPrice / spreadATR;
-      // Tiers based on spread-to-ATR ratio:
-      // < 5%  → excellent execution, no penalty
-      // 5-10% → acceptable, minor penalty (-0.2)
-      // 10-20% → mediocre, moderate penalty (-0.5)
-      // > 20% → poor execution quality, heavy penalty (-1.0)
       if (spreadToATR < 0.05) {
-        spreadPts = 0;
         spreadDetail = `Excellent: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       } else if (spreadToATR < 0.10) {
-        spreadPts = -0.2;
-        spreadDetail = `Acceptable: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -0.2 penalty`;
+        spreadDetail = `Acceptable: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       } else if (spreadToATR < 0.20) {
-        spreadPts = -0.5;
-        spreadDetail = `Mediocre: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -0.5 penalty`;
+        spreadDetail = `Mediocre: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       } else {
-        spreadPts = -1.0;
-        spreadDetail = `Poor: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR → -1.0 penalty`;
+        spreadDetail = `Poor: spread ${spreadSpec.typicalSpread}p = ${(spreadToATR * 100).toFixed(1)}% of ATR`;
+        spreadGatePassed = false;
+        spreadGateReason = `Spread too wide: ${(spreadToATR * 100).toFixed(1)}% of ATR`;
+      }
+      if (spreadGatePassed) {
+        spreadGateReason = `Spread OK: ${(spreadToATR * 100).toFixed(1)}% of ATR`;
       }
     } else {
       spreadDetail = "ATR unavailable — no spread quality assessment";
     }
-    if (spreadPts !== 0) score += spreadPts;
     factors.push({
       name: "Spread Quality",
-      present: spreadPts < 0,
-      weight: spreadPts,
-      detail: spreadDetail,
+      present: !spreadGatePassed,
+      weight: 0, // No score impact — info only
+      detail: `${spreadDetail} [info-only gate]`,
       group: "Macro Confirmation",
     });
   }
 
-  // ─── Percentage Scoring + Strong Factor Gate ─────────────────────────────────
-  // Score is now expressed as a percentage (0-100) of enabled factors' max.
-  // This replaces the old 0-10 scale. 55% always means "55% of what's possible".
+  // ─── Tiered Scoring Model ─────────────────────────────────────────────────
+  // Replaces the old percentage-of-weighted-max system with a clear tiered model:
+  //   Tier 1 (Core Setup): Market Structure, Order Block, FVG, Premium/Discount
+  //     → Each present Tier 1 factor scores 2 points
+  //     → Must have at least 2 Tier 1 factors to consider a trade
+  //   Tier 2 (Confirmation): PD/PW Levels, Liquidity Sweep, Displacement, Reversal Candle, Session Quality
+  //     → Each present Tier 2 factor scores 1 point
+  //   Tier 3 (Bonus): Everything else (Currency Strength, SMT, Daily Bias, Breaker, Unicorn, Volume, AMD, Judas)
+  //     → Each present Tier 3 factor scores 0.5 points
+  //   Regime and Spread are separate pass/fail gates — they do NOT affect the score.
   //
-  // Strong Factor Count: number of factors scoring above 50% of their individual max.
-  // This prevents the "many weak signals" problem where 12 factors each score 20%.
-  const rawScore = Math.round(score * 100) / 100;
+  // Max possible = (4 × 2) + (5 × 1) + (8 × 0.5) + Po3 bonus (1.0) + OR bonus (2.0) = 20
+  // Score percentage = tiered points / max possible × 100
 
-  // Calculate the maximum possible score from ENABLED weighted factors only.
-  // Factors disabled via toggles are excluded from the denominator so the
-  // percentage reflects "X% of what I actually turned on" — not "X% of everything".
+  const TIER_POINTS = { 1: 2, 2: 1, 3: 0.5 } as const;
+
+  // Count tier 1 factors present (for the minimum gate)
+  let tier1Count = 0;
+  let tier1Max = 0;
+  let tier2Count = 0;
+  let tier2Max = 0;
+  let tier3Count = 0;
+  let tier3Max = 0;
+  let tieredScore = 0;
+
+  // Factor toggle map to check if factors are disabled
   const FACTOR_TOGGLE_MAP: Record<string, string> = {
     marketStructure: "enableStructureBreak",
     orderBlock: "enableOB",
@@ -1665,82 +1657,100 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     amdPhase: "useAMD",
     currencyStrength: "useFOTSI",
     dailyBias: "useDailyBias",
-    // Factors without toggles (always enabled):
-    // premiumDiscountFib, sessionQuality, judasSwing, pdPwLevels, reversalCandle
   };
-  const weightedFactorKeys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  let enabledMax = 0;
-  for (const key of weightedFactorKeys) {
-    // Check if this factor has a toggle and if it's disabled
-    const toggleKey = FACTOR_TOGGLE_MAP[key];
-    if (toggleKey && (config as any)[toggleKey] === false) {
-      continue; // Skip disabled factors from the denominator
+
+  const NAME_TO_KEY: Record<string, string> = {
+    "Market Structure": "marketStructure",
+    "Order Block": "orderBlock",
+    "Fair Value Gap": "fairValueGap",
+    "Premium/Discount": "premiumDiscountFib",
+    "Session Quality": "sessionQuality",
+    "Judas Swing": "judasSwing",
+    "PD/PW Levels": "pdPwLevels",
+    "Reversal Candle": "reversalCandle",
+    "Liquidity Sweep": "liquiditySweep",
+    "Displacement": "displacement",
+    "Breaker Block": "breakerBlock",
+    "Unicorn Model": "unicornModel",
+    "SMT Divergence": "smtDivergence",
+    "Volume Profile": "volumeProfile",
+    "AMD Phase": "amdPhase",
+    "Currency Strength": "currencyStrength",
+    "Daily Bias": "dailyBias",
+  };
+
+  for (const f of factors) {
+    const tier = (f as any).tier as number | undefined;
+    if (!tier) continue; // Skip Regime, Spread, Po3, OR — they're not tiered
+
+    // Check if factor is disabled via toggle
+    const key = NAME_TO_KEY[f.name];
+    if (key) {
+      const toggleKey = FACTOR_TOGGLE_MAP[key];
+      if (toggleKey && (config as any)[toggleKey] === false) continue;
     }
-    const defaultW = DEFAULT_FACTOR_WEIGHTS[key];
-    const fw = config.factorWeights;
-    const effectiveW = (fw && fw[key] !== undefined && fw[key] !== null)
-      ? Math.max(0, fw[key])
-      : defaultW;
-    enabledMax += effectiveW;
+
+    const pts = TIER_POINTS[tier as keyof typeof TIER_POINTS] || 0.5;
+
+    if (tier === 1) {
+      tier1Max++;
+      if (f.present && f.weight > 0) {
+        tier1Count++;
+        tieredScore += pts;
+        f.detail += ` [Tier 1: +${pts}pts]`;
+      }
+    } else if (tier === 2) {
+      tier2Max++;
+      if (f.present && f.weight > 0) {
+        tier2Count++;
+        tieredScore += pts;
+        f.detail += ` [Tier 2: +${pts}pt]`;
+      }
+    } else {
+      tier3Max++;
+      if (f.present && f.weight > 0) {
+        tier3Count++;
+        tieredScore += pts;
+        f.detail += ` [Tier 3: +${pts}pts]`;
+      }
+    }
   }
-  // Add fixed bonus potential: Po3 combo (1.0) + OR enhancements (up to 2.0)
-  // Po3 requires AMD + sweep/Judas + structure — only add if those are enabled
+
+  // Add Po3 combo bonus if present
+  const po3Factor = factors.find(f => f.name === "Power of 3 Combo" && f.present);
+  if (po3Factor) tieredScore += 1.0;
+
+  // Add Opening Range bonus if present
+  const orFactor = factors.find(f => f.name && f.name.includes("Opening Range") && f.present);
+  if (orFactor) tieredScore += Math.min(2.0, orFactor.weight);
+
+  // Calculate max possible from enabled tiers + bonuses
+  let tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
+  // Add Po3 potential if prerequisites are enabled
   const po3Possible = (config as any).enableStructureBreak !== false
     && (config as any).useAMD !== false
     && (config as any).enableLiquiditySweep !== false;
-  if (po3Possible) enabledMax += 1.0;
-  if (config.openingRange?.enabled) {
-    enabledMax += 2.0;
-  }
+  if (po3Possible) tieredMax += 1.0;
+  if (config.openingRange?.enabled) tieredMax += 2.0;
 
-  // Calculate strong factor count: factors scoring above 50% of their individual max
-  // Exclude penalty-only factors (Spread Quality, negative Regime) from strong count
-  const strongFactorCount = factors.filter(f => {
-    if (!f.present || f.weight <= 0) return false;
-    // Find the factor's individual max from DEFAULT_FACTOR_WEIGHTS
-    // Map factor names to weight keys
-    const nameToKey: Record<string, string> = {
-      "Market Structure": "marketStructure",
-      "Order Block": "orderBlock",
-      "Fair Value Gap": "fairValueGap",
-      "Premium/Discount": "premiumDiscountFib",
-      "Session Quality": "sessionQuality",
-      "Judas Swing": "judasSwing",
-      "PD/PW Levels": "pdPwLevels",
-      "Reversal Candle": "reversalCandle",
-      "Liquidity Sweep": "liquiditySweep",
-      "Displacement": "displacement",
-      "Breaker Block": "breakerBlock",
-      "Unicorn Model": "unicornModel",
-      "SMT Divergence": "smtDivergence",
-      "Volume Profile": "volumeProfile",
-      "AMD Phase": "amdPhase",
-      "Currency Strength": "currencyStrength",
-      "Daily Bias": "dailyBias",
-    };
-    const key = nameToKey[f.name];
-    if (!key) return false; // Bonus/penalty factors (Po3 Combo, Regime, Spread) don't count
-    const maxW = DEFAULT_FACTOR_WEIGHTS[key] || 1;
-    const fw = config.factorWeights;
-    const effectiveMax = (fw && fw[key] !== undefined && fw[key] !== null)
-      ? Math.max(0, fw[key])
-      : maxW;
-    if (effectiveMax <= 0) return false;
-    return f.weight >= effectiveMax * 0.5;
-  }).length;
+  // Convert to percentage
+  const rawScore = Math.round(tieredScore * 100) / 100;
+  const enabledMax = Math.round(tieredMax * 100) / 100;
 
-  if (config.normalizedScoring) {
-    // Percentage scoring: express raw score as percentage of enabledMax
-    if (enabledMax > 0) {
-      const pct = Math.max(0, rawScore) / enabledMax * 100;
-      score = Math.round(pct * 10) / 10; // e.g., 72.3%
-    } else {
-      score = 0;
-    }
+  if (tieredMax > 0) {
+    score = Math.round((tieredScore / tieredMax) * 1000) / 10; // e.g., 72.3%
   } else {
-    // Legacy absolute scoring: clamp raw score to 0-10
-    score = Math.max(0, Math.min(10, Math.round(score * 10) / 10));
+    score = 0;
   }
+
+  // Tier 1 minimum gate: need at least 2 core factors
+  const tier1GatePassed = tier1Count >= 2;
+  const tier1GateReason = tier1GatePassed
+    ? `Tier 1 gate passed: ${tier1Count}/4 core factors (${["Market Structure", "Order Block", "FVG", "Premium/Discount"].filter(n => factors.find(f => f.name === n && f.present && f.weight > 0)).join(", ")})`
+    : `Tier 1 gate FAILED: only ${tier1Count}/4 core factors — need at least 2 of: Market Structure, Order Block, FVG, Premium/Discount`;
+
+  // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
+  const strongFactorCount = tier1Count + tier2Count;
 
   // Calculate SL/TP using configurable methods
   const symbolForSL = config._currentSymbol || "EUR/USD";
@@ -1768,17 +1778,32 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   });
 
   const fotsiSummary = _fotsiAlignment ? ` | FOTSI: ${_fotsiAlignment.label}` : "";
-  const scoringMode = config.normalizedScoring ? "%" : "/10";
+  // Build gate summary for the scan output
+  const gatesSummary = [
+    tier1GatePassed ? null : "TIER1_GATE_FAIL",
+    regimeGatePassed ? null : "REGIME_GATE_FAIL",
+    spreadGatePassed ? null : "SPREAD_GATE_FAIL",
+  ].filter(Boolean);
+  const gatesStr = gatesSummary.length > 0 ? ` | Gates: ${gatesSummary.join(", ")}` : "";
+
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}${scoringMode} confluence (${strongFactorCount} strong, ${presentFactors.length}/${enabledFactors.length} present). ${groupSummaryParts.join(" | ")}${fotsiSummary}`
-    : `No signal: ${score}${scoringMode} confluence (${strongFactorCount} strong, ${presentFactors.length}/${enabledFactors.length} present)${fotsiSummary}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus, ${strongFactorCount} strong). ${groupSummaryParts.join(" | ")}${fotsiSummary}${gatesStr}`
+    : `No signal: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus)${fotsiSummary}${gatesStr}`;
 
   return {
-    score, rawScore, normalizedScoring: !!config.normalizedScoring, enabledMax,
+    score, rawScore, normalizedScoring: true, enabledMax,
     strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
+    // New tiered scoring metadata
+    tieredScoring: {
+      tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
+      tieredScore, tieredMax,
+      tier1GatePassed, tier1GateReason,
+      regimeGatePassed, regimeGateReason,
+      spreadGatePassed, spreadGateReason,
+    },
   };
 }
 // ─── Lightweight Regime Classification (for real-time scoring) ──────
@@ -2528,6 +2553,36 @@ async function runSafetyGates(
     }
   }
 
+  // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
+  if (analysis.tieredScoring) {
+    const ts = analysis.tieredScoring;
+    if (!ts.tier1GatePassed) {
+      gates.push({ passed: false, reason: ts.tier1GateReason });
+    } else {
+      gates.push({ passed: true, reason: ts.tier1GateReason });
+    }
+  }
+
+  // Gate 20: Regime Alignment (separate gate, not a score penalty)
+  if (analysis.tieredScoring) {
+    const ts = analysis.tieredScoring;
+    if (!ts.regimeGatePassed) {
+      gates.push({ passed: false, reason: ts.regimeGateReason });
+    } else {
+      gates.push({ passed: true, reason: ts.regimeGateReason || "Regime gate: OK" });
+    }
+  }
+
+  // Gate 21: Spread Quality (separate gate, not a score penalty)
+  if (analysis.tieredScoring) {
+    const ts = analysis.tieredScoring;
+    if (!ts.spreadGatePassed) {
+      gates.push({ passed: false, reason: ts.spreadGateReason });
+    } else {
+      gates.push({ passed: true, reason: ts.spreadGateReason || "Spread gate: OK" });
+    }
+  }
+
   return gates;
 }
 
@@ -3224,8 +3279,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       enabledMax: analysis.enabledMax || 0,
       factors: analysis.factors,
       // ── analysis_snapshot: per-factor + new-factor breakdown for dashboard ──
+      tieredScoring: analysis.tieredScoring || null,
       analysis_snapshot: {
-        factorScores: analysis.factors.map((f: any) => ({ name: f.name, weight: f.weight, present: f.present, detail: f.detail })),
+        factorScores: analysis.factors.map((f: any) => ({ name: f.name, weight: f.weight, present: f.present, detail: f.detail, tier: (f as any).tier })),
         displacement: analysis.displacement ? { isDisplacement: analysis.displacement.isDisplacement, lastDirection: analysis.displacement.lastDirection } : null,
         breakerBlocks: (analysis.breakerBlocks || []).length,
         unicornSetups: (analysis.unicornSetups || []).length,
@@ -3790,9 +3846,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     } else {
       if (analysis.score < adjustedMinConfluence) {
         detail.status = "below_threshold";
-        detail.reason = config.normalizedScoring
-          ? `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold`
-          : `Score ${analysis.score.toFixed(1)} < ${adjustedMinConfluence} threshold`;
+        const ts = analysis.tieredScoring;
+        const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
+        detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
       } else {
         detail.status = isPaused ? "paused" : "no_direction";
       }
