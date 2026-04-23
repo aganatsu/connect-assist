@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
-import { STYLE_META, getActiveStyle } from "@/lib/botStyleClassifier";
+import { STYLE_META, STYLE_PARAMS, getActiveStyle } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
@@ -812,15 +812,31 @@ export default function BotView() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
-              {botConfig?.strategy && (
-                <Badge
-                  variant="outline"
-                  className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
-                  title="Active confluence gate. Setups must score above this percentage to trigger."
-                >
-                  Gate: ≥{(botConfig.strategy?.confluenceThreshold ?? 55)}%
-                </Badge>
-              )}
+              {botConfig?.strategy && (() => {
+                const activeStyle = getActiveStyle(botConfig);
+                const styleParams = STYLE_PARAMS[activeStyle];
+                const styleMeta = STYLE_META[activeStyle];
+                // Replicate bot-scanner resolution: style override applies when
+                // the user's value matches the global default (55), because the
+                // scanner can't distinguish "user set 55" from "never touched".
+                const DEFAULT_CONFLUENCE = 55;
+                const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                const resolvedGate = rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
+                const styleLabel = styleMeta?.label || activeStyle;
+                const isStyleOverride = resolvedGate !== rawThreshold;
+                return (
+                  <Badge
+                    variant="outline"
+                    className={`text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
+                      isStyleOverride ? 'border-warning/40 text-warning' : ''
+                    }`}
+                    title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
+                  >
+                    Gate: ≥{resolvedGate}%{isStyleOverride ? ` (${styleLabel})` : ''}
+                  </Badge>
+                );
+              })()}
               {currentScan && (
                 <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
                   <DataSourceBadge source={latestSource} />

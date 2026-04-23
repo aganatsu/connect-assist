@@ -3905,7 +3905,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change") };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change") };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
