@@ -405,6 +405,85 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (action === "trade_history") {
+      const limit = payload.limit || 50;
+      if (conn.broker_type === "oanda") {
+        const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades?state=CLOSED&count=${limit}`, {
+          headers: { Authorization: `Bearer ${conn.api_key}` },
+        });
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA error: ${res.status}`, details: errText, fallback: res.status >= 500 }, res.status); }
+        return respond((await res.json()).trades || []);
+      }
+      if (conn.broker_type === "metaapi") {
+        // MetaAPI: fetch history deals for the last 30 days
+        const startTime = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const endTime = new Date().toISOString();
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/history-deals/time/${startTime}/${endTime}`);
+        if (!res.ok) return respond({ error: `MetaAPI error: ${res.status}`, details: body, fallback: res.status >= 500 || /not connected to broker|region/i.test(body) }, 200);
+        const deals: any[] = JSON.parse(body);
+        // Group deals by positionId to reconstruct trades
+        const posMap = new Map<string, any[]>();
+        for (const deal of deals) {
+          if (!deal.positionId) continue;
+          if (!posMap.has(deal.positionId)) posMap.set(deal.positionId, []);
+          posMap.get(deal.positionId)!.push(deal);
+        }
+        // Build closed trade records from deal groups
+        const closedTrades: any[] = [];
+        for (const [posId, posDeals] of posMap) {
+          const entry = posDeals.find((d: any) => d.entryType === "DEAL_ENTRY_IN" || d.type?.includes("BUY") || d.type?.includes("SELL"));
+          const exit = posDeals.find((d: any) => d.entryType === "DEAL_ENTRY_OUT" || d.entryType === "DEAL_ENTRY_OUT_BY");
+          if (!entry || !exit) continue;
+          const pnl = posDeals.reduce((s: number, d: any) => s + (d.profit || 0), 0);
+          const commission = posDeals.reduce((s: number, d: any) => s + (d.commission || 0), 0);
+          const swap = posDeals.reduce((s: number, d: any) => s + (d.swap || 0), 0);
+          closedTrades.push({
+            positionId: posId,
+            symbol: entry.symbol || exit.symbol,
+            direction: entry.type?.includes("BUY") ? "long" : "short",
+            volume: entry.volume || exit.volume,
+            entryPrice: entry.price,
+            exitPrice: exit.price,
+            openTime: entry.time,
+            closeTime: exit.time,
+            pnl, commission, swap,
+            netPnl: pnl + commission + swap,
+            comment: entry.comment || exit.comment || "",
+            botManaged: /paper:/i.test(entry.comment || exit.comment || ""),
+          });
+        }
+        closedTrades.sort((a, b) => new Date(b.closeTime).getTime() - new Date(a.closeTime).getTime());
+        return respond(closedTrades.slice(0, limit));
+      }
+    }
+
+    if (action === "modify_trade") {
+      const { tradeId, stopLoss, takeProfit } = payload;
+      if (conn.broker_type === "metaapi") {
+        const modifyBody: any = { actionType: "POSITION_MODIFY", positionId: tradeId };
+        if (stopLoss !== undefined) modifyBody.stopLoss = stopLoss;
+        if (takeProfit !== undefined) modifyBody.takeProfit = takeProfit;
+        const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
+        });
+        if (!res.ok) return respond({ error: `MetaAPI modify failed: ${res.status}`, details: body }, 200);
+        return respond(JSON.parse(body));
+      }
+      if (conn.broker_type === "oanda") {
+        const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+        const updates: any = {};
+        if (stopLoss !== undefined) updates.stopLoss = { price: roundOandaPrice(payload.symbol || "", stopLoss), timeInForce: "GTC" };
+        if (takeProfit !== undefined) updates.takeProfit = { price: roundOandaPrice(payload.symbol || "", takeProfit) };
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${tradeId}/orders`, {
+          method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+          body: JSON.stringify(updates),
+        });
+        if (!res.ok) { const errText = await res.text(); return respond({ error: `OANDA modify failed: ${res.status}`, details: errText }, res.status); }
+        return respond(await res.json());
+      }
+    }
+
     return respond({ error: "Unknown action" });
   } catch (error: any) {
     console.error("broker-execute error:", error?.message || error);

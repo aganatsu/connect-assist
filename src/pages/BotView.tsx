@@ -26,6 +26,7 @@ import { ExpandedPositionCard } from "@/components/ExpandedPositionCard";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
+import BrokerTradesTab from "@/components/BrokerTradesTab";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -415,6 +416,7 @@ export default function BotView() {
                 <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
                 <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
                 <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
+                <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -535,6 +537,9 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="ai-advisor" className="flex-1 overflow-auto mt-1">
                 <RecommendationsDashboard botId="smc" />
+              </TabsContent>
+              <TabsContent value="broker-live" className="flex-1 overflow-auto mt-1">
+                <BrokerTradesTab />
               </TabsContent>
             </Tabs>
           </div>
