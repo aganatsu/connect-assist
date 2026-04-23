@@ -16,6 +16,7 @@ import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
   TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
+  Eye, EyeOff, PanelRightClose, PanelRightOpen,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 
@@ -43,6 +44,20 @@ export default function BotView() {
 
   const [customBalanceInput, setCustomBalanceInput] = useState("");
   const [showSetBalance, setShowSetBalance] = useState(false);
+
+  // Panel visibility — persisted in localStorage
+  const [showSidebar, setShowSidebar] = useState(() => {
+    try { return localStorage.getItem("botview-show-sidebar") !== "false"; } catch { return true; }
+  });
+  const [showScanPanel, setShowScanPanel] = useState(() => {
+    try { return localStorage.getItem("botview-show-scan") !== "false"; } catch { return true; }
+  });
+  const toggleSidebar = useCallback(() => {
+    setShowSidebar(prev => { const next = !prev; try { localStorage.setItem("botview-show-sidebar", String(next)); } catch {} return next; });
+  }, []);
+  const toggleScanPanel = useCallback(() => {
+    setShowScanPanel(prev => { const next = !prev; try { localStorage.setItem("botview-show-scan", String(next)); } catch {} return next; });
+  }, []);
 
   // Order form state
   const [orderType, setOrderType] = useState("market");
@@ -406,8 +421,8 @@ export default function BotView() {
 
         {/* Main workspace: 65/35 split */}
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
-          {/* Left: Tabbed Positions (~65%) */}
-          <div className="flex-[2] flex flex-col min-h-0 min-h-[300px] md:min-h-0">
+          {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
+          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
             <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
               <TabsList className="h-7 shrink-0 overflow-x-auto">
                 <TabsTrigger value="open" className="text-[11px] h-6">Open ({botPositions.length})</TabsTrigger>
@@ -544,7 +559,17 @@ export default function BotView() {
             </Tabs>
           </div>
 
+          {/* Sidebar toggle — always visible */}
+          <button
+            onClick={toggleSidebar}
+            className="hidden md:flex items-center justify-center w-5 h-10 my-auto rounded-l border border-r-0 border-border bg-card hover:bg-secondary/50 transition-colors self-center shrink-0"
+            title={showSidebar ? "Hide sidebar" : "Show sidebar"}
+          >
+            {showSidebar ? <PanelRightClose className="h-3 w-3 text-muted-foreground" /> : <PanelRightOpen className="h-3 w-3 text-muted-foreground" />}
+          </button>
+
           {/* Right sidebar (~35%) */}
+          {showSidebar && (
           <div className="flex-1 overflow-y-auto space-y-2 md:max-w-none">
 
             {/* Account Summary */}
@@ -735,13 +760,22 @@ export default function BotView() {
             )}
 
           </div>
+          )}
         </div>
 
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className="md:h-56 border-t border-border mt-2 pt-2 shrink-0 flex flex-col md:flex-row gap-0 min-h-0">
-          {/* Left: Latest Scan Pairs (60%) */}
-          <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
-            <div className="flex items-center justify-between mb-1 gap-2">
+        <div className={`border-t border-border mt-2 pt-1 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
+          {/* Scan panel header — always visible for toggle */}
+          <div className="flex items-center justify-between mb-1 gap-2">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={toggleScanPanel}
+                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
+                title={showScanPanel ? "Hide scan results" : "Show scan results"}
+              >
+                {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
+              </button>
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
                 {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
                 {currentScan?.scanned_at && (
@@ -774,75 +808,83 @@ export default function BotView() {
                 )}
 
               </p>
-              <div className="flex items-center gap-2 shrink-0">
-                <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
-                {botConfig?.strategy && (
-                  <Badge
-                    variant="outline"
-                    className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
-                    title="Active confluence gate. Setups must score above this percentage to trigger."
-                  >
-                    Gate: ≥{(botConfig.strategy?.confluenceThreshold ?? 55)}%
-                  </Badge>
-                )}
-                {currentScan && (
-                  <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
-                    <DataSourceBadge source={latestSource} />
-                    {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
-                  </span>
-                )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
+              {botConfig?.strategy && (
+                <Badge
+                  variant="outline"
+                  className="text-[8px] font-mono px-1.5 py-0 h-4 border-border/60"
+                  title="Active confluence gate. Setups must score above this percentage to trigger."
+                >
+                  Gate: ≥{(botConfig.strategy?.confluenceThreshold ?? 55)}%
+                </Badge>
+              )}
+              {currentScan && (
+                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                  <DataSourceBadge source={latestSource} />
+                  {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
+                </span>
+              )}
+            </div>
+          </div>
 
+          {/* Scan content — conditionally rendered */}
+          {showScanPanel && (
+          <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 pt-1">
+            {/* Left: Latest Scan Pairs (60%) */}
+            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
+              <div className="flex-1 overflow-y-auto">
+                {(() => {
+                    if (latestDetailsClean.length === 0) {
+                      return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
+                    }
+                    return (
+                      <div className="space-y-0">
+                        {latestDetailsClean.map((sig: any, i: number) => {
+                          const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
+                          const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const isSelected = selectedPairIdx === i;
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => setSelectedPairIdx(i)}
+                              className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                            >
+                              <div className="min-w-0 flex items-center gap-1.5 flex-1">
+                                {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
+                                <span className="font-medium shrink-0">{sig.pair}</span>
+
+                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`font-mono font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
+                                <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto">
-              {(() => {
-                  if (latestDetailsClean.length === 0) {
-                    return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
-                  }
-                  return (
-                    <div className="space-y-0">
-                      {latestDetailsClean.map((sig: any, i: number) => {
-                        const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
-                        const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
-                        const isSelected = selectedPairIdx === i;
-                        return (
-                          <button
-                            key={i}
-                            onClick={() => setSelectedPairIdx(i)}
-                            className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
-                          >
-                            <div className="min-w-0 flex items-center gap-1.5 flex-1">
-                              {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
-                              <span className="font-medium shrink-0">{sig.pair}</span>
 
-                              {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className={`font-mono font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                              <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
+            {/* Right: Detail Breakdown (40%) */}
+            <div className="w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
+              <div className="flex-1 overflow-y-auto">
+                {(() => {
+                    const selected = latestDetailsClean[selectedPairIdx];
+                    if (!selected) {
+                      return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
+                    }
+                    return <ScanDetailInline signal={selected} />;
+                  })()}
+              </div>
             </div>
           </div>
-
-          {/* Right: Detail Breakdown (40%) */}
-          <div className="w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
-            <div className="flex-1 overflow-y-auto">
-              {(() => {
-                  const selected = latestDetailsClean[selectedPairIdx];
-                  if (!selected) {
-                    return <p className="text-[10px] text-muted-foreground text-center py-8">Select a pair to view details</p>;
-                  }
-                  return <ScanDetailInline signal={selected} />;
-                })()}
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Kill Switch Banner */}
