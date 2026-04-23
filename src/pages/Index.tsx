@@ -27,11 +27,16 @@ export default function Dashboard() {
   const { data: liveQuotes } = useQuery({
     queryKey: ["live-quotes"],
     queryFn: async () => {
-      const results: Record<string, any> = {};
-      await Promise.all(WATCHED_PAIRS.map(async (pair) => {
-        try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; }
-      }));
-      return results;
+      try {
+        return await marketApi.batchQuotes(WATCHED_PAIRS);
+      } catch {
+        // Fallback to individual quotes if batch fails
+        const results: Record<string, any> = {};
+        await Promise.all(WATCHED_PAIRS.map(async (pair) => {
+          try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; }
+        }));
+        return results;
+      }
     },
     refetchInterval: 10000,
   });

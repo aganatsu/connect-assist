@@ -2818,7 +2818,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const slActions = activeActions.filter(a => a.newSL != null);
           if (slActions.length > 0) {
             const { data: liveConns } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (liveConns && liveConns.length > 0) {
               for (const a of slActions) {
                 const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
@@ -2828,8 +2828,54 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                   ? liveConns.filter((c: any) => mirroredIds.includes(c.id))
                   : liveConns; // fallback: try all active connections
                 const tp = parseFloat(pos.take_profit || "0") || undefined;
+                // Apply safety buffer (1 pip) to avoid premature stops from spread
+                const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
+                const safetyBuffer = spec.pipSize;
+                const adjustedSL = pos.direction === "long" ? a.newSL! - safetyBuffer : a.newSL! + safetyBuffer;
                 for (const conn of connsToModify) {
                   try {
+                    // ── OANDA: route through broker-execute modify_trade ──
+                    if (conn.broker_type === "oanda") {
+                      // First fetch open trades to find the matching OANDA trade ID
+                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
+                      });
+                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
+                      const oandaTrades: any[] = await tradesRes.json();
+                      // Match by instrument (EUR_USD format) + direction
+                      const oandaInstrument = a.symbol.replace("/", "_");
+                      const oandaTrade = oandaTrades.find((t: any) => {
+                        const instMatch = t.instrument === oandaInstrument ||
+                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
+                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
+                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
+                        return instMatch && dirMatch;
+                      });
+                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} SL modify`); continue; }
+                      // Route SL modification through broker-execute
+                      const modRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({
+                          action: "modify_trade",
+                          connectionId: conn.id,
+                          tradeId: oandaTrade.id,
+                          stopLoss: adjustedSL,
+                          ...(tp && tp > 0 ? { takeProfit: tp } : {}),
+                          symbol: a.symbol,
+                        }),
+                      });
+                      const modBody = await modRes.text();
+                      if (modRes.ok && !modBody.includes('"error"')) {
+                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA SL modified to ${adjustedSL} for ${a.symbol} (${a.action})`);
+                      } else {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA SL modify failed: ${modBody.slice(0, 300)}`);
+                      }
+                      continue;
+                    }
+                    // ── MetaAPI: direct API call ──
                     let authToken = conn.api_key;
                     let metaAccountId = conn.account_id;
                     if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
@@ -2856,10 +2902,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       );
                     }
                     if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} SL modify`); continue; }
-                    // Apply safety buffer (1 pip) to avoid premature stops from spread
-                    const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
-                    const safetyBuffer = spec.pipSize;
-                    const adjustedSL = pos.direction === "long" ? a.newSL! - safetyBuffer : a.newSL! + safetyBuffer;
                     const modifyBody: any = {
                       actionType: "POSITION_MODIFY",
                       positionId: brokerPos.id,
@@ -2885,7 +2927,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const partialActions = activeActions.filter(a => a.action === "partial_enabled");
           if (partialActions.length > 0) {
             const { data: liveConnsP } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
             if (liveConnsP && liveConnsP.length > 0) {
               for (const a of partialActions) {
                 const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
@@ -2899,6 +2941,44 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
                 for (const conn of connsToClose) {
                   try {
+                    // ── OANDA: route partial close through broker-execute ──
+                    if (conn.broker_type === "oanda") {
+                      // Fetch open trades to find the matching OANDA trade ID + current units
+                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
+                      });
+                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
+                      const oandaTrades: any[] = await tradesRes.json();
+                      const oandaInstrument = a.symbol.replace("/", "_");
+                      const oandaTrade = oandaTrades.find((t: any) => {
+                        const instMatch = t.instrument === oandaInstrument ||
+                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
+                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
+                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
+                        return instMatch && dirMatch;
+                      });
+                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} partial close`); continue; }
+                      // Calculate partial close units (OANDA uses units, not lots)
+                      const currentUnits = Math.abs(parseFloat(oandaTrade.currentUnits || oandaTrade.initialUnits || "0"));
+                      const closeUnits = Math.round(currentUnits * closeFraction);
+                      if (closeUnits <= 0) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA closeUnits=0 for ${a.symbol}`); continue; }
+                      // Route partial close through broker-execute close_trade with units param
+                      const closeRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                        body: JSON.stringify({ action: "close_trade", connectionId: conn.id, tradeId: oandaTrade.id, units: closeUnits }),
+                      });
+                      const closeBody = await closeRes.text();
+                      if (closeRes.ok && !closeBody.includes('"error"')) {
+                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA partial close ${closeUnits} units for ${a.symbol}`);
+                      } else {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA partial close failed: ${closeBody.slice(0, 300)}`);
+                      }
+                      continue;
+                    }
+                    // ── MetaAPI: direct API call ──
                     let authToken = conn.api_key;
                     let metaAccountId = conn.account_id;
                     if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {

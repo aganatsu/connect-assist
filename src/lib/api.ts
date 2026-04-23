@@ -81,6 +81,8 @@ export const marketApi = {
   },
   quote: (symbol: string) =>
     invokeFunction("market-data", { action: "quote", symbol }),
+  batchQuotes: (symbols: string[]) =>
+    invokeFunction<Record<string, { price: number; change: number; percentChange: number; open: number; high: number; low: number; previousClose: number; source: string; error?: string }>>("market-data", { action: "batch_quotes", symbols }),
 };
 
 // ── Bot Config ──

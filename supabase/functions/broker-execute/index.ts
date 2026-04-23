@@ -375,7 +375,7 @@ Deno.serve(async (req) => {
         const result = await retryWithBackoff(async () => {
           const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${payload.tradeId}/close`, {
             method: "PUT", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-            body: JSON.stringify({}),
+            body: JSON.stringify(payload.units ? { units: payload.units.toString() } : {}),
           });
           if (!res.ok) {
             const errMsg = `OANDA close failed: ${res.status}`;
@@ -460,6 +460,19 @@ Deno.serve(async (req) => {
 
     if (action === "modify_trade") {
       const { tradeId, stopLoss, takeProfit } = payload;
+      // Input validation (Fix #4)
+      if (!tradeId || (typeof tradeId !== "string" && typeof tradeId !== "number")) {
+        return respond({ error: "tradeId is required and must be a string or number" }, 400);
+      }
+      if (stopLoss === undefined && takeProfit === undefined) {
+        return respond({ error: "At least one of stopLoss or takeProfit must be provided" }, 400);
+      }
+      if (stopLoss !== undefined && (typeof stopLoss !== "number" || isNaN(stopLoss) || stopLoss <= 0)) {
+        return respond({ error: "stopLoss must be a positive number" }, 400);
+      }
+      if (takeProfit !== undefined && (typeof takeProfit !== "number" || isNaN(takeProfit) || takeProfit <= 0)) {
+        return respond({ error: "takeProfit must be a positive number" }, 400);
+      }
       if (conn.broker_type === "metaapi") {
         const modifyBody: any = { actionType: "POSITION_MODIFY", positionId: tradeId };
         if (stopLoss !== undefined) modifyBody.stopLoss = stopLoss;

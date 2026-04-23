@@ -40,9 +40,9 @@ const App = () => (
                 <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
                 <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
                 <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
-                <Route path="/bot" element={<ProtectedRoute><BotView /></ProtectedRoute>} />
+                <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><BotView /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
-                <Route path="/backtest" element={<ProtectedRoute><Backtest /></ProtectedRoute>} />
+                <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />

@@ -33,8 +33,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { action, symbol, interval, outputsize = 200 } = await req.json();
-    if (!symbol) {
+    const { action, symbol, symbols, interval, outputsize = 200 } = await req.json();
+    if (!symbol && action !== "batch_quotes") {
       return new Response(JSON.stringify({ error: "Missing symbol" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -63,6 +63,45 @@ Deno.serve(async (req) => {
         open: last.open, high: last.high, low: last.low,
         previousClose, source,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // Fix #5: Batch quotes — fetch multiple symbols in one call to reduce request count
+    if (action === "batch_quotes") {
+      const batchSymbols: string[] = (Array.isArray(symbols) ? symbols : (symbol ? [symbol] : []));
+      if (!batchSymbols.length || batchSymbols.length > 30) {
+        return new Response(JSON.stringify({ error: "Provide 1-30 symbols in 'symbols' array" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      // Fetch all quotes concurrently
+      const results: Record<string, any> = {};
+      await Promise.all(batchSymbols.map(async (sym: string) => {
+        try {
+          const { candles, source } = await fetchCandlesWithFallback({
+            symbol: sym, interval: "1d", limit: 5, brokerConn,
+          });
+          if (candles.length === 0) {
+            results[sym] = { error: "NO_DATA" };
+            return;
+          }
+          const last = candles[candles.length - 1];
+          const prev = candles.length > 1 ? candles[candles.length - 2] : last;
+          const previousClose = prev.close;
+          const currentPrice = last.close;
+          const change = currentPrice - previousClose;
+          const percentChange = previousClose > 0 ? (change / previousClose) * 100 : 0;
+          results[sym] = {
+            price: currentPrice, change, percentChange,
+            open: last.open, high: last.high, low: last.low,
+            previousClose, source,
+          };
+        } catch (e: any) {
+          results[sym] = { error: e?.message || "FETCH_FAILED" };
+        }
+      }));
+      return new Response(JSON.stringify(results), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Default: candles

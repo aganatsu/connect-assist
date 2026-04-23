@@ -1144,25 +1144,37 @@ async function sendTelegramNotification(
 
   message += `_Open dashboard to review and approve._`;
 
-  try {
-    const { error } = await supabase.functions.invoke("telegram-notify", {
-      body: { message, parse_mode: "Markdown" },
-    });
-    if (error) console.error("Telegram notification failed:", error);
-  } catch (err) {
-    console.error("Failed to send Telegram notification:", err);
-    const telegramToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
-    const telegramChatId = Deno.env.get("TELEGRAM_CHAT_ID");
-    if (telegramToken && telegramChatId) {
-      try {
-        await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: telegramChatId, text: message, parse_mode: "Markdown" }),
-        });
-      } catch (e) {
-        console.error("Direct Telegram fallback also failed:", e);
+  // Fetch Telegram chat IDs from user_settings (same source as bot-scanner)
+  const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
+  const prefs = (userSettings?.preferences_json as any) || {};
+  const telegramChatIds: string[] = (() => {
+    const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
+    const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
+    if (ids.length > 0) return ids;
+    return prefs.telegramChatId ? [String(prefs.telegramChatId)] : [];
+  })();
+
+  if (telegramChatIds.length === 0) {
+    console.log(`[weekly-advisor] No Telegram chat IDs configured for user ${userId}, skipping notification`);
+    return;
+  }
+
+  // Send via telegram-notify Edge Function to each configured chat ID
+  for (const chatId of telegramChatIds) {
+    try {
+      const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+        body: JSON.stringify({ chat_id: chatId, message }),
+      });
+      if (!notifyResp.ok) {
+        const errBody = await notifyResp.text();
+        console.warn(`[weekly-advisor] Telegram notify failed for chat ${chatId}: ${notifyResp.status} ${errBody.slice(0, 200)}`);
+      } else {
+        console.log(`[weekly-advisor] Telegram notify sent OK to chat ${chatId}`);
       }
+    } catch (e: any) {
+      console.error(`[weekly-advisor] Telegram notify error for chat ${chatId}:`, e?.message);
     }
   }
 }

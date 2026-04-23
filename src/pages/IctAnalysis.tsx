@@ -42,10 +42,14 @@ export default function IctAnalysis() {
   const { data: liveQuotes } = useQuery({
     queryKey: ["ict-live-quotes"],
     queryFn: async () => {
-      const results: Record<string, any> = {};
       const pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"];
-      await Promise.all(pairs.map(async (pair) => { try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; } }));
-      return results;
+      try {
+        return await marketApi.batchQuotes(pairs);
+      } catch {
+        const results: Record<string, any> = {};
+        await Promise.all(pairs.map(async (pair) => { try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; } }));
+        return results;
+      }
     },
     staleTime: 30000,
   });
