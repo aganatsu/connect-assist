@@ -698,12 +698,14 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           tags.push("no displacement — reduced score");
         }
         if (insideOB.hasFVGAdjacency) tags.push("FVG adjacent");
+        if (insideOB.hasVolumePivot) tags.push("volume pivot ✓");
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated) [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
         // OBs exist but price not inside any — no score (ICT: entry requires price AT the level)
         const withDisp = activeOBs.filter(ob => ob.hasDisplacement).length;
+        const withVol = activeOBs.filter(ob => ob.hasVolumePivot).length;
         pts = 0;
-        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement) — not at level, no score`;
+        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement${withVol > 0 ? `, ${withVol} with volume pivot` : ""}) — not at level, no score`;
       }
     } else {
       detail = "Order Blocks disabled";

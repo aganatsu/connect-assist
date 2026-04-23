@@ -49,6 +49,7 @@ export interface OrderBlock {
   mitigatedPercent: number;
   hasDisplacement?: boolean;
   hasFVGAdjacency?: boolean;
+  hasVolumePivot?: boolean;
 }
 
 export interface FairValueGap {
@@ -726,6 +727,23 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
 }
 
 export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {
+  // Volume pivot detection helper (LuxAlgo-inspired)
+  // A volume pivot exists when a candle's volume is the highest within ±pivotLen bars
+  const VOLUME_PIVOT_LEN = 5;
+  const hasVolumeData = candles.some(c => c.volume != null && c.volume > 0);
+  function isVolumePivot(idx: number): boolean {
+    if (!hasVolumeData) return false;
+    const vol = candles[idx]?.volume;
+    if (vol == null || vol <= 0) return false;
+    const start = Math.max(0, idx - VOLUME_PIVOT_LEN);
+    const end = Math.min(candles.length - 1, idx + VOLUME_PIVOT_LEN);
+    for (let k = start; k <= end; k++) {
+      if (k === idx) continue;
+      const kVol = candles[k]?.volume;
+      if (kVol != null && kVol > vol) return false;
+    }
+    return true;
+  }
   const OB_RECENCY = (typeof obLookbackOverride === "number" && obLookbackOverride > 0) ? obLookbackOverride : 50;
   const OB_CAP = 5;
   const BREAK_LOOKAHEAD = 10;
@@ -771,12 +789,17 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
           break;
         }
       }
-      // Quality scoring: structure break nearby = +2, displacement = +2, recency bonus
+      // Quality scoring: structure break nearby = +2, displacement = +2, volume pivot = +2, recency bonus
       if (structureBreaks && structureBreaks.length > 0) {
         const hasBreak = structureBreaks.some(b => b.type === "bullish" && b.index > ob.index && b.index <= ob.index + BREAK_LOOKAHEAD);
         if (hasBreak) ob.quality += 2;
       } else { ob.quality += 1; }
       if (ob.hasDisplacement) ob.quality += 2;
+      // Volume pivot bonus: OB candle or engulfing candle had highest volume in surrounding bars
+      if (isVolumePivot(i - 1) || isVolumePivot(i)) {
+        ob.hasVolumePivot = true;
+        ob.quality += 2;
+      }
       ob.quality += (ob.index - recencyStart) / OB_RECENCY; // recency bonus
       candidates.push(ob);
     }
@@ -814,6 +837,11 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
         if (hasBreak) ob.quality += 2;
       } else { ob.quality += 1; }
       if (ob.hasDisplacement) ob.quality += 2;
+      // Volume pivot bonus: OB candle or engulfing candle had highest volume in surrounding bars
+      if (isVolumePivot(i - 1) || isVolumePivot(i)) {
+        ob.hasVolumePivot = true;
+        ob.quality += 2;
+      }
       ob.quality += (ob.index - recencyStart) / OB_RECENCY;
       candidates.push(ob);
     }
