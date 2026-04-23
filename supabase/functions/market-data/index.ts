@@ -35,9 +35,13 @@ Deno.serve(async (req) => {
   try {
     const { action, symbol, symbols, interval, outputsize = 200 } = await req.json();
     if (!symbol && action !== "batch_quotes") {
-      return new Response(JSON.stringify({ error: "Missing symbol" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      // Return a soft fallback instead of 400 so callers (charts/quotes) don't crash
+      // when a symbol is briefly undefined during render.
+      console.warn(`[market-data] missing symbol for action=${action}`);
+      return new Response(
+        JSON.stringify(action === "candles" ? [] : { error: "NO_DATA", fallback: true }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
     const brokerConn = await loadBrokerConn(req);
