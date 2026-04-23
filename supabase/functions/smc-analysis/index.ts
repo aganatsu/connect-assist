@@ -83,7 +83,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   // Extended detections (same as scanner)
   const displacement = detectDisplacement(candles);
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
-  const breakerBlocks = detectBreakerBlocks(orderBlocks, candles);
+  const breakerBlocks = detectBreakerBlocks(orderBlocks, candles, structureBreaks);
   const unicornSetups = detectUnicornSetups(breakerBlocks, fvgs);
   const silverBullet = detectSilverBullet();
   const macroWindow = detectMacroWindow();
@@ -275,7 +275,12 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     let detail = "";
     if (breakerBlocks.length > 0) {
       pts = 1.0;
-      detail = `${breakerBlocks.length} breaker block(s) detected`;
+      const bbCount = breakerBlocks.filter(b => b.subtype === "breaker").length;
+      const mbCount = breakerBlocks.filter(b => b.subtype === "mitigation_block").length;
+      const parts: string[] = [];
+      if (bbCount > 0) parts.push(`${bbCount} BB`);
+      if (mbCount > 0) parts.push(`${mbCount} MB`);
+      detail = `${breakerBlocks.length} breaker block(s) detected (${parts.join(", ")})`;
     } else {
       detail = "No breaker blocks";
     }

@@ -74,6 +74,7 @@ export interface LiquidityPool {
 
 export interface BreakerBlock {
   type: "bullish_breaker" | "bearish_breaker";
+  subtype: "breaker" | "mitigation_block"; // breaker = confirmed new HH/LL, mitigation_block = no new extreme
   high: number;
   low: number;
   mitigatedAt: number;
@@ -758,15 +759,49 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
     avgRange = atrSlice.reduce((s, c) => s + (c.high - c.low), 0) / atrSlice.length;
   }
 
+  // ── Scan-back helper: find the last opposite-color candle within N bars before
+  // the engulfing candle (PineScript-inspired). This catches OBs where small
+  // consolidation candles sit between the institutional candle and the displacement.
+  const OB_SCANBACK = 10;
+  function findLastBearishCandle(fromIdx: number, minIdx: number): number {
+    const start = Math.max(minIdx, fromIdx - OB_SCANBACK);
+    for (let k = fromIdx; k >= start; k--) {
+      if (candles[k] && candles[k].close < candles[k].open) return k;
+    }
+    return -1; // none found
+  }
+  function findLastBullishCandle(fromIdx: number, minIdx: number): number {
+    const start = Math.max(minIdx, fromIdx - OB_SCANBACK);
+    for (let k = fromIdx; k >= start; k--) {
+      if (candles[k] && candles[k].close > candles[k].open) return k;
+    }
+    return -1; // none found
+  }
+
+  // ── Wick extension helper: body + 50% of wicks for more accurate institutional footprint ──
+  function obZoneWithWicks(c: Candle): { high: number; low: number } {
+    const bodyHigh = Math.max(c.open, c.close);
+    const bodyLow = Math.min(c.open, c.close);
+    const upperWick = c.high - bodyHigh;
+    const lowerWick = bodyLow - c.low;
+    return {
+      high: bodyHigh + upperWick * 0.5,
+      low: bodyLow - lowerWick * 0.5,
+    };
+  }
+
   for (let i = recencyStart; i < candles.length; i++) {
     const prev = candles[i - 1], curr = candles[i];
-    // Bullish OB: bearish candle followed by bullish candle that closes above prev high
-    if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
-      const obHigh = Math.max(prev.open, prev.close);
-      const obLow = Math.min(prev.open, prev.close);
+    // Bullish OB: bullish engulfing candle that closes above prev candle's high
+    // Scan back up to OB_SCANBACK bars for the last bearish candle (institutional candle)
+    if (curr.close > curr.open && curr.close > candles[i - 1].high) {
+      const obIdx = findLastBearishCandle(i - 1, recencyStart);
+      if (obIdx < 0) continue; // no bearish candle found in scan range
+      const obCandle = candles[obIdx];
+      const zone = obZoneWithWicks(obCandle);
       const ob: OrderBlock & { quality: number } = {
-        index: i - 1, high: obHigh, low: obLow, type: "bullish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0,
+        index: obIdx, high: zone.high, low: zone.low, type: "bullish",
+        datetime: obCandle.datetime, mitigated: false, mitigatedPercent: 0,
         hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
       };
       // Check for displacement: the engulfing candle (curr) or next 2 candles must be a large-body move
@@ -796,20 +831,23 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
       } else { ob.quality += 1; }
       if (ob.hasDisplacement) ob.quality += 2;
       // Volume pivot bonus: OB candle or engulfing candle had highest volume in surrounding bars
-      if (isVolumePivot(i - 1) || isVolumePivot(i)) {
+      if (isVolumePivot(obIdx) || isVolumePivot(i)) {
         ob.hasVolumePivot = true;
         ob.quality += 2;
       }
       ob.quality += (ob.index - recencyStart) / OB_RECENCY; // recency bonus
       candidates.push(ob);
     }
-    // Bearish OB: bullish candle followed by bearish candle that closes below prev low
-    if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
-      const obHigh = Math.max(prev.open, prev.close);
-      const obLow = Math.min(prev.open, prev.close);
+    // Bearish OB: bearish engulfing candle that closes below prev candle's low
+    // Scan back up to OB_SCANBACK bars for the last bullish candle (institutional candle)
+    if (curr.close < curr.open && curr.close < candles[i - 1].low) {
+      const obIdx = findLastBullishCandle(i - 1, recencyStart);
+      if (obIdx < 0) continue; // no bullish candle found in scan range
+      const obCandle = candles[obIdx];
+      const zone = obZoneWithWicks(obCandle);
       const ob: OrderBlock & { quality: number } = {
-        index: i - 1, high: obHigh, low: obLow, type: "bearish",
-        datetime: prev.datetime, mitigated: false, mitigatedPercent: 0,
+        index: obIdx, high: zone.high, low: zone.low, type: "bearish",
+        datetime: obCandle.datetime, mitigated: false, mitigatedPercent: 0,
         hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
       };
       // Check for displacement: bearish large-body move away from OB
@@ -838,7 +876,7 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
       } else { ob.quality += 1; }
       if (ob.hasDisplacement) ob.quality += 2;
       // Volume pivot bonus: OB candle or engulfing candle had highest volume in surrounding bars
-      if (isVolumePivot(i - 1) || isVolumePivot(i)) {
+      if (isVolumePivot(obIdx) || isVolumePivot(i)) {
         ob.hasVolumePivot = true;
         ob.quality += 2;
       }
@@ -997,7 +1035,7 @@ export function tagDisplacementQuality(
   }
 }
 
-export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]): BreakerBlock[] {
+export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[], structureBreaks?: { index: number; type: string }[]): BreakerBlock[] {
   const breakers: BreakerBlock[] = [];
   for (const ob of orderBlocks) {
     if (!ob.mitigated) continue;
@@ -1007,6 +1045,34 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
     for (let j = ob.index + 1; j < candles.length; j++) {
       if (ob.type === "bullish" && candles[j].close < ob.low) { mitigatedAt = j; break; }
       if (ob.type === "bearish" && candles[j].close > ob.high) { mitigatedAt = j; break; }
+    }
+    // BB vs MB distinction (PineScript-inspired):
+    // "breaker" = the MSB that broke this OB also made a new HH (bearish breaker) or LL (bullish breaker)
+    // "mitigation_block" = OB was broken but no new structural extreme was confirmed
+    let subtype: "breaker" | "mitigation_block" = "mitigation_block";
+    if (structureBreaks && structureBreaks.length > 0) {
+      // A true breaker has a structure break (BOS/CHoCH) near the mitigation point
+      // that confirms the structural shift (new extreme in the direction of the break)
+      const wantBreakType = breakerType === "bullish_breaker" ? "bullish" : "bearish";
+      const hasConfirmingBreak = structureBreaks.some(
+        b => b.type === wantBreakType && b.index >= ob.index && b.index <= mitigatedAt + 10
+      );
+      if (hasConfirmingBreak) subtype = "breaker";
+    } else {
+      // Without structure break data, check price action for new extreme
+      if (breakerType === "bearish_breaker") {
+        // Bearish breaker from a failed bullish OB: check if price made new HH after mitigation
+        let prevHigh = ob.high;
+        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
+          if (candles[j].high > prevHigh) { subtype = "breaker"; break; }
+        }
+      } else {
+        // Bullish breaker from a failed bearish OB: check if price made new LL after mitigation
+        let prevLow = ob.low;
+        for (let j = mitigatedAt; j < Math.min(mitigatedAt + 15, candles.length); j++) {
+          if (candles[j].low < prevLow) { subtype = "breaker"; break; }
+        }
+      }
     }
     let isActive = true;
     for (let j = mitigatedAt + 1; j < candles.length; j++) {
@@ -1019,7 +1085,7 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
         if (c.close > ob.high) { isActive = false; break; }
       }
     }
-    breakers.push({ type: breakerType, high: ob.high, low: ob.low, mitigatedAt, originalOBType: ob.type, isActive });
+    breakers.push({ type: breakerType, subtype, high: ob.high, low: ob.low, mitigatedAt, originalOBType: ob.type, isActive });
   }
   return breakers.filter(b => b.isActive);
 }
@@ -1491,7 +1557,7 @@ export function classifyInstrumentRegime(
 
     for (let i = 1; i < swingHighs.length; i++) {
       if (swingHighs[i].price > swingHighs[i - 1].price) {
-        if (currentTrend === "bearish") chochCount++;
+        if ((currentTrend as string) === "bearish") chochCount++;
         else bosCount++;
         currentTrend = "bullish";
       }

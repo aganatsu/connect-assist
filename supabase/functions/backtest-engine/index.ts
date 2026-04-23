@@ -651,7 +651,7 @@ function runConfluenceAnalysis(
     (ob as any).hasFVGAdjacency = hasFVGNearby;
   }
 
-  const breakerBlocks = config.useBreakerBlocks ? detectBreakerBlocks(orderBlocks, candles) : [];
+  const breakerBlocks = config.useBreakerBlocks ? detectBreakerBlocks(orderBlocks, candles, allBreaks) : [];
   const unicornSetups = config.useUnicornModel ? detectUnicornSetups(breakerBlocks, fvgs) : [];
   const pd = calculatePremiumDiscount(candles);
   const pdLevels = dailyCandles ? calculatePDLevels(dailyCandles) : null;

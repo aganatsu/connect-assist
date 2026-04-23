@@ -674,7 +674,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
 
   // Breaker Blocks + Unicorn Setups (computed early, scored after direction)
-  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles) : [];
+  const breakerBlocks = config.useBreakerBlocks !== false ? detectBreakerBlocks(orderBlocks, candles, structureBreaks) : [];
   const unicornSetups = config.useUnicornModel !== false ? detectUnicornSetups(breakerBlocks, fvgs) : [];
 
   // ── Factor 2: Order Block (max 2.0) ──
@@ -1185,14 +1185,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       }
       if (bestBreaker) {
         const isInside = lastPrice >= bestBreaker.low && lastPrice <= bestBreaker.high;
+        const subtypeLabel = bestBreaker.subtype === "breaker" ? "BB" : "MB";
         if (isInside) {
           pts = 1.0;
-          detail = `Price inside ${bestBreaker.type.replace("_", " ")} at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          detail = `Price inside ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
         } else if (bestDist <= atrThreshold) {
           pts = 0.5;
-          detail = `Price within ${(bestDist / breakerATR).toFixed(1)}× ATR of ${bestBreaker.type.replace("_", " ")} at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          detail = `Price within ${(bestDist / breakerATR).toFixed(1)}× ATR of ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
         } else {
-          detail = `${bestBreaker.type.replace("_", " ")} exists at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)} but price ${(bestDist / breakerATR).toFixed(1)}× ATR away`;
+          detail = `${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) exists at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)} but price ${(bestDist / breakerATR).toFixed(1)}× ATR away`;
         }
       }
     } else if (config.useBreakerBlocks === false) {
