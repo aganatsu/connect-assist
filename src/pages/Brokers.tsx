@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import {
   Plus, Trash2, Wand2, List, Wrench, Activity, CheckCircle2, XCircle,
   Server, KeyRound, Hash, Copy, RadioTower, ChevronRight, ChevronDown, Zap, Ban,
+  Pencil, Check, X as XIcon,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
@@ -362,6 +363,10 @@ function ConnectionDetail({
   // Confirm dialog state for "save anyway" when probe finds bad symbols.
   const [warnDialog, setWarnDialog] = useState<{ open: boolean; bad: { sym: string; brokerSym: string; reason: string }[] }>({ open: false, bad: [] });
   const [validating, setValidating] = useState(false);
+  // Inline edit state: which symbol row is being edited, and the current input value
+  const [editingSymbol, setEditingSymbol] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
 
   // Reset local state when selection changes
   useMemo(() => {
@@ -371,6 +376,8 @@ function ConnectionDetail({
     setEditCustomCommission("");
     setManualProbes({});
     setManuallyTouched(new Set());
+    setEditingSymbol(null);
+    setEditingValue("");
     setDirty(false);
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -565,7 +572,7 @@ function ConnectionDetail({
             </div>
             {overrideCount > 0 ? (
               <div className="border border-border rounded overflow-hidden">
-                <div className="grid grid-cols-[28px_1fr_1fr_32px] gap-2 px-3 py-1.5 bg-secondary/40 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                <div className="grid grid-cols-[28px_1fr_1fr_64px] gap-2 px-3 py-1.5 bg-secondary/40 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
                   <span>#</span><span>App</span><span>Broker</span><span></span>
                 </div>
                 <ScrollArea className="h-72">
@@ -583,10 +590,44 @@ function ConnectionDetail({
                     const hasAlternates = candidates.length > 1;
 
                     return (
-                      <div key={sym} className="grid grid-cols-[28px_1fr_1fr_32px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
+                      <div key={sym} className="grid grid-cols-[28px_1fr_1fr_64px] gap-2 px-3 py-1.5 text-xs items-center border-t border-border">
                         <span className="font-mono text-[10px] text-muted-foreground tabular-nums">{idx + 1}</span>
                         <span className="font-mono font-medium">{sym}</span>
-                        {hasAlternates ? (
+                        {editingSymbol === sym ? (
+                          /* ── Inline edit mode ── */
+                          <div className="flex items-center gap-1 min-w-0">
+                            <Input
+                              ref={editInputRef}
+                              value={editingValue}
+                              onChange={(e) => setEditingValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && editingValue.trim()) {
+                                  setEditOverrides((prev) => ({ ...prev, [sym]: editingValue.trim() }));
+                                  setManuallyTouched((prev) => new Set(prev).add(sym));
+                                  setDirty(true);
+                                  setEditingSymbol(null);
+                                } else if (e.key === "Escape") {
+                                  setEditingSymbol(null);
+                                }
+                              }}
+                              className="h-6 text-xs font-mono flex-1 min-w-0 px-1.5"
+                              autoFocus
+                            />
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-success hover:text-success" onClick={() => {
+                              if (editingValue.trim()) {
+                                setEditOverrides((prev) => ({ ...prev, [sym]: editingValue.trim() }));
+                                setManuallyTouched((prev) => new Set(prev).add(sym));
+                                setDirty(true);
+                              }
+                              setEditingSymbol(null);
+                            }}>
+                              <Check className="h-3 w-3" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setEditingSymbol(null)}>
+                              <XIcon className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ) : hasAlternates ? (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <button className="flex items-center gap-1.5 font-mono text-primary truncate hover:bg-secondary/50 rounded px-1.5 py-0.5 -mx-1.5 text-left">
@@ -660,11 +701,23 @@ function ConnectionDetail({
                             })()}
                           </div>
                         )}
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
-                          const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
-                        }}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        {/* Action buttons: edit + delete */}
+                        <div className="flex items-center gap-0.5">
+                          {editingSymbol !== sym && (
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Edit broker symbol" onClick={() => {
+                              setEditingSymbol(sym);
+                              setEditingValue(brokerSym);
+                            }}>
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => {
+                            const next = { ...editOverrides }; delete next[sym]; setEditOverrides(next); setDirty(true);
+                            if (editingSymbol === sym) setEditingSymbol(null);
+                          }}>
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
                     );
                   })}
