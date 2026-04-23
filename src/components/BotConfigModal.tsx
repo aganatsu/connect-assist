@@ -1359,28 +1359,34 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
 }
 
 // ─── Factor Weights Tab ───────────────────────────────────────────────────
-const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; group: string; description: string }[] = [
-  { key: "marketStructure", name: "Market Structure", defaultWeight: 2.5, group: "Market Structure", description: "BOS/CHoCH + entry TF trend alignment (merged)" },
-  { key: "orderBlock", name: "Order Block", defaultWeight: 2.0, group: "Order Flow Zones", description: "Institutional order blocks" },
-  { key: "fairValueGap", name: "Fair Value Gap", defaultWeight: 2.0, group: "Order Flow Zones", description: "FVG imbalances" },
-  { key: "breakerBlock", name: "Breaker Block", defaultWeight: 1.0, group: "Order Flow Zones", description: "Failed OB flip zones" },
-  { key: "unicornModel", name: "Unicorn Model", defaultWeight: 1.5, group: "Order Flow Zones", description: "Breaker + FVG overlap" },
-  { key: "premiumDiscountFib", name: "Premium/Discount & Fib", defaultWeight: 2.0, group: "Premium/Discount", description: "Fibonacci OTE zones" },
-  { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, group: "Premium/Discount", description: "Previous day/week levels" },
-  { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, group: "Timing", description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
-  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, group: "Price Action", description: "NY midnight-anchored fake breakout + liquidity sweep" },
-  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 1.5, group: "Price Action", description: "Reversal at key levels — primary entry trigger" },
-  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.5, group: "Price Action", description: "Liquidity pool sweeps with rejection confirmation" },
-  { key: "displacement", name: "Displacement", defaultWeight: 1.0, group: "Price Action", description: "Strong institutional candles" },
-  { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, group: "AMD / Power of 3", description: "Accumulation→Manipulation→Distribution" },
-  { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, group: "Macro Confirmation", description: "Correlated pair divergence" },
-  { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, group: "Macro Confirmation", description: "FOTSI alignment" },
-  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 0.75, group: "Volume Profile", description: "TPO-based POC/HVN/LVN (reduced: synthetic data)" },
-  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.0, group: "Daily Bias", description: "HTF daily trend alignment" },
-  { key: "spreadQuality", name: "Spread Quality", defaultWeight: 0, group: "Execution Quality", description: "Penalty based on spread-to-ATR ratio (not weight-scalable)" },
+const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; tier: 1 | 2 | 3; tierPts: number; description: string }[] = [
+  // Tier 1 — Core Setup (×2 pts)
+  { key: "marketStructure", name: "Market Structure", defaultWeight: 2.5, tier: 1, tierPts: 2, description: "BOS/CHoCH + entry TF trend alignment (merged)" },
+  { key: "orderBlock", name: "Order Block", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "Institutional order blocks" },
+  { key: "fairValueGap", name: "Fair Value Gap", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "FVG imbalances" },
+  { key: "premiumDiscountFib", name: "Premium/Discount & Fib", defaultWeight: 2.0, tier: 1, tierPts: 2, description: "Fibonacci OTE zones" },
+  // Tier 2 — Confirmation (×1 pt)
+  { key: "pdPwLevels", name: "PD/PW Levels", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Previous day/week levels" },
+  { key: "liquiditySweep", name: "Liquidity Sweep", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Liquidity pool sweeps with rejection confirmation" },
+  { key: "displacement", name: "Displacement", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Strong institutional candles" },
+  { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Reversal at key levels — primary entry trigger" },
+  { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
+  // Tier 3 — Bonus (×0.5 pts)
+  { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, tier: 3, tierPts: 0.5, description: "FOTSI alignment" },
+  { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Correlated pair divergence" },
+  { key: "dailyBias", name: "Daily Bias", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "HTF daily trend alignment" },
+  { key: "breakerBlock", name: "Breaker Block", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Failed OB flip zones" },
+  { key: "unicornModel", name: "Unicorn Model", defaultWeight: 1.5, tier: 3, tierPts: 0.5, description: "Breaker + FVG overlap" },
+  { key: "volumeProfile", name: "Volume Profile", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "TPO-based POC/HVN/LVN (reduced: synthetic data)" },
+  { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Accumulation→Manipulation→Distribution" },
+  { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "NY midnight-anchored fake breakout + liquidity sweep" },
 ];
 
-const FACTOR_GROUPS = [...new Set(FACTOR_WEIGHT_DEFS.map(f => f.group))];
+const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [
+  { tier: 1, label: "TIER 1 — CORE SETUP", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-amber-400", borderColor: "border-amber-500/40" },
+  { tier: 2, label: "TIER 2 — CONFIRMATION", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-sky-400", borderColor: "border-sky-500/40" },
+  { tier: 3, label: "TIER 3 — BONUS", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-violet-400", borderColor: "border-violet-500/40" },
+];
 
 function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
   const fw: Record<string, number> = config.factorWeights || {};
@@ -1417,33 +1423,35 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
         )}
       </div>
 
-      <p className="text-[10px] text-muted-foreground">
-        Weights scale each factor's score proportionally. Default values match the hardcoded scoring model.
-        Increasing a weight amplifies that factor's contribution; decreasing it reduces it. Set to 0 to effectively disable a factor's score contribution.
-      </p>
+      <div className="rounded border border-border bg-muted/20 p-3 space-y-1.5">
+        <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-wider">How Tiered Scoring Works</p>
+        <p className="text-[10px] text-muted-foreground">
+          Each factor has a <span className="font-bold text-foreground">tier base value</span> (T1 = 2pts, T2 = 1pt, T3 = 0.5pts) that determines its importance.
+          Your <span className="font-bold text-foreground">custom weight</span> multiplies this base value.
+          For example, Market Structure at weight 2.5 scores <span className="font-mono">2.5 × 2pts = 5pts</span> when present.
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          The final score is the sum of all present factors' weighted points, expressed as a percentage of the maximum possible.
+          No group caps — your weights work directly.
+        </p>
+      </div>
 
-      {FACTOR_GROUPS.map(group => {
-        const groupFactors = FACTOR_WEIGHT_DEFS.filter(f => f.group === group);
+      {TIER_META.map(tm => {
+        const tierFactors = FACTOR_WEIGHT_DEFS.filter(f => f.tier === tm.tier);
         return (
-          <div key={group} className="border border-border p-4 space-y-3">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{group}</p>
-            {groupFactors.map(factor => {
-              // Spread Quality is a penalty-only factor — show info, no slider
-              if (factor.key === "spreadQuality") {
-                return (
-                  <div key={factor.key} className="space-y-1 p-2 -mx-2 opacity-70">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{factor.name}</span>
-                      <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">penalty only</Badge>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground">{factor.description}</p>
-                    <p className="text-[10px] text-muted-foreground italic">Applies -0.2 to -1.0 penalty when spread exceeds 5% of ATR. Not adjustable via weights — controlled by the spread-to-ATR ratio of each instrument.</p>
-                  </div>
-                );
-              }
+          <div key={tm.tier} className={`border ${tm.borderColor} p-4 space-y-3`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className={`text-[10px] uppercase tracking-wider font-bold ${tm.color}`}>{tm.label}</p>
+                <p className="text-[10px] text-muted-foreground">{tm.subtitle}</p>
+              </div>
+              <Badge variant="outline" className={`text-[9px] font-mono font-bold ${tm.color} border-current`}>{tm.pts}</Badge>
+            </div>
+            {tierFactors.map(factor => {
               const currentValue = fw[factor.key] ?? factor.defaultWeight;
               const isOverridden = fw[factor.key] !== undefined;
               const maxSlider = Math.max(factor.defaultWeight * 2, 3);
+              const effectivePoints = (currentValue * factor.tierPts).toFixed(1);
               return (
                 <div key={factor.key} className={`space-y-1 p-2 -mx-2 transition-colors ${isOverridden ? "bg-primary/5 border border-primary/20" : ""}`}>
                   <div className="flex items-center justify-between">
@@ -1454,7 +1462,8 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-mono font-bold text-primary w-12 text-right">{currentValue.toFixed(2)}</span>
+                      <span className="text-[9px] text-muted-foreground font-mono">{currentValue.toFixed(2)} × {factor.tierPts}pts =</span>
+                      <span className="text-sm font-mono font-bold text-primary w-14 text-right">{effectivePoints}pts</span>
                       {isOverridden && (
                         <button
                           onClick={() => resetSingleWeight(factor.key)}
@@ -1466,7 +1475,7 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
                       )}
                     </div>
                   </div>
-                  <p className="text-[10px] text-muted-foreground">{factor.description} (default: {factor.defaultWeight})</p>
+                  <p className="text-[10px] text-muted-foreground">{factor.description} (default weight: {factor.defaultWeight})</p>
                   <Slider
                     value={[currentValue]}
                     onValueChange={v => updateWeight(factor.key, v[0])}
@@ -1486,6 +1495,35 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
           </div>
         );
       })}
+
+      {/* Spread & Regime Gates (not weight-adjustable) */}
+      <div className="border border-border p-4 space-y-3">
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">GATES (Pass/Fail)</p>
+          <p className="text-[10px] text-muted-foreground">These are binary checks — not scored. A failed gate rejects the trade regardless of score.</p>
+        </div>
+        <div className="space-y-1 p-2 -mx-2 opacity-70">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">Tier 1 Minimum</span>
+            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
+          </div>
+          <p className="text-[10px] text-muted-foreground">At least 2 Tier 1 (Core) factors must be present for any trade to pass. Not adjustable.</p>
+        </div>
+        <div className="space-y-1 p-2 -mx-2 opacity-70">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">Regime Alignment</span>
+            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
+          </div>
+          <p className="text-[10px] text-muted-foreground">Market regime must align with trade direction (e.g., trending market for trend trades). Fails if regime conflicts.</p>
+        </div>
+        <div className="space-y-1 p-2 -mx-2 opacity-70">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium">Spread Quality</span>
+            <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono">gate</Badge>
+          </div>
+          <p className="text-[10px] text-muted-foreground">Spread must not exceed the configured ATR threshold. Fails if spread is too wide relative to instrument volatility. Configured in the Strategy tab.</p>
+        </div>
+      </div>
     </div>
   );
 }
