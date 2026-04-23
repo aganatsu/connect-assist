@@ -593,7 +593,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const structureBreaks = [...structure.bos, ...structure.choch];
   // P1: OB lookback — pass config-driven recency window
   let orderBlocks = detectOrderBlocks(candles, structureBreaks, config.obLookbackCandles);
-  const fvgs = detectFVGs(candles);
+  const fvgs = detectFVGs(candles, structureBreaks);
 
   // FVG adjacency bonus: tag OBs that have an FVG within 5 candles
   // This doesn't filter them out, but boosts quality for Factor 2 detail
@@ -781,6 +781,12 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           pts = isAligned ? 1.5 : 0.75;
           detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})${isAligned ? "" : " — counter-directional"}`;
         }
+        // Quality scaling: scale base pts by FVG quality (0-8, max 8)
+        const fvgQuality = insideFVG.quality ?? 4; // default 4 (mid-range) for backward compat
+        const MAX_FVG_QUALITY = 8;
+        const qualityMultiplier = 0.4 + 0.6 * (fvgQuality / MAX_FVG_QUALITY); // range: 0.4 – 1.0
+        pts *= qualityMultiplier;
+        detail += ` [Q:${fvgQuality.toFixed(1)}/${MAX_FVG_QUALITY}]`;
         // Recency bonus: FVGs closer to current price action are more relevant
         const recencyIdx = insideFVG.index || 0;
         const isRecent = recencyIdx >= candles.length - 15;
@@ -1770,7 +1776,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const atrValue = calculateATR(candles, config.slATRPeriod || 14);
 
   const { stopLoss, takeProfit } = calculateSLTP({
-    direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue,
+    direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue, fvgs,
   });
 
   const presentFactors = factors.filter(f => f.present);

@@ -64,7 +64,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
   const structure = analyzeMarketStructure(candles);
   const structureBreaks = [...structure.bos, ...structure.choch];
   const orderBlocks = detectOrderBlocks(candles, structureBreaks);
-  const fvgs = detectFVGs(candles);
+  const fvgs = detectFVGs(candles, structureBreaks);
 
   // FVG adjacency bonus (same as scanner)
   for (const ob of orderBlocks) {
@@ -420,7 +420,10 @@ Deno.serve(async (req) => {
     if (action === "correlation") return respond({ coefficient: calculateCorrelation(data1 || [], data2 || []) });
     if (action === "structure") return respond(analyzeMarketStructure(candles));
     if (action === "order_blocks") return respond(detectOrderBlocks(candles));
-    if (action === "fvgs") return respond(detectFVGs(candles));
+    if (action === "fvgs") {
+      const s = analyzeMarketStructure(candles);
+      return respond(detectFVGs(candles, [...s.bos, ...s.choch]));
+    }
     if (action === "liquidity") return respond(detectLiquidityPools(candles));
     if (action === "session") return respond(detectSession());
 

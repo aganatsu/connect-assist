@@ -60,6 +60,8 @@ export interface FairValueGap {
   datetime: string;
   mitigated: boolean;
   hasDisplacement?: boolean;
+  /** Quality score 0-8: displacement(+3) + ATR-relative size(+0-2) + body ratio(+0-1) + structure break nearby(+2) */
+  quality?: number;
 }
 
 export interface LiquidityPool {
@@ -163,6 +165,8 @@ export interface SLTPInput {
   liquidityPools: LiquidityPool[];
   pdLevels: any;
   atrValue: number;
+  /** Optional: unfilled FVGs for FVG-aware SL/TP tightening */
+  fvgs?: FairValueGap[];
 }
 
 export interface OpeningRangeResult {
@@ -888,11 +892,18 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
   return candidates.slice(0, OB_CAP).map(({ quality, ...ob }) => ob);
 }
 
-export function detectFVGs(candles: Candle[]): FairValueGap[] {
+export function detectFVGs(
+  candles: Candle[],
+  structureBreaks?: { index: number; type: string }[],
+): FairValueGap[] {
   const fvgs: FairValueGap[] = [];
   // Only look at recent candles (last 50) to avoid stale FVGs from hours ago
   const FVG_RECENCY = 50;
   const startIdx = Math.max(2, candles.length - FVG_RECENCY);
+
+  // Pre-compute ATR for quality scoring (size relative to ATR)
+  const atr = calculateATR(candles, 14);
+
   for (let i = startIdx; i < candles.length; i++) {
     const c1 = candles[i - 2], c2 = candles[i - 1], c3 = candles[i];
     // Bullish FVG: gap up — candle 3 low > candle 1 high, middle candle is bullish
@@ -900,16 +911,63 @@ export function detectFVGs(candles: Candle[]): FairValueGap[] {
       const fvg: FairValueGap = { index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime, mitigated: false };
       // Check if FVG has been filled (price returned into the gap)
       for (let j = i + 1; j < candles.length; j++) { if (candles[j].low <= fvg.low) { fvg.mitigated = true; break; } }
+      fvg.quality = scoreFVGQuality(fvg, c2, atr, i - 1, "bullish", structureBreaks);
       fvgs.push(fvg);
     }
     // Bearish FVG: gap down — candle 1 low > candle 3 high, middle candle is bearish
     if (c1.low > c3.high && c2.close < c2.open) {
       const fvg: FairValueGap = { index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime, mitigated: false };
       for (let j = i + 1; j < candles.length; j++) { if (candles[j].high >= fvg.high) { fvg.mitigated = true; break; } }
+      fvg.quality = scoreFVGQuality(fvg, c2, atr, i - 1, "bearish", structureBreaks);
       fvgs.push(fvg);
     }
   }
   return fvgs;
+}
+
+/**
+ * Score FVG quality 0-8 based on institutional significance:
+ *   +3  displacement-created (middle candle body > 1.5× ATR)
+ *   +0-2  gap size relative to ATR (capped at 2)
+ *   +0-1  middle candle body ratio (body / total range)
+ *   +2  structure break (BOS/CHoCH) within 5 bars of the FVG
+ */
+function scoreFVGQuality(
+  fvg: FairValueGap,
+  middleCandle: Candle,
+  atr: number,
+  fvgIndex: number,
+  fvgType: "bullish" | "bearish",
+  structureBreaks?: { index: number; type: string }[],
+): number {
+  let quality = 0;
+
+  // 1. Displacement: middle candle body > 1.5× ATR → strong institutional move
+  const body = Math.abs(middleCandle.close - middleCandle.open);
+  if (atr > 0 && body > atr * 1.5) quality += 3;
+
+  // 2. Gap size relative to ATR: larger gaps = more institutional significance
+  const gapSize = fvg.high - fvg.low;
+  if (atr > 0) {
+    const sizeRatio = gapSize / atr;
+    quality += Math.min(2, sizeRatio); // 0-2 continuous, capped at 2
+  }
+
+  // 3. Body ratio: high body-to-range = conviction candle (not indecisive)
+  const range = middleCandle.high - middleCandle.low;
+  if (range > 0) {
+    quality += body / range; // 0-1 continuous
+  }
+
+  // 4. Structure break nearby: FVG formed right after BOS/CHoCH confirms structural shift
+  if (structureBreaks && structureBreaks.length > 0) {
+    const hasNearbyBreak = structureBreaks.some(
+      b => b.type === fvgType && Math.abs(b.index - fvgIndex) <= 5
+    );
+    if (hasNearbyBreak) quality += 2;
+  }
+
+  return Math.round(quality * 10) / 10; // 1 decimal precision
 }
 
 export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTouches = 2): LiquidityPool[] {
@@ -1351,6 +1409,37 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   }
 
+  // ── FVG-aware SL tightening ──
+  // If an unfilled, high-quality FVG sits between entry and SL, tighten SL to FVG boundary.
+  // Rationale: an institutional FVG acts as support/resistance — SL just beyond it is safer.
+  const activeFVGs = input.fvgs?.filter(f => !f.mitigated && (f.quality ?? 0) >= 4) || [];
+  if (sl !== null && activeFVGs.length > 0) {
+    if (direction === "long") {
+      // Find bullish FVGs between SL and entry (support zones)
+      const supportFVGs = activeFVGs
+        .filter(f => f.type === "bullish" && f.low > sl! && f.low < lastPrice)
+        .sort((a, b) => b.low - a.low); // closest to entry first
+      if (supportFVGs.length > 0) {
+        const tighterSL = supportFVGs[0].low - buffer;
+        // Only tighten if it reduces SL distance by at least 20% (avoid micro-adjustments)
+        if (tighterSL > sl && (lastPrice - tighterSL) < (lastPrice - sl) * 0.8) {
+          sl = tighterSL;
+        }
+      }
+    } else {
+      // Find bearish FVGs between entry and SL (resistance zones)
+      const resistFVGs = activeFVGs
+        .filter(f => f.type === "bearish" && f.high < sl! && f.high > lastPrice)
+        .sort((a, b) => a.high - b.high); // closest to entry first
+      if (resistFVGs.length > 0) {
+        const tighterSL = resistFVGs[0].high + buffer;
+        if (tighterSL < sl && (tighterSL - lastPrice) < (sl - lastPrice) * 0.8) {
+          sl = tighterSL;
+        }
+      }
+    }
+  }
+
   const tpMethod: string = config.tpMethod || "rr_ratio";
   const slDistance = Math.abs(lastPrice - sl);
 
@@ -1388,6 +1477,29 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   } else {
     tp = direction === "long" ? lastPrice + slDistance * (config.tpRatio || 2.0) : lastPrice - slDistance * (config.tpRatio || 2.0);
+  }
+
+  // ── FVG-aware TP extension ──
+  // If an unfilled, high-quality FVG exists beyond the TP in the trade direction,
+  // extend TP to the far edge of that FVG (price is likely to fill it).
+  if (tp !== null && activeFVGs.length > 0) {
+    if (direction === "long") {
+      // Find bearish FVGs (targets for longs) just beyond current TP
+      const targetFVGs = activeFVGs
+        .filter(f => f.type === "bearish" && f.high > tp! && f.high < lastPrice + slDistance * 4) // cap at 4× SL distance
+        .sort((a, b) => a.high - b.high); // nearest first
+      if (targetFVGs.length > 0) {
+        tp = targetFVGs[0].high; // extend TP to far edge of the FVG
+      }
+    } else {
+      // Find bullish FVGs (targets for shorts) just beyond current TP
+      const targetFVGs = activeFVGs
+        .filter(f => f.type === "bullish" && f.low < tp! && f.low > lastPrice - slDistance * 4)
+        .sort((a, b) => b.low - a.low); // nearest first
+      if (targetFVGs.length > 0) {
+        tp = targetFVGs[0].low; // extend TP to far edge of the FVG
+      }
+    }
   }
 
   return { stopLoss: sl, takeProfit: tp };

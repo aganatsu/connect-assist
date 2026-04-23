@@ -640,7 +640,7 @@ function runConfluenceAnalysis(
   const structure = analyzeMarketStructure(candles, config.structureLookback);
   const allBreaks = [...structure.bos, ...structure.choch];
   let orderBlocks = config.enableOB ? detectOrderBlocks(candles, allBreaks, config.obLookbackCandles) : [];
-  const fvgs = config.enableFVG ? detectFVGs(candles) : [];
+  const fvgs = config.enableFVG ? detectFVGs(candles, allBreaks) : [];
   const liquidityPools = config.enableLiquiditySweep ? detectLiquidityPools(candles, 0.001, config.liquidityPoolMinTouches) : [];
   const displacement = detectDisplacement(candles);
   if (displacement.isDisplacement) tagDisplacementQuality(orderBlocks, fvgs, displacement.displacementCandles);
@@ -769,6 +769,12 @@ function runConfluenceAnalysis(
           pts = 1.5;
           detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
         }
+        // Quality scaling: scale base pts by FVG quality (0-8, max 8)
+        const fvgQuality = insideFVG.quality ?? 4; // default 4 (mid-range) for backward compat
+        const MAX_FVG_QUALITY = 8;
+        const qualityMultiplier = 0.4 + 0.6 * (fvgQuality / MAX_FVG_QUALITY); // range: 0.4 – 1.0
+        pts *= qualityMultiplier;
+        detail += ` [Q:${fvgQuality.toFixed(1)}/${MAX_FVG_QUALITY}]`;
         if ((insideFVG as any).hasDisplacement) {
           detail += " [displacement-created, scored via Factor 10]";
         }
@@ -1545,7 +1551,7 @@ function runConfluenceAnalysis(
     direction, lastPrice, pipSize, config,
     swings: structure.swingPoints,
     orderBlocks, liquidityPools, pdLevels,
-    atrValue,
+    atrValue, fvgs,
   });
 
   return {
