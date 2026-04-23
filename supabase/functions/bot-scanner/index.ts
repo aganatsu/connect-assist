@@ -1543,7 +1543,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Classifies the instrument's current regime for display and optional gate blocking.
   // Does NOT adjust the confluence score — regime is a separate pass/fail gate.
   const regimeScoringEnabled = config.regimeScoringEnabled !== false;
-  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string } | null = null;
+  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[] } | null = null;
   let regimeGatePassed = true;
   let regimeGateReason = "";
   {
@@ -1560,11 +1560,15 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       } else {
         regimeGateReason = `Regime OK: ${regimeInfo.regime.replace("_", " ")} — ${detail}`;
       }
+      // Include the 7-check indicator breakdown in the factor detail
+      const indicatorSummary = regimeInfo.indicators.length > 0
+        ? " | Checks: " + regimeInfo.indicators.join(" | ")
+        : "";
       factors.push({
         name: "Regime Alignment",
         present: true,
         weight: 0, // No score impact — info only
-        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail} [info-only gate]`,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail} [info-only gate]${indicatorSummary}`,
         group: "Macro Confirmation",
       });
     } else {
@@ -1812,13 +1816,14 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 // Returns a regime label + confidence so the scorer can apply a penalty/bonus.
 // H7: classifyInstrumentRegime is now imported from _shared/smcAnalysis.ts
 // Thin wrapper to preserve the scanner's existing return shape { regime, confidence, atrTrend, bias }
-function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string } {
+function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[] } {
   const result = classifyInstrumentRegime(dailyCandles);
   return {
     regime: result.regime,
     confidence: result.confidence,
     atrTrend: result.atrTrend,
     bias: result.directionalBias,
+    indicators: result.indicators || [],
   };
 }
 
