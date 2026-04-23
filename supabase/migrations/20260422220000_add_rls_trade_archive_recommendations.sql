@@ -6,15 +6,15 @@ ALTER TABLE trade_archive ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Users can select own archived trades"
   ON trade_archive FOR SELECT
-  USING (auth.uid() = user_id);
+  USING (auth.uid()::text = user_id);
 
 CREATE POLICY "Users can insert own archived trades"
   ON trade_archive FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  WITH CHECK (auth.uid()::text = user_id);
 
 CREATE POLICY "Users can delete own archived trades"
   ON trade_archive FOR DELETE
-  USING (auth.uid() = user_id);
+  USING (auth.uid()::text = user_id);
 
 -- bot_recommendations: stores AI-generated trade recommendations
 -- Note: IF NOT EXISTS guards in case RLS was already enabled via Dashboard
@@ -36,17 +36,17 @@ DROP POLICY IF EXISTS "Users can delete own recommendations" ON bot_recommendati
 
 CREATE POLICY "Users can select own recommendations"
   ON bot_recommendations FOR SELECT
-  USING (auth.uid() = user_id);
+  USING (auth.uid()::text = user_id);
 
 CREATE POLICY "Users can insert own recommendations"
   ON bot_recommendations FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  WITH CHECK (auth.uid()::text = user_id);
 
 CREATE POLICY "Users can update own recommendations"
   ON bot_recommendations FOR UPDATE
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
+  USING (auth.uid()::text = user_id)
+  WITH CHECK (auth.uid()::text = user_id);
 
 CREATE POLICY "Users can delete own recommendations"
   ON bot_recommendations FOR DELETE
-  USING (auth.uid() = user_id);
+  USING (auth.uid()::text = user_id);
