@@ -5,7 +5,7 @@ function isAuthError(error: any, data: any): boolean {
   const msg = (error?.message || data?.error || "").toString().toLowerCase();
   const status = error?.context?.status ?? error?.status;
   if (status === 401 || status === 403) return true;
-  return /unauthor|invalid.*jwt|bad.?jwt|missing sub|jwt expired/.test(msg);
+  return /unauthor|invalid.*jwt|bad.?jwt|missing sub|jwt.*expired|expired.*jwt/.test(msg);
 }
 
 // Helper to invoke edge functions with typed responses
