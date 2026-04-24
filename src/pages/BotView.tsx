@@ -434,6 +434,7 @@ export default function BotView() {
                 <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
                 <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
                 <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
+                <TabsTrigger value="watchlist" className="text-[11px] h-6">Watchlist</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -558,6 +559,17 @@ export default function BotView() {
               <TabsContent value="broker-live" className="flex-1 overflow-auto mt-1">
                 <BrokerTradesTab />
               </TabsContent>
+              <TabsContent value="watchlist" className="flex-1 overflow-auto mt-1">
+                <WatchlistPanel confluenceGate={(() => {
+                  if (!botConfig?.strategy) return 55;
+                  const DEFAULT_CONFLUENCE = 55;
+                  const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                  const activeStyle = getActiveStyle(botConfig);
+                  const styleParams = STYLE_PARAMS[activeStyle];
+                  const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+                  return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
+                })()} />
+              </TabsContent>
             </Tabs>
           </div>
 
@@ -641,17 +653,6 @@ export default function BotView() {
                 </>
               );
             })()}
-
-            {/* Setup Staging Watchlist */}
-            <WatchlistPanel confluenceGate={(() => {
-              if (!botConfig?.strategy) return 55;
-              const DEFAULT_CONFLUENCE = 55;
-              const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-              const activeStyle = getActiveStyle(botConfig);
-              const styleParams = STYLE_PARAMS[activeStyle];
-              const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-              return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
-            })()} />
 
             {/* FOTSI Currency Strength Meter */}
             <FOTSIStrengthMeter
