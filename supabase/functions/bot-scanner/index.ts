@@ -2767,7 +2767,8 @@ Deno.serve(async (req) => {
       return respond({ scanned: results.length, results });
     }
 
-    return respond({ error: "Unknown action" }, 400);
+    console.warn("[bot-scanner] Unknown action received:", JSON.stringify(body));
+    return respond({ error: "Unknown action", received: action, bodyKeys: Object.keys(body || {}) }, 400);
   } catch (error: any) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
