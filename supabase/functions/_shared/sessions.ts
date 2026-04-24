@@ -113,7 +113,7 @@ export const SESSION_NAME_TO_KEY: Record<SessionName, SessionFilterKey> = {
  * Uses proper US DST rules: EDT starts 2nd Sunday of March at 2:00 AM local
  * (07:00 UTC), EST starts 1st Sunday of November at 2:00 AM local (06:00 UTC).
  */
-export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean; nyDay: number } {
   const year = utc.getUTCFullYear();
 
   // 2nd Sunday of March: March 1 + offset to get to 2nd Sunday
@@ -132,11 +132,12 @@ export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: nu
   const ny = new Date(nyMs);
   const h = ny.getUTCHours();
   const m = ny.getUTCMinutes();
-  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
+  const nyDay = ny.getUTCDay(); // 0=Sun … 6=Sat in NY local time
+  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT, nyDay };
 }
 
 /** Variant that accepts a UTC millisecond timestamp. */
-export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
+export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tMin: number; isEDT: boolean; nyDay: number } {
   return toNYTime(new Date(utcMs));
 }
 

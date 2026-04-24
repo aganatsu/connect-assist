@@ -2783,11 +2783,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Day-of-week check — skip for crypto-only instrument lists.
   // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
   const now = new Date();
-  const nyHour = toNYTime(now).t;
-  const utcDay = now.getUTCDay(); // 0=Sun
-  const isFxOpenSundayEvening = utcDay === 0 && nyHour >= 17;
-  const isFxClosedFridayEvening = utcDay === 5 && nyHour >= 17;
-  const effectiveDay = isFxOpenSundayEvening ? 1 : utcDay; // pretend Sunday-evening is Monday
+  const nyNow = toNYTime(now);
+  const nyHour = nyNow.t;
+  const nyDay = nyNow.nyDay; // 0=Sun … 6=Sat — NY local day, NOT UTC day
+  const isFxOpenSundayEvening = nyDay === 0 && nyHour >= 17;
+  const isFxClosedFridayEvening = nyDay === 5 && nyHour >= 17;
+  const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
   const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
   const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
   if (!config.enabledDays.includes(effectiveDay) && !hasCrypto) {
@@ -3220,7 +3221,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Skip non-crypto instruments on weekends (Fri 17:00 ET → Sun 17:00 ET).
-    const fxIsClosed = (utcDay === 6) || (utcDay === 0 && nyHour < 17) || (utcDay === 5 && nyHour >= 17);
+    // BUG FIX: use nyDay (NY local day) instead of utcDay to avoid UTC/NY day mismatch
+    // e.g. Thursday 9PM NY = Friday 01:00 UTC → utcDay was 5 (Fri), triggering false weekend close
+    const fxIsClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
     if (fxIsClosed && SPECS[pair]?.type !== "crypto") {
       scanDetails.push({ pair, status: "skipped", reason: "FX market closed (weekend)" });
       continue;
