@@ -22,8 +22,12 @@ import {
   detectDisplacement, tagDisplacementQuality,
   detectBreakerBlocks, detectUnicornSetups,
   detectJudasSwing, detectReversalCandle,
-  calculatePDLevels,
+  calculatePDLevels, calculatePremiumDiscount,
   computeOpeningRange, calculateSLTP,
+  // Confluence stacking, sweep reclaim, pullback decay
+  computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
+  type ConfluenceStack, type SweepReclaim, type PullbackDecay,
+  type FairValueGap,
 } from "../_shared/smcAnalysis.ts";
 import {
   classifySetupType, manageOpenPositions,
@@ -1427,6 +1431,121 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
   }
 
+  // ── Factor 19: Confluence Stacking (max 1.5) ──
+  // Detects when FVG/OB boxes overlap with S/R levels AND Fib retracement levels.
+  // Triple confluence (FVG/OB + S/R + Fib) = highest probability entry zone.
+  let confluenceStacks: ConfluenceStack[] = [];
+  {
+    let pts = 0;
+    let detail = "";
+    confluenceStacks = computeConfluenceStacking(
+      orderBlocks, fvgs, structure.swingPoints, candles, direction
+    );
+    if (confluenceStacks.length > 0) {
+      const best = confluenceStacks[0]; // Already sorted by layerCount desc + alignment
+      const priceInZone = lastPrice >= best.overlapZone[0] && lastPrice <= best.overlapZone[1];
+
+      if (best.layerCount >= 3 && priceInZone) {
+        // Triple+ confluence AND price is inside the zone — maximum score
+        pts = 1.5;
+        detail = `TRIPLE CONFLUENCE at price: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}]`;
+        if (best.directionalAlignment === "aligned") detail += " — directionally aligned";
+        else if (best.directionalAlignment === "counter") { pts *= 0.5; detail += " — counter-directional (reduced)"; }
+      } else if (best.layerCount >= 3) {
+        // Triple confluence but price not yet at the zone
+        pts = 0.75;
+        detail = `Triple confluence nearby: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}] — price not at level`;
+      } else if (best.layerCount === 2 && priceInZone) {
+        // Double confluence at price
+        pts = 1.0;
+        detail = `Double confluence at price: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}]`;
+        if (best.directionalAlignment === "counter") { pts *= 0.5; detail += " — counter-directional (reduced)"; }
+      } else if (best.layerCount === 2) {
+        // Double confluence nearby
+        pts = 0.5;
+        detail = `Double confluence nearby: ${best.label} — price not at level`;
+      }
+
+      // Add summary of all stacks found
+      if (confluenceStacks.length > 1) {
+        detail += ` | ${confluenceStacks.length} total stacks found (best: ${best.layerCount} layers)`;
+      }
+    } else {
+      detail = "No confluence stacking detected (FVG/OB zones don't overlap with S/R + Fib)";
+    }
+    { const s = applyWeightScale(pts, "confluenceStack", 1.5, config); pts = s.pts; score += pts;
+    factors.push({ name: "Confluence Stack", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+  }
+
+  // ── Factor 20: Sweep Reclaim Enhancement ──
+  // Enhances existing sweep data with reclaim confirmation.
+  // Sweep + reclaim = highest quality entry trigger (price grabs liquidity then reverses with conviction).
+  let sweepReclaims: SweepReclaim[] = [];
+  {
+    // Build sweep data from structure.sweeps for detectSweepReclaim
+    const structureSweeps = (structure.sweeps || []).map((s: any) => ({
+      index: s.index,
+      type: s.type as "bullish" | "bearish",
+      price: s.price,
+      datetime: s.datetime || "",
+      sweptLevel: s.sweptLevel,
+      wickDepth: s.wickDepth,
+    }));
+    sweepReclaims = detectSweepReclaim(candles, structureSweeps, fvgs);
+
+    // Enhance Factor 9 (Liquidity Sweep) detail with reclaim info if available
+    const sweepFactor = factors.find(f => f.name === "Liquidity Sweep");
+    if (sweepFactor && sweepReclaims.length > 0) {
+      const bestReclaim = sweepReclaims.find(sr => sr.reclaimed);
+      if (bestReclaim) {
+        const reclaimDetail = ` | SWEEP RECLAIM: ${bestReclaim.type} sweep at ${bestReclaim.sweptLevel.toFixed(5)} reclaimed (strength: ${(bestReclaim.reclaimStrength * 100).toFixed(0)}%)`;
+        if (bestReclaim.createdFVG) sweepFactor.detail += reclaimDetail + " + FVG created";
+        else if (bestReclaim.createdDisplacement) sweepFactor.detail += reclaimDetail + " + displacement";
+        else sweepFactor.detail += reclaimDetail;
+
+        // Boost sweep score if reclaim confirmed and sweep was already scored
+        if (sweepFactor.present && sweepFactor.weight < 1.5) {
+          const boost = bestReclaim.createdFVG ? 0.5 : bestReclaim.createdDisplacement ? 0.35 : 0.25;
+          const newWeight = Math.min(1.5, sweepFactor.weight + boost);
+          const diff = newWeight - sweepFactor.weight;
+          score += diff;
+          sweepFactor.weight = newWeight;
+          sweepFactor.detail += ` [reclaim boost: +${diff.toFixed(2)}]`;
+        }
+      } else {
+        // Sweeps detected but none reclaimed
+        sweepFactor.detail += ` | ${sweepReclaims.length} sweep(s) detected, none reclaimed`;
+      }
+    }
+  }
+
+  // ── Factor 21: Pullback Health (max 0.5) ──
+  // Measures pullback depth progression to assess trend health.
+  // Shallower pullbacks = healthy trend. Deeper pullbacks = exhausting.
+  let pullbackDecay: PullbackDecay | null = null;
+  {
+    let pts = 0;
+    let detail = "";
+    const trendForPullback = structure.trend === "bullish" ? "bullish"
+      : structure.trend === "bearish" ? "bearish" : "ranging";
+    pullbackDecay = measurePullbackDecay(structure.swingPoints, trendForPullback as "bullish" | "bearish" | "ranging");
+
+    if (pullbackDecay.trend === "healthy") {
+      pts = 0.5;
+      detail = pullbackDecay.detail;
+    } else if (pullbackDecay.trend === "exhausting") {
+      pts = 0;
+      detail = pullbackDecay.detail + " — WARNING: consider reducing position size";
+    } else if (pullbackDecay.trend === "stable") {
+      pts = 0.25;
+      detail = pullbackDecay.detail;
+    } else {
+      detail = pullbackDecay.detail;
+    }
+    { const s = applyWeightScale(pts, "pullbackHealth", 0.5, config); pts = s.pts; score += pts;
+    factors.push({ name: "Pullback Health", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -1876,6 +1995,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo, regime4HInfo,
+    // Confluence stacking, sweep reclaim, pullback decay
+    confluenceStacks, sweepReclaims, pullbackDecay,
     // New tiered scoring metadata
     tieredScoring: {
       tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
@@ -3826,6 +3947,49 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ? "agree" : (analysis.regimeInfo.regime === "transitional" || analysis.regime4HInfo.regime === "transitional")
             ? "mixed" : "disagree"
           : null,
+      } : null,
+      // ── Confluence Stacking Data (for frontend display) ──
+      confluenceStacking: analysis.confluenceStacks && analysis.confluenceStacks.length > 0 ? {
+        stacks: analysis.confluenceStacks.slice(0, 5).map((s: any) => ({
+          layerCount: s.layerCount,
+          label: s.label,
+          overlapZone: s.overlapZone,
+          fibLevels: s.fibLevels,
+          directionalAlignment: s.directionalAlignment,
+        })),
+        bestStack: analysis.confluenceStacks[0] ? {
+          label: analysis.confluenceStacks[0].label,
+          layerCount: analysis.confluenceStacks[0].layerCount,
+          overlapZone: analysis.confluenceStacks[0].overlapZone,
+          fibLevels: analysis.confluenceStacks[0].fibLevels,
+          alignment: analysis.confluenceStacks[0].directionalAlignment,
+        } : null,
+        totalStacks: analysis.confluenceStacks.length,
+      } : null,
+      // ── Sweep Reclaim Data (for frontend display) ──
+      sweepReclaim: analysis.sweepReclaims && analysis.sweepReclaims.length > 0 ? {
+        sweeps: analysis.sweepReclaims.slice(0, 5).map((sr: any) => ({
+          type: sr.type,
+          sweptLevel: sr.sweptLevel,
+          reclaimed: sr.reclaimed,
+          reclaimStrength: sr.reclaimStrength,
+          createdFVG: sr.createdFVG,
+          createdDisplacement: sr.createdDisplacement,
+          datetime: sr.datetime,
+        })),
+        bestReclaim: analysis.sweepReclaims.find((sr: any) => sr.reclaimed) || null,
+        totalSweeps: analysis.sweepReclaims.length,
+        reclaimedCount: analysis.sweepReclaims.filter((sr: any) => sr.reclaimed).length,
+      } : null,
+      // ── Pullback Decay Data (for frontend display) ──
+      pullbackHealth: analysis.pullbackDecay ? {
+        trend: analysis.pullbackDecay.trend,
+        decayRate: analysis.pullbackDecay.decayRate,
+        detail: analysis.pullbackDecay.detail,
+        measurements: analysis.pullbackDecay.measurements.map((m: any) => ({
+          depthPercent: m.depthPercent,
+          nearestFibLevel: m.nearestFibLevel,
+        })),
       } : null,
     };
 

@@ -1264,6 +1264,128 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
+      {/* Confluence Stacking Panel — shows FVG/OB + S/R + Fib overlap zones */}
+      {d.confluenceStacking && (
+        <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
+          <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
+          {d.confluenceStacking.bestStack && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                d.confluenceStacking.bestStack.layerCount >= 3
+                  ? "bg-cyan-500/25 text-cyan-300 border border-cyan-400/40"
+                  : "bg-cyan-500/15 text-cyan-400"
+              }`}>
+                {d.confluenceStacking.bestStack.layerCount >= 3 ? "⚡ TRIPLE" : "◆ DOUBLE"} CONFLUENCE
+              </span>
+              <span className="text-[9px] text-foreground font-medium">
+                {d.confluenceStacking.bestStack.label}
+              </span>
+              {d.confluenceStacking.bestStack.alignment && (
+                <span className={`text-[8px] px-1 py-0.5 rounded ${
+                  d.confluenceStacking.bestStack.alignment === "aligned" ? "bg-emerald-500/20 text-emerald-400"
+                  : d.confluenceStacking.bestStack.alignment === "counter" ? "bg-red-500/20 text-red-400"
+                  : "bg-muted text-muted-foreground"
+                }`}>
+                  {d.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : d.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
+                </span>
+              )}
+            </div>
+          )}
+          {d.confluenceStacking.bestStack?.overlapZone && (
+            <p className="text-[8px] text-muted-foreground">
+              Zone: {d.confluenceStacking.bestStack.overlapZone[0]?.toFixed(5)} — {d.confluenceStacking.bestStack.overlapZone[1]?.toFixed(5)}
+              {d.confluenceStacking.bestStack.fibLevels?.length > 0 && (
+                <span className="text-cyan-400"> | Fib: {d.confluenceStacking.bestStack.fibLevels.map((f: number) => `${f}%`).join(", ")}</span>
+              )}
+            </p>
+          )}
+          {d.confluenceStacking.totalStacks > 1 && (
+            <p className="text-[8px] text-muted-foreground">
+              {d.confluenceStacking.totalStacks} total confluence zones found
+            </p>
+          )}
+          {/* Additional stacks (collapsed) */}
+          {d.confluenceStacking.stacks?.length > 1 && (
+            <div className="mt-1 space-y-0.5">
+              {d.confluenceStacking.stacks.slice(1, 4).map((s: any, i: number) => (
+                <p key={i} className="text-[8px] text-muted-foreground">
+                  #{i + 2}: {s.label} ({s.layerCount} layers{s.fibLevels?.length > 0 ? `, Fib ${s.fibLevels.join("/")}%` : ""})
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sweep Reclaim Panel — shows liquidity sweep + reclaim confirmation */}
+      {d.sweepReclaim && d.sweepReclaim.reclaimedCount > 0 && (
+        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+          <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+          {d.sweepReclaim.sweeps?.filter((sr: any) => sr.reclaimed).slice(0, 3).map((sr: any, i: number) => (
+            <div key={i} className="flex flex-wrap items-center gap-1">
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                sr.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
+                : sr.createdDisplacement ? "bg-amber-500/20 text-amber-400"
+                : "bg-amber-500/15 text-amber-400"
+              }`}>
+                {sr.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM
+                {sr.createdFVG ? " + FVG" : sr.createdDisplacement ? " + DISP" : ""}
+              </span>
+              <span className="text-[8px] text-foreground">
+                at {sr.sweptLevel?.toFixed(5)}
+              </span>
+              <span className="text-[8px] text-muted-foreground">
+                (strength: {Math.round((sr.reclaimStrength || 0) * 100)}%)
+              </span>
+            </div>
+          ))}
+          {d.sweepReclaim.totalSweeps > d.sweepReclaim.reclaimedCount && (
+            <p className="text-[8px] text-muted-foreground">
+              {d.sweepReclaim.totalSweeps - d.sweepReclaim.reclaimedCount} additional sweep(s) without reclaim
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Pullback Health Panel — shows trend health via retracement depth progression */}
+      {d.pullbackHealth && d.pullbackHealth.trend !== "insufficient_data" && (
+        <div className={`rounded border px-2 py-1.5 space-y-1 ${
+          d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-emerald-500/5"
+          : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-red-500/5"
+          : "border-slate-500/30 bg-slate-500/5"
+        }`}>
+          <p className={`text-[8px] uppercase tracking-wider font-bold ${
+            d.pullbackHealth.trend === "healthy" ? "text-emerald-400"
+            : d.pullbackHealth.trend === "exhausting" ? "text-red-400"
+            : "text-slate-400"
+          }`}>Pullback Health</p>
+          <div className="flex items-center gap-1">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              d.pullbackHealth.trend === "healthy" ? "bg-emerald-500/20 text-emerald-400"
+              : d.pullbackHealth.trend === "exhausting" ? "bg-red-500/20 text-red-400"
+              : "bg-slate-500/20 text-slate-400"
+            }`}>
+              {d.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : d.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
+            </span>
+            <span className="text-[8px] text-muted-foreground">
+              (decay rate: {d.pullbackHealth.decayRate > 0 ? "+" : ""}{d.pullbackHealth.decayRate?.toFixed(1)}%/swing)
+            </span>
+          </div>
+          {d.pullbackHealth.measurements?.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[8px] text-muted-foreground">Depths:</span>
+              {d.pullbackHealth.measurements.map((m: any, i: number) => (
+                <span key={i} className="text-[8px] text-foreground">
+                  {m.depthPercent?.toFixed(1)}%
+                  <span className="text-muted-foreground"> (~{m.nearestFibLevel}%)</span>
+                  {i < d.pullbackHealth.measurements.length - 1 && <span className="text-muted-foreground"> →</span>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>

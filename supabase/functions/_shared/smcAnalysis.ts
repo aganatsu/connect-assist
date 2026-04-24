@@ -1624,6 +1624,439 @@ export interface InstrumentRegime {
   transition?: RegimeTransition; // Regime transition detection
 }
 
+// ─── Confluence Stacking Types ───────────────────────────────────────
+export interface ConfluenceLayer {
+  type: "fvg" | "ob" | "sr" | "fib";
+  label: string;
+  priceRange: [number, number]; // [low, high]
+}
+
+export interface ConfluenceStack {
+  /** Number of independent layers overlapping in this zone (2 = double, 3 = triple) */
+  layerCount: number;
+  /** The overlapping price zone where all layers converge */
+  overlapZone: [number, number]; // [low, high]
+  /** Individual layers that form this stack */
+  layers: ConfluenceLayer[];
+  /** Human-readable label, e.g. "FVG + S/R + Fib 61.8" */
+  label: string;
+  /** Which Fib level(s) are involved, if any */
+  fibLevels: number[];
+  /** Whether the stack aligns with the trade direction */
+  directionalAlignment: "aligned" | "counter" | "neutral";
+}
+
+// ─── Sweep Reclaim Types ────────────────────────────────────────────
+export interface SweepReclaim {
+  /** Index of the sweep candle */
+  sweepIndex: number;
+  /** The level that was swept */
+  sweptLevel: number;
+  /** Type: bullish = swept lows then reclaimed up, bearish = swept highs then reclaimed down */
+  type: "bullish" | "bearish";
+  /** How far past the level the wick went (in price) */
+  wickDepth: number;
+  /** Whether the next candle(s) closed back through the level with conviction */
+  reclaimed: boolean;
+  /** Strength of the reclaim: 0-1 (body ratio of reclaim candle, displacement check) */
+  reclaimStrength: number;
+  /** Whether the reclaim candle created an FVG (highest quality) */
+  createdFVG: boolean;
+  /** Whether the reclaim candle was a displacement candle */
+  createdDisplacement: boolean;
+  /** Datetime of the sweep */
+  datetime: string;
+}
+
+// ─── Pullback Decay Types ───────────────────────────────────────────
+export interface PullbackMeasurement {
+  /** Depth of this pullback as percentage of the preceding impulse leg */
+  depthPercent: number;
+  /** Approximate Fib level this pullback reached (closest of 38.2, 50, 61.8, 78.6) */
+  nearestFibLevel: number;
+  /** Swing high price of the impulse */
+  impulseHigh: number;
+  /** Swing low price of the impulse */
+  impulseLow: number;
+  /** Pullback reversal price */
+  pullbackPrice: number;
+}
+
+export interface PullbackDecay {
+  /** Overall trend health assessment */
+  trend: "healthy" | "exhausting" | "stable" | "insufficient_data";
+  /** Array of consecutive pullback depths (most recent last) */
+  measurements: PullbackMeasurement[];
+  /** Rate of depth change: negative = getting shallower (healthy), positive = getting deeper (exhausting) */
+  decayRate: number;
+  /** Human-readable detail */
+  detail: string;
+}
+
+// ─── Confluence Stacking Detection ──────────────────────────────────
+// Detects when FVG/OB boxes overlap with S/R levels and Fib retracement levels.
+// This is the core "triple confluence" check: FVG/OB + S/R + Fib = sniper entry.
+export function computeConfluenceStacking(
+  orderBlocks: OrderBlock[],
+  fvgs: FairValueGap[],
+  swingPoints: SwingPoint[],
+  candles: Candle[],
+  direction: "long" | "short" | null,
+): ConfluenceStack[] {
+  const stacks: ConfluenceStack[] = [];
+  if (candles.length < 10) return stacks;
+
+  // ── Compute Fib levels from the last significant swing ──
+  const recentHighs = swingPoints.filter(s => s.type === "high").slice(-5);
+  const recentLows = swingPoints.filter(s => s.type === "low").slice(-5);
+  if (recentHighs.length === 0 || recentLows.length === 0) return stacks;
+
+  const swingHigh = Math.max(...recentHighs.map(s => s.price));
+  const swingLow = Math.min(...recentLows.map(s => s.price));
+  const range = swingHigh - swingLow;
+  if (range === 0) return stacks;
+
+  // Fib retracement levels
+  const FIB_RATIOS = [0.50, 0.618, 0.786];
+  const fibLevels = FIB_RATIOS.map(ratio => ({
+    ratio,
+    priceLong: swingHigh - range * ratio,
+    priceShort: swingLow + range * ratio,
+  }));
+
+  // ATR for tolerance (Fib level within 0.3× ATR of zone edge counts)
+  const atr = calculateATR(candles, 14);
+  const fibTolerance = atr * 0.3;
+
+  // S/R levels from swing points
+  const srLevels = swingPoints.slice(-20).map(s => s.price);
+
+  // ── Check each active FVG and OB for overlap with S/R and Fib ──
+  const zones: Array<{ type: "fvg" | "ob"; low: number; high: number; zoneType: string; label: string }> = [];
+
+  for (const fvg of fvgs) {
+    if (fvg.mitigated) continue;
+    zones.push({
+      type: "fvg",
+      low: fvg.low,
+      high: fvg.high,
+      zoneType: fvg.type,
+      label: `${fvg.type} FVG [${fvg.low.toFixed(5)}-${fvg.high.toFixed(5)}]`,
+    });
+  }
+
+  for (const ob of orderBlocks) {
+    if (ob.mitigated) continue;
+    zones.push({
+      type: "ob",
+      low: ob.low,
+      high: ob.high,
+      zoneType: ob.type,
+      label: `${ob.type} OB [${ob.low.toFixed(5)}-${ob.high.toFixed(5)}]`,
+    });
+  }
+
+  for (const zone of zones) {
+    const layers: ConfluenceLayer[] = [];
+    const matchedFibs: number[] = [];
+
+    // Layer 1: The zone itself
+    layers.push({
+      type: zone.type,
+      label: zone.label,
+      priceRange: [zone.low, zone.high],
+    });
+
+    // Layer 2: S/R inside the zone
+    const srInZone = srLevels.filter(sr => sr >= zone.low && sr <= zone.high);
+    if (srInZone.length > 0) {
+      const zoneMid = (zone.low + zone.high) / 2;
+      const bestSR = srInZone.reduce((best, sr) =>
+        Math.abs(sr - zoneMid) < Math.abs(best - zoneMid) ? sr : best
+      );
+      layers.push({
+        type: "sr",
+        label: `S/R at ${bestSR.toFixed(5)}`,
+        priceRange: [bestSR, bestSR],
+      });
+    }
+
+    // Layer 3: Fib level inside (or very near) the zone
+    for (const fib of fibLevels) {
+      const fibPrices: number[] = [];
+      if (direction === "long" || !direction) fibPrices.push(fib.priceLong);
+      if (direction === "short" || !direction) fibPrices.push(fib.priceShort);
+
+      for (const fibPrice of fibPrices) {
+        if (fibPrice >= zone.low - fibTolerance && fibPrice <= zone.high + fibTolerance) {
+          const fibPct = Math.round(fib.ratio * 1000) / 10;
+          layers.push({
+            type: "fib",
+            label: `Fib ${fibPct}% at ${fibPrice.toFixed(5)}`,
+            priceRange: [fibPrice, fibPrice],
+          });
+          matchedFibs.push(fibPct);
+          break;
+        }
+      }
+    }
+
+    // Only create a stack if we have at least 2 layers
+    if (layers.length >= 2) {
+      let overlapLow = zone.low;
+      let overlapHigh = zone.high;
+
+      const layerLabels = layers.map(l => {
+        if (l.type === "fvg") return "FVG";
+        if (l.type === "ob") return "OB";
+        if (l.type === "sr") return "S/R";
+        if (l.type === "fib") return l.label.split(" at ")[0];
+        return l.type;
+      });
+      const label = layerLabels.join(" + ");
+
+      let alignment: "aligned" | "counter" | "neutral" = "neutral";
+      if (direction) {
+        const zoneIsBullish = zone.zoneType === "bullish";
+        const zoneIsBearish = zone.zoneType === "bearish";
+        if ((direction === "long" && zoneIsBullish) || (direction === "short" && zoneIsBearish)) {
+          alignment = "aligned";
+        } else if ((direction === "long" && zoneIsBearish) || (direction === "short" && zoneIsBullish)) {
+          alignment = "counter";
+        }
+      }
+
+      stacks.push({
+        layerCount: layers.length,
+        overlapZone: [overlapLow, overlapHigh],
+        layers,
+        label,
+        fibLevels: matchedFibs,
+        directionalAlignment: alignment,
+      });
+    }
+  }
+
+  // Sort by layer count (highest confluence first), then by alignment
+  stacks.sort((a, b) => {
+    if (b.layerCount !== a.layerCount) return b.layerCount - a.layerCount;
+    const alignOrder = { aligned: 0, neutral: 1, counter: 2 };
+    return alignOrder[a.directionalAlignment] - alignOrder[b.directionalAlignment];
+  });
+
+  return stacks;
+}
+
+// ─── Sweep Reclaim Detection ────────────────────────────────────────
+// Enhances existing liquidity sweep data with reclaim confirmation.
+// A "sweep + reclaim" is the highest-quality entry trigger.
+export function detectSweepReclaim(
+  candles: Candle[],
+  sweeps: { index: number; type: "bullish" | "bearish"; price: number; datetime: string; sweptLevel: number; wickDepth: number }[],
+  fvgs: FairValueGap[],
+): SweepReclaim[] {
+  const results: SweepReclaim[] = [];
+  if (candles.length < 5 || sweeps.length === 0) return results;
+
+  const atr = calculateATR(candles, 14);
+
+  for (const sweep of sweeps) {
+    if (sweep.index < candles.length - 30) continue;
+
+    let reclaimed = false;
+    let reclaimStrength = 0;
+    let createdFVG = false;
+    let createdDisplacement = false;
+
+    const reclaimWindow = Math.min(3, candles.length - sweep.index - 1);
+    for (let offset = 1; offset <= reclaimWindow; offset++) {
+      const reclaimCandle = candles[sweep.index + offset];
+      if (!reclaimCandle) continue;
+
+      const bodySize = Math.abs(reclaimCandle.close - reclaimCandle.open);
+      const totalRange = reclaimCandle.high - reclaimCandle.low;
+      const bodyRatio = totalRange > 0 ? bodySize / totalRange : 0;
+
+      if (sweep.type === "bullish") {
+        if (reclaimCandle.close > sweep.sweptLevel) {
+          reclaimed = true;
+          const isDisplacement = bodySize > atr * 1.5;
+          reclaimStrength = Math.min(1.0, bodyRatio * 0.6 + (isDisplacement ? 0.4 : 0));
+          createdDisplacement = isDisplacement;
+
+          if (sweep.index + offset + 1 < candles.length && sweep.index + offset >= 1) {
+            const prevC = candles[sweep.index + offset - 1];
+            const nextC = candles[sweep.index + offset + 1];
+            if (nextC && nextC.low > prevC.high) {
+              createdFVG = true;
+            }
+          }
+          break;
+        }
+      } else {
+        if (reclaimCandle.close < sweep.sweptLevel) {
+          reclaimed = true;
+          const isDisplacement = bodySize > atr * 1.5;
+          reclaimStrength = Math.min(1.0, bodyRatio * 0.6 + (isDisplacement ? 0.4 : 0));
+          createdDisplacement = isDisplacement;
+
+          if (sweep.index + offset + 1 < candles.length && sweep.index + offset >= 1) {
+            const prevC = candles[sweep.index + offset - 1];
+            const nextC = candles[sweep.index + offset + 1];
+            if (nextC && prevC.low > nextC.high) {
+              createdFVG = true;
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    if (!createdFVG) {
+      const nearbyFVG = fvgs.find(f =>
+        !f.mitigated &&
+        f.type === sweep.type &&
+        Math.abs(f.index - sweep.index) <= 3
+      );
+      if (nearbyFVG) createdFVG = true;
+    }
+
+    results.push({
+      sweepIndex: sweep.index,
+      sweptLevel: sweep.sweptLevel,
+      type: sweep.type,
+      wickDepth: sweep.wickDepth,
+      reclaimed,
+      reclaimStrength,
+      createdFVG,
+      createdDisplacement,
+      datetime: sweep.datetime,
+    });
+  }
+
+  results.sort((a, b) => {
+    if (a.reclaimed !== b.reclaimed) return a.reclaimed ? -1 : 1;
+    if (b.reclaimStrength !== a.reclaimStrength) return b.reclaimStrength - a.reclaimStrength;
+    return b.sweepIndex - a.sweepIndex;
+  });
+
+  return results;
+}
+
+// ─── Pullback Depth Decay Measurement ───────────────────────────────
+// Measures the depth of consecutive pullbacks to assess trend health.
+export function measurePullbackDecay(
+  swingPoints: SwingPoint[],
+  trend: "bullish" | "bearish" | "ranging",
+): PullbackDecay {
+  if (swingPoints.length < 6 || trend === "ranging") {
+    return { trend: "insufficient_data", measurements: [], decayRate: 0, detail: "Not enough swing data or ranging market" };
+  }
+
+  const measurements: PullbackMeasurement[] = [];
+  const FIB_LEVELS = [38.2, 50.0, 61.8, 78.6];
+
+  const highs = swingPoints.filter(s => s.type === "high");
+  const lows = swingPoints.filter(s => s.type === "low");
+
+  if (trend === "bullish") {
+    const recentLows = lows.slice(-5);
+    const recentHighs = highs.slice(-5);
+
+    for (let i = 0; i < recentLows.length - 1 && i < recentHighs.length; i++) {
+      const impulseLow = recentLows[i];
+      const impulseHigh = recentHighs.find(h => h.index > impulseLow.index);
+      if (!impulseHigh) continue;
+      const pullbackLow = recentLows.find(l => l.index > impulseHigh.index);
+      if (!pullbackLow) continue;
+
+      const impulseRange = impulseHigh.price - impulseLow.price;
+      if (impulseRange <= 0) continue;
+
+      const pullbackDepth = impulseHigh.price - pullbackLow.price;
+      const depthPercent = (pullbackDepth / impulseRange) * 100;
+
+      const nearestFib = FIB_LEVELS.reduce((best, fib) =>
+        Math.abs(depthPercent - fib) < Math.abs(depthPercent - best) ? fib : best
+      );
+
+      measurements.push({
+        depthPercent: Math.round(depthPercent * 10) / 10,
+        nearestFibLevel: nearestFib,
+        impulseHigh: impulseHigh.price,
+        impulseLow: impulseLow.price,
+        pullbackPrice: pullbackLow.price,
+      });
+    }
+  } else {
+    const recentHighs = highs.slice(-5);
+    const recentLows = lows.slice(-5);
+
+    for (let i = 0; i < recentHighs.length - 1 && i < recentLows.length; i++) {
+      const impulseHigh = recentHighs[i];
+      const impulseLow = recentLows.find(l => l.index > impulseHigh.index);
+      if (!impulseLow) continue;
+      const pullbackHigh = recentHighs.find(h => h.index > impulseLow.index);
+      if (!pullbackHigh) continue;
+
+      const impulseRange = impulseHigh.price - impulseLow.price;
+      if (impulseRange <= 0) continue;
+
+      const pullbackDepth = pullbackHigh.price - impulseLow.price;
+      const depthPercent = (pullbackDepth / impulseRange) * 100;
+
+      const nearestFib = FIB_LEVELS.reduce((best, fib) =>
+        Math.abs(depthPercent - fib) < Math.abs(depthPercent - best) ? fib : best
+      );
+
+      measurements.push({
+        depthPercent: Math.round(depthPercent * 10) / 10,
+        nearestFibLevel: nearestFib,
+        impulseHigh: impulseHigh.price,
+        impulseLow: impulseLow.price,
+        pullbackPrice: pullbackHigh.price,
+      });
+    }
+  }
+
+  if (measurements.length < 2) {
+    return { trend: "insufficient_data", measurements, decayRate: 0, detail: "Only " + measurements.length + " pullback(s) found — need at least 2" };
+  }
+
+  // Linear regression slope on depth percentages
+  const n = measurements.length;
+  const xMean = (n - 1) / 2;
+  const yMean = measurements.reduce((s, m) => s + m.depthPercent, 0) / n;
+  let numerator = 0;
+  let denominator = 0;
+  for (let i = 0; i < n; i++) {
+    numerator += (i - xMean) * (measurements[i].depthPercent - yMean);
+    denominator += (i - xMean) ** 2;
+  }
+  const decayRate = denominator !== 0 ? Math.round((numerator / denominator) * 100) / 100 : 0;
+
+  let trendHealth: "healthy" | "exhausting" | "stable";
+  let detail: string;
+
+  const depths = measurements.map(m => m.depthPercent);
+
+  if (decayRate < -3) {
+    trendHealth = "healthy";
+    detail = `Pullbacks getting shallower: ${depths.map(d => d.toFixed(1) + "%").join(" → ")} (slope: ${decayRate.toFixed(1)}%/swing) — trend healthy, institutions adding on dips`;
+  } else if (decayRate > 5) {
+    trendHealth = "exhausting";
+    detail = `Pullbacks getting deeper: ${depths.map(d => d.toFixed(1) + "%").join(" → ")} (slope: +${decayRate.toFixed(1)}%/swing) — trend may be exhausting`;
+  } else {
+    trendHealth = "stable";
+    detail = `Pullback depth stable: ${depths.map(d => d.toFixed(1) + "%").join(" → ")} (slope: ${decayRate > 0 ? "+" : ""}${decayRate.toFixed(1)}%/swing)`;
+  }
+
+  const fibSummary = measurements.map(m => `~${m.nearestFibLevel}%`).join(" → ");
+  detail += ` | Step-down: ${fibSummary}`;
+
+  return { trend: trendHealth, measurements, decayRate, detail };
+}
+
 export function classifyInstrumentRegime(
   candles: Array<{ open: number; high: number; low: number; close: number; datetime?: string }>,
 ): Omit<InstrumentRegime, "symbol"> {
