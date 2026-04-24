@@ -29,6 +29,7 @@ import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { WatchlistPanel } from "@/components/WatchlistPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -641,6 +642,17 @@ export default function BotView() {
               );
             })()}
 
+            {/* Setup Staging Watchlist */}
+            <WatchlistPanel confluenceGate={(() => {
+              if (!botConfig?.strategy) return 55;
+              const DEFAULT_CONFLUENCE = 55;
+              const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+              const activeStyle = getActiveStyle(botConfig);
+              const styleParams = STYLE_PARAMS[activeStyle];
+              const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
+              return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
+            })()} />
+
             {/* FOTSI Currency Strength Meter */}
             <FOTSIStrengthMeter
               strengths={fotsiStrengths}
@@ -859,8 +871,8 @@ export default function BotView() {
                     return (
                       <div className="space-y-0">
                         {latestDetailsClean.map((sig: any, i: number) => {
-                          const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status?.toUpperCase() || "—";
-                          const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
+                          const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button

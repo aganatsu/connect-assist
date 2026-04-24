@@ -121,6 +121,11 @@ const DEFAULTS = {
   normalizedScoring: true,  // Percentage-based scoring is now the default
   useSMT: true,
   useFOTSI: true,
+  // ── Setup Staging / Watchlist ──
+  stagingEnabled: true,
+  watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
+  stagingTTLMinutes: 240,      // Time-to-live for staged setups (4h default)
+  minStagingCycles: 1,         // Minimum scan cycles before promotion allowed
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -2242,6 +2247,12 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? DEFAULTS.atrFilterEnabled,
     atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? DEFAULTS.atrFilterMin,
     atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? DEFAULTS.atrFilterMax,
+
+    // ── Setup Staging / Watchlist ──
+    stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? DEFAULTS.stagingEnabled,
+    watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
+    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
+    minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
   };
 
   return merged;
@@ -2655,6 +2666,38 @@ Deno.serve(async (req) => {
           tradesPlaced: 0,
         });
       }
+    }
+
+    // ── Setup Staging: Fetch active staged setups for the UI ──
+    if (action === "staged_setups") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const { data } = await adminClient.from("staged_setups").select("*")
+        .eq("user_id", userId).eq("bot_id", BOT_ID)
+        .order("staged_at", { ascending: false }).limit(50);
+      return respond(data || []);
+    }
+
+    // ── Setup Staging: Dismiss (manually invalidate) a staged setup ──
+    if (action === "dismiss_staged") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const setupId = body.setupId;
+      if (!setupId) return respond({ error: "Missing setupId" }, 400);
+      const { error: updateErr } = await adminClient.from("staged_setups").update({
+        status: "invalidated",
+        invalidation_reason: "Manually dismissed by user",
+        resolved_at: new Date().toISOString(),
+      }).eq("id", setupId).eq("user_id", userId);
+      if (updateErr) return respond({ error: updateErr.message }, 500);
+      return respond({ success: true });
+    }
+
+    // ── Setup Staging: Get only active (watching) staged setups ──
+    if (action === "active_staged") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const { data } = await adminClient.from("staged_setups").select("*")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "watching")
+        .order("current_score", { ascending: false });
+      return respond(data || []);
     }
 
      if (action === "scan" || action === "cron") {
@@ -3146,6 +3189,57 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let tradesPlaced = 0;
   let rejectedCount = 0;
 
+  // ── Setup Staging: Fetch active staged setups for this user/bot ──
+  let activeStagedSetups: any[] = [];
+  const stagingEnabled = config.stagingEnabled !== false;
+  const watchThreshold = config.watchThreshold ?? 25;
+  const stagingTTLMinutes = config.stagingTTLMinutes ?? 240;
+  const minStagingCycles = config.minStagingCycles ?? 1;
+  let stagedPromoted = 0;
+  let stagedExpired = 0;
+  let stagedInvalidated = 0;
+  let stagedNew = 0;
+  if (stagingEnabled) {
+    try {
+      const { data: staged } = await supabase
+        .from("staged_setups")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .eq("status", "watching");
+      activeStagedSetups = staged || [];
+
+      // Expire stale setups (TTL exceeded)
+      const nowMs = Date.now();
+      for (const s of activeStagedSetups) {
+        const stagedAtMs = new Date(s.staged_at).getTime();
+        const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
+        if (nowMs - stagedAtMs > ttl) {
+          await supabase.from("staged_setups").update({
+            status: "expired",
+            invalidation_reason: `TTL expired (${s.ttl_minutes || stagingTTLMinutes}min)`,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", s.id);
+          stagedExpired++;
+          console.log(`[staging] Expired ${s.symbol} ${s.direction} — TTL ${s.ttl_minutes || stagingTTLMinutes}min exceeded`);
+        }
+      }
+      // Remove expired from active list
+      activeStagedSetups = activeStagedSetups.filter(s => {
+        const stagedAtMs = new Date(s.staged_at).getTime();
+        const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
+        return nowMs - stagedAtMs <= ttl;
+      });
+    } catch (e: any) {
+      console.warn(`[staging] Failed to fetch staged setups: ${e?.message}`);
+    }
+  }
+  // Map for quick lookup: "SYMBOL:DIRECTION" → staged setup row
+  const stagedMap = new Map<string, any>();
+  for (const s of activeStagedSetups) {
+    stagedMap.set(`${s.symbol}:${s.direction}`, s);
+  }
+
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
   // Fetch last close prices for the 7 major pairs needed by getQuoteToUSDRate.
   const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
@@ -3316,6 +3410,111 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         executionProfile: setupClassification.executionProfile,
       },
     };
+
+    // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
+    const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
+    const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
+    // Also check for staged setups in the opposite direction that should be invalidated
+    if (analysis.direction && stagingEnabled) {
+      const oppositeDir = analysis.direction === "long" ? "short" : "long";
+      const oppositeStaged = stagedMap.get(`${pair}:${oppositeDir}`);
+      if (oppositeStaged) {
+        // Direction flipped — invalidate the opposite staged setup
+        try {
+          await supabase.from("staged_setups").update({
+            status: "invalidated",
+            invalidation_reason: `Direction reversed to ${analysis.direction} (score ${analysis.score.toFixed(1)}%)`,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", oppositeStaged.id);
+          stagedInvalidated++;
+          stagedMap.delete(`${pair}:${oppositeDir}`);
+          console.log(`[staging] Invalidated ${pair} ${oppositeDir} — direction reversed to ${analysis.direction}`);
+        } catch (e: any) {
+          console.warn(`[staging] Failed to invalidate opposite staged ${pair} ${oppositeDir}: ${e?.message}`);
+        }
+      }
+    }
+
+    // SL invalidation check for existing staged setups
+    if (existingStaged && existingStaged.sl_level && stagingEnabled) {
+      const slLevel = parseFloat(existingStaged.sl_level);
+      const slBreached = existingStaged.direction === "long"
+        ? analysis.lastPrice < slLevel
+        : analysis.lastPrice > slLevel;
+      if (slBreached) {
+        try {
+          await supabase.from("staged_setups").update({
+            status: "invalidated",
+            invalidation_reason: `SL level breached (price ${analysis.lastPrice.toFixed(5)} vs SL ${slLevel.toFixed(5)})`,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", existingStaged.id);
+          stagedInvalidated++;
+          stagedMap.delete(stagedKey!);
+          console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — SL breached (${analysis.lastPrice.toFixed(5)} vs ${slLevel.toFixed(5)})`);
+        } catch (e: any) {
+          console.warn(`[staging] Failed to invalidate SL-breached ${pair}: ${e?.message}`);
+        }
+        detail.status = "staged_invalidated";
+        detail.reason = `Staged setup invalidated — SL breached`;
+        detail.staging = { action: "invalidated", reason: "sl_breached" };
+        scanDetails.push(detail);
+        continue;
+      }
+    }
+
+    // Determine if this is a staged setup being promoted
+    let isPromotedFromStaging = false;
+    if (existingStaged && analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
+      const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
+      if (cyclesMet) {
+        isPromotedFromStaging = true;
+        // Update the staged setup to promoted
+        try {
+          const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+          const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+          await supabase.from("staged_setups").update({
+            status: "promoted",
+            current_score: analysis.score,
+            current_factors: presentFactors,
+            missing_factors: missingFactors,
+            promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
+            resolved_at: new Date().toISOString(),
+            last_eval_at: new Date().toISOString(),
+            scan_cycles: existingStaged.scan_cycles + 1,
+          }).eq("id", existingStaged.id);
+          stagedPromoted++;
+          stagedMap.delete(stagedKey!);
+          console.log(`[staging] PROMOTED ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% after ${existingStaged.scan_cycles + 1} cycles`);
+        } catch (e: any) {
+          console.warn(`[staging] Failed to promote ${pair}: ${e?.message}`);
+        }
+        detail.staging = { action: "promoted", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+      } else {
+        // Score is above gate but hasn't been staged long enough — update and wait
+        try {
+          const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+          const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+          await supabase.from("staged_setups").update({
+            current_score: analysis.score,
+            current_factors: presentFactors,
+            missing_factors: missingFactors,
+            scan_cycles: existingStaged.scan_cycles + 1,
+            last_eval_at: new Date().toISOString(),
+            entry_price: analysis.lastPrice,
+            sl_level: analysis.stopLoss,
+            tp_level: analysis.takeProfit,
+          }).eq("id", existingStaged.id);
+          console.log(`[staging] ${pair} ${analysis.direction} score ${analysis.score.toFixed(1)}% — above gate but needs ${(existingStaged.min_cycles || minStagingCycles) - existingStaged.scan_cycles} more cycle(s)`);
+        } catch (e: any) {
+          console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
+        }
+        detail.status = "staged_confirming";
+        detail.reason = `Score ${analysis.score.toFixed(1)}% above gate — confirming (cycle ${existingStaged.scan_cycles + 1}/${existingStaged.min_cycles || minStagingCycles})`;
+        detail.staging = { action: "confirming", cycles: existingStaged.scan_cycles + 1, minCycles: existingStaged.min_cycles || minStagingCycles };
+        scanDetails.push(detail);
+        continue;
+      }
+    }
 
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
     if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
@@ -3860,10 +4059,128 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     } else {
       if (analysis.score < adjustedMinConfluence) {
-        detail.status = "below_threshold";
-        const ts = analysis.tieredScoring;
-        const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
-        detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
+        // ── Setup Staging: Stage below-threshold setups that have potential ──
+        if (stagingEnabled && analysis.direction && !isPaused
+            && analysis.score >= watchThreshold
+            && analysis.tieredScoring?.tier1Count >= 1) {
+          // Has direction, score is in the watch zone, and at least 1 Tier 1 factor
+          if (existingStaged) {
+            // Update existing staged setup with new score and factors
+            try {
+              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const ts = analysis.tieredScoring;
+              await supabase.from("staged_setups").update({
+                current_score: analysis.score,
+                current_factors: presentFactors,
+                missing_factors: missingFactors,
+                scan_cycles: existingStaged.scan_cycles + 1,
+                last_eval_at: new Date().toISOString(),
+                entry_price: analysis.lastPrice,
+                sl_level: analysis.stopLoss,
+                tp_level: analysis.takeProfit,
+                tier1_count: ts?.tier1Count ?? 0,
+                tier2_count: ts?.tier2Count ?? 0,
+                tier3_count: ts?.tier3Count ?? 0,
+              }).eq("id", existingStaged.id);
+              console.log(`[staging] Updated ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (cycle ${existingStaged.scan_cycles + 1})`);
+            } catch (e: any) {
+              console.warn(`[staging] Failed to update staged ${pair}: ${e?.message}`);
+            }
+            detail.status = "staged_watching";
+            detail.reason = `Watching: ${analysis.score.toFixed(1)}% (need ${adjustedMinConfluence}%) — cycle ${existingStaged.scan_cycles + 1}`;
+            detail.staging = {
+              action: "watching",
+              cycles: existingStaged.scan_cycles + 1,
+              initialScore: parseFloat(existingStaged.initial_score),
+              stagedAt: existingStaged.staged_at,
+              ttlMinutes: existingStaged.ttl_minutes || stagingTTLMinutes,
+            };
+          } else {
+            // Create new staged setup
+            try {
+              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const ts = analysis.tieredScoring;
+              // Style-aware TTL: scalpers get shorter TTL, swing traders get longer
+              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes;
+              await supabase.from("staged_setups").insert({
+                user_id: userId,
+                bot_id: BOT_ID,
+                symbol: pair,
+                direction: analysis.direction,
+                initial_score: analysis.score,
+                current_score: analysis.score,
+                watch_threshold: watchThreshold,
+                initial_factors: presentFactors,
+                current_factors: presentFactors,
+                missing_factors: missingFactors,
+                entry_price: analysis.lastPrice,
+                sl_level: analysis.stopLoss,
+                tp_level: analysis.takeProfit,
+                scan_cycles: 1,
+                min_cycles: minStagingCycles,
+                ttl_minutes: styleTTL,
+                setup_type: setupClassification.setupType,
+                tier1_count: ts?.tier1Count ?? 0,
+                tier2_count: ts?.tier2Count ?? 0,
+                tier3_count: ts?.tier3Count ?? 0,
+                analysis_snapshot: {
+                  score: analysis.score,
+                  direction: analysis.direction,
+                  trend: analysis.structure.trend,
+                  zone: analysis.pd.currentZone,
+                  zonePercent: analysis.pd.zonePercent,
+                  session: analysis.session.name,
+                  factors: presentFactors,
+                  missingFactors,
+                  tieredScoring: ts ? { tier1Count: ts.tier1Count, tier2Count: ts.tier2Count, tier3Count: ts.tier3Count } : null,
+                },
+              });
+              stagedNew++;
+              console.log(`[staging] NEW ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% (watch threshold: ${watchThreshold}%, gate: ${adjustedMinConfluence}%)`);
+            } catch (e: any) {
+              // Unique constraint violation = already watching this pair+direction
+              if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
+                console.log(`[staging] ${pair} ${analysis.direction} already staged — skipping duplicate`);
+              } else {
+                console.warn(`[staging] Failed to stage ${pair}: ${e?.message}`);
+              }
+            }
+            detail.status = "staged_new";
+            detail.reason = `New watch: ${analysis.score.toFixed(1)}% (need ${adjustedMinConfluence}%)`;
+            detail.staging = {
+              action: "new",
+              watchThreshold,
+              ttlMinutes: resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes,
+            };
+          }
+        } else {
+          detail.status = "below_threshold";
+          const ts = analysis.tieredScoring;
+          const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
+          detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
+          // If score dropped below watch threshold, invalidate any existing staged setup
+          if (existingStaged && analysis.score < watchThreshold && stagingEnabled) {
+            try {
+              await supabase.from("staged_setups").update({
+                status: "invalidated",
+                invalidation_reason: `Score dropped to ${analysis.score.toFixed(1)}% (below watch threshold ${watchThreshold}%)`,
+                resolved_at: new Date().toISOString(),
+              }).eq("id", existingStaged.id);
+              stagedInvalidated++;
+              stagedMap.delete(stagedKey!);
+              console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — score dropped below watch threshold`);
+            } catch (e: any) {
+              console.warn(`[staging] Failed to invalidate ${pair}: ${e?.message}`);
+            }
+            detail.staging = { action: "invalidated", reason: "score_dropped" };
+          }
+        }
       } else {
         detail.status = isPaused ? "paused" : "no_direction";
       }
@@ -3899,6 +4216,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
+      staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
     },
     ...scanDetails,
   ];
@@ -3914,7 +4232,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change") };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

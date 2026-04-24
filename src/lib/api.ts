@@ -188,7 +188,45 @@ export const backtestApi = {
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
   logs: () => invokeFunction("bot-scanner", { action: "scan_logs" }),
+  // Setup Staging / Watchlist
+  activeStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "active_staged" }),
+  allStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "staged_setups" }),
+  dismissStaged: (setupId: string) => invokeFunction("bot-scanner", { action: "dismiss_staged", setupId }),
 };
+
+// ── Staged Setup Type ──
+export interface StagedSetup {
+  id: string;
+  user_id: string;
+  bot_id: string;
+  symbol: string;
+  direction: "long" | "short";
+  initial_score: number;
+  current_score: number;
+  watch_threshold: number;
+  initial_factors: Array<{ name: string; weight: number; tier?: string }>;
+  current_factors: Array<{ name: string; weight: number; tier?: string }>;
+  missing_factors: Array<{ name: string; weight: number; tier?: string }>;
+  entry_price: number | null;
+  sl_level: number | null;
+  tp_level: number | null;
+  status: "watching" | "promoted" | "expired" | "invalidated";
+  scan_cycles: number;
+  min_cycles: number;
+  ttl_minutes: number;
+  promotion_reason: string | null;
+  invalidation_reason: string | null;
+  setup_type: string | null;
+  tier1_count: number;
+  tier2_count: number;
+  tier3_count: number;
+  analysis_snapshot: any;
+  staged_at: string;
+  last_eval_at: string;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 // Bot #2 (FOTSI Mean Reversion) has been removed — FOTSI currency strength
 // is still computed inside the main bot-scanner as a confluence factor.
