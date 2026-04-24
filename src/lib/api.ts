@@ -192,6 +192,10 @@ export const scannerApi = {
   activeStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "active_staged" }),
   allStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "staged_setups" }),
   dismissStaged: (setupId: string) => invokeFunction("bot-scanner", { action: "dismiss_staged", setupId }),
+  // Pending / Limit Orders
+  activePending: () => invokeFunction<PendingOrder[]>("bot-scanner", { action: "active_pending" }),
+  allPending: () => invokeFunction<PendingOrder[]>("bot-scanner", { action: "pending_orders" }),
+  cancelPending: (orderId: string) => invokeFunction("bot-scanner", { action: "cancel_pending", orderId }),
 };
 
 // ── Staged Setup Type ──
@@ -224,6 +228,42 @@ export interface StagedSetup {
   staged_at: string;
   last_eval_at: string;
   resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Pending Order Type ──
+export interface PendingOrder {
+  order_id: string;
+  user_id: string;
+  bot_id: string;
+  symbol: string;
+  direction: "long" | "short";
+  order_type: "limit_ob" | "limit_fvg";
+  entry_price: number;
+  current_price: number | null;
+  stop_loss: number;
+  take_profit: number;
+  size: number;
+  entry_zone_type: string;
+  entry_zone_low: number;
+  entry_zone_high: number;
+  status: "pending" | "filled" | "expired" | "cancelled";
+  expiry_minutes: number;
+  expires_at: string;
+  fill_reason: string | null;
+  cancel_reason: string | null;
+  filled_at: string | null;
+  resolved_at: string | null;
+  signal_reason: any;
+  signal_score: number;
+  setup_type: string | null;
+  setup_confidence: string | null;
+  from_watchlist: boolean;
+  staged_cycles: number;
+  staged_initial_score: number | null;
+  exit_flags: any;
+  placed_at: string;
   created_at: string;
   updated_at: string;
 }

@@ -126,6 +126,12 @@ const DEFAULTS = {
   watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
   stagingTTLMinutes: 240,      // Time-to-live for staged setups (4h default)
   minStagingCycles: 1,         // Minimum scan cycles before promotion allowed
+  // ── Limit Orders ──
+  limitOrderEnabled: false,     // When true, place limit orders at zone edges instead of market orders
+  limitOrderExpiryMinutes: 60,  // How long a pending limit order stays active before expiring
+  limitOrderMaxDistancePips: 30, // Max distance from current price to limit price (skip if too far)
+  limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
+  limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -2253,6 +2259,13 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
     stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
     minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
+
+    // ── Limit Orders ──
+    limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
+    limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? DEFAULTS.limitOrderExpiryMinutes,
+    limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
+    limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
+    limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
   };
 
   return merged;
@@ -2687,6 +2700,42 @@ Deno.serve(async (req) => {
         invalidation_reason: "Manually dismissed by user",
         resolved_at: new Date().toISOString(),
       }).eq("id", setupId).eq("user_id", userId);
+      if (updateErr) return respond({ error: updateErr.message }, 500);
+      return respond({ success: true });
+    }
+
+    // ── Pending Orders: Get all pending orders (active + resolved) ──
+    if (action === "pending_orders") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const statusFilter = body.status || "all";
+      let query = adminClient.from("pending_orders").select("*")
+        .eq("user_id", userId).eq("bot_id", BOT_ID);
+      if (statusFilter !== "all") {
+        query = query.eq("status", statusFilter);
+      }
+      const { data } = await query.order("placed_at", { ascending: false }).limit(100);
+      return respond(data || []);
+    }
+
+    // ── Pending Orders: Get only active pending orders ──
+    if (action === "active_pending") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const { data } = await adminClient.from("pending_orders").select("*")
+        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
+        .order("placed_at", { ascending: false });
+      return respond(data || []);
+    }
+
+    // ── Pending Orders: Cancel a pending order ──
+    if (action === "cancel_pending") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const orderId = body.orderId;
+      if (!orderId) return respond({ error: "Missing orderId" }, 400);
+      const { error: updateErr } = await adminClient.from("pending_orders").update({
+        status: "cancelled",
+        cancel_reason: "Manually cancelled by user",
+        resolved_at: new Date().toISOString(),
+      }).eq("order_id", orderId).eq("user_id", userId).eq("status", "pending");
       if (updateErr) return respond({ error: updateErr.message }, 500);
       return respond({ success: true });
     }
@@ -3294,6 +3343,278 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.warn(`[scan ${scanCycleId}] FOTSI computation error: ${e?.message}`);
   }
 
+  // ── Limit Orders: Helper to compute optimal entry price from OB/FVG zones ──
+  function computeLimitEntryPrice(
+    analysis: any, pair: string, direction: string
+  ): { price: number; zoneType: string; zoneLow: number; zoneHigh: number } | null {
+    if (!config.limitOrderEnabled) return null;
+    const lastPrice = analysis.lastPrice;
+    const spec = SPECS[pair] || SPECS["EUR/USD"];
+    const maxDistancePips = config.limitOrderMaxDistancePips || 30;
+    const maxDistance = maxDistancePips * spec.pipSize;
+
+    const candidates: { price: number; zoneType: string; low: number; high: number; distance: number }[] = [];
+
+    // Order Blocks: use consequent encroachment (midpoint) of unmitigated OBs
+    if (analysis.orderBlocks) {
+      for (const ob of analysis.orderBlocks) {
+        if (ob.mitigated) continue;
+        if (direction === "long" && ob.type === "bullish") {
+          const entryLevel = (ob.high + ob.low) / 2;
+          if (entryLevel < lastPrice) {
+            const dist = lastPrice - entryLevel;
+            if (dist <= maxDistance) {
+              candidates.push({ price: entryLevel, zoneType: "OB", low: ob.low, high: ob.high, distance: dist });
+            }
+          }
+        } else if (direction === "short" && ob.type === "bearish") {
+          const entryLevel = (ob.high + ob.low) / 2;
+          if (entryLevel > lastPrice) {
+            const dist = entryLevel - lastPrice;
+            if (dist <= maxDistance) {
+              candidates.push({ price: entryLevel, zoneType: "OB", low: ob.low, high: ob.high, distance: dist });
+            }
+          }
+        }
+      }
+    }
+
+    // FVGs: use consequent encroachment (midpoint) of unfilled FVGs
+    if (analysis.fvgs) {
+      for (const fvg of analysis.fvgs) {
+        if (fvg.mitigated) continue;
+        const ce = (fvg.high + fvg.low) / 2;
+        if (direction === "long" && fvg.type === "bullish" && ce < lastPrice) {
+          const dist = lastPrice - ce;
+          if (dist <= maxDistance) {
+            candidates.push({ price: ce, zoneType: "FVG", low: fvg.low, high: fvg.high, distance: dist });
+          }
+        } else if (direction === "short" && fvg.type === "bearish" && ce > lastPrice) {
+          const dist = ce - lastPrice;
+          if (dist <= maxDistance) {
+            candidates.push({ price: ce, zoneType: "FVG", low: fvg.low, high: fvg.high, distance: dist });
+          }
+        }
+      }
+    }
+
+    if (candidates.length === 0) return null;
+
+    // Pick the closest candidate to current price (best fill probability)
+    candidates.sort((a, b) => a.distance - b.distance);
+    const best = candidates[0];
+    return { price: best.price, zoneType: best.zoneType, zoneLow: best.low, zoneHigh: best.high };
+  }
+
+  // ── Limit Orders: Monitor active pending orders for fills/expiry ──
+  let pendingFilled = 0;
+  let pendingExpired = 0;
+  let pendingCancelled = 0;
+  let pendingPlaced = 0;
+  const { data: activePendingOrders } = await supabase.from("pending_orders").select("*")
+    .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
+    .order("placed_at", { ascending: true });
+
+  if (activePendingOrders && activePendingOrders.length > 0) {
+    console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
+    for (const pending of activePendingOrders) {
+      try {
+        // Check expiry first
+        if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
+          await supabase.from("pending_orders").update({
+            status: "expired",
+            cancel_reason: "TTL expired",
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pendingExpired++;
+          console.log(`[pending] Expired ${pending.symbol} ${pending.direction} limit @ ${pending.entry_price}`);
+          continue;
+        }
+
+        // Fetch current price to check if limit order should fill
+        const pendingCandles = await fetchCandles(pending.symbol, config.entryTimeframe || "15min", "5d").catch(() => [] as Candle[]);
+        if (pendingCandles.length === 0) continue;
+        const currentPrice = pendingCandles[pendingCandles.length - 1].close;
+        const lastCandle = pendingCandles[pendingCandles.length - 1];
+
+        // Update current price on the pending order
+        await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
+
+        const entryPrice = parseFloat(pending.entry_price);
+        const slLevel = parseFloat(pending.stop_loss);
+
+        // Check SL invalidation: if price has blown past the SL, cancel the order
+        if (pending.direction === "long" && currentPrice < slLevel) {
+          await supabase.from("pending_orders").update({
+            status: "cancelled",
+            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pendingCancelled++;
+          console.log(`[pending] Cancelled ${pending.symbol} long — price ${currentPrice} below SL ${slLevel}`);
+          continue;
+        }
+        if (pending.direction === "short" && currentPrice > slLevel) {
+          await supabase.from("pending_orders").update({
+            status: "cancelled",
+            cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
+            resolved_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+          pendingCancelled++;
+          console.log(`[pending] Cancelled ${pending.symbol} short — price ${currentPrice} above SL ${slLevel}`);
+          continue;
+        }
+
+        // Check fill: use candle low/high to detect if price touched the level
+        const filled = pending.direction === "long"
+          ? lastCandle.low <= entryPrice
+          : lastCandle.high >= entryPrice;
+
+        if (filled) {
+          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (current: ${currentPrice})`);
+
+          const positionId = pending.order_id;
+          const orderId = crypto.randomUUID().slice(0, 8);
+          const nowStr = new Date().toISOString();
+          const exitFlags = pending.exit_flags || {};
+
+          // Build signal_reason with limit order provenance
+          let parsedSignalReason: any = {};
+          try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+          const signalReason = {
+            ...parsedSignalReason,
+            filledFromLimitOrder: true,
+            limitOrderOrigin: {
+              orderType: pending.order_type,
+              entryPrice,
+              placedAt: pending.placed_at,
+              filledAt: nowStr,
+              zoneType: pending.entry_zone_type,
+              zoneLow: parseFloat(pending.entry_zone_low || "0"),
+              zoneHigh: parseFloat(pending.entry_zone_high || "0"),
+              fromWatchlist: pending.from_watchlist,
+              stagedCycles: pending.staged_cycles,
+            },
+          };
+
+          await supabase.from("paper_positions").insert({
+            user_id: userId,
+            position_id: positionId,
+            symbol: pending.symbol,
+            direction: pending.direction,
+            size: pending.size.toString(),
+            entry_price: entryPrice.toString(),
+            current_price: currentPrice.toString(),
+            stop_loss: pending.stop_loss.toString(),
+            take_profit: pending.take_profit.toString(),
+            open_time: nowStr,
+            signal_reason: JSON.stringify(signalReason),
+            signal_score: pending.signal_score?.toString() || "0",
+            order_id: orderId,
+            position_status: "open",
+            bot_id: BOT_ID,
+            order_type: "limit",
+            trigger_price: entryPrice.toString(),
+          });
+
+          await supabase.from("trade_reasonings").insert({
+            user_id: userId,
+            position_id: positionId,
+            symbol: pending.symbol,
+            direction: pending.direction,
+            confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
+            summary: `[LIMIT ORDER] ${pending.from_watchlist ? "[WATCHLIST] " : ""}Filled ${pending.direction.toUpperCase()} @ ${entryPrice} (${pending.entry_zone_type} zone)`,
+            bias: pending.direction === "long" ? "bullish" : "bearish",
+            session: "limit_fill",
+            timeframe: config.entryTimeframe || "15min",
+          });
+
+          await supabase.from("pending_orders").update({
+            status: "filled",
+            fill_reason: `Price touched ${entryPrice} (candle low: ${lastCandle.low}, high: ${lastCandle.high})`,
+            filled_at: nowStr,
+            resolved_at: nowStr,
+          }).eq("order_id", pending.order_id).eq("user_id", userId);
+
+          pendingFilled++;
+          tradesPlaced++;
+
+          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: entryPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+
+          // Send Telegram notification for limit order fill
+          if (telegramChatIds.length > 0) {
+            const emoji = pending.direction === "long" ? "🟢" : "🔴";
+            const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            const msg = `${emoji} <b>${mode} Limit Order FILLED</b>\n\n` +
+              `<b>Symbol:</b> ${pending.symbol}\n` +
+              `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+              `<b>Size:</b> ${pending.size} lots\n` +
+              `<b>Entry:</b> ${entryPrice} (limit)\n` +
+              `<b>SL:</b> ${pending.stop_loss}\n` +
+              `<b>TP:</b> ${pending.take_profit}\n` +
+              `<b>Score:</b> ${pending.signal_score}\n` +
+              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+              (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
+            await Promise.all(telegramChatIds.map(async (chatId: string) => {
+              try {
+                await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                  body: JSON.stringify({ chat_id: chatId, message: msg }),
+                });
+              } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+            }));
+          }
+
+          // Mirror to brokers for limit order fills
+          if (account.execution_mode === "live") {
+            const { data: connections } = await supabase.from("broker_connections")
+              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+            if (connections && connections.length > 0) {
+              const mirroredConnIds: string[] = [];
+              for (const conn of connections) {
+                try {
+                  if (conn.broker_type !== "metaapi") {
+                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                      body: JSON.stringify({ action: "place_order", connectionId: conn.id, symbol: pending.symbol, direction: pending.direction, size: parseFloat(pending.size), stopLoss: parseFloat(pending.stop_loss), takeProfit: parseFloat(pending.take_profit), userId }),
+                    });
+                    if (exRes.ok) { mirroredConnIds.push(conn.id); }
+                    continue;
+                  }
+                  let authToken = conn.api_key;
+                  let metaAccountId = conn.account_id;
+                  if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                    authToken = conn.account_id;
+                    metaAccountId = conn.api_key;
+                  }
+                  const brokerSymbol = resolveSymbol(pending.symbol, conn);
+                  const mt5Body: any = {
+                    actionType: pending.direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
+                    symbol: brokerSymbol,
+                    volume: parseFloat(pending.size),
+                    comment: `paper:${positionId}`,
+                  };
+                  if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
+                  if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
+                  const { res: mt5Res } = await metaFetch(metaAccountId, authToken, (base: string) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
+                  if (mt5Res.ok) { mirroredConnIds.push(conn.id); }
+                } catch (e: any) { console.warn(`Limit fill broker mirror [${conn.display_name}] error: ${e?.message}`); }
+              }
+              if (mirroredConnIds.length > 0) {
+                await supabase.from("paper_positions").update({ mirrored_connection_ids: mirroredConnIds }).eq("position_id", positionId).eq("user_id", userId);
+              }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[pending] Error monitoring ${pending.symbol}: ${e?.message}`);
+      }
+    }
+    console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled`);
+  }
+
   for (const pair of config.instruments) {
     if (!YAHOO_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
@@ -3726,7 +4047,124 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           tpRatio: pairConfig.tpRatio,
         };
 
-        // Place position
+        // ── Limit Order: Place pending order instead of market order if enabled and zone found ──
+        const limitEntry = computeLimitEntryPrice(analysis, pair, analysis.direction);
+        if (config.limitOrderEnabled && limitEntry) {
+          // Place a pending limit order instead of executing immediately
+          const pendingOrderId = crypto.randomUUID().slice(0, 8);
+          const expiryMinutes = config.limitOrderExpiryMinutes || 60;
+          const expiresAt = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
+
+          // Recalculate SL/TP relative to the limit entry price for better R:R
+          let limitSL = sl;
+          let limitTP = tp;
+          const riskFromLimit = Math.abs(limitEntry.price - sl);
+          if (analysis.direction === "long") {
+            limitTP = limitEntry.price + riskFromLimit * config.tpRatio;
+          } else {
+            limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
+          }
+
+          // Recalculate position size based on limit entry price
+          const limitSize = calculatePositionSize(balance, pairConfig.riskPerTrade, limitEntry.price, limitSL, pair, {
+            positionSizingMethod: (pairConfig as any).positionSizingMethod,
+            fixedLotSize: (pairConfig as any).fixedLotSize,
+            atrValue: (analysis as any).atrValue,
+            atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+          }, rateMap, undefined, avgCommissionPerLot);
+
+          await supabase.from("pending_orders").insert({
+            user_id: userId,
+            bot_id: BOT_ID,
+            order_id: pendingOrderId,
+            symbol: pair,
+            direction: analysis.direction,
+            order_type: limitEntry.zoneType === "OB" ? "limit_ob" : "limit_fvg",
+            entry_price: limitEntry.price,
+            current_price: analysis.lastPrice,
+            stop_loss: limitSL,
+            take_profit: limitTP,
+            size: limitSize,
+            entry_zone_type: limitEntry.zoneType,
+            entry_zone_low: limitEntry.zoneLow,
+            entry_zone_high: limitEntry.zoneHigh,
+            status: "pending",
+            expiry_minutes: expiryMinutes,
+            expires_at: expiresAt,
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, exitFlags, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_score: analysis.score,
+            setup_type: setupClassification.setupType,
+            setup_confidence: setupClassification.confidence,
+            from_watchlist: isPromotedFromStaging || false,
+            staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
+            staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
+            exit_flags: exitFlags,
+            placed_at: new Date().toISOString(),
+          });
+
+          pendingPlaced++;
+          detail.status = isPromotedFromStaging ? "limit_order_from_watchlist" : "limit_order_placed";
+          detail.limitOrder = {
+            orderId: pendingOrderId,
+            entryPrice: limitEntry.price,
+            zoneType: limitEntry.zoneType,
+            zoneLow: limitEntry.zoneLow,
+            zoneHigh: limitEntry.zoneHigh,
+            expiresAt,
+            currentPrice: analysis.lastPrice,
+            distancePips: (Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1),
+          };
+          if (isPromotedFromStaging && existingStaged) {
+            detail.staging = { action: "promoted_to_limit", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+          }
+          detail.size = limitSize;
+          detail.entryPrice = limitEntry.price;
+          detail.stopLoss = limitSL;
+          detail.takeProfit = limitTP;
+
+          // Telegram notification for limit order placement
+          if (telegramChatIds.length > 0) {
+            const emoji = analysis.direction === "long" ? "🟢" : "🔴";
+            const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            const msg = `${emoji} <b>${mode} Limit Order PLACED</b>
+
+` +
+              `<b>Symbol:</b> ${pair}
+` +
+              `<b>Direction:</b> ${analysis.direction.toUpperCase()}
+` +
+              `<b>Limit Entry:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
+` +
+              `<b>Current Price:</b> ${analysis.lastPrice}
+` +
+              `<b>Size:</b> ${limitSize} lots
+` +
+              `<b>SL:</b> ${limitSL}
+` +
+              `<b>TP:</b> ${limitTP}
+` +
+              `<b>Score:</b> ${analysis.score.toFixed(1)}
+` +
+              `<b>Expires:</b> ${expiryMinutes}min` +
+              (isPromotedFromStaging && existingStaged ? `
+
+📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
+            await Promise.all(telegramChatIds.map(async (chatId: string) => {
+              try {
+                await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                  body: JSON.stringify({ chat_id: chatId, message: msg }),
+                });
+              } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+            }));
+          }
+
+          scanDetails.push(detail);
+          continue; // Skip the market order path below
+        }
+
+        // Place position (market order — fallback when limit orders disabled or no zone found)
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -4221,6 +4659,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
+      pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
     },
     ...scanDetails,
   ];
@@ -4236,7 +4675,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

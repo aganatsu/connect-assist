@@ -30,6 +30,7 @@ import { RecommendationsDashboard } from "@/components/RecommendationsDashboard"
 import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
+import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -435,6 +436,7 @@ export default function BotView() {
                 <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
                 <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
                 <TabsTrigger value="watchlist" className="text-[11px] h-6">Watchlist</TabsTrigger>
+                <TabsTrigger value="pending-orders" className="text-[11px] h-6">Pending Orders</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -569,6 +571,9 @@ export default function BotView() {
                   const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
                   return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
                 })()} />
+              </TabsContent>
+              <TabsContent value="pending-orders" className="flex-1 overflow-auto mt-1">
+                <PendingOrdersPanel />
               </TabsContent>
             </Tabs>
           </div>
@@ -872,8 +877,8 @@ export default function BotView() {
                     return (
                       <div className="space-y-0">
                         {latestDetailsClean.map((sig: any, i: number) => {
-                          const statusLabel = sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
-                          const statusColor = sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = sig.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : sig.status === "limit_order_placed" ? "🎯 LIMIT" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
+                          const statusColor = sig.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1067,8 +1072,8 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
-  const statusLabel = d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+  const statusLabel = d.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : d.status === "limit_order_placed" ? "🎯 LIMIT" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -1121,8 +1126,8 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
 }
 
 function ScanDetailInline({ signal: d }: { signal: any }) {
-  const statusLabel = d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+  const statusLabel = d.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : d.status === "limit_order_placed" ? "🎯 LIMIT" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" ? "text-purple-400" : d.status === "limit_order_placed" ? "text-blue-400" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
   return (
     <div className="space-y-2">
@@ -1143,6 +1148,19 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
           <p className="mt-1 text-[10px] text-cyan-300">
             Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
+          </p>
+        </div>
+      )}
+
+      {/* Limit Order Info Banner */}
+      {d.limitOrder && (
+        <div className="rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5">
+          <p className="text-[8px] text-blue-400 uppercase tracking-wider font-bold">🎯 Limit Order Placed</p>
+          <p className="mt-1 text-[10px] text-blue-300">
+            Entry: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
+          </p>
+          <p className="text-[10px] text-blue-300/70">
+            Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </p>
         </div>
       )}
