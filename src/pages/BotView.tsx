@@ -872,8 +872,8 @@ export default function BotView() {
                     return (
                       <div className="space-y-0">
                         {latestDetailsClean.map((sig: any, i: number) => {
-                          const statusLabel = sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
-                          const statusColor = sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
+                          const statusColor = sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1067,8 +1067,8 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
-  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+  const statusLabel = d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -1121,8 +1121,8 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
 }
 
 function ScanDetailInline({ signal: d }: { signal: any }) {
-  const statusLabel = d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+  const statusLabel = d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
   return (
     <div className="space-y-2">
@@ -1136,6 +1136,16 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Tier score summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
+
+      {/* Watchlist Origin Banner */}
+      {d.staging?.action === "promoted_and_traded" && (
+        <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
+          <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
+          <p className="mt-1 text-[10px] text-cyan-300">
+            Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
+          </p>
+        </div>
+      )}
 
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">

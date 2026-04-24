@@ -3738,7 +3738,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -3752,7 +3752,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           symbol: pair,
           direction: analysis.direction,
           confluence_score: Math.round(analysis.score),
-          summary: `[${setupClassification.setupType.toUpperCase()}] ${analysis.summary}`,
+          summary: `${isPromotedFromStaging ? "[WATCHLIST] " : ""}[${setupClassification.setupType.toUpperCase()}] ${analysis.summary}`,
           bias: analysis.bias,
           session: analysis.session.name,
           timeframe: pairConfig.entryTimeframe,
@@ -3760,7 +3760,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         });
 
         tradesPlaced++;
-        detail.status = "trade_placed";
+        detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : "trade_placed";
+        if (isPromotedFromStaging && existingStaged) {
+          detail.staging = { action: "promoted_and_traded", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+        }
         detail.size = size;
         detail.entryPrice = analysis.lastPrice;
         detail.stopLoss = sl;
@@ -3782,7 +3785,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
-            `<b>Summary:</b> ${analysis.summary || "—"}`;
+            `<b>Summary:</b> ${analysis.summary || "—"}` +
+            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {

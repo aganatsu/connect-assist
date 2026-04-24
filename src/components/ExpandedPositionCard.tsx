@@ -349,6 +349,12 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           <span className={`text-xs ${direction === "long" ? "text-success" : "text-destructive"}`}>
             {direction === "long" ? "\u25B2" : "\u25BC"}
           </span>
+          {sr.promotedFromWatchlist && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" title={sr.watchlistOrigin?.promotionReason || "Promoted from watchlist"}>
+              \ud83d\udccb WATCHLIST
+              {sr.watchlistOrigin?.cyclesWatched && <span className="text-cyan-300/70">({sr.watchlistOrigin.cyclesWatched} cycles)</span>}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 text-xs font-mono flex-wrap">
           <span className="text-muted-foreground">Entry: <span className="text-foreground font-semibold">{formatPrice(entry, p.symbol)}</span></span>
