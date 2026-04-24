@@ -526,6 +526,114 @@ export type Database = {
         }
         Relationships: []
       }
+      pending_orders: {
+        Row: {
+          bot_id: string
+          cancel_reason: string | null
+          created_at: string
+          current_price: number
+          direction: string
+          entry_price: number
+          entry_zone_high: number | null
+          entry_zone_low: number | null
+          entry_zone_type: string | null
+          exit_flags: Json | null
+          expires_at: string
+          expiry_minutes: number
+          fill_reason: string | null
+          filled_at: string | null
+          from_watchlist: boolean
+          id: string
+          order_id: string
+          order_type: string
+          placed_at: string
+          resolved_at: string | null
+          setup_confidence: number | null
+          setup_type: string | null
+          signal_reason: Json | null
+          signal_score: number | null
+          size: number
+          staged_cycles: number | null
+          staged_initial_score: number | null
+          status: string
+          stop_loss: number
+          symbol: string
+          take_profit: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          cancel_reason?: string | null
+          created_at?: string
+          current_price: number
+          direction: string
+          entry_price: number
+          entry_zone_high?: number | null
+          entry_zone_low?: number | null
+          entry_zone_type?: string | null
+          exit_flags?: Json | null
+          expires_at: string
+          expiry_minutes?: number
+          fill_reason?: string | null
+          filled_at?: string | null
+          from_watchlist?: boolean
+          id?: string
+          order_id: string
+          order_type?: string
+          placed_at?: string
+          resolved_at?: string | null
+          setup_confidence?: number | null
+          setup_type?: string | null
+          signal_reason?: Json | null
+          signal_score?: number | null
+          size: number
+          staged_cycles?: number | null
+          staged_initial_score?: number | null
+          status?: string
+          stop_loss: number
+          symbol: string
+          take_profit: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          cancel_reason?: string | null
+          created_at?: string
+          current_price?: number
+          direction?: string
+          entry_price?: number
+          entry_zone_high?: number | null
+          entry_zone_low?: number | null
+          entry_zone_type?: string | null
+          exit_flags?: Json | null
+          expires_at?: string
+          expiry_minutes?: number
+          fill_reason?: string | null
+          filled_at?: string | null
+          from_watchlist?: boolean
+          id?: string
+          order_id?: string
+          order_type?: string
+          placed_at?: string
+          resolved_at?: string | null
+          setup_confidence?: number | null
+          setup_type?: string | null
+          signal_reason?: Json | null
+          signal_score?: number | null
+          size?: number
+          staged_cycles?: number | null
+          staged_initial_score?: number | null
+          status?: string
+          stop_loss?: number
+          symbol?: string
+          take_profit?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       scan_logs: {
         Row: {
           bot_id: string
