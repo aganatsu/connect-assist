@@ -562,6 +562,105 @@ export type Database = {
         }
         Relationships: []
       }
+      staged_setups: {
+        Row: {
+          analysis_snapshot: Json | null
+          bot_id: string
+          created_at: string
+          current_factors: Json
+          current_score: number
+          direction: string
+          entry_price: number | null
+          id: string
+          initial_factors: Json
+          initial_score: number
+          invalidation_reason: string | null
+          last_eval_at: string
+          min_cycles: number
+          missing_factors: Json
+          promotion_reason: string | null
+          resolved_at: string | null
+          scan_cycles: number
+          setup_type: string | null
+          sl_level: number | null
+          staged_at: string
+          status: string
+          symbol: string
+          tier1_count: number
+          tier2_count: number
+          tier3_count: number
+          tp_level: number | null
+          ttl_minutes: number
+          updated_at: string
+          user_id: string
+          watch_threshold: number
+        }
+        Insert: {
+          analysis_snapshot?: Json | null
+          bot_id?: string
+          created_at?: string
+          current_factors?: Json
+          current_score: number
+          direction: string
+          entry_price?: number | null
+          id?: string
+          initial_factors?: Json
+          initial_score: number
+          invalidation_reason?: string | null
+          last_eval_at?: string
+          min_cycles?: number
+          missing_factors?: Json
+          promotion_reason?: string | null
+          resolved_at?: string | null
+          scan_cycles?: number
+          setup_type?: string | null
+          sl_level?: number | null
+          staged_at?: string
+          status?: string
+          symbol: string
+          tier1_count?: number
+          tier2_count?: number
+          tier3_count?: number
+          tp_level?: number | null
+          ttl_minutes?: number
+          updated_at?: string
+          user_id: string
+          watch_threshold: number
+        }
+        Update: {
+          analysis_snapshot?: Json | null
+          bot_id?: string
+          created_at?: string
+          current_factors?: Json
+          current_score?: number
+          direction?: string
+          entry_price?: number | null
+          id?: string
+          initial_factors?: Json
+          initial_score?: number
+          invalidation_reason?: string | null
+          last_eval_at?: string
+          min_cycles?: number
+          missing_factors?: Json
+          promotion_reason?: string | null
+          resolved_at?: string | null
+          scan_cycles?: number
+          setup_type?: string | null
+          sl_level?: number | null
+          staged_at?: string
+          status?: string
+          symbol?: string
+          tier1_count?: number
+          tier2_count?: number
+          tier3_count?: number
+          tp_level?: number | null
+          ttl_minutes?: number
+          updated_at?: string
+          user_id?: string
+          watch_threshold?: number
+        }
+        Relationships: []
+      }
       trade_archive: {
         Row: {
           archived_at: string | null
