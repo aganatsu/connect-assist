@@ -1601,6 +1601,16 @@ export function calcPnl(dir: string, entry: number, current: number, size: numbe
   return { pnl: diff * spec.lotUnits * size * quoteToUSD, pnlPips: diff / spec.pipSize };
 }
 
+// ─── Regime Transition Detection ──────────────────────────────────────────────
+export interface RegimeTransition {
+  state: string;        // "stable" | "trending_to_range" | "range_to_trending" | "accelerating" | "decelerating"
+  confidence: number;   // 0.0-1.0 — how certain we are about the transition
+  momentum: number;     // rate of regime score change (positive = becoming more trending, negative = becoming more ranging)
+  priorScore: number;   // regime score from lookback window
+  currentScore: number; // current regime score
+  detail: string;       // human-readable explanation
+}
+
 // ─── Instrument Regime Classification (H7: shared across scanner + weekly advisor) ──
 export interface InstrumentRegime {
   symbol?: string;
@@ -1611,6 +1621,7 @@ export interface InstrumentRegime {
   atrTrend: string;     // "expanding" | "contracting" | "stable"
   directionalBias: string; // "bullish" | "bearish" | "neutral"
   rangePercent: number;
+  transition?: RegimeTransition; // Regime transition detection
 }
 
 export function classifyInstrumentRegime(
@@ -1949,7 +1960,72 @@ export function classifyInstrumentRegime(
 
   indicators.push(`Total regime score: ${regimeScore}/14`);
 
-  return { regime, confidence, indicators, atr14, atrTrend, directionalBias, rangePercent };
+  // ─── Regime Transition Detection ──────────────────────────────────────────
+  // Compare current regime score against a lookback window (candles shifted back 10 periods)
+  // to detect if the market is transitioning between regimes.
+  let transition: RegimeTransition | undefined;
+  {
+    const lookbackShift = 10; // How many candles back to compute the "prior" regime
+    if (sorted.length >= 30 + lookbackShift) {
+      // Compute regime score on the older window (excluding the last N candles)
+      const priorCandles = sorted.slice(0, sorted.length - lookbackShift);
+      const priorResult = _computeRegimeScore(priorCandles);
+      const priorScore = priorResult.score;
+      const currentScore = regimeScore;
+      const scoreDelta = currentScore - priorScore;
+      const momentum = scoreDelta / lookbackShift; // Score change per candle
+
+      // Classify the transition state
+      let transState: string;
+      let transConf: number;
+      let transDetail: string;
+
+      const absDelta = Math.abs(scoreDelta);
+
+      if (absDelta <= 2) {
+        // Score barely changed — regime is stable
+        transState = "stable";
+        transConf = Math.min(0.8, 0.5 + (2 - absDelta) * 0.15);
+        transDetail = `Regime stable: score moved ${scoreDelta > 0 ? "+" : ""}${scoreDelta} (${priorScore} → ${currentScore}) over ${lookbackShift} candles`;
+      } else if (scoreDelta > 2 && priorScore <= 0) {
+        // Was ranging/transitional, now becoming trending
+        transState = "range_to_trending";
+        transConf = Math.min(0.95, 0.4 + absDelta * 0.08);
+        transDetail = `Transitioning range→trend: score jumped ${scoreDelta > 0 ? "+" : ""}${scoreDelta} (${priorScore} → ${currentScore}) — market gaining directional momentum`;
+      } else if (scoreDelta < -2 && priorScore >= 0) {
+        // Was trending/transitional, now becoming ranging
+        transState = "trending_to_range";
+        transConf = Math.min(0.95, 0.4 + absDelta * 0.08);
+        transDetail = `Transitioning trend→range: score dropped ${scoreDelta} (${priorScore} → ${currentScore}) — trend losing steam`;
+      } else if (scoreDelta > 2 && priorScore > 0) {
+        // Was already trending, now trending even harder
+        transState = "accelerating";
+        transConf = Math.min(0.9, 0.5 + absDelta * 0.06);
+        transDetail = `Trend accelerating: score rose ${scoreDelta > 0 ? "+" : ""}${scoreDelta} (${priorScore} → ${currentScore}) — strengthening directional move`;
+      } else if (scoreDelta < -2 && priorScore < 0) {
+        // Was already ranging, now ranging even harder
+        transState = "decelerating";
+        transConf = Math.min(0.9, 0.5 + absDelta * 0.06);
+        transDetail = `Range deepening: score dropped ${scoreDelta} (${priorScore} → ${currentScore}) — consolidation intensifying`;
+      } else {
+        transState = "stable";
+        transConf = 0.3;
+        transDetail = `Ambiguous transition: score moved ${scoreDelta > 0 ? "+" : ""}${scoreDelta} (${priorScore} → ${currentScore})`;
+      }
+
+      transition = {
+        state: transState,
+        confidence: Math.round(transConf * 100) / 100,
+        momentum: Math.round(momentum * 1000) / 1000,
+        priorScore,
+        currentScore,
+        detail: transDetail,
+      };
+      indicators.push(`Transition: ${transState} (${(transConf * 100).toFixed(0)}% conf, momentum ${momentum > 0 ? "+" : ""}${momentum.toFixed(3)}/candle)`);
+    }
+  }
+
+  return { regime, confidence, indicators, atr14, atrTrend, directionalBias, rangePercent, transition };
 }
 
 // ─── Helper: Compute EMA for regime classifier ─────────────────────────────
@@ -1964,4 +2040,185 @@ function _regimeEMA(values: number[], period: number): number[] {
     ema.push(values[i] * k + ema[ema.length - 1] * (1 - k));
   }
   return ema;
+}
+
+// ─── Helper: Compute raw regime score for transition detection ────────────
+// Runs the same 7 checks as classifyInstrumentRegime but returns only the
+// numeric score (no indicators, no classification). Used to compare current
+// vs lookback windows for transition detection.
+function _computeRegimeScore(
+  candles: Array<{ open: number; high: number; low: number; close: number; datetime?: string }>
+): { score: number } {
+  if (!candles || candles.length < 20) return { score: 0 };
+
+  const sorted = candles[0].datetime
+    ? [...candles].sort((a, b) => new Date(a.datetime!).getTime() - new Date(b.datetime!).getTime())
+    : candles;
+  const closes = sorted.map(c => c.close);
+  let score = 0;
+
+  // ATR
+  const trueRanges: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const h = sorted[i].high, l = sorted[i].low, pc = sorted[i - 1].close;
+    trueRanges.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+  }
+  const atr14 = trueRanges.slice(-14).reduce((s, v) => s + v, 0) / Math.min(14, trueRanges.length);
+
+  // CHECK 1: Swing Structure (BOS vs CHoCH)
+  {
+    const swingLookback = 3;
+    const swingHighs: { index: number; price: number }[] = [];
+    const swingLows: { index: number; price: number }[] = [];
+    const minSwingSize = atr14 * 0.25;
+    for (let i = swingLookback; i < sorted.length - swingLookback; i++) {
+      let isHigh = true, isLow = true;
+      for (let j = 1; j <= swingLookback; j++) {
+        if (sorted[i].high <= sorted[i - j].high || sorted[i].high <= sorted[i + j].high) isHigh = false;
+        if (sorted[i].low >= sorted[i - j].low || sorted[i].low >= sorted[i + j].low) isLow = false;
+      }
+      if (isHigh && sorted[i].high - sorted[i].low >= minSwingSize) swingHighs.push({ index: i, price: sorted[i].high });
+      if (isLow && sorted[i].high - sorted[i].low >= minSwingSize) swingLows.push({ index: i, price: sorted[i].low });
+    }
+    let bosCount = 0, chochCount = 0;
+    let currentTrend: "bullish" | "bearish" | "none" = "none";
+    for (let i = 1; i < swingHighs.length; i++) {
+      if (swingHighs[i].price > swingHighs[i - 1].price) {
+        if ((currentTrend as string) === "bearish") chochCount++; else bosCount++;
+        currentTrend = "bullish";
+      }
+    }
+    for (let i = 1; i < swingLows.length; i++) {
+      if (swingLows[i].price < swingLows[i - 1].price) {
+        if (currentTrend === "bullish") chochCount++; else bosCount++;
+        currentTrend = "bearish";
+      }
+    }
+    const totalBreaks = bosCount + chochCount;
+    if (totalBreaks > 0) {
+      const bosRatio = bosCount / totalBreaks;
+      if (bosRatio >= 0.7) score += 2;
+      else if (bosRatio >= 0.5) score += 1;
+      else if (bosRatio < 0.3) score -= 2;
+      else score -= 1;
+    }
+  }
+
+  // CHECK 2: EMA 20/50 Alignment
+  {
+    const ema20 = _regimeEMA(closes, 20);
+    const ema50 = _regimeEMA(closes, Math.min(50, closes.length - 1));
+    if (ema20.length >= 5 && ema50.length >= 5) {
+      const recentEma20 = ema20[ema20.length - 1];
+      const recentEma50 = ema50[ema50.length - 1];
+      const priorEma20 = ema20[ema20.length - 5];
+      const priorEma50 = ema50[ema50.length - 5];
+      const ema20Slope = recentEma20 - priorEma20;
+      const ema50Slope = recentEma50 - priorEma50;
+      const separation = Math.abs(recentEma20 - recentEma50);
+      const separationPct = (separation / recentEma50) * 100;
+      const sameDirection = (ema20Slope > 0 && ema50Slope > 0) || (ema20Slope < 0 && ema50Slope < 0);
+      if (sameDirection && separationPct > 0.3) score += 2;
+      else if (sameDirection) score += 1;
+      else if (separationPct < 0.1) score -= 2;
+      else score -= 1;
+    }
+  }
+
+  // CHECK 3: Impulse vs Correction Ratio
+  {
+    const recent = sorted.slice(-20);
+    let maxSwingUp = 0, maxSwingDown = 0;
+    let runningLow = recent[0].low, runningHigh = recent[0].high;
+    for (let i = 1; i < recent.length; i++) {
+      if (recent[i].high - runningLow > maxSwingUp) maxSwingUp = recent[i].high - runningLow;
+      if (recent[i].low < runningLow) runningLow = recent[i].low;
+      if (runningHigh - recent[i].low > maxSwingDown) maxSwingDown = runningHigh - recent[i].low;
+      if (recent[i].high > runningHigh) runningHigh = recent[i].high;
+    }
+    const impulse = Math.max(maxSwingUp, maxSwingDown);
+    const correction = Math.min(maxSwingUp, maxSwingDown);
+    const ratio = correction > 0 ? impulse / correction : (impulse > 0 ? 5.0 : 1.0);
+    if (ratio >= 3.0) score += 2;
+    else if (ratio >= 1.8) score += 1;
+    else if (ratio <= 1.2) score -= 2;
+  }
+
+  // CHECK 4: Consecutive Directional Candles
+  {
+    const recent = sorted.slice(-20);
+    let maxRun = 1, currentRun = 1;
+    for (let i = 1; i < recent.length; i++) {
+      const prevDir = recent[i - 1].close >= recent[i - 1].open ? "bull" : "bear";
+      const currDir = recent[i].close >= recent[i].open ? "bull" : "bear";
+      if (currDir === prevDir) currentRun++; else { maxRun = Math.max(maxRun, currentRun); currentRun = 1; }
+    }
+    maxRun = Math.max(maxRun, currentRun);
+    if (maxRun >= 5) score += 2;
+    else if (maxRun >= 4) score += 1;
+    else if (maxRun <= 2) score -= 2;
+  }
+
+  // CHECK 5: ADX
+  {
+    const adxPeriod = Math.min(14, trueRanges.length);
+    const plusDMs: number[] = [];
+    const minusDMs: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const upMove = sorted[i].high - sorted[i - 1].high;
+      const downMove = sorted[i - 1].low - sorted[i].low;
+      plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+      minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    }
+    const smoothLen = Math.min(adxPeriod, plusDMs.length);
+    let smoothPlusDM = plusDMs.slice(0, smoothLen).reduce((s, v) => s + v, 0);
+    let smoothMinusDM = minusDMs.slice(0, smoothLen).reduce((s, v) => s + v, 0);
+    let smoothTR = trueRanges.slice(0, smoothLen).reduce((s, v) => s + v, 0);
+    const dxValues: number[] = [];
+    for (let i = smoothLen; i < plusDMs.length; i++) {
+      smoothPlusDM = smoothPlusDM - (smoothPlusDM / smoothLen) + plusDMs[i];
+      smoothMinusDM = smoothMinusDM - (smoothMinusDM / smoothLen) + minusDMs[i];
+      smoothTR = smoothTR - (smoothTR / smoothLen) + trueRanges[i];
+      const plusDI = smoothTR > 0 ? (smoothPlusDM / smoothTR) * 100 : 0;
+      const minusDI = smoothTR > 0 ? (smoothMinusDM / smoothTR) * 100 : 0;
+      const diSum = plusDI + minusDI;
+      const dx = diSum > 0 ? (Math.abs(plusDI - minusDI) / diSum) * 100 : 0;
+      dxValues.push(dx);
+    }
+    const adxSmoothPeriod = Math.min(14, dxValues.length);
+    const adx = adxSmoothPeriod > 0 ? dxValues.slice(-adxSmoothPeriod).reduce((s, v) => s + v, 0) / adxSmoothPeriod : 0;
+    if (adx > 30) score += 2;
+    else if (adx > 25) score += 1;
+    else if (adx < 18) score -= 2;
+  }
+
+  // CHECK 6: HTF Bias Consistency
+  {
+    const len = sorted.length;
+    const price50ago = len >= 50 ? sorted[len - 50].close : sorted[0].close;
+    const price20ago = sorted[len - 20].close;
+    const priceNow = sorted[len - 1].close;
+    const longTermDir = priceNow > price50ago ? "bullish" : priceNow < price50ago ? "bearish" : "flat";
+    const shortTermDir = priceNow > price20ago ? "bullish" : priceNow < price20ago ? "bearish" : "flat";
+    const longTermMove = Math.abs(priceNow - price50ago) / price50ago * 100;
+    const shortTermMove = Math.abs(priceNow - price20ago) / price20ago * 100;
+    if (longTermDir === shortTermDir && longTermDir !== "flat") score += 2;
+    else if (longTermDir !== "flat" && shortTermDir !== longTermDir && longTermMove > shortTermMove) score += 1;
+    else if (longTermMove < 0.5 && shortTermMove < 0.5) score -= 2;
+  }
+
+  // CHECK 7: Range Compression (BB Width proxy)
+  {
+    const recentCloses = closes.slice(-20);
+    const mean = recentCloses.reduce((s, v) => s + v, 0) / recentCloses.length;
+    const variance = recentCloses.reduce((s, v) => s + (v - mean) ** 2, 0) / recentCloses.length;
+    const stdDev = Math.sqrt(variance);
+    const bbWidthPct = (stdDev / mean) * 100 * 4;
+    const atrPriceRatio = (atr14 / closes[closes.length - 1]) * 100;
+    if (bbWidthPct > 3.0 && atrPriceRatio > 0.8) score += 2;
+    else if (bbWidthPct > 2.0) score += 1;
+    else if (bbWidthPct < 1.0) score -= 2;
+  }
+
+  return { score };
 }

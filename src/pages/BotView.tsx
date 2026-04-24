@@ -1165,6 +1165,105 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
+      {/* Regime Detection Panel — shows Daily + 4H regime, transition state, multi-TF alignment */}
+      {d.regimeData && (
+        <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
+          <p className="text-[8px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {/* Daily Regime */}
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">Daily:</span>
+              <span className={`text-[9px] font-bold ${
+                d.regimeData.daily?.regime?.includes("trend") ? "text-emerald-400"
+                : d.regimeData.daily?.regime?.includes("range") ? "text-orange-400"
+                : "text-yellow-400"
+              }`}>
+                {(d.regimeData.daily?.regime || "—").replace(/_/g, " ")}
+              </span>
+              <span className="text-[8px] text-muted-foreground">
+                ({Math.round((d.regimeData.daily?.confidence || 0) * 100)}%)
+              </span>
+              {d.regimeData.daily?.bias && d.regimeData.daily.bias !== "neutral" && (
+                <span className={`text-[8px] ${d.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                  {d.regimeData.daily.bias === "bullish" ? "↑" : "↓"}
+                </span>
+              )}
+            </div>
+            {/* 4H Regime */}
+            {d.regimeData.h4 && (
+              <div className="flex items-center gap-1">
+                <span className="text-[8px] text-muted-foreground">4H:</span>
+                <span className={`text-[9px] font-bold ${
+                  d.regimeData.h4.regime?.includes("trend") ? "text-emerald-400"
+                  : d.regimeData.h4.regime?.includes("range") ? "text-orange-400"
+                  : "text-yellow-400"
+                }`}>
+                  {(d.regimeData.h4.regime || "—").replace(/_/g, " ")}
+                </span>
+                <span className="text-[8px] text-muted-foreground">
+                  ({Math.round((d.regimeData.h4.confidence || 0) * 100)}%)
+                </span>
+                {d.regimeData.h4.bias && d.regimeData.h4.bias !== "neutral" && (
+                  <span className={`text-[8px] ${d.regimeData.h4.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                    {d.regimeData.h4.bias === "bullish" ? "↑" : "↓"}
+                  </span>
+                )}
+              </div>
+            )}
+            {/* Multi-TF Alignment */}
+            {d.regimeData.multiTFAlignment && (
+              <div className="flex items-center gap-1">
+                <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                  d.regimeData.multiTFAlignment === "agree" ? "bg-emerald-500/20 text-emerald-400"
+                  : d.regimeData.multiTFAlignment === "disagree" ? "bg-red-500/20 text-red-400"
+                  : "bg-yellow-500/20 text-yellow-400"
+                }`}>
+                  {d.regimeData.multiTFAlignment === "agree" ? "TF ✓ AGREE"
+                    : d.regimeData.multiTFAlignment === "disagree" ? "TF ✗ DISAGREE"
+                    : "TF ~ MIXED"}
+                </span>
+              </div>
+            )}
+          </div>
+          {/* Transition State */}
+          {d.regimeData.daily?.transition && d.regimeData.daily.transition.state !== "stable" && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                d.regimeData.daily.transition.state === "range_to_trending" ? "bg-emerald-500/20 text-emerald-400"
+                : d.regimeData.daily.transition.state === "accelerating" ? "bg-blue-500/20 text-blue-400"
+                : d.regimeData.daily.transition.state === "trending_to_range" ? "bg-orange-500/20 text-orange-400"
+                : d.regimeData.daily.transition.state === "decelerating" ? "bg-red-500/20 text-red-400"
+                : "bg-muted text-muted-foreground"
+              }`}>
+                {d.regimeData.daily.transition.state === "range_to_trending" ? "⚡ RANGE → TREND"
+                  : d.regimeData.daily.transition.state === "accelerating" ? "🚀 ACCELERATING"
+                  : d.regimeData.daily.transition.state === "trending_to_range" ? "⏸ TREND → RANGE"
+                  : d.regimeData.daily.transition.state === "decelerating" ? "📉 DECELERATING"
+                  : d.regimeData.daily.transition.state.replace(/_/g, " ").toUpperCase()}
+              </span>
+              <span className="text-[8px] text-muted-foreground">
+                ({Math.round(d.regimeData.daily.transition.confidence * 100)}% conf, momentum {d.regimeData.daily.transition.momentum > 0 ? "+" : ""}{d.regimeData.daily.transition.momentum.toFixed(3)}/candle)
+              </span>
+            </div>
+          )}
+          {/* 4H Transition */}
+          {d.regimeData.h4?.transition && d.regimeData.h4.transition.state !== "stable" && (
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">4H:</span>
+              <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                d.regimeData.h4.transition.state.includes("trending") || d.regimeData.h4.transition.state === "accelerating" ? "bg-emerald-500/15 text-emerald-400"
+                : "bg-orange-500/15 text-orange-400"
+              }`}>
+                {d.regimeData.h4.transition.state.replace(/_/g, " ")}
+              </span>
+              <span className="text-[8px] text-muted-foreground">
+                (mom: {d.regimeData.h4.transition.momentum > 0 ? "+" : ""}{d.regimeData.h4.transition.momentum.toFixed(3)})
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>

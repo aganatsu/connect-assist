@@ -1562,33 +1562,88 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // ─── Regime Classification (info-only, separate gate — no score adjustment) ──────
   // Classifies the instrument's current regime for display and optional gate blocking.
   // Does NOT adjust the confluence score — regime is a separate pass/fail gate.
+  // Now supports multi-timeframe regime: Daily (primary) + 4H (secondary).
   const regimeScoringEnabled = config.regimeScoringEnabled !== false;
-  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[] } | null = null;
+  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
+    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
+  } | null = null;
+  let regime4HInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
+    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
+  } | null = null;
   let regimeGatePassed = true;
   let regimeGateReason = "";
   {
+    const h4Candles: Candle[] | null = (config as any)._h4Candles || null;
+
     if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
       regimeInfo = classifyInstrumentRegimeLocal(dailyCandles);
+
+      // ── Multi-TF Regime: classify 4H alongside daily ──
+      if (h4Candles && h4Candles.length >= 20) {
+        regime4HInfo = classifyInstrumentRegimeLocal(h4Candles);
+      }
+
+      // ── Multi-TF Alignment Adjustment ──
+      // When both timeframes are available, adjust the effective regime based on agreement/disagreement.
+      // Daily is the primary regime; 4H provides confirmation or caution.
       const { adjustment, detail } = regimeAlignmentAdjustment(
         regimeInfo.regime, regimeInfo.confidence, direction, factors
       );
-      // Regime is now info-only for the score — but we track it for the gate
-      // If adjustment is heavily negative (< -1.0), regime gate fails
-      if (adjustment < -1.0) {
-        regimeGatePassed = false;
-        regimeGateReason = `Regime mismatch: ${regimeInfo.regime.replace("_", " ")} — ${detail}`;
-      } else {
-        regimeGateReason = `Regime OK: ${regimeInfo.regime.replace("_", " ")} — ${detail}`;
+
+      // Multi-TF modifier: if 4H disagrees with daily, reduce confidence in the alignment
+      let multiTFModifier = 0;
+      let multiTFDetail = "";
+      if (regime4HInfo) {
+        const dailyTrending = regimeInfo.regime === "strong_trend" || regimeInfo.regime === "mild_trend";
+        const dailyRanging = regimeInfo.regime === "choppy_range" || regimeInfo.regime === "mild_range";
+        const h4Trending = regime4HInfo.regime === "strong_trend" || regime4HInfo.regime === "mild_trend";
+        const h4Ranging = regime4HInfo.regime === "choppy_range" || regime4HInfo.regime === "mild_range";
+
+        if ((dailyTrending && h4Trending) || (dailyRanging && h4Ranging)) {
+          // Both timeframes agree — strengthen the signal
+          multiTFModifier = 0.15;
+          multiTFDetail = `Multi-TF AGREE: Daily ${regimeInfo.regime.replace("_", " ")} + 4H ${regime4HInfo.regime.replace("_", " ")} → +0.15 confidence boost`;
+        } else if ((dailyTrending && h4Ranging) || (dailyRanging && h4Trending)) {
+          // Timeframes disagree — caution, reduce confidence
+          multiTFModifier = -0.25;
+          multiTFDetail = `Multi-TF DISAGREE: Daily ${regimeInfo.regime.replace("_", " ")} vs 4H ${regime4HInfo.regime.replace("_", " ")} → -0.25 confidence reduction`;
+        } else {
+          // One is transitional — mild uncertainty
+          multiTFModifier = -0.1;
+          multiTFDetail = `Multi-TF MIXED: Daily ${regimeInfo.regime.replace("_", " ")} + 4H ${regime4HInfo.regime.replace("_", " ")} → -0.1 mild uncertainty`;
+        }
       }
+
+      // Apply multi-TF modifier to the alignment adjustment
+      const effectiveAdjustment = adjustment + multiTFModifier;
+
+      // Regime is now info-only for the score — but we track it for the gate
+      // If effective adjustment is heavily negative (< -1.0), regime gate fails
+      if (effectiveAdjustment < -1.0) {
+        regimeGatePassed = false;
+        regimeGateReason = `Regime mismatch: ${regimeInfo.regime.replace("_", " ")} — ${detail}${multiTFDetail ? " | " + multiTFDetail : ""}`;
+      } else {
+        regimeGateReason = `Regime OK: ${regimeInfo.regime.replace("_", " ")} — ${detail}${multiTFDetail ? " | " + multiTFDetail : ""}`;
+      }
+
       // Include the 7-check indicator breakdown in the factor detail
       const indicatorSummary = regimeInfo.indicators.length > 0
         ? " | Checks: " + regimeInfo.indicators.join(" | ")
         : "";
+      // Transition info
+      const transitionSummary = regimeInfo.transition
+        ? ` | Transition: ${regimeInfo.transition.state} (${(regimeInfo.transition.confidence * 100).toFixed(0)}% conf, momentum ${regimeInfo.transition.momentum > 0 ? "+" : ""}${regimeInfo.transition.momentum.toFixed(3)}/candle)`
+        : "";
+      // 4H regime summary
+      const h4Summary = regime4HInfo
+        ? ` | 4H Regime: ${regime4HInfo.regime.replace("_", " ")} (${(regime4HInfo.confidence * 100).toFixed(0)}% conf, bias ${regime4HInfo.bias})`
+        : "";
+
       factors.push({
         name: "Regime Alignment",
         present: true,
         weight: 0, // No score impact — info only
-        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail} [info-only gate]${indicatorSummary}`,
+        detail: `${regimeInfo.regime.replace("_", " ")} (${(regimeInfo.confidence * 100).toFixed(0)}% conf, ATR ${regimeInfo.atrTrend}, bias ${regimeInfo.bias}) — ${detail} [info-only gate]${transitionSummary}${h4Summary}${multiTFDetail ? " | " + multiTFDetail : ""}${indicatorSummary}`,
         group: "Macro Confirmation",
       });
     } else {
@@ -1820,7 +1875,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     strongFactorCount, direction, bias, summary, factors,
     structure, orderBlocks, fvgs, liquidityPools, judasSwing, reversalCandle,
     pd, session, pdLevels, lastPrice, stopLoss, takeProfit, displacement, breakerBlocks, unicornSetups, silverBullet, macroWindow, smt: smtResult, vwap, amd,
-    fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo,
+    fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo, regime4HInfo,
     // New tiered scoring metadata
     tieredScoring: {
       tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
@@ -1836,7 +1891,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 // Returns a regime label + confidence so the scorer can apply a penalty/bonus.
 // H7: classifyInstrumentRegime is now imported from _shared/smcAnalysis.ts
 // Thin wrapper to preserve the scanner's existing return shape { regime, confidence, atrTrend, bias }
-function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[] } {
+function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): {
+  regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
+  transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
+} {
   const result = classifyInstrumentRegime(dailyCandles);
   return {
     regime: result.regime,
@@ -1844,6 +1902,14 @@ function classifyInstrumentRegimeLocal(dailyCandles: Candle[]): { regime: string
     atrTrend: result.atrTrend,
     bias: result.directionalBias,
     indicators: result.indicators || [],
+    transition: result.transition ? {
+      state: result.transition.state,
+      confidence: result.transition.confidence,
+      momentum: result.transition.momentum,
+      priorScore: result.transition.priorScore,
+      currentScore: result.transition.currentScore,
+      detail: result.transition.detail,
+    } : undefined,
   };
 }
 
@@ -3657,21 +3723,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const entryInterval = getYahooInterval(pairConfig.entryTimeframe);
     const entryRange = getYahooRange(pairConfig.entryTimeframe);
 
-    // Fetch entry TF, daily, optionally 1h, and SMT correlated pair candles in parallel
+    // Fetch entry TF, daily, 4H (for multi-TF regime), optionally 1h, and SMT correlated pair candles in parallel
     const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
     const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
     const smtFlag = smtPair && YAHOO_SYMBOLS[smtPair] ? 1 : 0;
+    const multiTFRegimeEnabled = pairConfig.multiTFRegimeEnabled !== false; // ON by default
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
+    // Always fetch 4H for multi-TF regime (reuses 1h data if OR is also enabled)
+    if (multiTFRegimeEnabled) fetchPromises.push(fetchCandles(pair, "4h", "1mo").catch(() => [] as Candle[]));
     if (orFlag) fetchPromises.push(fetchCandles(pair, "1h", "2d"));
     if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
-    const hourlyCandles = orFlag ? fetched[2] : undefined;
-    const smtCandles = smtFlag ? fetched[2 + orFlag] : null;
+    const h4Candles: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
+    const h4Offset = multiTFRegimeEnabled ? 1 : 0;
+    const hourlyCandles = orFlag ? fetched[2 + h4Offset] : undefined;
+    const smtCandles = smtFlag ? fetched[2 + h4Offset + orFlag] : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -3689,6 +3760,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     pairConfig._smtResult = smtCandles ? detectSMTDivergence(pair, candles, smtCandles) : null;
     // Inject FOTSI result for Factor 18 (Currency Strength)
     (pairConfig as any)._fotsiResult = _fotsiResult;
+    // Inject 4H candles for multi-TF regime classification
+    (pairConfig as any)._h4Candles = h4Candles.length >= 20 ? h4Candles : null;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
 
     // ── Setup Classifier: determine scalp/day/swing from the actual setup structure (informational only) ──
@@ -3731,6 +3804,29 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         rationale: setupClassification.rationale,
         executionProfile: setupClassification.executionProfile,
       },
+      // ── Regime Detection Data (for frontend display) ──
+      regimeData: analysis.regimeInfo ? {
+        daily: {
+          regime: analysis.regimeInfo.regime,
+          confidence: analysis.regimeInfo.confidence,
+          atrTrend: analysis.regimeInfo.atrTrend,
+          bias: analysis.regimeInfo.bias,
+          transition: analysis.regimeInfo.transition || null,
+        },
+        h4: analysis.regime4HInfo ? {
+          regime: analysis.regime4HInfo.regime,
+          confidence: analysis.regime4HInfo.confidence,
+          atrTrend: analysis.regime4HInfo.atrTrend,
+          bias: analysis.regime4HInfo.bias,
+          transition: analysis.regime4HInfo.transition || null,
+        } : null,
+        multiTFAlignment: analysis.regimeInfo && analysis.regime4HInfo
+          ? ((analysis.regimeInfo.regime.includes("trend") && analysis.regime4HInfo.regime.includes("trend"))
+            || (analysis.regimeInfo.regime.includes("range") && analysis.regime4HInfo.regime.includes("range")))
+            ? "agree" : (analysis.regimeInfo.regime === "transitional" || analysis.regime4HInfo.regime === "transitional")
+            ? "mixed" : "disagree"
+          : null,
+      } : null,
     };
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
