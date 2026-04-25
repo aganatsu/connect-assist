@@ -38,6 +38,11 @@ export interface SwingPoint {
   type: "high" | "low";
   datetime: string;
   significance?: "internal" | "external";  // internal = minor pullback swing, external = major structural swing
+  // ── Lifecycle tracking ──
+  state: "active" | "tested" | "swept" | "broken";
+  testedCount: number;        // times price approached within tolerance but didn't break
+  sweptAt?: number;           // candle index when wick went through but close held
+  brokenAt?: number;          // candle index when price closed through (BOS/CHoCH)
 }
 
 export interface OrderBlock {
@@ -51,6 +56,12 @@ export interface OrderBlock {
   hasDisplacement?: boolean;
   hasFVGAdjacency?: boolean;
   hasVolumePivot?: boolean;
+  // ── Lifecycle tracking ──
+  state: "fresh" | "tested" | "mitigated" | "broken";
+  testedCount: number;        // times price entered zone edge but didn't close through 50%
+  firstTestedAt?: number;     // candle index of first test
+  mitigatedAt?: number;       // candle index when mitigatedPercent first crossed 50%
+  brokenAt?: number;          // candle index when price closed fully through the zone
 }
 
 export interface FairValueGap {
@@ -63,6 +74,12 @@ export interface FairValueGap {
   hasDisplacement?: boolean;
   /** Quality score 0-8: displacement(+3) + ATR-relative size(+0-2) + body ratio(+0-1) + structure break nearby(+2) */
   quality?: number;
+  // ── Lifecycle tracking ──
+  state: "open" | "partially_filled" | "respected" | "filled";
+  fillPercent: number;        // 0-100%, how much of the gap has been filled by subsequent price action
+  respectedCount: number;     // times price touched the FVG edge but bounced away
+  firstTestedAt?: number;     // candle index of first price entry into gap
+  filledAt?: number;          // candle index when fully filled (mitigated)
 }
 
 export interface LiquidityPool {
@@ -73,6 +90,11 @@ export interface LiquidityPool {
   swept: boolean;
   sweptAtIndex?: number;
   rejectionConfirmed?: boolean;
+  // ── Lifecycle tracking ──
+  state: "active" | "swept_rejected" | "swept_absorbed" | "retested";
+  sweepDepth?: number;        // how far past the level price went (absolute distance)
+  retestedAt?: number;        // candle index when price came back to test from the other side
+  retestedHeld?: boolean;     // did the retest hold? (level acting as new S/R)
 }
 
 export interface BreakerBlock {
@@ -83,6 +105,11 @@ export interface BreakerBlock {
   mitigatedAt: number;
   originalOBType: "bullish" | "bearish";
   isActive: boolean;
+  // ── Lifecycle tracking ──
+  state: "active" | "tested" | "respected" | "broken";
+  testedCount: number;
+  respectedAt?: number;       // candle index when price bounced from the zone
+  brokenAt?: number;          // candle index when price closed through (invalidated)
 }
 
 export interface UnicornSetup {
@@ -93,6 +120,9 @@ export interface UnicornSetup {
   fvgLow: number;
   overlapHigh: number;
   overlapLow: number;
+  // ── Lifecycle tracking ──
+  state: "active" | "tested" | "triggered" | "invalidated";
+  invalidationReason?: "breaker_broken" | "fvg_filled" | "price_through";
 }
 
 export interface DisplacementCandle {
@@ -572,8 +602,8 @@ export function detectSwingPoints(candles: Candle[], lookback = 3, atrFilter = 0
       }
       if (maxHigh - candles[i].low < minSwingSize) isLow = false;
     }
-    if (isHigh) swings.push({ index: i, price: candles[i].high, type: "high", datetime: candles[i].datetime });
-    if (isLow) swings.push({ index: i, price: candles[i].low, type: "low", datetime: candles[i].datetime });
+    if (isHigh) swings.push({ index: i, price: candles[i].high, type: "high", datetime: candles[i].datetime, state: "active", testedCount: 0 });
+    if (isLow) swings.push({ index: i, price: candles[i].low, type: "low", datetime: candles[i].datetime, state: "active", testedCount: 0 });
   }
   return swings;
 }
@@ -829,6 +859,61 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     .filter(b => b.derivedSR && b.derivedSR.broken)
     .map(b => b.derivedSR!);
 
+  // ── Swing Point Lifecycle Write-Back ──
+  // Now that BOS, CHoCH, and sweeps are computed, write the results back onto the swing points.
+  // This lets downstream consumers see each swing's full history without re-deriving it.
+  const swingMap = new Map<string, SwingPoint>();
+  for (const s of swings) swingMap.set(`${s.type}_${s.index}`, s);
+
+  // BOS/CHoCH = swing was broken (price closed through)
+  for (const brk of [...bos, ...choch]) {
+    // Find the swing that was broken: it's the previous swing at brk.level
+    // We need to find the swing whose price matches brk.level
+    const swingType = brk.type === "bullish" ? "high" : "low";
+    const relevantSwings = swings.filter(s => s.type === swingType && Math.abs(s.price - brk.level) < 0.000001);
+    for (const sw of relevantSwings) {
+      if (sw.index < brk.index) {
+        sw.state = "broken";
+        sw.brokenAt = brk.index;
+      }
+    }
+  }
+
+  // Sweeps = swing was swept (wick through but close held)
+  for (const sweep of sweeps) {
+    const swingType = sweep.type === "bullish" ? "low" : "high";
+    const relevantSwings = swings.filter(s => s.type === swingType && Math.abs(s.price - sweep.sweptLevel) < 0.000001);
+    for (const sw of relevantSwings) {
+      if (sw.index < sweep.index && sw.state !== "broken") {
+        sw.state = "swept";
+        sw.sweptAt = sweep.index;
+      }
+    }
+  }
+
+  // Test detection: for remaining active swings, scan subsequent candles for approaches
+  const swingATR = candles.length >= 15 ? calculateATR(candles, 14) : 0;
+  const testTolerance = swingATR > 0 ? swingATR * 0.15 : 0; // 15% of ATR = "approaching"
+  for (const sw of swings) {
+    if (sw.state !== "active") continue; // already broken or swept
+    for (let k = sw.index + 1; k < candles.length; k++) {
+      const c = candles[k];
+      if (sw.type === "high") {
+        // Test = price came within tolerance of the swing high but didn't break through
+        if (c.high >= sw.price - testTolerance && c.high < sw.price) {
+          sw.testedCount++;
+          if (sw.state === "active") sw.state = "tested";
+        }
+      } else {
+        // Test = price came within tolerance of the swing low but didn't break through
+        if (c.low <= sw.price + testTolerance && c.low > sw.price) {
+          sw.testedCount++;
+          if (sw.state === "active") sw.state = "tested";
+        }
+      }
+    }
+  }
+
   return {
     trend, swingPoints: swings, bos, choch, sweeps,
     // New fields — all backward compatible (optional consumption)
@@ -914,6 +999,7 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
         index: obIdx, high: zone.high, low: zone.low, type: "bullish",
         datetime: obCandle.datetime, mitigated: false, mitigatedPercent: 0,
         hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
+        state: "fresh", testedCount: 0,
       };
       // Check for displacement: the engulfing candle (curr) or next 2 candles must be a large-body move
       // Displacement = body > 1.5x avg range AND body ratio > 60%
@@ -926,13 +1012,39 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
           break;
         }
       }
-      // Mitigation check
+      // ── Lifecycle tracking: scan all candles after OB creation ──
+      // Track tests (price enters zone edge), mitigation (50%+ penetration), and broken (close through)
+      const obRange = ob.high - ob.low;
       for (let j = i + 1; j < candles.length; j++) {
-        const mid = (ob.high + ob.low) / 2;
-        if (candles[j].low <= mid) {
-          ob.mitigatedPercent = Math.min(100, ((ob.high - candles[j].low) / (ob.high - ob.low)) * 100);
-          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+        const c = candles[j];
+        // "Broken" = candle closes fully below the OB low (for bullish OB)
+        if (c.close < ob.low) {
+          ob.state = "broken";
+          ob.brokenAt = j;
+          ob.mitigatedPercent = 100;
+          ob.mitigated = true;
+          if (!ob.mitigatedAt) ob.mitigatedAt = j;
           break;
+        }
+        // "Mitigated" = price penetrated 50%+ into the zone
+        const mid = (ob.high + ob.low) / 2;
+        if (c.low <= mid) {
+          const penetration = Math.min(100, ((ob.high - c.low) / obRange) * 100);
+          if (penetration > ob.mitigatedPercent) ob.mitigatedPercent = penetration;
+          if (ob.mitigatedPercent >= 50 && !ob.mitigated) {
+            ob.mitigated = true;
+            ob.mitigatedAt = j;
+            if (ob.state === "fresh" || ob.state === "tested") ob.state = "mitigated";
+          }
+          // Also counts as a test
+          if (!ob.firstTestedAt) ob.firstTestedAt = j;
+          ob.testedCount++;
+        }
+        // "Tested" = price entered the zone (touched ob.high from above) but didn't penetrate 50%
+        else if (c.low <= ob.high && c.low > mid) {
+          if (ob.state === "fresh") ob.state = "tested";
+          if (!ob.firstTestedAt) ob.firstTestedAt = j;
+          ob.testedCount++;
         }
       }
       // Quality scoring: structure break nearby = +2, displacement = +2, volume pivot = +2, recency bonus
@@ -960,6 +1072,7 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
         index: obIdx, high: zone.high, low: zone.low, type: "bearish",
         datetime: obCandle.datetime, mitigated: false, mitigatedPercent: 0,
         hasDisplacement: false, hasFVGAdjacency: false, quality: 0,
+        state: "fresh", testedCount: 0,
       };
       // Check for displacement: bearish large-body move away from OB
       for (let d = i; d < Math.min(i + 3, candles.length); d++) {
@@ -971,13 +1084,37 @@ export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: 
           break;
         }
       }
-      // Mitigation check
+      // ── Lifecycle tracking: scan all candles after OB creation ──
+      const obRange = ob.high - ob.low;
       for (let j = i + 1; j < candles.length; j++) {
-        const mid = (ob.high + ob.low) / 2;
-        if (candles[j].high >= mid) {
-          ob.mitigatedPercent = Math.min(100, ((candles[j].high - ob.low) / (ob.high - ob.low)) * 100);
-          if (ob.mitigatedPercent >= 50) ob.mitigated = true;
+        const c = candles[j];
+        // "Broken" = candle closes fully above the OB high (for bearish OB)
+        if (c.close > ob.high) {
+          ob.state = "broken";
+          ob.brokenAt = j;
+          ob.mitigatedPercent = 100;
+          ob.mitigated = true;
+          if (!ob.mitigatedAt) ob.mitigatedAt = j;
           break;
+        }
+        // "Mitigated" = price penetrated 50%+ into the zone
+        const mid = (ob.high + ob.low) / 2;
+        if (c.high >= mid) {
+          const penetration = Math.min(100, ((c.high - ob.low) / obRange) * 100);
+          if (penetration > ob.mitigatedPercent) ob.mitigatedPercent = penetration;
+          if (ob.mitigatedPercent >= 50 && !ob.mitigated) {
+            ob.mitigated = true;
+            ob.mitigatedAt = j;
+            if (ob.state === "fresh" || ob.state === "tested") ob.state = "mitigated";
+          }
+          if (!ob.firstTestedAt) ob.firstTestedAt = j;
+          ob.testedCount++;
+        }
+        // "Tested" = price entered the zone (touched ob.low from below) but didn't penetrate 50%
+        else if (c.high >= ob.low && c.high < mid) {
+          if (ob.state === "fresh") ob.state = "tested";
+          if (!ob.firstTestedAt) ob.firstTestedAt = j;
+          ob.testedCount++;
         }
       }
       // Quality scoring
@@ -1015,16 +1152,75 @@ export function detectFVGs(
     const c1 = candles[i - 2], c2 = candles[i - 1], c3 = candles[i];
     // Bullish FVG: gap up — candle 3 low > candle 1 high, middle candle is bullish
     if (c3.low > c1.high && c2.close > c2.open) {
-      const fvg: FairValueGap = { index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime, mitigated: false };
-      // Check if FVG has been filled (price returned into the gap)
-      for (let j = i + 1; j < candles.length; j++) { if (candles[j].low <= fvg.low) { fvg.mitigated = true; break; } }
+      const fvg: FairValueGap = {
+        index: i - 1, high: c3.low, low: c1.high, type: "bullish", datetime: c2.datetime,
+        mitigated: false, state: "open", fillPercent: 0, respectedCount: 0,
+      };
+      // ── Lifecycle tracking: scan all candles after FVG creation ──
+      const gapSize = fvg.high - fvg.low;
+      for (let j = i + 1; j < candles.length; j++) {
+        const c = candles[j];
+        // Fully filled: price closed through the entire gap (low went below fvg.low for bullish)
+        if (c.low <= fvg.low) {
+          fvg.mitigated = true;
+          fvg.state = "filled";
+          fvg.fillPercent = 100;
+          fvg.filledAt = j;
+          if (!fvg.firstTestedAt) fvg.firstTestedAt = j;
+          break;
+        }
+        // Partial fill: price entered the gap but didn't close through
+        if (c.low < fvg.high) {
+          const penetration = Math.min(100, ((fvg.high - c.low) / gapSize) * 100);
+          if (penetration > fvg.fillPercent) fvg.fillPercent = penetration;
+          if (!fvg.firstTestedAt) fvg.firstTestedAt = j;
+          if (fvg.fillPercent > 0 && fvg.fillPercent < 100 && fvg.state === "open") {
+            fvg.state = "partially_filled";
+          }
+        }
+        // Respected: price approached the FVG top edge (within 20% of gap size) but bounced away
+        // A "respect" = the candle's low came within the top 20% of the gap AND the candle closed above the gap top
+        else if (c.low <= fvg.high + gapSize * 0.2 && c.close > fvg.high) {
+          fvg.respectedCount++;
+          if (fvg.state === "open" && fvg.respectedCount >= 1) fvg.state = "respected";
+        }
+      }
       fvg.quality = scoreFVGQuality(fvg, c2, atr, i - 1, "bullish", structureBreaks);
       fvgs.push(fvg);
     }
     // Bearish FVG: gap down — candle 1 low > candle 3 high, middle candle is bearish
     if (c1.low > c3.high && c2.close < c2.open) {
-      const fvg: FairValueGap = { index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime, mitigated: false };
-      for (let j = i + 1; j < candles.length; j++) { if (candles[j].high >= fvg.high) { fvg.mitigated = true; break; } }
+      const fvg: FairValueGap = {
+        index: i - 1, high: c1.low, low: c3.high, type: "bearish", datetime: c2.datetime,
+        mitigated: false, state: "open", fillPercent: 0, respectedCount: 0,
+      };
+      const gapSize = fvg.high - fvg.low;
+      for (let j = i + 1; j < candles.length; j++) {
+        const c = candles[j];
+        // Fully filled: price closed through the entire gap (high went above fvg.high for bearish)
+        if (c.high >= fvg.high) {
+          fvg.mitigated = true;
+          fvg.state = "filled";
+          fvg.fillPercent = 100;
+          fvg.filledAt = j;
+          if (!fvg.firstTestedAt) fvg.firstTestedAt = j;
+          break;
+        }
+        // Partial fill: price entered the gap from below
+        if (c.high > fvg.low) {
+          const penetration = Math.min(100, ((c.high - fvg.low) / gapSize) * 100);
+          if (penetration > fvg.fillPercent) fvg.fillPercent = penetration;
+          if (!fvg.firstTestedAt) fvg.firstTestedAt = j;
+          if (fvg.fillPercent > 0 && fvg.fillPercent < 100 && fvg.state === "open") {
+            fvg.state = "partially_filled";
+          }
+        }
+        // Respected: price approached the FVG bottom edge but bounced away
+        else if (c.high >= fvg.low - gapSize * 0.2 && c.close < fvg.low) {
+          fvg.respectedCount++;
+          if (fvg.state === "open" && fvg.respectedCount >= 1) fvg.state = "respected";
+        }
+      }
       fvg.quality = scoreFVGQuality(fvg, c2, atr, i - 1, "bearish", structureBreaks);
       fvgs.push(fvg);
     }
@@ -1097,21 +1293,39 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       let swept = false;
       let sweptAtIndex: number | undefined;
       let rejectionConfirmed = false;
+      let state: LiquidityPool["state"] = "active";
+      let sweepDepth: number | undefined;
+      let retestedAt: number | undefined;
+      let retestedHeld: boolean | undefined;
+
       // Find the FIRST candle that swept above this pool level
       for (let k = i + 1; k < candles.length; k++) {
         if (candles[k].high > poolPrice) {
           swept = true;
           sweptAtIndex = k;
-          // Rejection = wick above but close below the pool level
+          sweepDepth = candles[k].high - poolPrice;
           if (candles[k].close < poolPrice) {
             rejectionConfirmed = true;
+            state = "swept_rejected";
+          } else {
+            // Price closed above = liquidity absorbed (continuation)
+            state = "swept_absorbed";
+          }
+          // After sweep, check for retest from the other side
+          // Buy-side swept = level may now act as support. Check if price comes back down to test it.
+          for (let r = k + 1; r < candles.length; r++) {
+            if (candles[r].low <= poolPrice + tol && candles[r].low >= poolPrice - tol) {
+              retestedAt = r;
+              retestedHeld = candles[r].close > poolPrice; // held as support?
+              if (retestedHeld) state = "retested";
+              break;
+            }
           }
           break;
         }
       }
-      // Recency filter: only include pools from the last 80 candles
       if (i >= candles.length - 80 || swept) {
-        pools.push({ price: poolPrice, type: "buy-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed });
+        pools.push({ price: poolPrice, type: "buy-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld });
       }
     }
   }
@@ -1128,18 +1342,37 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       let swept = false;
       let sweptAtIndex: number | undefined;
       let rejectionConfirmed = false;
+      let state: LiquidityPool["state"] = "active";
+      let sweepDepth: number | undefined;
+      let retestedAt: number | undefined;
+      let retestedHeld: boolean | undefined;
+
       for (let k = i + 1; k < candles.length; k++) {
         if (candles[k].low < poolPrice) {
           swept = true;
           sweptAtIndex = k;
+          sweepDepth = poolPrice - candles[k].low;
           if (candles[k].close > poolPrice) {
             rejectionConfirmed = true;
+            state = "swept_rejected";
+          } else {
+            state = "swept_absorbed";
+          }
+          // After sweep, check for retest from the other side
+          // Sell-side swept = level may now act as resistance. Check if price comes back up.
+          for (let r = k + 1; r < candles.length; r++) {
+            if (candles[r].high >= poolPrice - tol && candles[r].high <= poolPrice + tol) {
+              retestedAt = r;
+              retestedHeld = candles[r].close < poolPrice; // held as resistance?
+              if (retestedHeld) state = "retested";
+              break;
+            }
           }
           break;
         }
       }
       if (i >= candles.length - 80 || swept) {
-        pools.push({ price: poolPrice, type: "sell-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed });
+        pools.push({ price: poolPrice, type: "sell-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld });
       }
     }
   }
@@ -1240,36 +1473,84 @@ export function detectBreakerBlocks(orderBlocks: OrderBlock[], candles: Candle[]
       }
     }
     let isActive = true;
+    let breakerState: BreakerBlock["state"] = "active";
+    let testedCount = 0;
+    let respectedAt: number | undefined;
+    let brokenAt: number | undefined;
+
     for (let j = mitigatedAt + 1; j < candles.length; j++) {
       const c = candles[j];
       const enteredZone = c.high >= ob.low && c.low <= ob.high;
       if (!enteredZone) continue;
+
+      // Check if price closed through the zone (broken)
       if (breakerType === "bearish_breaker") {
-        if (c.close < ob.low) { isActive = false; break; }
+        if (c.close < ob.low) {
+          isActive = false;
+          breakerState = "broken";
+          brokenAt = j;
+          break;
+        }
+        // Respected = entered zone but bounced (closed above zone midpoint)
+        const mid = (ob.high + ob.low) / 2;
+        if (c.close > mid) {
+          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
+          if (!respectedAt) respectedAt = j;
+        }
       } else {
-        if (c.close > ob.high) { isActive = false; break; }
+        if (c.close > ob.high) {
+          isActive = false;
+          breakerState = "broken";
+          brokenAt = j;
+          break;
+        }
+        const mid = (ob.high + ob.low) / 2;
+        if (c.close < mid) {
+          if (breakerState === "active" || breakerState === "tested") breakerState = "respected";
+          if (!respectedAt) respectedAt = j;
+        }
       }
+      testedCount++;
+      if (breakerState === "active") breakerState = "tested";
     }
-    breakers.push({ type: breakerType, subtype, high: ob.high, low: ob.low, mitigatedAt, originalOBType: ob.type, isActive });
+    breakers.push({ type: breakerType, subtype, high: ob.high, low: ob.low, mitigatedAt, originalOBType: ob.type, isActive, state: breakerState, testedCount, respectedAt, brokenAt });
   }
-  return breakers.filter(b => b.isActive);
+  // Return ALL breakers (including broken) for history — downstream can filter by state
+  return breakers;
 }
 
 export function detectUnicornSetups(breakerBlocks: BreakerBlock[], fvgs: FairValueGap[]): UnicornSetup[] {
   const unicorns: UnicornSetup[] = [];
-  const activeFVGs = fvgs.filter(f => !f.mitigated);
+  // Lifecycle-aware: use FVGs that aren't fully filled
+  const viableFVGs = fvgs.filter(f => f.state !== "filled");
   for (const breaker of breakerBlocks) {
-    if (!breaker.isActive) continue;
+    // Include all breakers for detection, but mark invalidated ones
     const wantFVGType = breaker.type === "bullish_breaker" ? "bullish" : "bearish";
-    for (const fvg of activeFVGs) {
+    for (const fvg of viableFVGs) {
       if (fvg.type !== wantFVGType) continue;
       const overlapLow = Math.max(breaker.low, fvg.low);
       const overlapHigh = Math.min(breaker.high, fvg.high);
       if (overlapLow < overlapHigh) {
+        // Determine unicorn lifecycle state
+        let uniState: UnicornSetup["state"] = "active";
+        let invalidationReason: UnicornSetup["invalidationReason"];
+
+        if (breaker.state === "broken") {
+          uniState = "invalidated";
+          invalidationReason = "breaker_broken";
+        } else if (fvg.state === "filled") {
+          uniState = "invalidated";
+          invalidationReason = "fvg_filled";
+        } else if (!breaker.isActive) {
+          uniState = "invalidated";
+          invalidationReason = "price_through";
+        }
+
         unicorns.push({
           type: breaker.type === "bullish_breaker" ? "bullish_unicorn" : "bearish_unicorn",
           breakerHigh: breaker.high, breakerLow: breaker.low,
           fvgHigh: fvg.high, fvgLow: fvg.low, overlapHigh, overlapLow,
+          state: uniState, invalidationReason,
         });
       }
     }

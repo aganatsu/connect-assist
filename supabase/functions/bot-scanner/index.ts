@@ -734,51 +734,61 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let pts = 0;
     let detail = "";
     if (config.enableOB !== false) {
-      const activeOBs = orderBlocks.filter(ob => !ob.mitigated);
+      // Lifecycle-aware filtering: exclude broken OBs entirely
+      const activeOBs = orderBlocks.filter(ob => ob.state !== "broken" && !ob.mitigated);
       const insideOB = activeOBs.find(ob => lastPrice >= ob.low && lastPrice <= ob.high);
       if (insideOB) {
         const tags: string[] = [];
         if (insideOB.hasDisplacement) {
-          // Full-quality OB: displacement confirmed
           pts = 2.0;
-          tags.push("displacement ✓");
+          tags.push("displacement \u2713");
         } else {
-          // Low-quality OB: no displacement — capped at 0.75
           pts = 0.75;
-          tags.push("no displacement — reduced score");
+          tags.push("no displacement \u2014 reduced score");
         }
 
-        // FIX #8: mitigatedPercent quality scaling
-        // Fresh OB (0-20% mitigated) = full score. Partially used (20-60%) = 80%. Nearly exhausted (60-90%) = 50%.
+        // Lifecycle state scoring
+        const obState = insideOB.state || "fresh";
         const mitPct = insideOB.mitigatedPercent || 0;
-        if (mitPct <= 20) {
+        const testCount = insideOB.testedCount || 0;
+
+        if (obState === "fresh" && mitPct <= 20) {
           tags.push(`fresh (${mitPct.toFixed(0)}% mitigated)`);
-        } else if (mitPct <= 60) {
-          pts *= 0.8;
-          tags.push(`partially used (${mitPct.toFixed(0)}% mitigated, score ×0.8)`);
-        } else if (mitPct <= 90) {
-          pts *= 0.5;
-          tags.push(`nearly exhausted (${mitPct.toFixed(0)}% mitigated, score ×0.5)`);
-        } else {
-          pts *= 0.2;
-          tags.push(`exhausted (${mitPct.toFixed(0)}% mitigated, score ×0.2)`);
+        } else if (obState === "tested" && mitPct <= 50) {
+          // Tested-and-held OBs are STRONGER: price tested the zone edge but it held
+          // Bonus scales with test count: +0.15 per test, max +0.45 (3 tests)
+          const testBonus = Math.min(0.45, testCount * 0.15);
+          pts += testBonus;
+          tags.push(`tested ${testCount}x & held (+${testBonus.toFixed(2)}, ${mitPct.toFixed(0)}% mitigated)`);
+        } else if (obState === "mitigated" || mitPct > 50) {
+          // Mitigated OBs: scale down based on how deeply penetrated
+          if (mitPct <= 60) {
+            pts *= 0.7;
+            tags.push(`mitigated (${mitPct.toFixed(0)}%, score \u00d70.7)`);
+          } else if (mitPct <= 90) {
+            pts *= 0.4;
+            tags.push(`deeply mitigated (${mitPct.toFixed(0)}%, score \u00d70.4)`);
+          } else {
+            pts *= 0.15;
+            tags.push(`nearly broken (${mitPct.toFixed(0)}%, score \u00d70.15)`);
+          }
         }
 
-        // FIX #9: hasFVGAdjacency concrete boost
-        // FVG adjacent to OB = institutional footprint confirmation = +0.25 bonus
+        // FVG adjacency bonus
         if (insideOB.hasFVGAdjacency) {
           pts = Math.min(2.5, pts + 0.25);
           tags.push("FVG adjacent (+0.25)");
         }
-        if (insideOB.hasVolumePivot) tags.push("volume pivot ✓");
+        if (insideOB.hasVolumePivot) tags.push("volume pivot \u2713");
         detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
-        // OBs exist but price not inside any — no score (ICT: entry requires price AT the level)
         const withDisp = activeOBs.filter(ob => ob.hasDisplacement).length;
         const withVol = activeOBs.filter(ob => ob.hasVolumePivot).length;
-        const freshOBs = activeOBs.filter(ob => (ob.mitigatedPercent || 0) < 30).length;
+        const freshOBs = activeOBs.filter(ob => ob.state === "fresh").length;
+        const testedOBs = activeOBs.filter(ob => ob.state === "tested").length;
+        const brokenCount = orderBlocks.filter(ob => ob.state === "broken").length;
         pts = 0;
-        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement, ${freshOBs} fresh${withVol > 0 ? `, ${withVol} with volume pivot` : ""}) — not at level, no score`;
+        detail = `${activeOBs.length} OBs nearby (${freshOBs} fresh, ${testedOBs} tested, ${withDisp} displaced${withVol > 0 ? `, ${withVol} vol pivot` : ""}${brokenCount > 0 ? `, ${brokenCount} broken/excluded` : ""}) \u2014 not at level`;
       }
     } else {
       detail = "Order Blocks disabled";
@@ -825,8 +835,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const _minPips = typeof config.fvgMinSizePips === "number" ? config.fvgMinSizePips : 0;
       const _onlyUnfilled = config.fvgOnlyUnfilled !== false;
 
-      // P1: filter FVGs by config — unfilled-only and minimum size
+      // P1: filter FVGs by config — lifecycle-aware: exclude filled FVGs entirely
       const activeFVGs = fvgs.filter(f => {
+        if (f.state === "filled") return false; // Lifecycle: fully filled = dead
         if (_onlyUnfilled && f.mitigated) return false;
         if (_minPips > 0) {
           const sizePips = (f.high - f.low) / _pipSize;
@@ -860,6 +871,35 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         const qualityMultiplier = 0.4 + 0.6 * (fvgQuality / MAX_FVG_QUALITY); // range: 0.4 – 1.0
         pts *= qualityMultiplier;
         detail += ` [Q:${fvgQuality.toFixed(1)}/${MAX_FVG_QUALITY}]`;
+
+        // ── Lifecycle state scoring ──
+        const fvgState = insideFVG.state || "open";
+        const fillPct = insideFVG.fillPercent || 0;
+        const respectCount = insideFVG.respectedCount || 0;
+
+        if (fvgState === "open" && fillPct === 0) {
+          detail += " [pristine gap]";
+        } else if (fvgState === "respected") {
+          // Respected FVGs get a bonus — they've proven themselves as S/R
+          const respectBonus = Math.min(0.4, respectCount * 0.2);
+          pts += respectBonus;
+          detail += ` [respected ${respectCount}x, +${respectBonus.toFixed(2)}]`;
+        } else if (fvgState === "partially_filled") {
+          // Partially filled: scale down based on how much is filled
+          if (fillPct <= 30) {
+            detail += ` [${fillPct.toFixed(0)}% filled — still viable]`;
+          } else if (fillPct <= 60) {
+            pts *= 0.75;
+            detail += ` [${fillPct.toFixed(0)}% filled, score \u00d70.75]`;
+          } else if (fillPct <= 85) {
+            pts *= 0.45;
+            detail += ` [${fillPct.toFixed(0)}% filled, score \u00d70.45]`;
+          } else {
+            pts *= 0.2;
+            detail += ` [${fillPct.toFixed(0)}% filled — nearly dead, score \u00d70.2]`;
+          }
+        }
+
         // Recency bonus: FVGs closer to current price action are more relevant
         const recencyIdx = insideFVG.index || 0;
         const isRecent = recencyIdx >= candles.length - 15;
@@ -872,8 +912,12 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         }
       } else if (activeFVGs.length > 0) {
         // FVGs exist but price not inside any — no score (ICT: entry requires price AT the level)
+        const openFVGs = activeFVGs.filter(f => f.state === "open").length;
+        const respectedFVGs = activeFVGs.filter(f => f.state === "respected").length;
+        const partialFVGs = activeFVGs.filter(f => f.state === "partially_filled").length;
+        const filledCount = fvgs.filter(f => f.state === "filled").length;
         pts = 0;
-        detail = `${activeFVGs.length} qualifying FVGs in range${_minPips > 0 ? ` (≥${_minPips} pips)` : ""} — not at level, no score`;
+        detail = `${activeFVGs.length} qualifying FVGs (${openFVGs} open, ${respectedFVGs} respected, ${partialFVGs} partial${filledCount > 0 ? `, ${filledCount} filled/excluded` : ""}${_minPips > 0 ? `, \u2265${_minPips} pips` : ""}) \u2014 not at level`;
       }
     } else {
       detail = "FVGs disabled";
@@ -1322,11 +1366,12 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const breakerATR = calculateATR(candles, 14);
       const atrThreshold = breakerATR * 2;
       // Find the closest aligned breaker
-      const alignedBreakers = breakerBlocks.filter(b => b.type === wantType);
-      let bestBreaker = null;
+      // Lifecycle-aware: exclude broken breakers from scoring
+      const alignedBreakers = breakerBlocks.filter(b => b.type === wantType && b.state !== "broken");
+      const brokenCount = breakerBlocks.filter(b => b.type === wantType && b.state === "broken").length;
+      let bestBreaker: typeof alignedBreakers[0] | null = null;
       let bestDist = Infinity;
       for (const b of alignedBreakers) {
-        // Check if price is inside or near the breaker zone
         const mid = (b.high + b.low) / 2;
         const dist = Math.abs(lastPrice - mid);
         if (dist < bestDist) { bestDist = dist; bestBreaker = b; }
@@ -1334,14 +1379,23 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       if (bestBreaker) {
         const isInside = lastPrice >= bestBreaker.low && lastPrice <= bestBreaker.high;
         const subtypeLabel = bestBreaker.subtype === "breaker" ? "BB" : "MB";
+        const bState = bestBreaker.state || "active";
+        const bTests = bestBreaker.testedCount || 0;
         if (isInside) {
           pts = 1.0;
-          detail = `Price inside ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          // Lifecycle bonus: respected breakers are stronger
+          if (bState === "respected" && bTests > 0) {
+            const respectBonus = Math.min(0.3, bTests * 0.15);
+            pts += respectBonus;
+            detail = `Price inside ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}, respected ${bTests}x +${respectBonus.toFixed(2)}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          } else {
+            detail = `Price inside ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}, ${bState}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          }
         } else if (bestDist <= atrThreshold) {
           pts = 0.5;
-          detail = `Price within ${(bestDist / breakerATR).toFixed(1)}× ATR of ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
+          detail = `Price within ${(bestDist / breakerATR).toFixed(1)}\u00d7 ATR of ${bestBreaker.type.replace("_", " ")} (${subtypeLabel}, ${bState}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)}`;
         } else {
-          detail = `${bestBreaker.type.replace("_", " ")} (${subtypeLabel}) exists at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)} but price ${(bestDist / breakerATR).toFixed(1)}× ATR away`;
+          detail = `${bestBreaker.type.replace("_", " ")} (${subtypeLabel}, ${bState}) at ${bestBreaker.low.toFixed(5)}-${bestBreaker.high.toFixed(5)} but ${(bestDist / breakerATR).toFixed(1)}\u00d7 ATR away${brokenCount > 0 ? ` (${brokenCount} broken/excluded)` : ""}`;
         }
       }
     } else if (config.useBreakerBlocks === false) {
@@ -1357,15 +1411,20 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let detail = "No unicorn (Breaker + FVG overlap) aligned with signal";
     if (config.useUnicornModel !== false && direction && unicornSetups.length > 0) {
       const wantType = direction === "long" ? "bullish_unicorn" : "bearish_unicorn";
-      const aligned = unicornSetups.find(u => u.type === wantType
+      // Lifecycle-aware: only score active unicorns, invalidated ones get zero
+      const activeUnicorns = unicornSetups.filter(u => u.state !== "invalidated");
+      const invalidatedCount = unicornSetups.filter(u => u.state === "invalidated").length;
+      const aligned = activeUnicorns.find(u => u.type === wantType
         && lastPrice >= u.overlapLow && lastPrice <= u.overlapHigh);
       if (aligned) {
         pts = 1.5;
-        detail = `Unicorn: Breaker + FVG overlap at ${aligned.overlapLow.toFixed(5)}-${aligned.overlapHigh.toFixed(5)}`;
+        detail = `Unicorn: Breaker + FVG overlap at ${aligned.overlapLow.toFixed(5)}-${aligned.overlapHigh.toFixed(5)} [${aligned.state}]`;
       } else {
-        const anyAligned = unicornSetups.find(u => u.type === wantType);
+        const anyAligned = activeUnicorns.find(u => u.type === wantType);
         if (anyAligned) {
-          detail = `Unicorn zone exists at ${anyAligned.overlapLow.toFixed(5)}-${anyAligned.overlapHigh.toFixed(5)} but price outside overlap`;
+          detail = `Unicorn zone at ${anyAligned.overlapLow.toFixed(5)}-${anyAligned.overlapHigh.toFixed(5)} [${anyAligned.state}] but price outside${invalidatedCount > 0 ? ` (${invalidatedCount} invalidated/excluded)` : ""}`;
+        } else if (invalidatedCount > 0) {
+          detail = `${invalidatedCount} unicorn(s) found but all invalidated (${unicornSetups.filter(u => u.state === "invalidated").map(u => u.invalidationReason || "unknown").join(", ")})`;
         }
       }
     } else if (config.useUnicornModel === false) {
@@ -4116,6 +4175,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         vwap: analysis.vwap ? { value: analysis.vwap.value, distancePips: analysis.vwap.distancePips, rejection: analysis.vwap.rejection } : null,
         amd: analysis.amd || null,
         fotsi: analysis.fotsiAlignment || null,
+        // ── Entity Lifecycle Summaries ──
+        entityLifecycles: {
+          orderBlocks: (() => {
+            const obs = analysis.orderBlocks || [];
+            return {
+              total: obs.length,
+              byState: { active: obs.filter((o: any) => o.state === "active").length, tested: obs.filter((o: any) => o.state === "tested").length, mitigating: obs.filter((o: any) => o.state === "mitigating").length, broken: obs.filter((o: any) => o.state === "broken").length },
+            };
+          })(),
+          fvgs: (() => {
+            const fs = analysis.fvgs || [];
+            return {
+              total: fs.length,
+              byState: { open: fs.filter((f: any) => f.state === "open").length, respected: fs.filter((f: any) => f.state === "respected").length, partially_filled: fs.filter((f: any) => f.state === "partially_filled").length, filled: fs.filter((f: any) => f.state === "filled").length },
+              avgFillPercent: fs.length > 0 ? (fs.reduce((s: number, f: any) => s + (f.fillPercent || 0), 0) / fs.length) : 0,
+            };
+          })(),
+          swingPoints: (() => {
+            const sps = analysis.structure?.swingPoints || [];
+            return {
+              total: sps.length,
+              byState: { active: sps.filter((s: any) => s.state === "active").length, tested: sps.filter((s: any) => s.state === "tested").length, swept: sps.filter((s: any) => s.state === "swept").length, broken: sps.filter((s: any) => s.state === "broken").length },
+            };
+          })(),
+          liquidityPools: (() => {
+            const lps = analysis.liquidityPools || [];
+            return {
+              total: lps.length,
+              byState: { active: lps.filter((l: any) => l.state === "active").length, swept_rejected: lps.filter((l: any) => l.state === "swept_rejected").length, swept_absorbed: lps.filter((l: any) => l.state === "swept_absorbed").length, retested: lps.filter((l: any) => l.state === "retested").length },
+            };
+          })(),
+          breakerBlocks: (() => {
+            const bbs = analysis.breakerBlocks || [];
+            return {
+              total: bbs.length,
+              byState: { active: bbs.filter((b: any) => b.state === "active").length, tested: bbs.filter((b: any) => b.state === "tested").length, respected: bbs.filter((b: any) => b.state === "respected").length, broken: bbs.filter((b: any) => b.state === "broken").length },
+            };
+          })(),
+          unicornSetups: (() => {
+            const us = analysis.unicornSetups || [];
+            return {
+              total: us.length,
+              byState: { active: us.filter((u: any) => u.state === "active").length, invalidated: us.filter((u: any) => u.state === "invalidated").length },
+              invalidationReasons: us.filter((u: any) => u.state === "invalidated").map((u: any) => u.invalidationReason).filter(Boolean),
+            };
+          })(),
+        },
       },
       status: "analyzed",
       tradingStyle: resolvedStyle,

@@ -1455,6 +1455,77 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
+      {/* Entity Lifecycle Summary Panel */}
+      {d.analysis_snapshot?.entityLifecycles && (() => {
+        const lc = d.analysis_snapshot.entityLifecycles;
+        const stateColor = (state: string) => {
+          if (state === "active" || state === "open") return "bg-emerald-500/20 text-emerald-400";
+          if (state === "tested" || state === "respected" || state === "retested") return "bg-blue-500/20 text-blue-400";
+          if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-amber-500/20 text-amber-400";
+          if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-red-500/20 text-red-400";
+          return "bg-muted/30 text-muted-foreground";
+        };
+        const renderStates = (byState: Record<string, number>) => (
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(byState).filter(([_, v]) => v > 0).map(([state, count]) => (
+              <span key={state} className={`text-[8px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
+                {count} {state.replace("_", " ")}
+              </span>
+            ))}
+          </div>
+        );
+        return (
+          <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1.5">
+            <p className="text-[8px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
+            {/* Order Blocks */}
+            {lc.orderBlocks?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>
+                {renderStates(lc.orderBlocks.byState)}
+              </div>
+            )}
+            {/* FVGs */}
+            {lc.fvgs?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>
+                {renderStates(lc.fvgs.byState)}
+              </div>
+            )}
+            {/* Swing Points */}
+            {lc.swingPoints?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>
+                {renderStates(lc.swingPoints.byState)}
+              </div>
+            )}
+            {/* Liquidity Pools */}
+            {lc.liquidityPools?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>
+                {renderStates(lc.liquidityPools.byState)}
+              </div>
+            )}
+            {/* Breaker Blocks */}
+            {lc.breakerBlocks?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>
+                {renderStates(lc.breakerBlocks.byState)}
+              </div>
+            )}
+            {/* Unicorn Setups */}
+            {lc.unicornSetups?.total > 0 && (
+              <div className="space-y-0.5">
+                <p className="text-[8px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>
+                {renderStates(lc.unicornSetups.byState)}
+                {lc.unicornSetups.invalidationReasons?.length > 0 && (
+                  <p className="text-[7px] text-red-400/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
