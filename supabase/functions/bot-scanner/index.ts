@@ -28,6 +28,8 @@ import {
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
   type ConfluenceStack, type SweepReclaim, type PullbackDecay,
   type FairValueGap,
+  // Optimal style detection
+  detectOptimalStyle,
 } from "../_shared/smcAnalysis.ts";
 import {
   classifySetupType, manageOpenPositions,
@@ -695,6 +697,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // ── Factor 2: Order Block (max 2.0) ──
   // OBs are quality-gated: displacement required for full score, FVG adjacency bonus.
   // Without displacement, OB scores at most 0.75 (reduced from 2.0).
+  // FIX #8: mitigatedPercent now scales the score — fresh OBs score higher than exhausted ones.
+  // FIX #9: hasFVGAdjacency now provides a concrete score boost, not just a display tag.
   {
     let pts = 0;
     let detail = "";
@@ -712,15 +716,38 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           pts = 0.75;
           tags.push("no displacement — reduced score");
         }
-        if (insideOB.hasFVGAdjacency) tags.push("FVG adjacent");
+
+        // FIX #8: mitigatedPercent quality scaling
+        // Fresh OB (0-20% mitigated) = full score. Partially used (20-60%) = 80%. Nearly exhausted (60-90%) = 50%.
+        const mitPct = insideOB.mitigatedPercent || 0;
+        if (mitPct <= 20) {
+          tags.push(`fresh (${mitPct.toFixed(0)}% mitigated)`);
+        } else if (mitPct <= 60) {
+          pts *= 0.8;
+          tags.push(`partially used (${mitPct.toFixed(0)}% mitigated, score ×0.8)`);
+        } else if (mitPct <= 90) {
+          pts *= 0.5;
+          tags.push(`nearly exhausted (${mitPct.toFixed(0)}% mitigated, score ×0.5)`);
+        } else {
+          pts *= 0.2;
+          tags.push(`exhausted (${mitPct.toFixed(0)}% mitigated, score ×0.2)`);
+        }
+
+        // FIX #9: hasFVGAdjacency concrete boost
+        // FVG adjacent to OB = institutional footprint confirmation = +0.25 bonus
+        if (insideOB.hasFVGAdjacency) {
+          pts = Math.min(2.5, pts + 0.25);
+          tags.push("FVG adjacent (+0.25)");
+        }
         if (insideOB.hasVolumePivot) tags.push("volume pivot ✓");
-        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} (${insideOB.mitigatedPercent.toFixed(0)}% mitigated) [${tags.join(", ")}]`;
+        detail = `Price inside ${insideOB.type} OB at ${insideOB.low.toFixed(5)}-${insideOB.high.toFixed(5)} [${tags.join(", ")}]`;
       } else if (activeOBs.length > 0) {
         // OBs exist but price not inside any — no score (ICT: entry requires price AT the level)
         const withDisp = activeOBs.filter(ob => ob.hasDisplacement).length;
         const withVol = activeOBs.filter(ob => ob.hasVolumePivot).length;
+        const freshOBs = activeOBs.filter(ob => (ob.mitigatedPercent || 0) < 30).length;
         pts = 0;
-        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement${withVol > 0 ? `, ${withVol} with volume pivot` : ""}) — not at level, no score`;
+        detail = `${activeOBs.length} OBs nearby (${withDisp} with displacement, ${freshOBs} fresh${withVol > 0 ? `, ${withVol} with volume pivot` : ""}) — not at level, no score`;
       }
     } else {
       detail = "Order Blocks disabled";
@@ -937,6 +964,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // ── Factor 6: Judas Swing (max 0.75) ──
   // ICT: Judas Swing is a manipulation move that sweeps liquidity before the real move.
   // Improved: Now anchored to actual NY midnight open. Requires liquidity sweep for full score.
+  // FIX #4: Now uses judasSwing.type to check directional alignment with trade direction.
   {
     let pts = 0;
     let detail = judasSwing.description;
@@ -956,6 +984,21 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         pts = 0.25;
         detail += " — outside kill zone, no sweep (lower probability)";
       }
+      // ── Direction alignment check (FIX #4) ──
+      // A bullish Judas Swing = fake move DOWN then real move UP (supports long entries)
+      // A bearish Judas Swing = fake move UP then real move DOWN (supports short entries)
+      if (direction && judasSwing.type) {
+        const jsAligned = (direction === "long" && judasSwing.type === "bullish")
+          || (direction === "short" && judasSwing.type === "bearish");
+        if (jsAligned) {
+          pts = Math.min(0.75, pts + 0.15);
+          detail += ` | ${judasSwing.type} JS aligned with ${direction} ✓`;
+        } else {
+          // Counter-directional Judas Swing — the manipulation is AGAINST our trade
+          pts = Math.max(0, pts * 0.5);
+          detail += ` | ${judasSwing.type} JS COUNTER to ${direction} (reduced)`;
+        }
+      }
     } else if (judasSwing.detected) {
       pts = 0.1;
       detail += " (unconfirmed)";
@@ -964,27 +1007,80 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Judas Swing", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
-  // ── Factor 7: PD/PW Levels (max 1.0) ──
-  // ICT: PD/PW levels are primary draw-on-liquidity targets. Increased weight per audit.
+  // ── Factor 7: PD/PW Levels + Opens (max 1.5) ──
+  // ICT: PD/PW levels are primary draw-on-liquidity targets.
+  // Now scores ALL 11 levels: PDH, PDL, PDO, PDC, PWH, PWL, PWO, PWC, DO, WO, MO.
+  // Also computes bias alignment from current-period opens.
   {
     let pts = 0;
     let detail = "No PD/PW levels";
+    let biasAlignmentDetail = "";
     if (pdLevels) {
       const threshold = lastPrice * 0.002;
-      const nearLevels = [
-        { name: "PDH", price: pdLevels.pdh }, { name: "PDL", price: pdLevels.pdl },
-        { name: "PWH", price: pdLevels.pwh }, { name: "PWL", price: pdLevels.pwl },
-      ].filter(l => Math.abs(lastPrice - l.price) <= threshold);
+      // All 11 key levels, tiered by significance
+      const allLevels = [
+        // Tier A: Weekly H/L and Monthly Open (highest significance)
+        { name: "PWH", price: pdLevels.pwh, tier: "A" },
+        { name: "PWL", price: pdLevels.pwl, tier: "A" },
+        { name: "MO",  price: pdLevels.monthlyOpen, tier: "A" },
+        // Tier B: Daily H/L, Weekly Open, Weekly Close
+        { name: "PDH", price: pdLevels.pdh, tier: "B" },
+        { name: "PDL", price: pdLevels.pdl, tier: "B" },
+        { name: "WO",  price: pdLevels.weeklyOpen, tier: "B" },
+        { name: "PWC", price: pdLevels.pwc, tier: "B" },
+        // Tier C: Daily Open, Daily Close, Previous Week Open, Previous Day Open
+        { name: "DO",  price: pdLevels.dailyOpen, tier: "C" },
+        { name: "PDC", price: pdLevels.pdc, tier: "C" },
+        { name: "PDO", price: pdLevels.pdo, tier: "C" },
+        { name: "PWO", price: pdLevels.pwo, tier: "C" },
+      ];
+      const nearLevels = allLevels.filter(l => Math.abs(lastPrice - l.price) <= threshold);
       if (nearLevels.length > 0) {
-        // Weekly levels are more significant than daily
-        const nearWeekly = nearLevels.some(l => l.name.startsWith("PW"));
-        pts = nearWeekly ? 1.0 : 0.75;
-        detail = `Price near ${nearLevels.map(l => l.name).join(", ")} (${nearLevels[0].price.toFixed(5)})${nearWeekly ? " — weekly level (higher significance)" : ""}`;
+        const hasA = nearLevels.some(l => l.tier === "A");
+        const hasB = nearLevels.some(l => l.tier === "B");
+        // Tier A = 1.0, Tier B = 0.75, Tier C = 0.5, multiple tiers = bonus
+        if (hasA) pts = 1.0;
+        else if (hasB) pts = 0.75;
+        else pts = 0.5;
+        // Multiple level confluence bonus (price near 2+ levels = stronger)
+        if (nearLevels.length >= 3) pts = Math.min(1.5, pts + 0.5);
+        else if (nearLevels.length >= 2) pts = Math.min(1.5, pts + 0.25);
+        detail = `Price near ${nearLevels.map(l => l.name).join(", ")} (${nearLevels[0].price.toFixed(5)})${hasA ? " — high-significance level" : ""}`;
       } else {
-        detail = `PDH=${pdLevels.pdh.toFixed(5)}, PDL=${pdLevels.pdl.toFixed(5)}, PWH=${pdLevels.pwh.toFixed(5)}, PWL=${pdLevels.pwl.toFixed(5)}`;
+        detail = `PDH=${pdLevels.pdh.toFixed(5)} PDL=${pdLevels.pdl.toFixed(5)} PWH=${pdLevels.pwh.toFixed(5)} PWL=${pdLevels.pwl.toFixed(5)} DO=${pdLevels.dailyOpen.toFixed(5)} WO=${pdLevels.weeklyOpen.toFixed(5)} MO=${pdLevels.monthlyOpen.toFixed(5)}`;
       }
+
+      // ── Bias Alignment from Opens ──
+      // Price above open = bullish bias for that timeframe, below = bearish.
+      // When all 3 opens agree with trade direction, strong confirmation.
+      if (direction) {
+        const doBias = lastPrice > pdLevels.dailyOpen ? "bullish" : "bearish";
+        const woBias = lastPrice > pdLevels.weeklyOpen ? "bullish" : "bearish";
+        const moBias = lastPrice > pdLevels.monthlyOpen ? "bullish" : "bearish";
+        const tradeBias = direction === "long" ? "bullish" : "bearish";
+        const doAlign = doBias === tradeBias;
+        const woAlign = woBias === tradeBias;
+        const moAlign = moBias === tradeBias;
+        const alignCount = [doAlign, woAlign, moAlign].filter(Boolean).length;
+        if (alignCount === 3) {
+          // All 3 opens agree with direction — strong bias confirmation
+          pts = Math.min(1.5, pts + 0.5);
+          biasAlignmentDetail = ` | Bias: DO/WO/MO all ${tradeBias} ✓✓✓ (strong)`;
+        } else if (alignCount === 2) {
+          pts = Math.min(1.5, pts + 0.25);
+          biasAlignmentDetail = ` | Bias: ${doAlign ? "DO✓" : "DO✗"} ${woAlign ? "WO✓" : "WO✗"} ${moAlign ? "MO✓" : "MO✗"} (2/3 aligned)`;
+        } else if (alignCount === 1) {
+          // Only 1 open agrees — mild headwind
+          biasAlignmentDetail = ` | Bias: ${doAlign ? "DO✓" : "DO✗"} ${woAlign ? "WO✓" : "WO✗"} ${moAlign ? "MO✓" : "MO✗"} (1/3 — headwind)`;
+        } else {
+          // All 3 opens disagree — significant headwind, reduce score
+          pts = Math.max(0, pts - 0.25);
+          biasAlignmentDetail = ` | Bias: DO/WO/MO all against ${tradeBias} ✗✗✗ (strong headwind, score reduced)`;
+        }
+      }
+      detail += biasAlignmentDetail;
     }
-    { const s = applyWeightScale(pts, "pdPwLevels", 1.0, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "pdPwLevels", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "PD/PW Levels", present: pts > 0, weight: s.displayWeight, detail, group: "Premium/Discount & Fib" }); }
   }
 
@@ -1342,7 +1438,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const _vwapPipSize = (SPECS[_vwapSymbol] || SPECS["EUR/USD"]).pipSize;
   const vwap = calculateAnchoredVWAP(candles, _vwapPipSize);
 
-  // ── Factor 17: AMD Phase (max 1.0; 0.5 if bias aligned, +0.5 if in distribution phase) ──
+  // ── Factor 17: AMD Phase (max 1.5; bias alignment + distribution + Asian range key levels) ──
+  // FIX #7: Now uses asianHigh/asianLow as key levels — price near Asian range boundary = extra confluence.
   const amd = detectAMDPhase(candles);
   {
     let pts = 0;
@@ -1363,7 +1460,28 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
         detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
       }
     }
-    { const s = applyWeightScale(pts, "amdPhase", 1.0, config); pts = s.pts; score += pts;
+    // ── Asian range as key levels (FIX #7) ──
+    // asianHigh and asianLow are primary liquidity targets during London/NY.
+    // Price near these levels = potential manipulation zone.
+    if (amd.asianHigh != null && amd.asianLow != null) {
+      const asianRange = amd.asianHigh - amd.asianLow;
+      const nearThreshold = asianRange * 0.15; // within 15% of the Asian range
+      const nearAsianHigh = Math.abs(lastPrice - amd.asianHigh) <= nearThreshold;
+      const nearAsianLow = Math.abs(lastPrice - amd.asianLow) <= nearThreshold;
+      if (nearAsianHigh || nearAsianLow) {
+        const whichLevel = nearAsianHigh ? `Asian High (${amd.asianHigh.toFixed(5)})` : `Asian Low (${amd.asianLow.toFixed(5)})`;
+        detail += ` | Price near ${whichLevel} — key liquidity level`;
+        // Boost if the Asian level aligns with trade direction
+        // Near Asian High + short = selling at resistance (good)
+        // Near Asian Low + long = buying at support (good)
+        const asianAligned = (nearAsianHigh && direction === "short") || (nearAsianLow && direction === "long");
+        if (asianAligned) {
+          pts = Math.min(1.5, pts + 0.25);
+          detail += " (directionally aligned)";
+        }
+      }
+    }
+    { const s = applyWeightScale(pts, "amdPhase", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "AMD Phase", present: pts > 0, weight: s.displayWeight, detail, group: "AMD / Power of 3" }); }
   }
 
@@ -1398,34 +1516,85 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Currency Strength", present: pts !== 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
   }
 
-  // ── Factor 17: Daily Bias / HTF Trend (max 1.0) ──
-  // Reduced from 1.5 to 1.0: HTF alignment is valuable but shouldn't dominate.
+  // ── Factor 17: Daily Bias / HTF Trend (max 1.5) ──
+  // Now fully activates htfStructure: trend, BOS/CHoCH recency, trend strength,
+  // and daily swing points as key levels. Increased max from 1.0 to 1.5.
   if (config.useDailyBias !== false) {
     let pts = 0;
     let detail = "";
     if (dailyCandles && dailyCandles.length >= 20 && direction) {
       const dailyStructure = analyzeMarketStructure(dailyCandles);
       const dailyTrend = dailyStructure.trend;
+      const dailyBOS = dailyStructure.bos;
+      const dailyCHoCH = dailyStructure.choch;
+      const dailySwings = dailyStructure.swingPoints;
+
+      // ── Trend strength: BOS count without CHoCH = strong continuation ──
+      const recentBOS = dailyBOS.filter(b => b.index >= dailyCandles.length - 20);
+      const recentCHoCH = dailyCHoCH.filter(c => c.index >= dailyCandles.length - 20);
+      const trendStrength = recentBOS.length - recentCHoCH.length; // positive = strong trend, negative = choppy
+
+      // ── Last BOS/CHoCH recency ──
+      const lastBOS = dailyBOS.length > 0 ? dailyBOS[dailyBOS.length - 1] : null;
+      const lastCHoCH = dailyCHoCH.length > 0 ? dailyCHoCH[dailyCHoCH.length - 1] : null;
+      const bosRecency = lastBOS ? dailyCandles.length - 1 - lastBOS.index : Infinity;
+      const chochRecency = lastCHoCH ? dailyCandles.length - 1 - lastCHoCH.index : Infinity;
+
       if (dailyTrend !== "ranging") {
         const htfAligned = (direction === "long" && dailyTrend === "bullish")
           || (direction === "short" && dailyTrend === "bearish");
         if (htfAligned) {
           pts = 1.0;
-          detail = `Daily ${dailyTrend} trend aligned with ${direction} — HTF confirmation`;
+          detail = `Daily ${dailyTrend} aligned with ${direction}`;
+          // Trend strength bonus: strong trend (3+ BOS without CHoCH) = extra conviction
+          if (trendStrength >= 3) {
+            pts += 0.25;
+            detail += ` — strong trend (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+          } else {
+            detail += ` (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+          }
+          // Recent BOS bonus: BOS within last 5 daily candles = fresh momentum
+          if (bosRecency <= 5) {
+            pts += 0.25;
+            detail += ` + recent BOS (${bosRecency}d ago)`;
+          }
         } else {
           pts = -0.5;
-          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} trend (penalty)`;
+          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} (penalty)`;
+          // Recent CHoCH against us = extra danger
+          if (chochRecency <= 5) {
+            pts -= 0.25;
+            detail += ` + recent CHoCH against direction (${chochRecency}d ago)`;
+          }
         }
       } else {
         pts = 0.25;
-        detail = `Daily trend ranging — partial credit (no HTF directional bias)`;
+        detail = `Daily ranging (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+        // If there's a very recent CHoCH, the range is fresh — could be a reversal
+        if (chochRecency <= 3) {
+          detail += ` — fresh CHoCH (${chochRecency}d ago, possible reversal)`;
+        }
       }
+
+      // ── Daily swing points as key levels ──
+      // Check if current price is near a daily swing high/low (strong S/R)
+      if (dailySwings.length >= 2) {
+        const recentDailySwings = dailySwings.slice(-6);
+        const pipSize = (SPECS[config._currentSymbol || "EUR/USD"] || SPECS["EUR/USD"]).pipSize;
+        const threshold = pipSize * 30; // within 30 pips of a daily swing
+        const nearDailySwing = recentDailySwings.find(s => Math.abs(lastPrice - s.price) <= threshold);
+        if (nearDailySwing) {
+          detail += ` | Near daily swing ${nearDailySwing.type} at ${nearDailySwing.price.toFixed(5)}`;
+        }
+      }
+
+      pts = Math.min(1.5, Math.max(-0.75, pts)); // cap at 1.5, floor at -0.75
     } else if (!dailyCandles || dailyCandles.length < 20) {
       detail = "Daily candles unavailable — HTF bias skipped";
     } else {
       detail = "No direction determined — HTF bias skipped";
     }
-    { const s = applyWeightScale(pts, "dailyBias", 1.0, config); pts = s.pts; score += pts;
+    { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
   } else {
     factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
@@ -3919,6 +4088,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
       status: "analyzed",
       tradingStyle: resolvedStyle,
+      // FIX #10: detectOptimalStyle — suggests the best style based on current market conditions
+      suggestedStyle: (() => {
+        try {
+          return detectOptimalStyle(candles, dailyCandles);
+        } catch { return null; }
+      })(),
+      styleMismatch: (() => {
+        try {
+          const suggested = detectOptimalStyle(candles, dailyCandles);
+          return suggested !== resolvedStyle ? `Using ${resolvedStyle} but market suggests ${suggested}` : null;
+        } catch { return null; }
+      })(),
       setupClassification: {
         setupType: setupClassification.setupType,
         confidence: setupClassification.confidence,

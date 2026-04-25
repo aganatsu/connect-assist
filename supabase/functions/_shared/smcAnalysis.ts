@@ -1311,13 +1311,67 @@ export function detectReversalCandle(candles: Candle[]): { detected: boolean; ty
 export function calculatePDLevels(dailyCandles: Candle[]) {
   if (dailyCandles.length < 10) return null;
   const prev = dailyCandles[dailyCandles.length - 2];
-  const weekCandles = dailyCandles.slice(-5);
+  const curr = dailyCandles[dailyCandles.length - 1];
+
+  // ── Proper weekly aggregation ──
+  // Walk backwards to find the boundary between the current week and the previous week.
+  // Use UTC day-of-week (0=Sun). The most recent Monday starts the current week.
+  const parseDow = (d: string) => new Date(d).getUTCDay();
+  let currentWeekStart = -1;
+  for (let i = dailyCandles.length - 1; i >= 0; i--) {
+    if (parseDow(dailyCandles[i].datetime) === 1) { // Monday
+      currentWeekStart = i;
+      break;
+    }
+  }
+  // Previous week = candles before currentWeekStart, back to the Monday before that
+  let prevWeekCandles: Candle[] = [];
+  if (currentWeekStart > 0) {
+    let prevWeekEnd = currentWeekStart - 1;
+    let prevWeekStartIdx = 0;
+    for (let i = prevWeekEnd; i >= 0; i--) {
+      if (parseDow(dailyCandles[i].datetime) === 1) {
+        prevWeekStartIdx = i;
+        break;
+      }
+    }
+    prevWeekCandles = dailyCandles.slice(prevWeekStartIdx, prevWeekEnd + 1);
+  }
+  // Fallback: if we can't find proper week boundaries, use last 5 candles before current
+  if (prevWeekCandles.length === 0) {
+    const endIdx = currentWeekStart > 0 ? currentWeekStart : dailyCandles.length - 1;
+    prevWeekCandles = dailyCandles.slice(Math.max(0, endIdx - 5), endIdx);
+  }
+
+  // ── Monthly open ──
+  // Find the first candle of the current calendar month
+  const currDate = new Date(curr.datetime);
+  const currMonth = currDate.getUTCMonth();
+  const currYear = currDate.getUTCFullYear();
+  let monthOpen = curr.open; // fallback
+  for (let i = 0; i < dailyCandles.length; i++) {
+    const d = new Date(dailyCandles[i].datetime);
+    if (d.getUTCFullYear() === currYear && d.getUTCMonth() === currMonth) {
+      monthOpen = dailyCandles[i].open;
+      break;
+    }
+  }
+
+  // ── Current week open ──
+  const weekOpen = currentWeekStart >= 0 ? dailyCandles[currentWeekStart].open : curr.open;
+
   return {
+    // Previous day
     pdh: prev.high, pdl: prev.low, pdo: prev.open, pdc: prev.close,
-    pwh: Math.max(...weekCandles.map(c => c.high)),
-    pwl: Math.min(...weekCandles.map(c => c.low)),
-    pwo: weekCandles[0].open,
-    pwc: weekCandles[weekCandles.length - 1].close,
+    // Previous week (properly aggregated)
+    pwh: Math.max(...prevWeekCandles.map(c => c.high)),
+    pwl: Math.min(...prevWeekCandles.map(c => c.low)),
+    pwo: prevWeekCandles[0].open,
+    pwc: prevWeekCandles[prevWeekCandles.length - 1].close,
+    // Current-period opens (new)
+    dailyOpen: curr.open,   // DO — today's opening price
+    weeklyOpen: weekOpen,   // WO — this week's opening price
+    monthlyOpen: monthOpen, // MO — this month's opening price
   };
 }
 
