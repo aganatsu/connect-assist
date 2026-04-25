@@ -28,9 +28,28 @@ export async function invokeFunction<T = any>(
     return /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 50[234]|BOOT_ERROR|WORKER_LIMIT/i.test(msg);
   };
 
-  for (let attempt = 0; attempt < 2 && isTransient503(error, data); attempt++) {
-    await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+  for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
+    await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     ({ data, error } = await supabase.functions.invoke(functionName, { body }));
+  }
+
+  // Bot scanner data is dashboard/polling data. If the hosted function is briefly
+  // unavailable even after retries, return a safe empty result instead of letting
+  // the Bot page crash into a blank screen.
+  if (functionName === "bot-scanner" && isTransient503(error, data)) {
+    const action = body?.action;
+    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) {
+      return [] as T;
+    }
+    if (action === "manual_scan") {
+      return {
+        error: "Scanner is temporarily unavailable. Please try again shortly.",
+        started: false,
+        pairsScanned: 0,
+        signalsFound: 0,
+        tradesPlaced: 0,
+      } as T;
+    }
   }
 
   // If auth failed, try refreshing the session once and retry.
