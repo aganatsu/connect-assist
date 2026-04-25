@@ -15,6 +15,14 @@ export async function invokeFunction<T = any>(
 ): Promise<T> {
   let { data, error } = await supabase.functions.invoke(functionName, { body });
 
+  // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry once.
+  const status = (error as any)?.context?.status ?? (error as any)?.status;
+  const msg = (error?.message || (data as any)?.message || "").toString();
+  if (status === 503 || /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR/i.test(msg)) {
+    await new Promise((r) => setTimeout(r, 600));
+    ({ data, error } = await supabase.functions.invoke(functionName, { body }));
+  }
+
   // If auth failed, try refreshing the session once and retry.
   if (isAuthError(error, data)) {
     const { error: refreshErr } = await supabase.auth.refreshSession();
