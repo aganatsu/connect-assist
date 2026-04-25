@@ -631,8 +631,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const factors: ReasoningFactor[] = [];
 
   // ── Factor 1: Market Structure (merged BOS/CHoCH + Trend Direction) (max 2.5) ──
-  // Combines structural breaks with entry-TF trend alignment into a single factor.
-  // This eliminates the previous double-count between Factor 1 and Factor 19.
+  // Now integrates: internal vs external BOS significance, derived S/R, and structure-to-fractal rate.
   {
     let pts = 0;
     let detail = "";
@@ -642,35 +641,67 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const closeBasedBos = structure.bos.filter((b: any) => b.closeBased);
       const sweepCount = structure.sweeps?.length || 0;
 
-      // Base structure score (0-1.5)
+      // Internal vs External BOS counts (new)
+      const sCounts = structure.structureCounts || { internalBOS: 0, externalBOS: 0, internalCHoCH: 0, externalCHoCH: 0 };
+      const hasExternalCHoCH = sCounts.externalCHoCH > 0;
+      const hasExternalBOS = sCounts.externalBOS > 0;
+
+      // Base structure score (0-1.5) — now weighted by significance
       let structurePts = 0;
       if (closeBasedChoch.length > 0) {
-        structurePts = 1.5;
-        detail = `${closeBasedChoch.length} CHoCH (close-based) — strong trend reversal`;
+        structurePts = hasExternalCHoCH ? 1.5 : 1.2;  // external CHoCH = full, internal = slightly less
+        detail = `${closeBasedChoch.length} CHoCH (close-based${hasExternalCHoCH ? ", EXTERNAL — major reversal" : ", internal"}) — strong trend reversal`;
       } else if (structure.choch.length > 0) {
         structurePts = 1.0;
         detail = `${structure.choch.length} CHoCH (wick-based, no close confirmation) — possible reversal`;
       } else if (closeBasedBos.length > 0) {
-        structurePts = 1.0;
-        detail = `${closeBasedBos.length} BOS (close-based) — trend continuation confirmed`;
+        structurePts = hasExternalBOS ? 1.2 : 0.9;  // external BOS = stronger continuation
+        detail = `${closeBasedBos.length} BOS (close-based${hasExternalBOS ? ", EXTERNAL — major continuation" : ", internal"}) — trend continuation confirmed`;
       } else if (structure.bos.length > 0) {
         structurePts = 0.5;
         detail = `${structure.bos.length} BOS (wick-based only) — weak continuation`;
       } else {
         detail = "No BOS or CHoCH detected";
       }
+
+      // Structure-to-Fractal conversion rate bonus (new)
+      // High rate = swings keep breaking = strong trend. Low rate = swings hold = range.
+      const s2f = structure.structureToFractal;
+      if (s2f && s2f.totalFractals >= 4) {
+        if (s2f.overallRate > 0.6) {
+          structurePts += 0.15;
+          detail += ` | S2F rate ${(s2f.overallRate * 100).toFixed(0)}% — high conversion, strong trend`;
+        } else if (s2f.overallRate < 0.2) {
+          structurePts -= 0.1;
+          detail += ` | S2F rate ${(s2f.overallRate * 100).toFixed(0)}% — low conversion, swings holding`;
+        }
+      }
+
+      // Derived S/R proximity bonus (new)
+      // If price is near an active (unbroken) BOS-derived S/R level, that's a high-quality reaction zone
+      const derivedSR = structure.derivedSR;
+      if (derivedSR && derivedSR.active.length > 0 && typeof currentPrice === "number") {
+        const atr = calculateATR(candles);
+        const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(currentPrice - sr.price) < atr * 0.5);
+        if (nearActiveSR) {
+          structurePts += 0.2;
+          detail += ` | Near active BOS-derived ${nearActiveSR.type} at ${nearActiveSR.price.toFixed(5)}`;
+        }
+      }
+
       if (sweepCount > 0) {
         detail += ` | ${sweepCount} liquidity sweep${sweepCount > 1 ? "s" : ""} detected`;
+      }
+
+      // Internal/External summary
+      if (sCounts.externalBOS > 0 || sCounts.externalCHoCH > 0) {
+        detail += ` | Structure: ${sCounts.externalBOS} ext BOS, ${sCounts.externalCHoCH} ext CHoCH, ${sCounts.internalBOS} int BOS, ${sCounts.internalCHoCH} int CHoCH`;
       }
 
       pts = structurePts;
 
       // Trend alignment bonus/penalty (adds up to +1.0 or -0.5)
-      // Note: direction is determined later, so we use structure.trend as a proxy here.
-      // This will be re-evaluated after direction is set (see post-direction trend adjustment below).
-      // For now, if structure has a clear trend, we can score alignment with the trend itself.
       if (structure.trend !== "ranging" && structurePts > 0) {
-        // Trend is clear and structure confirms it — bonus
         pts += 1.0;
         detail += ` | Entry TF trend ${structure.trend} — aligned`;
       } else if (structure.trend === "ranging" && structurePts > 0) {
@@ -4172,6 +4203,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           nearestFibLevel: m.nearestFibLevel,
         })),
       } : null,
+      // ── Structure Intelligence Data (for frontend display) ──
+      structureIntel: {
+        // Internal vs External BOS/CHoCH counts
+        counts: analysis.structure.structureCounts || { internalBOS: 0, externalBOS: 0, internalCHoCH: 0, externalCHoCH: 0 },
+        // Structure-to-Fractal conversion rate
+        s2f: analysis.structure.structureToFractal || null,
+        // BOS-derived S/R levels with lifecycle status
+        derivedSR: analysis.structure.derivedSR ? {
+          active: analysis.structure.derivedSR.active.map((sr: any) => ({ price: sr.price, type: sr.type })),
+          broken: analysis.structure.derivedSR.broken.map((sr: any) => ({ price: sr.price, type: sr.type })),
+        } : null,
+      },
     };
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──

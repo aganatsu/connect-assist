@@ -1386,6 +1386,75 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
+      {/* Structure Intelligence Panel — Internal/External BOS, S2F rate, derived S/R */}
+      {d.structureIntel && (
+        <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
+          <p className="text-[8px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
+          {/* BOS / CHoCH counts by significance */}
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">Internal BOS:</span>
+              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.internalBOS ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">External BOS:</span>
+              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.externalBOS ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">Internal CHoCH:</span>
+              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.internalCHoCH ?? 0}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[8px] text-muted-foreground">External CHoCH:</span>
+              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.externalCHoCH ?? 0}</span>
+            </div>
+          </div>
+          {/* Structure-to-Fractal conversion rate */}
+          {d.structureIntel.s2f && (
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[8px] text-muted-foreground">S2F Rate:</span>
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                d.structureIntel.s2f.overallRate > 0.4 ? "bg-emerald-500/20 text-emerald-400"
+                : d.structureIntel.s2f.overallRate > 0.2 ? "bg-amber-500/20 text-amber-400"
+                : "bg-red-500/20 text-red-400"
+              }`}>
+                {(d.structureIntel.s2f.overallRate * 100).toFixed(0)}%
+              </span>
+              <span className="text-[8px] text-muted-foreground">
+                ({d.structureIntel.s2f.totalFractals} fractals | Bull {(d.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(d.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
+              </span>
+            </div>
+          )}
+          {/* BOS-derived S/R levels */}
+          {d.structureIntel.derivedSR && (
+            <div className="space-y-0.5 mt-0.5">
+              {d.structureIntel.derivedSR.active?.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-[8px] text-emerald-400 font-semibold">Active S/R:</span>
+                  {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
+                    <span key={i} className={`text-[8px] font-mono px-1 py-0.5 rounded ${
+                      sr.type === "support" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                    }`}>
+                      {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {d.structureIntel.derivedSR.broken?.length > 0 && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-[8px] text-muted-foreground">Broken:</span>
+                  {d.structureIntel.derivedSR.broken.map((sr: any, i: number) => (
+                    <span key={i} className="text-[8px] font-mono text-muted-foreground line-through px-1 py-0.5">
+                      {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>

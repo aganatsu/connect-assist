@@ -37,6 +37,7 @@ export interface SwingPoint {
   price: number;
   type: "high" | "low";
   datetime: string;
+  significance?: "internal" | "external";  // internal = minor pullback swing, external = major structural swing
 }
 
 export interface OrderBlock {
@@ -593,6 +594,8 @@ export interface StructureBreak {
   datetime: string;
   closeBased: boolean;  // true = candle body closed through the level (strong)
   level: number;        // the swing level that was broken
+  significance?: "internal" | "external";  // internal = broke a minor swing, external = broke a major structural swing
+  derivedSR?: { price: number; type: "support" | "resistance"; broken: boolean };  // auto S/R from BOS (LuxAlgo-inspired)
 }
 
 export interface LiquiditySweep {
@@ -605,13 +608,42 @@ export interface LiquiditySweep {
 }
 
 export function analyzeMarketStructure(candles: Candle[], structureLookback?: number) {
-  // Use ATR-filtered swings (0.25 = swing must be at least 25% of ATR to count)
-  const atrFilterStrength = 0.25;
-  const swings = detectSwingPoints(
-    candles,
-    structureLookback && structureLookback > 0 ? structureLookback : 3,
-    candles.length >= 15 ? atrFilterStrength : 0
-  );
+  // ── Dual-Lookback Swing Detection (Internal vs External) ──
+  // Internal swings: minor pullback pivots (lookback=3, lower ATR filter)
+  // External swings: major structural pivots (lookback=7, higher ATR filter)
+  const internalLookback = structureLookback && structureLookback > 0 ? structureLookback : 3;
+  const externalLookback = Math.max(internalLookback + 4, 7); // at least 7, always larger than internal
+  const hasEnoughForATR = candles.length >= 15;
+
+  const internalSwings = detectSwingPoints(candles, internalLookback, hasEnoughForATR ? 0.2 : 0);
+  const externalSwings = detectSwingPoints(candles, externalLookback, hasEnoughForATR ? 0.5 : 0);
+
+  // Tag significance on each swing
+  for (const s of internalSwings) s.significance = "internal";
+  for (const s of externalSwings) s.significance = "external";
+
+  // Build external swing index set for quick lookup
+  const externalSet = new Set(externalSwings.map(s => `${s.type}_${s.index}`));
+
+  // Merge: external swings override internal at the same index.
+  // Internal swings that also appear as external get promoted to "external".
+  const mergedMap = new Map<string, SwingPoint>();
+  for (const s of internalSwings) {
+    const key = `${s.type}_${s.index}`;
+    if (externalSet.has(key)) {
+      s.significance = "external"; // promote
+    }
+    mergedMap.set(key, s);
+  }
+  // Add any external swings not already in internal set (different lookback may find different pivots)
+  for (const s of externalSwings) {
+    const key = `${s.type}_${s.index}`;
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, s);
+    }
+  }
+  const swings = Array.from(mergedMap.values()).sort((a, b) => a.index - b.index);
+
   const highs = swings.filter(s => s.type === "high");
   const lows = swings.filter(s => s.type === "low");
   let currentTrend: "bullish" | "bearish" | "ranging" = "ranging";
@@ -620,15 +652,20 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   const sweeps: LiquiditySweep[] = [];
 
   // ── Process all swing breaks chronologically to properly track trend transitions ──
-  // Merge highs and lows by their candle index so we process them in time order.
-  // This ensures currentTrend correctly reflects the full sequence of structural events.
-  type SwingEvent = { swingType: "high" | "low"; prevLevel: number; index: number };
+  type SwingEvent = { swingType: "high" | "low"; prevLevel: number; index: number; prevSwingIdx: number; significance: "internal" | "external" };
   const events: SwingEvent[] = [];
   for (let i = 1; i < highs.length; i++) {
-    events.push({ swingType: "high", prevLevel: highs[i - 1].price, index: highs[i].index });
+    // The significance of the BOS is determined by the swing that was BROKEN (the previous one)
+    events.push({
+      swingType: "high", prevLevel: highs[i - 1].price, index: highs[i].index,
+      prevSwingIdx: highs[i - 1].index, significance: highs[i - 1].significance || "internal",
+    });
   }
   for (let i = 1; i < lows.length; i++) {
-    events.push({ swingType: "low", prevLevel: lows[i - 1].price, index: lows[i].index });
+    events.push({
+      swingType: "low", prevLevel: lows[i - 1].price, index: lows[i].index,
+      prevSwingIdx: lows[i - 1].index, significance: lows[i - 1].significance || "internal",
+    });
   }
   events.sort((a, b) => a.index - b.index);
 
@@ -639,9 +676,30 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     if (evt.swingType === "high" && breakCandle.high > evt.prevLevel) {
       const closedThrough = breakCandle.close > evt.prevLevel;
       if (closedThrough) {
+        // ── Auto S/R from BOS (LuxAlgo-inspired) ──
+        // After bullish BOS: find the lowest low between the broken swing and the break candle → support
+        let derivedSR: StructureBreak["derivedSR"] = undefined;
+        const scanStart = evt.prevSwingIdx + 1;
+        const scanEnd = evt.index;
+        if (scanEnd > scanStart) {
+          let minLow = Infinity;
+          for (let k = scanStart; k < scanEnd; k++) {
+            if (candles[k] && candles[k].low < minLow) minLow = candles[k].low;
+          }
+          if (minLow < Infinity) {
+            // S/R lifecycle: check if any candle AFTER the break closed below this support
+            let broken = false;
+            for (let k = evt.index + 1; k < candles.length; k++) {
+              if (candles[k] && candles[k].close < minLow) { broken = true; break; }
+            }
+            derivedSR = { price: minLow, type: "support", broken };
+          }
+        }
+
         const entry: StructureBreak = {
           index: evt.index, type: "bullish", price: breakCandle.high,
           datetime: breakCandle.datetime, closeBased: true, level: evt.prevLevel,
+          significance: evt.significance, derivedSR,
         };
         if (currentTrend === "bearish") choch.push(entry);
         else bos.push(entry);
@@ -656,9 +714,28 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     } else if (evt.swingType === "low" && breakCandle.low < evt.prevLevel) {
       const closedThrough = breakCandle.close < evt.prevLevel;
       if (closedThrough) {
+        // ── Auto S/R from BOS: after bearish BOS, find highest high → resistance ──
+        let derivedSR: StructureBreak["derivedSR"] = undefined;
+        const scanStart = evt.prevSwingIdx + 1;
+        const scanEnd = evt.index;
+        if (scanEnd > scanStart) {
+          let maxHigh = -Infinity;
+          for (let k = scanStart; k < scanEnd; k++) {
+            if (candles[k] && candles[k].high > maxHigh) maxHigh = candles[k].high;
+          }
+          if (maxHigh > -Infinity) {
+            let broken = false;
+            for (let k = evt.index + 1; k < candles.length; k++) {
+              if (candles[k] && candles[k].close > maxHigh) { broken = true; break; }
+            }
+            derivedSR = { price: maxHigh, type: "resistance", broken };
+          }
+        }
+
         const entry: StructureBreak = {
           index: evt.index, type: "bearish", price: breakCandle.low,
           datetime: breakCandle.datetime, closeBased: true, level: evt.prevLevel,
+          significance: evt.significance, derivedSR,
         };
         if (currentTrend === "bullish") choch.push(entry);
         else bos.push(entry);
@@ -674,9 +751,6 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   }
 
   // ── Separate sweep scan: check ALL candles between consecutive swing levels ──
-  // Sweeps can happen on non-swing candles (e.g., a candle wicks above a swing high
-  // but isn't itself a swing high because a later candle goes even higher).
-  // Scan between each pair of consecutive swing highs for bearish sweeps (buy-side)
   for (let i = 0; i < highs.length; i++) {
     const level = highs[i].price;
     const startIdx = highs[i].index + 1;
@@ -684,9 +758,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     for (let ci = startIdx; ci < endIdx; ci++) {
       const c = candles[ci];
       if (!c) continue;
-      // Wick went above the swing high but close stayed below
       if (c.high > level && c.close <= level) {
-        // Avoid duplicating sweeps already found in the BOS/CHoCH pass
         const alreadyFound = sweeps.some(s => s.index === ci && s.type === "bearish");
         if (!alreadyFound) {
           sweeps.push({
@@ -698,7 +770,6 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
       }
     }
   }
-  // Scan between each pair of consecutive swing lows for bullish sweeps (sell-side)
   for (let i = 0; i < lows.length; i++) {
     const level = lows[i].price;
     const startIdx = lows[i].index + 1;
@@ -706,7 +777,6 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     for (let ci = startIdx; ci < endIdx; ci++) {
       const c = candles[ci];
       if (!c) continue;
-      // Wick went below the swing low but close stayed above
       if (c.low < level && c.close >= level) {
         const alreadyFound = sweeps.some(s => s.index === ci && s.type === "bullish");
         if (!alreadyFound) {
@@ -728,7 +798,44 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
   }
 
-  return { trend, swingPoints: swings, bos, choch, sweeps };
+  // ── Structure-to-Fractal Conversion Rate ──
+  // What % of detected swing highs led to a bullish BOS/CHoCH? (fractal → structure break)
+  // What % of detected swing lows led to a bearish BOS/CHoCH?
+  // High rate = strong trend (swings keep breaking). Low rate = range (swings hold as S/R).
+  const totalHighFractals = Math.max(1, highs.length);
+  const totalLowFractals = Math.max(1, lows.length);
+  const bullishBreaks = bos.filter(b => b.type === "bullish").length + choch.filter(c => c.type === "bullish").length;
+  const bearishBreaks = bos.filter(b => b.type === "bearish").length + choch.filter(c => c.type === "bearish").length;
+  const structureToFractal = {
+    bullishRate: bullishBreaks / totalHighFractals,  // % of swing highs that got broken
+    bearishRate: bearishBreaks / totalLowFractals,   // % of swing lows that got broken
+    totalFractals: highs.length + lows.length,
+    totalBreaks: bullishBreaks + bearishBreaks,
+    overallRate: (bullishBreaks + bearishBreaks) / Math.max(1, highs.length + lows.length),
+  };
+
+  // ── Count internal vs external breaks for downstream scoring ──
+  const internalBOS = bos.filter(b => b.significance === "internal").length;
+  const externalBOS = bos.filter(b => b.significance === "external").length;
+  const internalCHoCH = choch.filter(c => c.significance === "internal").length;
+  const externalCHoCH = choch.filter(c => c.significance === "external").length;
+
+  // ── Collect active (unbroken) derived S/R levels ──
+  const allBreaks = [...bos, ...choch];
+  const activeDerivedSR = allBreaks
+    .filter(b => b.derivedSR && !b.derivedSR.broken)
+    .map(b => b.derivedSR!);
+  const brokenDerivedSR = allBreaks
+    .filter(b => b.derivedSR && b.derivedSR.broken)
+    .map(b => b.derivedSR!);
+
+  return {
+    trend, swingPoints: swings, bos, choch, sweeps,
+    // New fields — all backward compatible (optional consumption)
+    structureToFractal,
+    structureCounts: { internalBOS, externalBOS, internalCHoCH, externalCHoCH },
+    derivedSR: { active: activeDerivedSR, broken: brokenDerivedSR },
+  };
 }
 
 export function detectOrderBlocks(candles: Candle[], structureBreaks?: { index: number; type: string }[], obLookbackOverride?: number): OrderBlock[] {
