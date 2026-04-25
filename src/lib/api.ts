@@ -15,11 +15,21 @@ export async function invokeFunction<T = any>(
 ): Promise<T> {
   let { data, error } = await supabase.functions.invoke(functionName, { body });
 
-  // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry once.
-  const status = (error as any)?.context?.status ?? (error as any)?.status;
-  const msg = (error?.message || (data as any)?.message || "").toString();
-  if (status === 503 || /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR/i.test(msg)) {
-    await new Promise((r) => setTimeout(r, 600));
+  // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry up to 2x with backoff.
+  const isTransient503 = (err: any, d: any): boolean => {
+    if (!err) return false;
+    const ctx = err?.context;
+    const status =
+      ctx?.status ??
+      ctx?.response?.status ??
+      err?.status;
+    if (status === 503 || status === 504 || status === 502) return true;
+    const msg = (err?.message || d?.message || d?.error || "").toString();
+    return /temporarily unavailable|SUPABASE_EDGE_RUNTIME_ERROR|returned 50[234]|BOOT_ERROR|WORKER_LIMIT/i.test(msg);
+  };
+
+  for (let attempt = 0; attempt < 2 && isTransient503(error, data); attempt++) {
+    await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
     ({ data, error } = await supabase.functions.invoke(functionName, { body }));
   }
 
