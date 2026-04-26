@@ -1,4 +1,4 @@
-import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { corsHeaders } from "../_shared/cors.ts";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
 

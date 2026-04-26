@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
-import { corsHeaders } from "https://esm.sh/@supabase/supabase-js@2.95.0/cors";
+import { corsHeaders } from "../_shared/cors.ts";
 import { buildBrokerSymbolMapProbed, type TradabilityProbe } from "../_shared/symbolMatcher.ts";
 
 // Canonical pairs the bot scanner cares about — used for auto-mapping.
