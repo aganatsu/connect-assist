@@ -15,6 +15,7 @@ export interface TradeMarker {
   type: "entry" | "exit" | "be" | "trail";
   label: string;
   price: number;
+  direction?: "BUY" | "SELL";
 }
 
 export interface ZoneOverlay {
@@ -128,23 +129,34 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
     if (!candleSeriesRef.current || !markers?.length) return;
     const sorted = [...markers].sort((a, b) => a.time - b.time);
     candleSeriesRef.current.setMarkers(
-      sorted.map((m) => ({
-        time: m.time as Time,
-        position: m.type === "entry"
-          ? "belowBar" as const
-          : m.type === "exit"
-          ? "aboveBar" as const
-          : "inBar" as const,
-        color:
-          m.type === "entry" ? "#22c55e" :
-          m.type === "exit" ? "#ef4444" :
-          m.type === "be" ? "#3b82f6" : "#f59e0b",
-        shape:
-          m.type === "entry" ? "arrowUp" as const :
-          m.type === "exit" ? "arrowDown" as const :
-          "circle" as const,
-        text: m.label,
-      }))
+      sorted.map((m) => {
+        const isBuy = m.direction === "BUY";
+        if (m.type === "entry") {
+          return {
+            time: m.time as Time,
+            position: isBuy ? "belowBar" as const : "aboveBar" as const,
+            color: isBuy ? "#22c55e" : "#ef4444",
+            shape: isBuy ? "arrowUp" as const : "arrowDown" as const,
+            text: m.label,
+          };
+        }
+        if (m.type === "exit") {
+          return {
+            time: m.time as Time,
+            position: isBuy ? "aboveBar" as const : "belowBar" as const,
+            color: isBuy ? "#ef4444" : "#22c55e",
+            shape: isBuy ? "arrowDown" as const : "arrowUp" as const,
+            text: m.label,
+          };
+        }
+        return {
+          time: m.time as Time,
+          position: "inBar" as const,
+          color: m.type === "be" ? "#3b82f6" : "#f59e0b",
+          shape: "circle" as const,
+          text: m.label,
+        };
+      })
     );
   }, [markers]);
 

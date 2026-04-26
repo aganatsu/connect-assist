@@ -191,26 +191,43 @@ export default function TradeReplay() {
 
   /* ─── Trade markers ─── */
   const markers: TradeMarker[] = useMemo(() => {
-    if (!selectedTrade) return [];
+    if (!selectedTrade || !chartCandles.length) return [];
     const m: TradeMarker[] = [];
-    const entryTime = Math.floor(new Date(selectedTrade.opened_at).getTime() / 1000);
+
+    // Helper: snap a unix-seconds timestamp to the nearest candle time
+    const snapToCandle = (ts: number): number => {
+      let best = chartCandles[0].time as number;
+      let bestDiff = Math.abs(ts - best);
+      for (const c of chartCandles) {
+        const diff = Math.abs(ts - (c.time as number));
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          best = c.time as number;
+        }
+      }
+      return best;
+    };
+
+    const entryTime = snapToCandle(Math.floor(new Date(selectedTrade.opened_at).getTime() / 1000));
     m.push({
       time: entryTime,
       type: "entry",
       label: `${selectedTrade.direction} @ ${selectedTrade.entry_price.toFixed(5)}`,
       price: selectedTrade.entry_price,
+      direction: selectedTrade.direction,
     });
     if (selectedTrade.status === "closed" && selectedTrade.exit_price && selectedTrade.closed_at) {
-      const exitTime = Math.floor(new Date(selectedTrade.closed_at).getTime() / 1000);
+      const exitTime = snapToCandle(Math.floor(new Date(selectedTrade.closed_at).getTime() / 1000));
       m.push({
         time: exitTime,
         type: "exit",
         label: `Exit @ ${selectedTrade.exit_price.toFixed(5)}`,
         price: selectedTrade.exit_price,
+        direction: selectedTrade.direction,
       });
     }
     return m;
-  }, [selectedTrade]);
+  }, [selectedTrade, chartCandles]);
 
   /* ─── Trade levels ─── */
   const levels: TradeLevels | null = useMemo(() => {
