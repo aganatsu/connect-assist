@@ -564,6 +564,7 @@ export interface FetchOptions {
   interval: string;          // any common form: "15min", "15m", "1h", "4h", "1d", "1w"
   limit?: number;            // desired number of candles (default 200)
   brokerConn?: BrokerConn | null; // optional MetaAPI connection
+  skipBroker?: boolean;      // true for request-budget-sensitive scans; use public data directly
 }
 
 export interface FetchResult {
@@ -609,8 +610,11 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
     return { candles: cached.candles.slice(-limit), source: cached.source as any };
   }
 
-  // Try MetaAPI first if we have a broker connection
-  if (opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
+  // Try MetaAPI first if we have a broker connection, unless the caller is a
+  // request-budget-sensitive scan. Scanner invocations fetch many symbols and
+  // timeframes; probing broker regions/subscriptions there can exceed hosted
+  // runtime limits and surface as platform 503s.
+  if (!opts.skipBroker && opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
