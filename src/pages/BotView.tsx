@@ -149,6 +149,11 @@ export default function BotView() {
         return;
       }
 
+      if (data.started) {
+        toast.info("Scan started — results will appear in the next refresh", { duration: 5000 });
+        return;
+      }
+
       // Handle skip reasons (overlap, interval, day not enabled, no account, etc.)
       if (data.skippedReason) {
         const reason = data.skippedReason;

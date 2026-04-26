@@ -22,7 +22,7 @@ import {
   detectDisplacement, tagDisplacementQuality,
   detectBreakerBlocks, detectUnicornSetups,
   detectJudasSwing, detectReversalCandle,
-  calculatePDLevels, calculatePremiumDiscount,
+  calculatePDLevels,
   computeOpeningRange, calculateSLTP,
   // Confluence stacking, sweep reclaim, pullback decay
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
@@ -42,6 +42,8 @@ import {
   isSessionEnabled,
   type SessionResult,
 } from "../_shared/sessions.ts";
+
+declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -680,9 +682,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       // Derived S/R proximity bonus (new)
       // If price is near an active (unbroken) BOS-derived S/R level, that's a high-quality reaction zone
       const derivedSR = structure.derivedSR;
-      if (derivedSR && derivedSR.active.length > 0 && typeof currentPrice === "number") {
+      if (derivedSR && derivedSR.active.length > 0 && typeof lastPrice === "number") {
         const atr = calculateATR(candles);
-        const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(currentPrice - sr.price) < atr * 0.5);
+        const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(lastPrice - sr.price) < atr * 0.5);
         if (nearActiveSR) {
           structurePts += 0.2;
           detail += ` | Near active BOS-derived ${nearActiveSR.type} at ${nearActiveSR.price.toFixed(5)}`;
@@ -2372,6 +2374,7 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
     interval,
     limit: 300,
     brokerConn: _scanBrokerConn,
+    skipBroker: true,
   });
   return result.candles;
 }
@@ -3106,25 +3109,11 @@ Deno.serve(async (req) => {
 
     if (action === "manual_scan") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      // Await the scan so we can return the full result to the frontend.
-      // Manual scans are user-triggered one-offs — returning real results
-      // is far better than fire-and-forget with silent failures.
-      try {
-        const result = await runScanForUser(adminClient, userId, { isManualScan: true });
-        return respond({
-          ...result,
-          started: false, // signal to frontend: this is a completed result, not a background job
-        });
-      } catch (e: any) {
-        console.error("[manual_scan] error", e);
-        return respond({
-          error: e?.message || "Scan failed unexpectedly",
-          started: false,
-          pairsScanned: 0,
-          signalsFound: 0,
-          tradesPlaced: 0,
-        });
-      }
+      EdgeRuntime.waitUntil(
+        runScanForUser(adminClient, userId, { isManualScan: true })
+          .catch((e: any) => console.error("[manual_scan] background error", e))
+      );
+      return respond({ started: true, message: "Scan started" });
     }
 
     // ── Setup Staging: Fetch active staged setups for the UI ──
@@ -4117,7 +4106,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
     const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
     const smtFlag = smtPair && YAHOO_SYMBOLS[smtPair] ? 1 : 0;
-    const multiTFRegimeEnabled = pairConfig.multiTFRegimeEnabled !== false; // ON by default
+    const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
