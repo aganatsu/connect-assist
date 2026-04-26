@@ -121,18 +121,19 @@ export default function TradeReplay() {
     const staged = Array.isArray(stagedSetups) ? stagedSetups : [];
     if (staged.length > 0) {
       for (const s of staged) {
+        const snapshot = s.analysis_snapshot as any;
         items.push({
-          position_id: s.id || s.setup_id || `staged-${s.symbol}`,
+          position_id: s.id || `staged-${s.symbol}`,
           symbol: s.symbol,
           direction: s.direction?.toUpperCase() === "LONG" || s.direction?.toUpperCase() === "BUY" ? "BUY" : "SELL",
-          entry_price: parseFloat(s.entry_price) || 0,
-          stop_loss: s.stop_loss != null ? parseFloat(s.stop_loss) : null,
-          take_profit: s.take_profit != null ? parseFloat(s.take_profit) : null,
+          entry_price: Number(s.entry_price) || 0,
+          stop_loss: s.sl_level != null ? Number(s.sl_level) : null,
+          take_profit: s.tp_level != null ? Number(s.tp_level) : null,
           status: "staged",
           opened_at: s.staged_at || s.created_at,
           signal_reason: {
-            score: parseFloat(s.current_score || s.initial_score || "0"),
-            summary: s.signal_reason || "",
+            score: Number(s.current_score ?? s.initial_score ?? 0),
+            summary: snapshot?.summary || s.promotion_reason || "",
           },
         });
       }
