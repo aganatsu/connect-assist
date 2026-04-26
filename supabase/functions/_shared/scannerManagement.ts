@@ -318,6 +318,14 @@ export async function manageOpenPositions(
   const maxHoldEnabled = config.maxHoldEnabled ?? false;
   const maxHoldHours = config.maxHoldHours ?? 0; // 0 = no limit
 
+  // Helper: round price to instrument precision to avoid floating point garbage
+  // e.g. pipSize 0.01 → 2 decimals, pipSize 0.0001 → 4 decimals, pipSize 1 → 0 decimals
+  const roundPrice = (price: number, pipSize: number): number => {
+    const decimals = Math.max(0, Math.round(-Math.log10(pipSize)) + 1);
+    const factor = Math.pow(10, decimals);
+    return Math.round(price * factor) / factor;
+  };
+
   for (const pos of positions) {
     try {
       const symbol: string = pos.symbol;
@@ -383,13 +391,13 @@ export async function manageOpenPositions(
               exitAttribution: [...(signalData.exitAttribution || []), attribution],
             };
             await supabase.from("paper_positions").update({
-              stop_loss: beSL.toString(),
+              stop_loss: roundPrice(beSL, spec.pipSize).toString(),
               signal_reason: JSON.stringify(updatedSignal),
             }).eq("id", pos.id);
 
             actions.push({
               positionId: pos.position_id, symbol, action: "sl_tightened",
-              reason: attribution.detail, newSL: beSL, attribution,
+              reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
             });
             console.log(`[mgmt ${scanCycleId}] MAX HOLD ${symbol} | ${holdHours.toFixed(1)}h/${maxHoldHours}h | SL→BE at ${beSL.toFixed(5)}`);
             continue;
@@ -425,13 +433,13 @@ export async function manageOpenPositions(
             exitAttribution: [...(signalData.exitAttribution || []), attribution],
           };
           await supabase.from("paper_positions").update({
-            stop_loss: beSL.toString(),
+            stop_loss: roundPrice(beSL, spec.pipSize).toString(),
             signal_reason: JSON.stringify(updatedSignal),
           }).eq("id", pos.id);
 
           actions.push({
             positionId: pos.position_id, symbol, action: "be_enabled",
-            reason: attribution.detail, newSL: beSL, attribution,
+            reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
           });
           console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}`);
           continue;
@@ -480,13 +488,13 @@ export async function manageOpenPositions(
               exitAttribution: [...(signalData.exitAttribution || []), attribution],
             };
             await supabase.from("paper_positions").update({
-              stop_loss: newTrailLevel.toString(),
+              stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
               signal_reason: JSON.stringify(updatedSignal),
             }).eq("id", pos.id);
 
             actions.push({
               positionId: pos.position_id, symbol, action: "trailing_enabled",
-              reason: attribution.detail, newSL: newTrailLevel, attribution,
+              reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
             });
             console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL→${newTrailLevel.toFixed(5)} (${proportionalTrailPips.toFixed(1)} pips trail = 0.5× SL)`);
             continue;
@@ -529,13 +537,13 @@ export async function manageOpenPositions(
             exitAttribution: [...(signalData.exitAttribution || []), attribution],
           };
           await supabase.from("paper_positions").update({
-            stop_loss: newTrailLevel.toString(),
+            stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
             signal_reason: JSON.stringify(updatedSignal),
           }).eq("id", pos.id);
 
           actions.push({
             positionId: pos.position_id, symbol, action: "sl_tightened",
-            reason: attribution.detail, newSL: newTrailLevel, attribution,
+            reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
           });
           console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${newTrailLevel.toFixed(5)}`);
           continue;
@@ -621,13 +629,13 @@ export async function manageOpenPositions(
                   exitAttribution: [...(signalData.exitAttribution || []), attribution],
                 };
                 await supabase.from("paper_positions").update({
-                  stop_loss: newSL.toString(),
+                  stop_loss: roundPrice(newSL, spec.pipSize).toString(),
                   signal_reason: JSON.stringify(updatedSignalForSL),
                 }).eq("id", pos.id);
 
                 actions.push({
                   positionId: pos.position_id, symbol, action: "sl_tightened",
-                  reason: attribution.detail, newSL, attribution,
+                  reason: attribution.detail, newSL: roundPrice(newSL, spec.pipSize), attribution,
                 });
                 console.log(`[mgmt ${scanCycleId}] SL TIGHTENED ${symbol} ${pos.direction} | CHoCH against | SL ${sl.toFixed(5)}→${newSL.toFixed(5)} at ${rMultiple.toFixed(2)}R`);
                 continue; // Already handled
@@ -665,13 +673,13 @@ export async function manageOpenPositions(
               exitAttribution: [...(signalData.exitAttribution || []), attribution],
             };
             await supabase.from("paper_positions").update({
-              stop_loss: beSL.toString(),
+              stop_loss: roundPrice(beSL, spec.pipSize).toString(),
               signal_reason: JSON.stringify(updatedSignalForSession),
             }).eq("id", pos.id);
 
             actions.push({
               positionId: pos.position_id, symbol, action: "sl_tightened",
-              reason: attribution.detail, newSL: beSL, attribution,
+              reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
             });
             console.log(`[mgmt ${scanCycleId}] SESSION END ${symbol} | SL→BE at ${beSL.toFixed(5)}`);
             continue;

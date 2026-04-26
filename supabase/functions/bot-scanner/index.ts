@@ -3409,10 +3409,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const openPosArr = (openPositions || []).filter((p: any) => !p.bot_id || p.bot_id === BOT_ID);
 
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
+  // Weekend guard: skip management for non-crypto positions when FX market is closed
+  // FX closed: Saturday all day, Sunday before 17:00 ET, Friday after 17:00 ET
+  const fxMarketClosed = (nyDay === 6) || (nyDay === 0 && nyHour < 17) || (nyDay === 5 && nyHour >= 17);
+  const fxPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type !== "crypto");
+  const cryptoPositions = openPosArr.filter((p: any) => SPECS[p.symbol]?.type === "crypto");
+  // Only manage crypto positions during FX closed hours; manage all when FX is open
+  const positionsToManage = fxMarketClosed ? cryptoPositions : openPosArr;
+  if (fxMarketClosed && fxPositions.length > 0) {
+    console.log(`[scan ${scanCycleId}] FX market closed — skipping management for ${fxPositions.length} FX position(s): ${fxPositions.map((p: any) => p.symbol).join(", ")}`);
+  }
   let managementActions: ManagementAction[] = [];
-  if (openPosArr.length > 0) {
+  if (positionsToManage.length > 0) {
     try {
-      managementActions = await manageOpenPositions(supabase, openPosArr, config, scanCycleId, fetchCandles, detectSession);
+      managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, fetchCandles, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
