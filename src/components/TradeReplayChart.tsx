@@ -174,17 +174,19 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
         })
       );
 
-      // Original SL
-      lines.push(
-        series.createPriceLine({
-          price: levels.originalSL,
-          color: "#ef4444",
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "Original SL",
-        })
-      );
+      // Original SL (only if we have a real value)
+      if (levels.originalSL && levels.originalSL > 0) {
+        lines.push(
+          series.createPriceLine({
+            price: levels.originalSL,
+            color: "#ef4444",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: "Original SL",
+          })
+        );
+      }
 
       // Current SL (if trailed)
       if (levels.currentSL && levels.currentSL !== levels.originalSL) {
@@ -200,17 +202,19 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
         );
       }
 
-      // Take Profit
-      lines.push(
-        series.createPriceLine({
-          price: levels.takeProfit,
-          color: "#22c55e",
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "TP",
-        })
-      );
+      // Take Profit (only if we have a real value)
+      if (levels.takeProfit && levels.takeProfit > 0) {
+        lines.push(
+          series.createPriceLine({
+            price: levels.takeProfit,
+            color: "#22c55e",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: "TP",
+          })
+        );
+      }
     }
 
     // Zone overlays as price lines (pairs of lines for high/low)

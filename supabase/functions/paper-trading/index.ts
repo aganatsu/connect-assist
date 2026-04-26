@@ -1097,6 +1097,8 @@ Deno.serve(async (req) => {
         signalReason: t.signal_reason || "", signalScore: parseFloat(t.signal_score || "0"),
         orderId: t.order_id,
         botId: t.bot_id || "smc",
+        stopLoss: t.stop_loss ? parseFloat(t.stop_loss) : null,
+        takeProfit: t.take_profit ? parseFloat(t.take_profit) : null,
       }));
       const wins = histArr.filter((t: any) => t.pnl > 0).length;
       const losses = histArr.filter((t: any) => t.pnl <= 0).length;

@@ -466,9 +466,9 @@ export default function TradeReplay() {
                   <span className="text-muted-foreground">Entry</span>
                   <span className="font-mono text-right">{selectedTrade.entry_price.toFixed(5)}</span>
                   <span className="text-muted-foreground">SL</span>
-                  <span className="font-mono text-right text-red-400">{selectedTrade.stop_loss.toFixed(5)}</span>
+                  <span className="font-mono text-right text-red-400">{selectedTrade.stop_loss ? selectedTrade.stop_loss.toFixed(5) : "N/A"}</span>
                   <span className="text-muted-foreground">TP</span>
-                  <span className="font-mono text-right text-green-400">{selectedTrade.take_profit.toFixed(5)}</span>
+                  <span className="font-mono text-right text-green-400">{selectedTrade.take_profit ? selectedTrade.take_profit.toFixed(5) : "N/A"}</span>
                   {selectedTrade.pnl_pips !== undefined && (
                     <>
                       <span className="text-muted-foreground">P&L</span>
