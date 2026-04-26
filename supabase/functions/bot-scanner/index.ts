@@ -2372,6 +2372,7 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
     interval,
     limit: 300,
     brokerConn: _scanBrokerConn,
+    skipBroker: true,
   });
   return result.candles;
 }
