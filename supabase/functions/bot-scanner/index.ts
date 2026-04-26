@@ -3608,6 +3608,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Filter to only this bot's positions (bot_id column or legacy without it)
   let openPosArr = (openPositions || []).filter((p: any) => !p.bot_id || p.bot_id === BOT_ID);
 
+  // ── Refresh current_price for all open positions before management ──
+  // Without this, management reads stale entry-time prices and can't fire trailing/BE/TP logic.
+  // Uses the same fetchCandles chain (MetaAPI→TwelveData→Yahoo) as the rest of the scanner.
+  if (openPosArr.length > 0) {
+    const posSymbols = [...new Set(openPosArr.map((p: any) => p.symbol))];
+    const livePriceMap: Record<string, number> = {};
+    // Fetch a minimal 1-day candle for each symbol — last close = current price
+    await Promise.all(posSymbols.map(async (sym: string) => {
+      try {
+        const candles = await fetchCandles(sym, "15m", "5d");
+        if (candles.length > 0) {
+          livePriceMap[sym] = candles[candles.length - 1].close;
+        }
+      } catch {}
+    }));
+    let priceUpdates = 0;
+    for (const pos of openPosArr) {
+      const livePrice = livePriceMap[pos.symbol];
+      if (livePrice !== undefined && livePrice.toString() !== pos.current_price) {
+        await supabase.from("paper_positions").update({ current_price: livePrice.toString() }).eq("id", pos.id);
+        pos.current_price = livePrice.toString(); // Also update in-memory so management sees fresh price
+        priceUpdates++;
+      }
+    }
+    if (priceUpdates > 0) {
+      console.log(`[scan ${scanCycleId}] Refreshed current_price for ${priceUpdates}/${openPosArr.length} open positions (${posSymbols.length} symbols)`);
+    }
+  }
+
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
   // Weekend guard: skip management for non-crypto positions when FX market is closed
   // FX closed: Saturday all day, Sunday before 17:00 ET, Friday after 17:00 ET
