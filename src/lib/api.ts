@@ -459,6 +459,10 @@ export const brokerExecApi = {
     invokeFunction("broker-execute", { action: "account_summary", connectionId }),
   openTrades: (connectionId: string) =>
     invokeFunction("broker-execute", { action: "open_trades", connectionId }),
+  connectionStatus: (connectionId: string) =>
+    invokeFunction("broker-execute", { action: "connection_status", connectionId }),
+  validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
+    invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
     invokeFunction("broker-execute", { action: "place_order", connectionId, ...order }),
   closeTrade: (connectionId: string, tradeId: string) =>
