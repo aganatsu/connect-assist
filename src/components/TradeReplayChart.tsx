@@ -7,6 +7,7 @@ import {
   type Time,
   CrosshairMode,
   LineStyle,
+  ColorType,
 } from "lightweight-charts";
 
 /* ─── types ─── */
@@ -62,7 +63,7 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: "solid" as const, color: "#0a0e17" },
+        background: { type: ColorType.Solid, color: "#0a0e17" },
         textColor: "#64748b",
         fontFamily: "'JetBrains Mono', monospace",
         fontSize: 11,
