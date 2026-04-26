@@ -3107,25 +3107,11 @@ Deno.serve(async (req) => {
 
     if (action === "manual_scan") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      // Await the scan so we can return the full result to the frontend.
-      // Manual scans are user-triggered one-offs — returning real results
-      // is far better than fire-and-forget with silent failures.
-      try {
-        const result = await runScanForUser(adminClient, userId, { isManualScan: true });
-        return respond({
-          ...result,
-          started: false, // signal to frontend: this is a completed result, not a background job
-        });
-      } catch (e: any) {
-        console.error("[manual_scan] error", e);
-        return respond({
-          error: e?.message || "Scan failed unexpectedly",
-          started: false,
-          pairsScanned: 0,
-          signalsFound: 0,
-          tradesPlaced: 0,
-        });
-      }
+      EdgeRuntime.waitUntil(
+        runScanForUser(adminClient, userId, { isManualScan: true })
+          .catch((e: any) => console.error("[manual_scan] background error", e))
+      );
+      return respond({ started: true, message: "Scan started" });
     }
 
     // ── Setup Staging: Fetch active staged setups for the UI ──
