@@ -52,6 +52,29 @@ export async function invokeFunction<T = any>(
     }
   }
 
+  // Broker execution can be polled from live dashboards. If the hosted runtime
+  // briefly returns a platform 503 after retries, keep read-only views alive and
+  // return a clear fallback for write actions instead of throwing into a blank screen.
+  if (functionName === "broker-execute" && isTransient503(error, data)) {
+    const action = body?.action;
+    if (["open_trades", "trade_history"].includes(action)) {
+      return [] as T;
+    }
+    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) {
+      return {
+        ok: false,
+        error: "Broker service is temporarily unavailable. Please try again shortly.",
+        fallback: true,
+      } as T;
+    }
+    if (["place_order", "close_trade", "modify_trade"].includes(action)) {
+      return {
+        error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.",
+        fallback: true,
+      } as T;
+    }
+  }
+
   // If auth failed, try refreshing the session once and retry.
   if (isAuthError(error, data)) {
     const { error: refreshErr } = await supabase.auth.refreshSession();
