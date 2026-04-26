@@ -580,7 +580,12 @@ export async function manageOpenPositions(
       const structureInvalidationAlreadyFired = exitFlags.structureInvalidationFired === true;
       if (!structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
         try {
-          const checkCandles = await fetchCandlesFn(symbol, "15m", "2d").catch(() => [] as Candle[]);
+          // C4 fix: Use the position's entry timeframe for structure invalidation
+          // instead of hardcoded 15m. Scalpers (5m) need 5m structure checks,
+          // swing traders (1h) need 1h structure checks. Falls back to 15m for
+          // legacy positions that don't have entryTimeframe stored.
+          const invalidationTF = signalData.entryTimeframe || "15m";
+          const checkCandles = await fetchCandlesFn(symbol, invalidationTF, "2d").catch(() => [] as Candle[]);
           if (checkCandles.length >= 20) {
             const currentStructure = analyzeMarketStructure(checkCandles);
 

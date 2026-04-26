@@ -1435,11 +1435,19 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       const trendAligned = (direction === "long" && structure.trend === "bullish")
         || (direction === "short" && structure.trend === "bearish");
       if (!trendAligned && msFactor.present) {
-        // Counter-trend penalty: reduce Market Structure score
-        const penalty = 0.5;
+        // C7 fix: Proportional counter-trend penalty based on trend strength.
+        // A strong trend (multiple BOS, no CHoCH) means counter-trend is riskier
+        // than a weak trend (few BOS, some CHoCH). Scale penalty from 0.3 to 1.0.
+        const bosCount = structure.bos.length;
+        const chochCount = structure.choch.length;
+        const trendStrength = Math.max(0, bosCount - chochCount); // 0 = weak, 3+ = strong
+        // Base penalty 0.3, +0.15 per net BOS, capped at 1.0
+        const penalty = Math.min(1.0, 0.3 + trendStrength * 0.15);
         score -= penalty;
         msFactor.weight = Math.max(0, msFactor.weight - penalty);
-        msFactor.detail += ` | Counter-trend penalty: ${direction} against ${structure.trend} (-${penalty})`;
+        msFactor.detail += ` | Counter-trend penalty: ${direction} against ${structure.trend} (-${penalty.toFixed(2)}, strength=${trendStrength})`;
+      } else if (trendAligned && msFactor.present) {
+        msFactor.detail += ` | Trend aligned: ${direction} with ${structure.trend} \u2713`;
       }
     }
   }
@@ -1803,7 +1811,11 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           }
         } else {
           pts = -0.5;
-          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} (penalty)`;
+          // C5 fix: Communicate gate severity in the factor detail.
+          // If htfBiasRequired is on, Gate 1 will block this trade entirely.
+          // The score penalty alone doesn't convey that — add explicit warning.
+          const gateWillBlock = config.htfBiasRequired;
+          detail = `Counter-HTF: ${direction} against daily ${dailyTrend} (penalty)${gateWillBlock ? " ⚠ Gate 1 will BLOCK" : ""}`;
           // Recent CHoCH against us = extra danger
           if (chochRecency <= 5) {
             pts -= 0.25;
@@ -1811,8 +1823,19 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           }
         }
       } else {
-        pts = 0.25;
-        detail = `Daily ranging (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+        // C5 fix: Align Factor 22 ranging treatment with Gate 1 tolerance.
+        // Hard veto mode: Gate 1 blocks ranging daily for ALL directions, so
+        // Factor 22 should give 0 pts (not 0.25) to avoid inflating the score
+        // for a trade that will be gate-blocked anyway.
+        // Soft mode: Gate 1 passes ranging, so Factor 22 gives a small neutral bonus.
+        const hardVeto = config.htfBiasHardVeto;
+        if (hardVeto) {
+          pts = 0;
+          detail = `Daily ranging — hard veto mode will block (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+        } else {
+          pts = 0.25;
+          detail = `Daily ranging — neutral (${recentBOS.length} BOS, ${recentCHoCH.length} CHoCH)`;
+        }
         // If there's a very recent CHoCH, the range is fresh — could be a reversal
         if (chochRecency <= 3) {
           detail += ` — fresh CHoCH (${chochRecency}d ago, possible reversal)`;
@@ -3566,7 +3589,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const { data: openPositions } = await supabase.from("paper_positions").select("*")
     .eq("user_id", userId).eq("position_status", "open");
   // Filter to only this bot's positions (bot_id column or legacy without it)
-  const openPosArr = (openPositions || []).filter((p: any) => !p.bot_id || p.bot_id === BOT_ID);
+  let openPosArr = (openPositions || []).filter((p: any) => !p.bot_id || p.bot_id === BOT_ID);
 
   // ── Active Trade Management: manage existing positions before scanning for new ones ──
   // Weekend guard: skip management for non-crypto positions when FX market is closed
@@ -4789,6 +4812,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
             }
           }
+          // C6 fix: Remove closed opposite positions from the in-memory array
+          // so Gate 4 (max open positions) and Gate 5 (max per symbol) don't
+          // over-count for remaining pairs in this scan cycle.
+          const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
+          openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
         }
 
         // Build exit flags metadata to store on the position
@@ -4860,7 +4888,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -4945,7 +4973,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
