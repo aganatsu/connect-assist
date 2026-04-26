@@ -18,6 +18,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
+import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -44,6 +45,7 @@ const App = () => (
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
                 <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
+                <Route path="/trade-replay" element={<ProtectedRoute><ErrorBoundary><TradeReplay /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
