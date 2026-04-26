@@ -15,6 +15,7 @@ import { BotConfigModal } from "@/components/BotConfigModal";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { supabase } from "@/integrations/supabase/client";
 
 type SettingsTab = "risk" | "bot" | "preferences" | "about";
 
