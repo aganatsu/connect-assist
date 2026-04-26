@@ -43,6 +43,8 @@ import {
   type SessionResult,
 } from "../_shared/sessions.ts";
 
+declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
+
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
 // ─── Default Config (overridden by bot_configs) ─────────────────────
