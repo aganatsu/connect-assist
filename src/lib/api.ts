@@ -3,7 +3,13 @@ import { supabase } from "@/integrations/supabase/client";
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
 
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
-  const run = () => supabase.functions.invoke(functionName, { body });
+  const run = async () => {
+    try {
+      return await supabase.functions.invoke(functionName, { body });
+    } catch (error) {
+      return { data: null, error };
+    }
+  };
   if (functionName !== "broker-execute") return run();
 
   const previous = brokerExecuteQueue.catch(() => undefined);
