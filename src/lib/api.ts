@@ -50,6 +50,13 @@ export async function invokeFunction<T = any>(
         tradesPlaced: 0,
       } as T;
     }
+    // Any other bot-scanner action (dismiss_staged, cancel_pending, etc.):
+    // return a structured fallback rather than throwing into a blank screen.
+    return {
+      ok: false,
+      error: "Scanner is temporarily unavailable. Please try again shortly.",
+      fallback: true,
+    } as T;
   }
 
   // Broker execution can be polled from live dashboards. If the hosted runtime
