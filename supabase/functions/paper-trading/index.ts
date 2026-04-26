@@ -739,15 +739,21 @@ Deno.serve(async (req) => {
     }
     const user = { id: claimsData.claims.sub as string };
 
-    const { action, ...payload } = await req.json();
+    const { action, ...payload } = await req.json().catch(() => ({ action: "status" }));
 
-    // Build rateMap once per request for cross-pair PnL conversion
-    if (Object.keys(_rateMap).length === 0) {
+    // Build live conversion rates only for write/engine actions. The dashboard
+    // status endpoint is polled frequently and must stay fast/read-only; doing
+    // multiple external Yahoo requests on every cold status worker was causing
+    // runtime churn and intermittent hosted 503s.
+    if (action !== "status" && Object.keys(_rateMap).length === 0) {
       try {
         _rateMap = await buildRateMap();
       } catch (e: any) {
-        console.warn(`rateMap build failed: ${e?.message} — using legacy 1.0 fallback`);
+        console.warn(`rateMap build failed: ${e?.message} — using fallback rates`);
+        _rateMap = { ...FALLBACK_RATES };
       }
+    } else if (Object.keys(_rateMap).length === 0) {
+      _rateMap = { ...FALLBACK_RATES };
     }
 
     // ── Get account state ──
@@ -770,10 +776,11 @@ Deno.serve(async (req) => {
       }
 
       let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
-      // Update current prices from live market data
-      if (positions && positions.length > 0) {
+      // Keep status read-only by default. Engine processing can still be run by
+      // passing processEngine=true from controlled automation, but dashboard
+      // polling must not perform external data calls or broker mirror actions.
+      if (payload.processEngine === true && positions && positions.length > 0) {
         await updatePositionPrices(supabase, positions);
-        // Re-fetch with updated prices
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
         positions = refreshed || positions;
 
