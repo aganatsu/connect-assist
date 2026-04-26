@@ -3081,7 +3081,9 @@ async function runSafetyGates(
   if (config.killZoneOnly) {
     const assetProfile = getAssetProfile(symbol);
     if (!assetProfile.skipSessionGate) {
-      const sess = detectSession(config);
+      // S3 Fix: Use cachedSession from analysis instead of calling detectSession again.
+      // The analysis object carries the session snapshot from the scan-cycle level.
+      const sess = analysis.cachedSession || detectSession(config);
       if (!sess.isKillZone) {
         gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
       } else {
@@ -3480,26 +3482,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // These fields should NEVER be overwritten by style if the user set them:
     const userProtectedFields = new Set([
       "minConfluence",
+      // I2 Fix: tpRatio is user-tunable — don't silently overwrite with style default
+      "tpRatio",
       // Management fields the user can tune per-broker:
       "trailingStopEnabled", "trailingStopPips", "trailingStopActivation",
       "breakEvenEnabled", "breakEvenPips",
       "partialTPEnabled", "partialTPPercent", "partialTPLevel",
       "maxHoldHours",
     ]);
+    // I1 Fix: Track provenance of each config field for debugging and transparency.
+    const styleApplied: string[] = [];
+    const userKept: string[] = [];
     for (const [key, val] of Object.entries(styleDefaults)) {
       if (userProtectedFields.has(key)) {
         // Only apply style default if user didn't explicitly set this field
         // (i.e., the value is still the global DEFAULTS fallback)
         if ((config as any)[key] === (DEFAULTS as any)[key]) {
           (config as any)[key] = val;
+          styleApplied.push(`${key}=${val}`);
+        } else {
+          // User explicitly set a different value — keep it
+          userKept.push(`${key}=${(config as any)[key]} (style wanted ${val})`);
         }
-        // else: user explicitly set a different value — keep it
       } else {
         // Non-protected fields (entryTimeframe, htfTimeframe, tpRatio, slBufferPips)
         // always come from the style
         (config as any)[key] = val;
+        styleApplied.push(`${key}=${val}`);
       }
     }
+    if (styleApplied.length > 0) console.log(`[config] Style "${resolvedStyle}" applied: ${styleApplied.join(", ")}`);
+    if (userKept.length > 0) console.log(`[config] User-protected overrides kept: ${userKept.join(", ")}`);
   }
 
   // Day-of-week check — skip for crypto-only instrument lists.
@@ -3517,9 +3530,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
 
+  // S3 Fix: Capture session ONCE per scan cycle. detectSession() is time-based,
+  // so calling it multiple times during a long scan could return different results
+  // if the scan crosses a session boundary. Cache it here and reuse everywhere.
   const session = detectSession(config);
-  // Session filter: use filterKey directly from shared sessions module (no more manual normalization)
   const normalizedSession = session.filterKey;
+  // Freeze the session snapshot for this entire scan cycle
+  const cachedSession = { ...session };
   // Session gate is now checked per-instrument inside the loop, not globally
   // Try to load bot-specific account first; fall back to legacy single-row if bot_id column doesn't exist yet
   {
@@ -3624,9 +3641,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
                 if (!pos) continue;
                 const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
-                const connsToModify = mirroredIds.length > 0
-                  ? liveConns.filter((c: any) => mirroredIds.includes(c.id))
-                  : liveConns; // fallback: try all active connections
+                // B2 Fix: Skip SL modify when no mirrored_connection_ids instead of trying all connections.
+                // Legacy positions without mirrored IDs should be managed conservatively to avoid
+                // modifying SL on broker positions that were not opened by this scanner.
+                if (mirroredIds.length === 0) {
+                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping SL modify (B2 safety)`);
+                  continue;
+                }
+                const connsToModify = liveConns.filter((c: any) => mirroredIds.includes(c.id));
                 const tp = parseFloat(pos.take_profit || "0") || undefined;
                 // Apply safety buffer (1 pip) to avoid premature stops from spread
                 const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
@@ -3691,17 +3713,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                     let brokerPos = brokerPositions.find((p: any) =>
                       p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
                     );
+                    // B1 Fix: Removed symbol+direction fallback — it could match the wrong position
+                    // when multiple positions exist for the same symbol+direction.
+                    // Now only matches by comment tag. If comment was truncated by broker, skip.
                     if (!brokerPos) {
-                      // Fallback: match by symbol + direction
-                      const brokerSymbol = resolveSymbol(a.symbol, conn);
-                      brokerPos = brokerPositions.find((p: any) =>
-                        (p.symbol === brokerSymbol || p.symbol === a.symbol.replace("/", "") ||
-                         p.symbol?.replace(/[._\-]/g, "").toUpperCase() === a.symbol.replace("/", "").toUpperCase()) &&
-                        ((p.type === "POSITION_TYPE_BUY" && pos.direction === "long") ||
-                         (p.type === "POSITION_TYPE_SELL" && pos.direction === "short"))
-                      );
+                      console.warn(`[mgmt-broker] ${conn.display_name}: No comment-tag match for paper:${a.positionId} on ${a.symbol} — skipping SL modify (B1 safety)`);
+                      continue;
                     }
-                    if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} SL modify`); continue; }
                     const modifyBody: any = {
                       actionType: "POSITION_MODIFY",
                       positionId: brokerPos.id,
@@ -3733,9 +3751,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
                 if (!pos) continue;
                 const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
-                const connsToClose = mirroredIds.length > 0
-                  ? liveConnsP.filter((c: any) => mirroredIds.includes(c.id))
-                  : liveConnsP;
+                // B2 Fix: Skip partial TP when no mirrored_connection_ids (same safety as SL modify)
+                if (mirroredIds.length === 0) {
+                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping partial TP (B2 safety)`);
+                  continue;
+                }
+                const connsToClose = liveConnsP.filter((c: any) => mirroredIds.includes(c.id));
                 // Parse partial TP percent from the action's attribution
                 const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
                 const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
@@ -4111,7 +4132,38 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           : lastCandle.high >= entryPrice;
 
         if (filled) {
-          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (current: ${currentPrice})`);
+          // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
+          // Multiple limit orders can fill in the same cycle — enforce limits before creating position.
+          const currentOpenCount = openPosArr.filter((p: any) => p.position_status === "open" || !p.position_status).length;
+          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol && (p.position_status === "open" || !p.position_status)).length;
+          if (currentOpenCount >= (config.maxOpenPositions || 3)) {
+            console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at fill time`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            continue;
+          }
+          if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
+            console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at fill time`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            continue;
+          }
+
+          // L1 Fix: Use the actual candle touch price for a more realistic fill.
+          // For longs, the fill would occur at the candle low (or limit price if low < limit).
+          // For shorts, the fill would occur at the candle high (or limit price if high > limit).
+          const actualFillPrice = pending.direction === "long"
+            ? Math.max(lastCandle.low, entryPrice)   // filled at low, but not below limit
+            : Math.min(lastCandle.high, entryPrice);  // filled at high, but not above limit
+          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (actual fill: ${actualFillPrice}, current: ${currentPrice})`);
 
           const positionId = pending.order_id;
           const orderId = crypto.randomUUID().slice(0, 8);
@@ -4143,7 +4195,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             size: pending.size.toString(),
-            entry_price: entryPrice.toString(),
+            entry_price: actualFillPrice.toString(),  // L1: use actual fill price, not limit price
             current_price: currentPrice.toString(),
             stop_loss: pending.stop_loss.toString(),
             take_profit: pending.take_profit.toString(),
@@ -4214,6 +4266,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               const mirroredConnIds: string[] = [];
               for (const conn of connections) {
                 try {
+                  // B4 Fix: Add spread check before mirroring limit fills to brokers.
+                  // Market order path checks spread; limit fills should too.
+                  let metaAccountIdForSpread: string | undefined;
+                  let authTokenForSpread: string | undefined;
+                  if (conn.broker_type === "metaapi") {
+                    metaAccountIdForSpread = conn.account_id;
+                    authTokenForSpread = conn.api_key;
+                    if (metaAccountIdForSpread.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authTokenForSpread)) {
+                      authTokenForSpread = conn.account_id;
+                      metaAccountIdForSpread = conn.api_key;
+                    }
+                  }
+                  const spreadResult = await fetchBrokerSpread(conn, pending.symbol, config, metaAccountIdForSpread, authTokenForSpread);
+                  if (spreadResult && !spreadResult.passed) {
+                    console.warn(`[limit-fill-mirror] ${conn.display_name}: spread too wide (${spreadResult.spreadPips.toFixed(2)}p > ${spreadResult.effectiveMax}p) — skipping broker mirror for ${pending.symbol} (B4 safety)`);
+                    continue;
+                  }
+
                   if (conn.broker_type !== "metaapi") {
                     const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
                       method: "POST",
@@ -4336,6 +4406,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Inject 4H candles for multi-TF regime classification
     (pairConfig as any)._h4Candles = h4Candles.length >= 20 ? h4Candles : null;
     const analysis = runFullConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
+    // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
+    (analysis as any).cachedSession = cachedSession;
 
     // ── Setup Classifier: determine scalp/day/swing from the actual setup structure (informational only) ──
     const setupClassification = classifySetupType(analysis);
