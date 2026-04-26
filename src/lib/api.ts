@@ -75,6 +75,34 @@ export async function invokeFunction<T = any>(
     }
   }
 
+  // Paper-trading is polled from the dashboard. If the hosted runtime briefly
+  // returns a platform 503 after retries, keep read-only views alive and return
+  // a clear fallback for write actions instead of crashing into a blank screen.
+  if (functionName === "paper-trading" && isTransient503(error, data)) {
+    const action = body?.action;
+    if (action === "status") {
+      return {
+        ok: false,
+        error: "Paper trading service is temporarily unavailable. Please try again shortly.",
+        fallback: true,
+        engine_status: "unknown",
+        positions: [],
+        orders: [],
+      } as T;
+    }
+    if ([
+      "place_order", "close_position", "update_position",
+      "start_engine", "pause_engine", "stop_engine",
+      "kill_switch", "reset_account", "reset_balance_only",
+      "set_balance", "set_execution_mode",
+    ].includes(action)) {
+      return {
+        error: "Paper trading is temporarily unavailable. Please retry shortly.",
+        fallback: true,
+      } as T;
+    }
+  }
+
   // If auth failed, try refreshing the session once and retry.
   if (isAuthError(error, data)) {
     const { error: refreshErr } = await supabase.auth.refreshSession();
