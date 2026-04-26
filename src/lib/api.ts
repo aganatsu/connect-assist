@@ -282,15 +282,82 @@ export const backtestApi = {
 // ── Bot Scanner (Bot #1 — SMC) ──
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
-  logs: () => invokeFunction("bot-scanner", { action: "scan_logs" }),
+  logs: async () => {
+    const { data, error } = await (supabase as any)
+      .from("scan_logs")
+      .select("*")
+      .order("scanned_at", { ascending: false })
+      .limit(20);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
   // Setup Staging / Watchlist
-  activeStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "active_staged" }),
-  allStaged: () => invokeFunction<StagedSetup[]>("bot-scanner", { action: "staged_setups" }),
-  dismissStaged: (setupId: string) => invokeFunction("bot-scanner", { action: "dismiss_staged", setupId }),
+  activeStaged: async (): Promise<StagedSetup[]> => {
+    const { data, error } = await (supabase as any)
+      .from("staged_setups")
+      .select("*")
+      .eq("bot_id", "smc")
+      .eq("status", "watching")
+      .order("current_score", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  allStaged: async (): Promise<StagedSetup[]> => {
+    const { data, error } = await (supabase as any)
+      .from("staged_setups")
+      .select("*")
+      .eq("bot_id", "smc")
+      .order("staged_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  dismissStaged: async (setupId: string) => {
+    const { error } = await (supabase as any)
+      .from("staged_setups")
+      .update({
+        status: "invalidated",
+        invalidation_reason: "Manually dismissed by user",
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", setupId);
+    if (error) throw new Error(error.message);
+    return { success: true };
+  },
   // Pending / Limit Orders
-  activePending: () => invokeFunction<PendingOrder[]>("bot-scanner", { action: "active_pending" }),
-  allPending: () => invokeFunction<PendingOrder[]>("bot-scanner", { action: "pending_orders" }),
-  cancelPending: (orderId: string) => invokeFunction("bot-scanner", { action: "cancel_pending", orderId }),
+  activePending: async (): Promise<PendingOrder[]> => {
+    const { data, error } = await (supabase as any)
+      .from("pending_orders")
+      .select("*")
+      .eq("bot_id", "smc")
+      .eq("status", "pending")
+      .order("placed_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  allPending: async (): Promise<PendingOrder[]> => {
+    const { data, error } = await (supabase as any)
+      .from("pending_orders")
+      .select("*")
+      .eq("bot_id", "smc")
+      .order("placed_at", { ascending: false })
+      .limit(100);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+  cancelPending: async (orderId: string) => {
+    const { error } = await (supabase as any)
+      .from("pending_orders")
+      .update({
+        status: "cancelled",
+        cancel_reason: "Manually cancelled by user",
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("order_id", orderId)
+      .eq("status", "pending");
+    if (error) throw new Error(error.message);
+    return { success: true };
+  },
 };
 
 // ── Staged Setup Type ──
