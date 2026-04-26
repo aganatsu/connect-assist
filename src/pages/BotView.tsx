@@ -1277,11 +1277,36 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             );
                           })()}
 
+                          {/* ── Fib Levels ── */}
+                          {sr.fibLevels && (
+                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
+                                <span className="text-[7px] font-mono text-muted-foreground">({sr.fibLevels.direction === "up" ? "↑" : "↓"} {sr.fibLevels.swingLow?.toFixed(sr.fibLevels.swingLow > 10 ? 3 : 5)} – {sr.fibLevels.swingHigh?.toFixed(sr.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {(sr.fibLevels.retracements || []).map((r: any, i: number) => (
+                                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
+                                    {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
+                                  </span>
+                                ))}
+                              </div>
+                              {sr.fibLevels.extensions?.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  <span className="text-[7px] text-muted-foreground">Ext:</span>
+                                  {sr.fibLevels.extensions.map((e: any, i: number) => (
+                                    <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                                      {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                           {/* ── Tier-Grouped Factor Breakdown ── */}
                           {sr.factorScores && sr.factorScores.length > 0 && (
                             <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
                           )}
-
                           {/* ── Risk Gates ── */}
                           {sr.gates && sr.gates.length > 0 && (
                             <div className="space-y-0.5">
@@ -1831,6 +1856,35 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
           <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
           <p className="mt-1 text-[10px] text-foreground">{d.reason}</p>
+        </div>
+      )}
+
+      {/* Fib Levels Panel — shows ZigZag-based retracement + extension levels */}
+      {d.fibLevels && (
+        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+          <div className="flex items-center gap-2">
+            <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
+            <span className="text-[7px] font-mono text-muted-foreground">({d.fibLevels.direction === "up" ? "↑" : "↓"} {d.fibLevels.swingLow?.toFixed(d.fibLevels.swingLow > 10 ? 3 : 5)} – {d.fibLevels.swingHigh?.toFixed(d.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
+          </div>
+          {/* Retracement levels */}
+          <div className="flex flex-wrap gap-1">
+            {(d.fibLevels.retracements || []).map((r: any, i: number) => (
+              <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
+                {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
+              </span>
+            ))}
+          </div>
+          {/* Extension levels */}
+          {d.fibLevels.extensions?.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-0.5">
+              <span className="text-[7px] text-muted-foreground">Ext:</span>
+              {d.fibLevels.extensions.map((e: any, i: number) => (
+                <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                  {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

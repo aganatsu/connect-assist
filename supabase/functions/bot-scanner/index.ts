@@ -28,6 +28,9 @@ import {
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
   type ConfluenceStack, type SweepReclaim, type PullbackDecay,
   type FairValueGap,
+  // ZigZag pivot detection & Fibonacci levels
+  detectZigZagPivots, computeFibLevels,
+  type ZigZagPivot, type FibLevel, type FibLevels,
   // Optimal style detection
   detectOptimalStyle,
 } from "../_shared/smcAnalysis.ts";
@@ -628,6 +631,47 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   const session = detectSession(config);
   const pdLevels = dailyCandles ? calculatePDLevels(dailyCandles) : null;
 
+  // ── ZigZag-based Fibonacci anchoring ──
+  // Uses deviation-based pivot detection (TradingView-style) for clean Fib levels.
+  // Falls back to the old 5-swing envelope if ZigZag doesn't find 2 pivots.
+  const zigzagResult = detectZigZagPivots(candles, config.fibDevMultiplier || 3, config.fibDepth || 10);
+  let fibLevels: FibLevels | null = null;
+  if (zigzagResult.lastTwo) {
+    fibLevels = computeFibLevels(zigzagResult.lastTwo[0], zigzagResult.lastTwo[1]);
+  }
+  // Fallback: if ZigZag didn't produce 2 pivots, build from detectSwingPoints envelope
+  if (!fibLevels) {
+    const fallbackSwings = detectSwingPoints(candles);
+    const fbHighs = fallbackSwings.filter(s => s.type === "high").slice(-5);
+    const fbLows = fallbackSwings.filter(s => s.type === "low").slice(-5);
+    if (fbHighs.length > 0 && fbLows.length > 0) {
+      const fbHigh = fbHighs.reduce((best, s) => s.price > best.price ? s : best);
+      const fbLow = fbLows.reduce((best, s) => s.price < best.price ? s : best);
+      fibLevels = computeFibLevels(
+        { index: fbLow.index, price: fbLow.price, type: "low", datetime: fbLow.datetime },
+        { index: fbHigh.index, price: fbHigh.price, type: "high", datetime: fbHigh.datetime },
+      );
+    }
+  }
+
+  // ── Early regime classification (needed by Factor 4 for 0.236 scoring) ──
+  // Computed here so Factor 4 can use regime-aware Fib scoring.
+  // The full regime gate logic still runs later in its original position.
+  const h4CandlesEarly: Candle[] | null = (config as any)._h4Candles || null;
+  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
+    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
+  } | null = null;
+  let regime4HInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
+    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
+  } | null = null;
+  const regimeScoringEnabled = config.regimeScoringEnabled !== false;
+  if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
+    regimeInfo = classifyInstrumentRegimeLocal(dailyCandles);
+    if (h4CandlesEarly && h4CandlesEarly.length >= 20) {
+      regime4HInfo = classifyInstrumentRegimeLocal(h4CandlesEarly);
+    }
+  }
+
   const lastPrice = candles[candles.length - 1].close;
   let score = 0;
   const factors: ReasoningFactor[] = [];
@@ -930,69 +974,97 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   // ── Factor 4: Premium/Discount & Fibonacci (max 2.5, group-capped) ──
   // Merged: P/D zone + Fibonacci retracement levels + PD/PW levels.
-  // Uses the same swing high/low for both P/D and Fib calculations.
+  // Now uses ZigZag-based 2-pivot Fib anchoring (with fallback to old envelope).
+  // Added 0.236 level: in strong trends, shallow pullbacks are high-probability continuation entries.
   {
     let pts = 0;
-    const fibPercent = pd.zonePercent; // 0% = swing low, 100% = swing high
-    let detail = `Price at ${fibPercent.toFixed(1)}% of swing range — ${pd.currentZone} zone`;
+    let detail = "";
 
-    // Fibonacci-aware scoring (direction-dependent):
-    // For LONGS: want price in discount (low fib %). OTE sweet spot = 61.8-78.6% retracement from high = 21.4-38.2% of range.
-    // For SHORTS: want price in premium (high fib %). OTE sweet spot = 61.8-78.6% retracement from low = 61.8-78.6% of range.
-    // Note: zonePercent is measured from swing low, so:
-    //   - For longs: OTE = price at 21.4-38.2% (deep discount, 61.8-78.6% retracement)
-    //   - For shorts: OTE = price at 61.8-78.6% (deep premium, 61.8-78.6% retracement)
+    // Compute retracement % using ZigZag-based Fib levels if available
+    let retrace = 0;
+    let fibSource = "legacy";
+    if (fibLevels) {
+      const range = fibLevels.swingHigh - fibLevels.swingLow;
+      if (range > 0) {
+        // Retracement measured from the END of the swing
+        if (fibLevels.direction === "up") {
+          // Swing went up (low→high), retracement = how far price pulled back from high
+          retrace = ((fibLevels.swingHigh - lastPrice) / range) * 100;
+        } else {
+          // Swing went down (high→low), retracement = how far price bounced from low
+          retrace = ((lastPrice - fibLevels.swingLow) / range) * 100;
+        }
+        fibSource = "zigzag";
+        detail = `Price at ${retrace.toFixed(1)}% retracement (${fibSource}, range ${fibLevels.swingLow.toFixed(5)}–${fibLevels.swingHigh.toFixed(5)})`;
+      }
+    }
+    // Fallback to legacy pd calculation if no fibLevels
+    if (!fibLevels || detail === "") {
+      const fibPercent = pd.zonePercent;
+      retrace = direction === "long" ? (100 - fibPercent) : fibPercent;
+      detail = `Price at ${retrace.toFixed(1)}% retracement (legacy, ${pd.currentZone} zone)`;
+    }
 
-    // Use actual direction (now determined before Factor 3)
     const fibDirection = direction;
 
-    if (fibDirection === "long") {
-      // Retracement from swing high: retrace% = 100 - fibPercent
-      const retrace = 100 - fibPercent;
+    // Regime-aware 0.236 scoring: in strong trends, shallow pullbacks are valid entries
+    const isStrongRegime = regimeInfo && (
+      regimeInfo.regime === "strong_trend" ||
+      (regimeInfo.confidence >= 70 && (regimeInfo.regime === "trending" || regimeInfo.regime === "strong_trend"))
+    );
+    const isAccelerating = regimeInfo?.transition?.state === "accelerating";
+
+    if (fibDirection === "long" || fibDirection === "short") {
       if (retrace >= 70 && retrace <= 72) {
         // 70.5% sweet spot (ICT optimal)
         pts = 2.0;
-        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
+        detail += ` | Fib 70.5% sweet spot — OPTIMAL ENTRY`;
       } else if (retrace >= 61.8 && retrace <= 78.6) {
         // OTE zone
         pts = 1.5;
-        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
-      } else if (fibPercent < 45) {
-        // In discount but not OTE
+        detail += ` | Fib OTE zone (${retrace.toFixed(1)}%)`;
+      } else if (retrace > 50 && retrace < 61.8) {
+        // Discount/premium zone (beyond equilibrium but not OTE)
         pts = 1.0;
-        detail += ` | Discount zone (${retrace.toFixed(1)}% retracement)`;
-      } else if (retrace >= 38.2 && retrace < 61.8) {
+        detail += ` | ${fibDirection === "long" ? "Discount" : "Premium"} zone (${retrace.toFixed(1)}%)`;
+      } else if (retrace >= 38.2 && retrace <= 50) {
         // Shallow retracement
         pts = 0.5;
         detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
-      } else if (fibPercent >= 50) {
-        // Buying in premium — no points
-        detail += ` | Buying in premium — unfavorable`;
-      }
-    } else if (fibDirection === "short") {
-      // For shorts, fibPercent IS the retracement from swing low
-      const retrace = fibPercent;
-      if (retrace >= 70 && retrace <= 72) {
-        pts = 2.0;
-        detail += ` | Fib 70.5% sweet spot (retrace ${retrace.toFixed(1)}%) — OPTIMAL ENTRY`;
-      } else if (retrace >= 61.8 && retrace <= 78.6) {
-        pts = 1.5;
-        detail += ` | Fib OTE zone (${retrace.toFixed(1)}% retracement)`;
-      } else if (fibPercent > 55) {
-        pts = 1.0;
-        detail += ` | Premium zone (${retrace.toFixed(1)}% retracement)`;
-      } else if (retrace >= 38.2 && retrace < 61.8) {
+      } else if (retrace >= 23.6 && retrace < 38.2) {
+        // NEW: 0.236 level — regime-dependent scoring
+        if (isStrongRegime && isAccelerating) {
+          pts = 0.75;
+          detail += ` | Fib 23.6% continuation (strong trend + accelerating) — valid shallow entry`;
+        } else if (isStrongRegime) {
+          pts = 0.5;
+          detail += ` | Fib 23.6% pullback (strong trend) — moderate entry`;
+        } else {
+          pts = 0.25;
+          detail += ` | Fib 23.6% pullback (weak regime) — minimal confluence`;
+        }
+      } else if (retrace > 78.6) {
+        // Deep retracement — risky but still in play
         pts = 0.5;
-        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
-      } else if (fibPercent <= 50) {
-        detail += ` | Selling in discount — unfavorable`;
+        detail += ` | Deep retracement (${retrace.toFixed(1)}%) — approaching invalidation`;
+      } else {
+        // < 23.6% — barely pulled back, or wrong side
+        detail += ` | ${fibDirection === "long" ? "Buying in premium" : "Selling in discount"} — unfavorable (${retrace.toFixed(1)}%)`;
       }
     } else {
-      // Ranging — no clear direction from structure, just report zone
+      // Ranging — no clear direction from structure
       if (pd.oteZone) {
         pts = 0.5;
         detail += " | OTE zone active (ranging — no directional bias)";
       }
+    }
+
+    // Append Fib level proximity info if we have computed levels
+    if (fibLevels && pts > 0) {
+      const nearestRetrace = fibLevels.retracements.reduce((best, lvl) =>
+        Math.abs(lvl.price - lastPrice) < Math.abs(best.price - lastPrice) ? lvl : best
+      );
+      detail += ` | Nearest Fib: ${nearestRetrace.label} @ ${nearestRetrace.price.toFixed(5)}`;
     }
 
     { const s = applyWeightScale(pts, "premiumDiscountFib", 2.0, config); pts = s.pts; score += pts;
@@ -1700,7 +1772,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     let pts = 0;
     let detail = "";
     confluenceStacks = computeConfluenceStacking(
-      orderBlocks, fvgs, structure.swingPoints, candles, direction
+      orderBlocks, fvgs, structure.swingPoints, candles, direction, fibLevels
     );
     if (confluenceStacks.length > 0) {
       const best = confluenceStacks[0]; // Already sorted by layerCount desc + alignment
@@ -1939,29 +2011,13 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
-  // ─── Regime Classification (info-only, separate gate — no score adjustment) ──────
-  // Classifies the instrument's current regime for display and optional gate blocking.
-  // Does NOT adjust the confluence score — regime is a separate pass/fail gate.
-  // Now supports multi-timeframe regime: Daily (primary) + 4H (secondary).
-  const regimeScoringEnabled = config.regimeScoringEnabled !== false;
-  let regimeInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
-    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
-  } | null = null;
-  let regime4HInfo: { regime: string; confidence: number; atrTrend: string; bias: string; indicators: string[];
-    transition?: { state: string; confidence: number; momentum: number; priorScore: number; currentScore: number; detail: string };
-  } | null = null;
+  // ─── Regime Gate & Multi-TF Alignment (uses early-computed regimeInfo/regime4HInfo) ──────
+  // regimeInfo and regime4HInfo were computed early (before Factor 4) for Fib 0.236 scoring.
+  // This section handles the regime gate logic and multi-TF alignment adjustments.
   let regimeGatePassed = true;
   let regimeGateReason = "";
   {
-    const h4Candles: Candle[] | null = (config as any)._h4Candles || null;
-
-    if (regimeScoringEnabled && dailyCandles && dailyCandles.length >= 20) {
-      regimeInfo = classifyInstrumentRegimeLocal(dailyCandles);
-
-      // ── Multi-TF Regime: classify 4H alongside daily ──
-      if (h4Candles && h4Candles.length >= 20) {
-        regime4HInfo = classifyInstrumentRegimeLocal(h4Candles);
-      }
+    if (regimeInfo) {
 
       // ── Multi-TF Alignment Adjustment ──
       // When both timeframes are available, adjust the effective regime based on agreement/disagreement.
@@ -2223,6 +2279,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   const { stopLoss, takeProfit } = calculateSLTP({
     direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue, fvgs,
+    fibExtensions: fibLevels?.extensions,
   });
 
   const presentFactors = factors.filter(f => f.present);
@@ -2258,6 +2315,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo, regime4HInfo,
     // Confluence stacking, sweep reclaim, pullback decay
     confluenceStacks, sweepReclaims, pullbackDecay,
+    // ZigZag-based Fibonacci levels (retracements + extensions)
+    fibLevels,
     // New tiered scoring metadata
     tieredScoring: {
       tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
@@ -4320,6 +4379,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           broken: analysis.structure.derivedSR.broken.map((sr: any) => ({ price: sr.price, type: sr.type })),
         } : null,
       },
+      // ── ZigZag-based Fibonacci Levels (retracements + extensions) ──
+      fibLevels: analysis.fibLevels ? {
+        swingHigh: analysis.fibLevels.swingHigh,
+        swingLow: analysis.fibLevels.swingLow,
+        direction: analysis.fibLevels.direction,
+        retracements: analysis.fibLevels.retracements,
+        extensions: analysis.fibLevels.extensions,
+      } : null,
     };
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
@@ -4681,7 +4748,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -4766,7 +4833,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",

@@ -186,6 +186,32 @@ export interface GateResult {
   reason: string;
 }
 
+// ─── ZigZag Pivot & Fibonacci Types ────────────────────────────────
+export interface ZigZagPivot {
+  index: number;
+  price: number;
+  type: "high" | "low";
+  datetime: string;
+}
+
+export interface FibLevel {
+  ratio: number;
+  price: number;
+  label: string;   // e.g. "23.6%", "61.8%", "-27.2%" (extension)
+  type: "retracement" | "extension";
+}
+
+export interface FibLevels {
+  swingHigh: number;
+  swingLow: number;
+  /** Direction of the last completed swing: low→high = "up", high→low = "down" */
+  direction: "up" | "down";
+  retracements: FibLevel[];
+  extensions: FibLevel[];
+  pivotHigh: ZigZagPivot;
+  pivotLow: ZigZagPivot;
+}
+
 export interface SLTPInput {
   direction: "long" | "short" | null;
   lastPrice: number;
@@ -198,6 +224,8 @@ export interface SLTPInput {
   atrValue: number;
   /** Optional: unfilled FVGs for FVG-aware SL/TP tightening */
   fvgs?: FairValueGap[];
+  /** Optional: Fib extension levels for TP intelligence */
+  fibExtensions?: FibLevel[];
 }
 
 export interface OpeningRangeResult {
@@ -608,8 +636,254 @@ export function detectSwingPoints(candles: Candle[], lookback = 3, atrFilter = 0
   return swings;
 }
 
+// ─── ZigZag Pivot Detection (TradingView-style) ────────────────────
+// Deviation-based pivot detection for Fibonacci anchoring.
+// Unlike detectSwingPoints (fast, lookback-based, used for structure),
+// this produces clean, significant pivots for Fib calculations.
+//
+// Algorithm mirrors TradingView's Auto Fib Retracement:
+//   1. Compute deviation threshold from ATR (adapts to volatility)
+//   2. Track current leg direction (up/down)
+//   3. Only confirm a pivot when price reverses by > devThreshold%
+//   4. Enforce minimum `depth` bars between pivots
+//   5. Return the last 2 confirmed pivots (one completed swing)
+//
+// Fallback: if < 2 pivots found, uses detectSwingPoints() envelope.
+export function detectZigZagPivots(
+  candles: Candle[],
+  devMultiplier = 3,
+  depth = 10,
+): { pivots: ZigZagPivot[]; lastTwo: [ZigZagPivot, ZigZagPivot] | null } {
+  if (candles.length < depth + 5) {
+    return { pivots: [], lastTwo: null };
+  }
+
+  // ATR-based deviation threshold (same formula as TradingView)
+  const atr10 = calculateATR(candles, 10);
+  const lastClose = candles[candles.length - 1].close;
+  if (lastClose === 0 || atr10 === 0) return { pivots: [], lastTwo: null };
+  const devThreshold = (atr10 / lastClose) * 100 * devMultiplier;
+
+  const pivots: ZigZagPivot[] = [];
+  let dir: "up" | "down" | null = null;
+  let extremeIdx = 0;
+  let extremePrice = candles[0].close;
+  let lastPivotIdx = -depth; // enforce depth spacing
+
+  // Initialize: find initial direction from first `depth` candles
+  let initHigh = -Infinity, initHighIdx = 0;
+  let initLow = Infinity, initLowIdx = 0;
+  for (let i = 0; i < Math.min(depth, candles.length); i++) {
+    if (candles[i].high > initHigh) { initHigh = candles[i].high; initHighIdx = i; }
+    if (candles[i].low < initLow) { initLow = candles[i].low; initLowIdx = i; }
+  }
+  const initRange = initHigh - initLow;
+  if (initRange === 0) return { pivots: [], lastTwo: null };
+  const initDevPct = (initRange / ((initHigh + initLow) / 2)) * 100;
+  if (initDevPct < devThreshold * 0.5) {
+    // Not enough initial movement — start scanning from scratch
+    dir = null;
+    extremeIdx = 0;
+    extremePrice = candles[0].close;
+  } else if (initHighIdx > initLowIdx) {
+    // Low came first → initial direction is up
+    dir = "up";
+    extremeIdx = initHighIdx;
+    extremePrice = initHigh;
+    pivots.push({ index: initLowIdx, price: initLow, type: "low", datetime: candles[initLowIdx].datetime });
+    lastPivotIdx = initLowIdx;
+  } else {
+    // High came first → initial direction is down
+    dir = "down";
+    extremeIdx = initLowIdx;
+    extremePrice = initLow;
+    pivots.push({ index: initHighIdx, price: initHigh, type: "high", datetime: candles[initHighIdx].datetime });
+    lastPivotIdx = initHighIdx;
+  }
+
+  // Main scan loop
+  const startIdx = Math.min(depth, candles.length);
+  for (let i = startIdx; i < candles.length; i++) {
+    const c = candles[i];
+
+    if (dir === null) {
+      // Still looking for initial direction
+      if (c.high > extremePrice) { extremePrice = c.high; extremeIdx = i; }
+      if (c.low < extremePrice) { extremePrice = c.low; extremeIdx = i; }
+      // Check if we have enough deviation from the start
+      const highSoFar = Math.max(...candles.slice(0, i + 1).map(x => x.high));
+      const lowSoFar = Math.min(...candles.slice(0, i + 1).map(x => x.low));
+      const rangePct = ((highSoFar - lowSoFar) / ((highSoFar + lowSoFar) / 2)) * 100;
+      if (rangePct >= devThreshold) {
+        const hiIdx = candles.slice(0, i + 1).findIndex(x => x.high === highSoFar);
+        const loIdx = candles.slice(0, i + 1).findIndex(x => x.low === lowSoFar);
+        if (hiIdx > loIdx) {
+          dir = "up";
+          pivots.push({ index: loIdx, price: lowSoFar, type: "low", datetime: candles[loIdx].datetime });
+          lastPivotIdx = loIdx;
+          extremeIdx = hiIdx;
+          extremePrice = highSoFar;
+        } else {
+          dir = "down";
+          pivots.push({ index: hiIdx, price: highSoFar, type: "high", datetime: candles[hiIdx].datetime });
+          lastPivotIdx = hiIdx;
+          extremeIdx = loIdx;
+          extremePrice = lowSoFar;
+        }
+      }
+      continue;
+    }
+
+    if (dir === "up") {
+      // Tracking upward leg — look for new highs
+      if (c.high > extremePrice) {
+        extremePrice = c.high;
+        extremeIdx = i;
+      }
+      // Check for reversal: price dropped from extreme by > devThreshold%
+      const retracement = ((extremePrice - c.low) / extremePrice) * 100;
+      if (retracement >= devThreshold && (i - lastPivotIdx) >= depth) {
+        // Confirm the extreme as a swing high pivot
+        pivots.push({ index: extremeIdx, price: extremePrice, type: "high", datetime: candles[extremeIdx].datetime });
+        lastPivotIdx = extremeIdx;
+        // Start tracking downward leg from this candle
+        dir = "down";
+        extremeIdx = i;
+        extremePrice = c.low;
+      }
+    } else {
+      // Tracking downward leg — look for new lows
+      if (c.low < extremePrice) {
+        extremePrice = c.low;
+        extremeIdx = i;
+      }
+      // Check for reversal: price rose from extreme by > devThreshold%
+      const retracement = extremePrice > 0 ? ((c.high - extremePrice) / extremePrice) * 100 : 0;
+      if (retracement >= devThreshold && (i - lastPivotIdx) >= depth) {
+        // Confirm the extreme as a swing low pivot
+        pivots.push({ index: extremeIdx, price: extremePrice, type: "low", datetime: candles[extremeIdx].datetime });
+        lastPivotIdx = extremeIdx;
+        // Start tracking upward leg from this candle
+        dir = "up";
+        extremeIdx = i;
+        extremePrice = c.high;
+      }
+    }
+  }
+
+  // Return last 2 confirmed pivots
+  if (pivots.length >= 2) {
+    const last = pivots[pivots.length - 1];
+    const prev = pivots[pivots.length - 2];
+    return { pivots, lastTwo: [prev, last] };
+  }
+
+  return { pivots, lastTwo: null };
+}
+
+// ─── Compute Fibonacci Levels from 2 Pivots ────────────────────────
+// Given two ZigZag pivots (one high, one low), computes:
+//   - Retracement levels: 0.236, 0.382, 0.5, 0.618, 0.705, 0.786
+//   - Extension levels: 1.272, 1.618
+// Direction-aware: "up" swing (low→high) means retracements go downward,
+// "down" swing (high→low) means retracements go upward.
+export function computeFibLevels(
+  pivotA: ZigZagPivot,
+  pivotB: ZigZagPivot,
+): FibLevels | null {
+  if (!pivotA || !pivotB) return null;
+
+  let pivotHigh: ZigZagPivot, pivotLow: ZigZagPivot;
+  let direction: "up" | "down";
+
+  // Determine swing direction based on chronological order
+  if (pivotA.index < pivotB.index) {
+    // A came first
+    if (pivotA.type === "low" && pivotB.type === "high") {
+      direction = "up";
+      pivotLow = pivotA;
+      pivotHigh = pivotB;
+    } else if (pivotA.type === "high" && pivotB.type === "low") {
+      direction = "down";
+      pivotHigh = pivotA;
+      pivotLow = pivotB;
+    } else {
+      // Same type — use price to determine
+      if (pivotA.price < pivotB.price) {
+        direction = "up";
+        pivotLow = pivotA;
+        pivotHigh = pivotB;
+      } else {
+        direction = "down";
+        pivotHigh = pivotA;
+        pivotLow = pivotB;
+      }
+    }
+  } else {
+    // B came first
+    if (pivotB.type === "low" && pivotA.type === "high") {
+      direction = "up";
+      pivotLow = pivotB;
+      pivotHigh = pivotA;
+    } else if (pivotB.type === "high" && pivotA.type === "low") {
+      direction = "down";
+      pivotHigh = pivotB;
+      pivotLow = pivotA;
+    } else {
+      if (pivotB.price < pivotA.price) {
+        direction = "up";
+        pivotLow = pivotB;
+        pivotHigh = pivotA;
+      } else {
+        direction = "down";
+        pivotHigh = pivotB;
+        pivotLow = pivotA;
+      }
+    }
+  }
+
+  const swingHigh = pivotHigh.price;
+  const swingLow = pivotLow.price;
+  const range = swingHigh - swingLow;
+  if (range <= 0) return null;
+
+  // Retracement levels — measured from the END of the swing
+  // For "up" swing: retracements go DOWN from swingHigh
+  // For "down" swing: retracements go UP from swingLow
+  const RETRACE_RATIOS = [0.236, 0.382, 0.5, 0.618, 0.705, 0.786];
+  const retracements: FibLevel[] = RETRACE_RATIOS.map(ratio => {
+    const price = direction === "up"
+      ? swingHigh - range * ratio   // retracing down from high
+      : swingLow + range * ratio;   // retracing up from low
+    return {
+      ratio,
+      price,
+      label: `${(ratio * 100).toFixed(1)}%`,
+      type: "retracement" as const,
+    };
+  });
+
+  // Extension levels — measured BEYOND the swing end
+  // For "up" swing: extensions go ABOVE swingHigh (bullish targets)
+  // For "down" swing: extensions go BELOW swingLow (bearish targets)
+  const EXT_RATIOS = [1.272, 1.618];
+  const extensions: FibLevel[] = EXT_RATIOS.map(ratio => {
+    const price = direction === "up"
+      ? swingLow + range * ratio    // extending above the high
+      : swingHigh - range * ratio;  // extending below the low
+    return {
+      ratio,
+      price,
+      label: `-${((ratio - 1) * 100).toFixed(1)}%`,  // -27.2%, -61.8%
+      type: "extension" as const,
+    };
+  });
+
+  return { swingHigh, swingLow, direction, retracements, extensions, pivotHigh, pivotLow };
+}
+
 // ─── Enhanced Market Structure Analysis ──────────────────────────────
-// Improvements over the original:
+// Improvements over the original::
 // 1. ATR-filtered swings — filters out noise in volatile sessions
 // 2. Close-based BOS — requires candle body close through the level, not just wick
 // 3. Liquidity sweep detection — wick through + close back = sweep, not BOS
@@ -1944,6 +2218,41 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
     }
   }
 
+  // ── Fib Extension TP Intelligence ──
+  // Uses pre-computed Fib extension levels (1.272, 1.618) as draw-on-liquidity targets.
+  // Logic:
+  //   1. If a Fib extension is between entry and TP (potential reversal zone):
+  //      - If extension is within 80-120% of TP distance: snap TP to extension (natural target)
+  //   2. If a Fib extension is just beyond TP (within 30% more distance):
+  //      - Extend TP to the extension level (room to run)
+  //   3. Never extend TP beyond 4× SL distance (risk cap)
+  const fibExts = input.fibExtensions;
+  if (tp !== null && fibExts && fibExts.length > 0 && slDistance > 0) {
+    const maxTPDistance = slDistance * 4; // hard cap
+    const currentTPDistance = Math.abs(tp - lastPrice);
+
+    for (const ext of fibExts) {
+      const extDistance = direction === "long"
+        ? ext.price - lastPrice
+        : lastPrice - ext.price;
+
+      // Skip extensions in the wrong direction or beyond hard cap
+      if (extDistance <= 0 || extDistance > maxTPDistance) continue;
+
+      const ratioToTP = extDistance / currentTPDistance;
+
+      if (ratioToTP >= 0.8 && ratioToTP <= 1.2) {
+        // Extension is very close to current TP — snap to it (natural target)
+        tp = ext.price;
+        break; // Use the first (nearest) matching extension
+      } else if (ratioToTP > 1.0 && ratioToTP <= 1.3) {
+        // Extension is slightly beyond TP — extend TP to capture the move
+        tp = ext.price;
+        break;
+      }
+    }
+  }
+
   return { stopLoss: sl, takeProfit: tp };
 }
 
@@ -2144,22 +2453,29 @@ export function computeConfluenceStacking(
   swingPoints: SwingPoint[],
   candles: Candle[],
   direction: "long" | "short" | null,
+  precomputedFib?: FibLevels | null,
 ): ConfluenceStack[] {
   const stacks: ConfluenceStack[] = [];
   if (candles.length < 10) return stacks;
 
-  // ── Compute Fib levels from the last significant swing ──
-  const recentHighs = swingPoints.filter(s => s.type === "high").slice(-5);
-  const recentLows = swingPoints.filter(s => s.type === "low").slice(-5);
-  if (recentHighs.length === 0 || recentLows.length === 0) return stacks;
-
-  const swingHigh = Math.max(...recentHighs.map(s => s.price));
-  const swingLow = Math.min(...recentLows.map(s => s.price));
-  const range = swingHigh - swingLow;
+  // ── Use pre-computed ZigZag Fib levels if available, else fall back to 5-swing envelope ──
+  let swingHigh: number, swingLow: number, range: number;
+  if (precomputedFib) {
+    swingHigh = precomputedFib.swingHigh;
+    swingLow = precomputedFib.swingLow;
+    range = swingHigh - swingLow;
+  } else {
+    const recentHighs = swingPoints.filter(s => s.type === "high").slice(-5);
+    const recentLows = swingPoints.filter(s => s.type === "low").slice(-5);
+    if (recentHighs.length === 0 || recentLows.length === 0) return stacks;
+    swingHigh = Math.max(...recentHighs.map(s => s.price));
+    swingLow = Math.min(...recentLows.map(s => s.price));
+    range = swingHigh - swingLow;
+  }
   if (range === 0) return stacks;
 
-  // Fib retracement levels
-  const FIB_RATIOS = [0.50, 0.618, 0.786];
+  // Fib retracement levels — now includes 0.236
+  const FIB_RATIOS = [0.236, 0.382, 0.50, 0.618, 0.786];
   const fibLevels = FIB_RATIOS.map(ratio => ({
     ratio,
     priceLong: swingHigh - range * ratio,
@@ -2396,7 +2712,7 @@ export function measurePullbackDecay(
   }
 
   const measurements: PullbackMeasurement[] = [];
-  const FIB_LEVELS = [38.2, 50.0, 61.8, 78.6];
+  const FIB_LEVELS = [23.6, 38.2, 50.0, 61.8, 78.6];
 
   const highs = swingPoints.filter(s => s.type === "high");
   const lows = swingPoints.filter(s => s.type === "low");
