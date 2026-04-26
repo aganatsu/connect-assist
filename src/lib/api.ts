@@ -102,6 +102,12 @@ export async function invokeFunction<T = any>(
   functionName: string,
   body: Record<string, any>
 ): Promise<T> {
+  const cooldownUntil = functionCooldownUntil.get(functionName) || 0;
+  const cooldownFallback = getFunctionFallback(functionName, body);
+  if (cooldownFallback !== undefined && cooldownUntil > Date.now()) {
+    return cooldownFallback as T;
+  }
+
   let { data, error } = await invokeSupabaseFunction(functionName, body);
 
   // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry up to 2x with backoff.
@@ -120,6 +126,10 @@ export async function invokeFunction<T = any>(
   for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
     await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     ({ data, error } = await invokeSupabaseFunction(functionName, body));
+  }
+
+  if (isTransient503(error, data)) {
+    functionCooldownUntil.set(functionName, Date.now() + 15_000);
   }
 
   // Bot scanner data is dashboard/polling data. If the hosted function is briefly
@@ -225,6 +235,8 @@ export async function invokeFunction<T = any>(
 
   if (error) throw new Error(error.message || `${functionName} failed`);
   if (data?.error && !data?.fallback) throw new Error(data.error);
+  functionCooldownUntil.delete(functionName);
+  cacheSuccessfulFunctionResponse(functionName, body, data);
   return data as T;
 }
 
