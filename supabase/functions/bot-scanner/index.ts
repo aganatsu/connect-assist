@@ -976,6 +976,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Merged: P/D zone + Fibonacci retracement levels + PD/PW levels.
   // Now uses ZigZag-based 2-pivot Fib anchoring (with fallback to old envelope).
   // Added 0.236 level: in strong trends, shallow pullbacks are high-probability continuation entries.
+  // FIX: Handles swing-direction vs trade-direction alignment properly.
+  //   - ALIGNED (swing up + long, swing down + short): standard retracement scoring
+  //   - COUNTER (swing up + short, swing down + long): inverted scoring (low retrace = good entry)
   {
     let pts = 0;
     let detail = "";
@@ -983,6 +986,10 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     // Compute retracement % using ZigZag-based Fib levels if available
     let retrace = 0;
     let fibSource = "legacy";
+    // Track whether swing direction aligns with trade direction
+    // aligned = trading WITH the swing (continuation), counter = trading AGAINST it (reversal)
+    let swingTradeAlignment: "aligned" | "counter" | "unknown" = "unknown";
+
     if (fibLevels) {
       const range = fibLevels.swingHigh - fibLevels.swingLow;
       if (range > 0) {
@@ -995,13 +1002,24 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
           retrace = ((lastPrice - fibLevels.swingLow) / range) * 100;
         }
         fibSource = "zigzag";
-        detail = `Price at ${retrace.toFixed(1)}% retracement (${fibSource}, range ${fibLevels.swingLow.toFixed(5)}–${fibLevels.swingHigh.toFixed(5)})`;
+
+        // Determine alignment: swing up + long = aligned (buying the pullback in an upswing)
+        //                      swing down + short = aligned (selling the bounce in a downswing)
+        //                      swing up + short = counter (shorting near the top of an upswing)
+        //                      swing down + long = counter (buying near the bottom of a downswing)
+        if (direction) {
+          const swingBias = fibLevels.direction === "up" ? "long" : "short";
+          swingTradeAlignment = (swingBias === direction) ? "aligned" : "counter";
+        }
+
+        detail = `Price at ${retrace.toFixed(1)}% retracement (${fibSource}, ${swingTradeAlignment}, range ${fibLevels.swingLow.toFixed(5)}–${fibLevels.swingHigh.toFixed(5)})`;
       }
     }
     // Fallback to legacy pd calculation if no fibLevels
     if (!fibLevels || detail === "") {
       const fibPercent = pd.zonePercent;
       retrace = direction === "long" ? (100 - fibPercent) : fibPercent;
+      swingTradeAlignment = "aligned"; // legacy method already accounts for direction
       detail = `Price at ${retrace.toFixed(1)}% retracement (legacy, ${pd.currentZone} zone)`;
     }
 
@@ -1015,41 +1033,71 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     const isAccelerating = regimeInfo?.transition?.state === "accelerating";
 
     if (fibDirection === "long" || fibDirection === "short") {
-      if (retrace >= 70 && retrace <= 72) {
-        // 70.5% sweet spot (ICT optimal)
-        pts = 2.0;
-        detail += ` | Fib 70.5% sweet spot — OPTIMAL ENTRY`;
-      } else if (retrace >= 61.8 && retrace <= 78.6) {
-        // OTE zone
-        pts = 1.5;
-        detail += ` | Fib OTE zone (${retrace.toFixed(1)}%)`;
-      } else if (retrace > 50 && retrace < 61.8) {
-        // Discount/premium zone (beyond equilibrium but not OTE)
-        pts = 1.0;
-        detail += ` | ${fibDirection === "long" ? "Discount" : "Premium"} zone (${retrace.toFixed(1)}%)`;
-      } else if (retrace >= 38.2 && retrace <= 50) {
-        // Shallow retracement
-        pts = 0.5;
-        detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
-      } else if (retrace >= 23.6 && retrace < 38.2) {
-        // NEW: 0.236 level — regime-dependent scoring
-        if (isStrongRegime && isAccelerating) {
-          pts = 0.75;
-          detail += ` | Fib 23.6% continuation (strong trend + accelerating) — valid shallow entry`;
-        } else if (isStrongRegime) {
+      if (swingTradeAlignment === "counter") {
+        // ── COUNTER-SWING ENTRY (reversal trade) ──
+        // Trading against the last swing. For this to be a good entry:
+        //   - LOW retrace = price is near the swing extreme = good reversal entry
+        //   - HIGH retrace = price already moved in your direction = you're late
+        // Invert the scoring: low retrace scores high, high retrace scores low.
+        // Also cap the max score lower than aligned entries (reversals are inherently riskier).
+        if (retrace <= 23.6) {
+          // Price near the swing extreme — excellent reversal entry point
+          pts = 1.5;
+          detail += ` | COUNTER-SWING: Near swing extreme (${retrace.toFixed(1)}% retrace) — strong reversal entry`;
+        } else if (retrace <= 38.2) {
+          // Still close to the extreme — decent reversal entry
+          pts = 1.0;
+          detail += ` | COUNTER-SWING: Fib 23.6–38.2% from extreme (${retrace.toFixed(1)}%) — valid reversal`;
+        } else if (retrace <= 50) {
+          // At equilibrium — mediocre reversal entry
           pts = 0.5;
-          detail += ` | Fib 23.6% pullback (strong trend) — moderate entry`;
+          detail += ` | COUNTER-SWING: Near equilibrium (${retrace.toFixed(1)}%) — late reversal entry`;
         } else {
-          pts = 0.25;
-          detail += ` | Fib 23.6% pullback (weak regime) — minimal confluence`;
+          // Price has already moved significantly in your trade direction — you're chasing
+          pts = 0;
+          detail += ` | COUNTER-SWING: Price already moved ${retrace.toFixed(1)}% — chasing, no Fib confluence`;
         }
-      } else if (retrace > 78.6) {
-        // Deep retracement — risky but still in play
-        pts = 0.5;
-        detail += ` | Deep retracement (${retrace.toFixed(1)}%) — approaching invalidation`;
       } else {
-        // < 23.6% — barely pulled back, or wrong side
-        detail += ` | ${fibDirection === "long" ? "Buying in premium" : "Selling in discount"} — unfavorable (${retrace.toFixed(1)}%)`;
+        // ── ALIGNED ENTRY (continuation/pullback trade) ──
+        // Trading with the swing. Standard retracement scoring:
+        //   - HIGH retrace = deep pullback into OTE = good entry
+        //   - LOW retrace = barely pulled back = weak entry
+        if (retrace >= 70 && retrace <= 72) {
+          // 70.5% sweet spot (ICT optimal)
+          pts = 2.0;
+          detail += ` | Fib 70.5% sweet spot — OPTIMAL ENTRY`;
+        } else if (retrace >= 61.8 && retrace <= 78.6) {
+          // OTE zone
+          pts = 1.5;
+          detail += ` | Fib OTE zone (${retrace.toFixed(1)}%)`;
+        } else if (retrace > 50 && retrace < 61.8) {
+          // Discount/premium zone (beyond equilibrium but not OTE)
+          pts = 1.0;
+          detail += ` | ${fibDirection === "long" ? "Discount" : "Premium"} zone (${retrace.toFixed(1)}%)`;
+        } else if (retrace >= 38.2 && retrace <= 50) {
+          // Shallow retracement
+          pts = 0.5;
+          detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
+        } else if (retrace >= 23.6 && retrace < 38.2) {
+          // 0.236 level — regime-dependent scoring
+          if (isStrongRegime && isAccelerating) {
+            pts = 0.75;
+            detail += ` | Fib 23.6% continuation (strong trend + accelerating) — valid shallow entry`;
+          } else if (isStrongRegime) {
+            pts = 0.5;
+            detail += ` | Fib 23.6% pullback (strong trend) — moderate entry`;
+          } else {
+            pts = 0.25;
+            detail += ` | Fib 23.6% pullback (weak regime) — minimal confluence`;
+          }
+        } else if (retrace > 78.6) {
+          // Deep retracement — risky but still in play
+          pts = 0.5;
+          detail += ` | Deep retracement (${retrace.toFixed(1)}%) — approaching invalidation`;
+        } else {
+          // < 23.6% — barely pulled back, or wrong side
+          detail += ` | ${fibDirection === "long" ? "Buying in premium" : "Selling in discount"} — unfavorable (${retrace.toFixed(1)}%)`;
+        }
       }
     } else {
       // Ranging — no clear direction from structure
@@ -1680,14 +1728,18 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     factors.push({ name: "Currency Strength", present: pts !== 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
   }
 
-  // ── Factor 17: Daily Bias / HTF Trend (max 1.5) ──
+  // ── Cached Daily Structure (computed once, reused by Factor 22 + gates) ──
+  const cachedDailyStructure = (dailyCandles && dailyCandles.length >= 10)
+    ? analyzeMarketStructure(dailyCandles) : null;
+
+  // ── Factor 22: Daily Bias / HTF Trend (max 1.5) ──
   // Now fully activates htfStructure: trend, BOS/CHoCH recency, trend strength,
   // and daily swing points as key levels. Increased max from 1.0 to 1.5.
   if (config.useDailyBias !== false) {
     let pts = 0;
     let detail = "";
-    if (dailyCandles && dailyCandles.length >= 20 && direction) {
-      const dailyStructure = analyzeMarketStructure(dailyCandles);
+    if (cachedDailyStructure && dailyCandles && dailyCandles.length >= 20 && direction) {
+      const dailyStructure = cachedDailyStructure;
       const dailyTrend = dailyStructure.trend;
       const dailyBOS = dailyStructure.bos;
       const dailyCHoCH = dailyStructure.choch;
@@ -2317,6 +2369,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     confluenceStacks, sweepReclaims, pullbackDecay,
     // ZigZag-based Fibonacci levels (retracements + extensions)
     fibLevels,
+    // Cached daily structure (computed once, reusable by gates)
+    cachedDailyStructure,
     // New tiered scoring metadata
     tieredScoring: {
       tier1Count, tier1Max, tier2Count, tier2Max, tier3Count, tier3Max,
@@ -2790,8 +2844,9 @@ async function runSafetyGates(
   const gates: GateResult[] = [];
 
   // Gate 1: HTF Bias Alignment
-  if (config.htfBiasRequired && dailyCandles && dailyCandles.length >= 10) {
-    const htfStructure = analyzeMarketStructure(dailyCandles);
+  // Uses cachedDailyStructure from analysis to avoid redundant computation
+  if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
+    const htfStructure = analysis.cachedDailyStructure || analyzeMarketStructure(dailyCandles!);
     const htfTrend = htfStructure.trend;
     const entryBias = direction === "long" ? "bullish" : "bearish";
     const hardVeto = config.htfBiasHardVeto;
