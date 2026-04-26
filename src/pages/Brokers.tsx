@@ -19,9 +19,8 @@ import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { brokerApi } from "@/lib/api";
+import { brokerApi, brokerExecApi } from "@/lib/api";
 import { BotConfigModal } from "@/components/BotConfigModal";
-import { supabase } from "@/integrations/supabase/client";
 
 type Connection = {
   id: string;
@@ -156,10 +155,7 @@ export default function BrokersPage() {
   const checkStatus = async (connectionId: string, name: string) => {
     const t = toast.loading(`Checking ${name}…`);
     try {
-      const { data, error } = await supabase.functions.invoke("broker-execute", {
-        body: { action: "connection_status", connectionId },
-      });
-      if (error) throw error;
+      const data = await brokerExecApi.connectionStatus(connectionId);
       toast.dismiss(t);
       if (!data?.ok) {
         toast.error(`✗ ${name}: ${data?.error || "status check failed"}`, { duration: 8000 });
