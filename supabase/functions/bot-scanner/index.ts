@@ -4354,6 +4354,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled`);
   }
 
+  // ── Dynamic Scan Skip: management-only mode when max positions reached ──
+  // Reads maxOpenPositions from live config each cycle — fully dynamic.
+  // If positions close or config.maxOpenPositions increases, scanning resumes next cycle.
+  const currentOpenCount = openPosArr.filter((p: any) => p.position_status === "open" || !p.position_status).length;
+  const maxOpen = config.maxOpenPositions || 3;
+  if (currentOpenCount >= maxOpen) {
+    console.log(`[scan ${scanCycleId}] MAX POSITIONS REACHED (${currentOpenCount}/${maxOpen}) — management only, skipping new entry scan. Saves API credits & compute.`);
+    // Still ran: price refresh + management (trailing SL, break-even, partial TP, close-on-reverse, structure invalidation)
+    // Skipped: per-pair candle fetch, SMC analysis, scoring, gate checks, new entry placement
+    const summaryPayload: any = {
+      scan_cycle_id: scanCycleId,
+      scanned_at: new Date().toISOString(),
+      mode: "management_only",
+      reason: `Max positions reached (${currentOpenCount}/${maxOpen})`,
+      open_positions: currentOpenCount,
+      max_open_positions: maxOpen,
+      management_actions: managementActions?.filter((a: any) => a.action !== "none").length || 0,
+      scan_details: [],
+    };
+    await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
+    return new Response(JSON.stringify({ ok: true, mode: "management_only", reason: summaryPayload.reason, management_actions: summaryPayload.management_actions }), { headers: { "Content-Type": "application/json" } });
+  }
+  console.log(`[scan ${scanCycleId}] Positions: ${currentOpenCount}/${maxOpen} — room for ${maxOpen - currentOpenCount} new entries, proceeding with full scan`);
+
   for (const pair of config.instruments) {
     if (!YAHOO_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
