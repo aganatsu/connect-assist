@@ -5,7 +5,35 @@ let brokerExecuteQueue: Promise<void> = Promise.resolve();
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
     try {
-      return await supabase.functions.invoke(functionName, { body });
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text ? { message: text } : null;
+      }
+      if (!response.ok) {
+        return {
+          data,
+          error: {
+            message: `Edge function returned ${response.status}: ${response.statusText || "Error"}${text ? `, ${text}` : ""}`,
+            status: response.status,
+            context: { status: response.status, response },
+          },
+        };
+      }
+      return { data, error: null };
     } catch (error) {
       return { data: null, error };
     }
