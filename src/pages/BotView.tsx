@@ -993,12 +993,18 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 <td className={`py-1 px-1 text-right font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</td>
                 <td className={`py-1 px-1 text-[10px] ${reasonColor(t.closeReason)}`}>{t.closeReason}</td>
               </tr>
-              {isOpen && (
+              {isOpen && (() => {
+                // Parse enriched signal_reason JSON
+                let sr: any = null;
+                try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores);
+
+                return (
                 <tr className="bg-secondary/20 border-b border-border">
                   <td colSpan={10} className="p-2">
-                    <div className="space-y-1 text-[10px]">
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-bold">Signal Reasoning</p>
+                    <div className="space-y-2 text-[10px]">
+                      {/* Header: Close reason badge + Score + Tier summary */}
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 border rounded ${
                           t.closeReason === "tp_hit" || t.closeReason === "trail_hit" ? "bg-success/15 border-success/40 text-success" :
                           t.closeReason === "sl_hit" ? "bg-destructive/15 border-destructive/40 text-destructive" :
@@ -1009,20 +1015,310 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {t.closeReason === "trail_hit" && " (trailing stop locked profit)"}
                           {t.closeReason === "be_hit" && " (break-even SL)"}
                         </span>
+                        <span className={`text-[10px] font-mono font-bold ${
+                          t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
+                        }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
+                        {sr?.tieredScoring && <TierScoreSummary tieredScoring={sr.tieredScoring} />}
                       </div>
-                      <SignalReasoningCard signalReason={t.signalReason || ""} />
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px]">
+
+                      {hasRichData ? (
+                        <>
+                          {/* ── Regime Detection ── */}
+                          {sr.regimeData && (
+                            <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
+                              <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                {sr.regimeData.daily && (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[8px] text-muted-foreground">Daily:</span>
+                                    <span className={`text-[9px] font-bold ${
+                                      sr.regimeData.daily.regime?.includes("trend") ? "text-emerald-400"
+                                      : sr.regimeData.daily.regime?.includes("range") ? "text-orange-400"
+                                      : "text-yellow-400"
+                                    }`}>{(sr.regimeData.daily.regime || "—").replace(/_/g, " ")}</span>
+                                    <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.daily.confidence || 0) * 100)}%)</span>
+                                    {sr.regimeData.daily.bias && sr.regimeData.daily.bias !== "neutral" && (
+                                      <span className={`text-[8px] ${sr.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                                        {sr.regimeData.daily.bias === "bullish" ? "↑" : "↓"}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                {sr.regimeData.h4 && (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[8px] text-muted-foreground">4H:</span>
+                                    <span className={`text-[9px] font-bold ${
+                                      sr.regimeData.h4.regime?.includes("trend") ? "text-emerald-400"
+                                      : sr.regimeData.h4.regime?.includes("range") ? "text-orange-400"
+                                      : "text-yellow-400"
+                                    }`}>{(sr.regimeData.h4.regime || "—").replace(/_/g, " ")}</span>
+                                    <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.h4.confidence || 0) * 100)}%)</span>
+                                  </div>
+                                )}
+                                {sr.regimeData.multiTFAlignment && (
+                                  <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                                    sr.regimeData.multiTFAlignment === "agree" ? "bg-emerald-500/20 text-emerald-400"
+                                    : sr.regimeData.multiTFAlignment === "disagree" ? "bg-red-500/20 text-red-400"
+                                    : "bg-yellow-500/20 text-yellow-400"
+                                  }`}>
+                                    {sr.regimeData.multiTFAlignment === "agree" ? "TF ✓ AGREE" : sr.regimeData.multiTFAlignment === "disagree" ? "TF ✗ DISAGREE" : "TF ~ MIXED"}
+                                  </span>
+                                )}
+                              </div>
+                              {sr.regimeData.daily?.transition && sr.regimeData.daily.transition.state !== "stable" && (
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                                    sr.regimeData.daily.transition.state === "accelerating" ? "bg-blue-500/20 text-blue-400"
+                                    : sr.regimeData.daily.transition.state === "range_to_trending" ? "bg-emerald-500/20 text-emerald-400"
+                                    : sr.regimeData.daily.transition.state === "trending_to_range" ? "bg-orange-500/20 text-orange-400"
+                                    : sr.regimeData.daily.transition.state === "decelerating" ? "bg-red-500/20 text-red-400"
+                                    : "bg-muted text-muted-foreground"
+                                  }`}>
+                                    {sr.regimeData.daily.transition.state === "accelerating" ? "🚀 ACCELERATING"
+                                      : sr.regimeData.daily.transition.state === "range_to_trending" ? "⚡ RANGE → TREND"
+                                      : sr.regimeData.daily.transition.state === "trending_to_range" ? "⏸ TREND → RANGE"
+                                      : sr.regimeData.daily.transition.state === "decelerating" ? "📉 DECELERATING"
+                                      : sr.regimeData.daily.transition.state.replace(/_/g, " ").toUpperCase()}
+                                  </span>
+                                  <span className="text-[8px] text-muted-foreground">
+                                    ({Math.round(sr.regimeData.daily.transition.confidence * 100)}% conf, momentum {sr.regimeData.daily.transition.momentum > 0 ? "+" : ""}{sr.regimeData.daily.transition.momentum.toFixed(3)}/candle)
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ── Confluence Stacking ── */}
+                          {sr.confluenceStacking && (
+                            <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
+                              {sr.confluenceStacking.bestStack && (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    sr.confluenceStacking.bestStack.layerCount >= 3
+                                      ? "bg-cyan-500/25 text-cyan-300 border border-cyan-400/40"
+                                      : "bg-cyan-500/15 text-cyan-400"
+                                  }`}>
+                                    {sr.confluenceStacking.bestStack.layerCount >= 3 ? "⚡ TRIPLE" : "◆ DOUBLE"} CONFLUENCE
+                                  </span>
+                                  <span className="text-[9px] text-foreground font-medium">{sr.confluenceStacking.bestStack.label}</span>
+                                  {sr.confluenceStacking.bestStack.alignment && (
+                                    <span className={`text-[8px] px-1 py-0.5 rounded ${
+                                      sr.confluenceStacking.bestStack.alignment === "aligned" ? "bg-emerald-500/20 text-emerald-400"
+                                      : sr.confluenceStacking.bestStack.alignment === "counter" ? "bg-red-500/20 text-red-400"
+                                      : "bg-muted text-muted-foreground"
+                                    }`}>
+                                      {sr.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : sr.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              {sr.confluenceStacking.bestStack?.overlapZone && (
+                                <p className="text-[8px] text-muted-foreground">
+                                  Zone: {sr.confluenceStacking.bestStack.overlapZone[0]?.toFixed(5)} — {sr.confluenceStacking.bestStack.overlapZone[1]?.toFixed(5)}
+                                  {sr.confluenceStacking.bestStack.fibLevels?.length > 0 && (
+                                    <span className="text-cyan-400"> | Fib: {sr.confluenceStacking.bestStack.fibLevels.map((f: number) => `${f}%`).join(", ")}</span>
+                                  )}
+                                </p>
+                              )}
+                              {sr.confluenceStacking.totalStacks > 1 && (
+                                <p className="text-[8px] text-muted-foreground">{sr.confluenceStacking.totalStacks} total confluence zones found</p>
+                              )}
+                              {sr.confluenceStacking.stacks?.length > 1 && (
+                                <div className="mt-1 space-y-0.5">
+                                  {sr.confluenceStacking.stacks.slice(1, 4).map((s: any, si: number) => (
+                                    <p key={si} className="text-[8px] text-muted-foreground">
+                                      #{si + 2}: {s.label} ({s.layerCount} layers{s.fibLevels?.length > 0 ? `, Fib ${s.fibLevels.join("/")}%` : ""})
+                                    </p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ── Sweep Reclaim ── */}
+                          {sr.sweepReclaim && sr.sweepReclaim.reclaimedCount > 0 && (
+                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+                              {sr.sweepReclaim.sweeps?.filter((sw: any) => sw.reclaimed).slice(0, 3).map((sw: any, si: number) => (
+                                <div key={si} className="flex flex-wrap items-center gap-1">
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    sw.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
+                                    : sw.createdDisplacement ? "bg-amber-500/20 text-amber-400"
+                                    : "bg-amber-500/15 text-amber-400"
+                                  }`}>
+                                    {sw.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM{sw.createdFVG ? " + FVG" : sw.createdDisplacement ? " + DISP" : ""}
+                                  </span>
+                                  <span className="text-[8px] text-foreground">at {sw.sweptLevel?.toFixed(5)}</span>
+                                  <span className="text-[8px] text-muted-foreground">(strength: {Math.round((sw.reclaimStrength || 0) * 100)}%)</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* ── Pullback Health ── */}
+                          {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
+                            <div className={`rounded border px-2 py-1.5 space-y-1 ${
+                              sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-emerald-500/5"
+                              : sr.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-red-500/5"
+                              : "border-slate-500/30 bg-slate-500/5"
+                            }`}>
+                              <p className={`text-[8px] uppercase tracking-wider font-bold ${
+                                sr.pullbackHealth.trend === "healthy" ? "text-emerald-400" : sr.pullbackHealth.trend === "exhausting" ? "text-red-400" : "text-slate-400"
+                              }`}>Pullback Health</p>
+                              <div className="flex items-center gap-1">
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                  sr.pullbackHealth.trend === "healthy" ? "bg-emerald-500/20 text-emerald-400"
+                                  : sr.pullbackHealth.trend === "exhausting" ? "bg-red-500/20 text-red-400"
+                                  : "bg-slate-500/20 text-slate-400"
+                                }`}>
+                                  {sr.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : sr.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
+                                </span>
+                                <span className="text-[8px] text-muted-foreground">
+                                  (decay rate: {sr.pullbackHealth.decayRate > 0 ? "+" : ""}{sr.pullbackHealth.decayRate?.toFixed(1)}%/swing)
+                                </span>
+                              </div>
+                              {sr.pullbackHealth.measurements?.length > 0 && (
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="text-[8px] text-muted-foreground">Depths:</span>
+                                  {sr.pullbackHealth.measurements.map((m: any, mi: number) => (
+                                    <span key={mi} className="text-[8px] text-foreground">
+                                      {m.depthPercent?.toFixed(1)}%
+                                      <span className="text-muted-foreground"> (~{m.nearestFibLevel}%)</span>
+                                      {mi < sr.pullbackHealth.measurements.length - 1 && <span className="text-muted-foreground"> →</span>}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ── Structure Intelligence ── */}
+                          {sr.structureIntel && (
+                            <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
+                              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">Internal BOS:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.internalBOS ?? 0}</span></div>
+                                <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">External BOS:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.externalBOS ?? 0}</span></div>
+                                <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">Internal CHoCH:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.internalCHoCH ?? 0}</span></div>
+                                <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">External CHoCH:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.externalCHoCH ?? 0}</span></div>
+                              </div>
+                              {sr.structureIntel.s2f && (
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[8px] text-muted-foreground">S2F Rate:</span>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    sr.structureIntel.s2f.overallRate > 0.4 ? "bg-emerald-500/20 text-emerald-400"
+                                    : sr.structureIntel.s2f.overallRate > 0.2 ? "bg-amber-500/20 text-amber-400"
+                                    : "bg-red-500/20 text-red-400"
+                                  }`}>{(sr.structureIntel.s2f.overallRate * 100).toFixed(0)}%</span>
+                                  <span className="text-[8px] text-muted-foreground">
+                                    ({sr.structureIntel.s2f.totalFractals} fractals | Bull {(sr.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(sr.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
+                                  </span>
+                                </div>
+                              )}
+                              {sr.structureIntel.derivedSR && (
+                                <div className="space-y-0.5 mt-0.5">
+                                  {sr.structureIntel.derivedSR.active?.length > 0 && (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      <span className="text-[8px] text-emerald-400 font-semibold">Active S/R:</span>
+                                      {sr.structureIntel.derivedSR.active.map((lv: any, li: number) => (
+                                        <span key={li} className={`text-[8px] font-mono px-1 py-0.5 rounded ${lv.type === "support" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                          {lv.type === "support" ? "S" : "R"} {lv.price?.toFixed(lv.price > 10 ? 3 : 5)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {sr.structureIntel.derivedSR.broken?.length > 0 && (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                      <span className="text-[8px] text-muted-foreground">Broken:</span>
+                                      {sr.structureIntel.derivedSR.broken.map((lv: any, li: number) => (
+                                        <span key={li} className="text-[8px] font-mono text-muted-foreground line-through px-1 py-0.5">
+                                          {lv.type === "support" ? "S" : "R"} {lv.price?.toFixed(lv.price > 10 ? 3 : 5)}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* ── Entity Lifecycles ── */}
+                          {sr.entityLifecycles && (() => {
+                            const lc = sr.entityLifecycles;
+                            const stateColor = (state: string) => {
+                              if (state === "active" || state === "open") return "bg-emerald-500/20 text-emerald-400";
+                              if (state === "tested" || state === "respected" || state === "retested") return "bg-blue-500/20 text-blue-400";
+                              if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-amber-500/20 text-amber-400";
+                              if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-red-500/20 text-red-400";
+                              return "bg-muted/30 text-muted-foreground";
+                            };
+                            const renderStates = (byState: Record<string, number>) => (
+                              <div className="flex flex-wrap gap-1">
+                                {Object.entries(byState).filter(([_, v]) => v > 0).map(([state, count]) => (
+                                  <span key={state} className={`text-[8px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
+                                    {count} {state.replace("_", " ")}
+                                  </span>
+                                ))}
+                              </div>
+                            );
+                            const hasAny = (lc.orderBlocks?.total > 0) || (lc.fvgs?.total > 0) || (lc.swingPoints?.total > 0) || (lc.liquidityPools?.total > 0) || (lc.breakerBlocks?.total > 0) || (lc.unicornSetups?.total > 0);
+                            if (!hasAny) return null;
+                            return (
+                              <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1.5">
+                                <p className="text-[8px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
+                                {lc.orderBlocks?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>{renderStates(lc.orderBlocks.byState)}</div>}
+                                {lc.fvgs?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>{renderStates(lc.fvgs.byState)}</div>}
+                                {lc.swingPoints?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>{renderStates(lc.swingPoints.byState)}</div>}
+                                {lc.liquidityPools?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>{renderStates(lc.liquidityPools.byState)}</div>}
+                                {lc.breakerBlocks?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>{renderStates(lc.breakerBlocks.byState)}</div>}
+                                {lc.unicornSetups?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>{renderStates(lc.unicornSetups.byState)}</div>}
+                              </div>
+                            );
+                          })()}
+
+                          {/* ── Tier-Grouped Factor Breakdown ── */}
+                          {sr.factorScores && sr.factorScores.length > 0 && (
+                            <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
+                          )}
+
+                          {/* ── Risk Gates ── */}
+                          {sr.gates && sr.gates.length > 0 && (
+                            <div className="space-y-0.5">
+                              <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+                              {sr.gates.map((g: any, gi: number) => (
+                                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                                  <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+                                  <span>{g.reason}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* ── Exit Strategy + Filters ── */}
+                          <SignalReasoningCard signalReason={t.signalReason || ""} />
+                        </>
+                      ) : (
+                        /* ── Legacy fallback: old trades without rich data ── */
+                        <SignalReasoningCard signalReason={t.signalReason || ""} />
+                      )}
+
+                      {/* ── Trade Metadata Grid ── */}
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-1 text-[9px] border-t border-border/30 pt-1.5">
                         <div className="flex justify-between"><span className="text-muted-foreground">Score</span><span className="font-mono font-bold text-primary">{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Order ID</span><span className="font-mono">{t.orderId}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Opened</span><span className="font-mono">{formatFullDateTime(t.openTime)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Size</span><span className="font-mono">{t.size}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{t.pnlPips?.toFixed(1)}</span></div>
+                        {t.stopLoss != null && <div className="flex justify-between"><span className="text-muted-foreground">Stop Loss</span><span className="font-mono text-red-400">{Number(t.stopLoss).toFixed(5)}</span></div>}
+                        {t.takeProfit != null && <div className="flex justify-between"><span className="text-muted-foreground">Take Profit</span><span className="font-mono text-green-400">{Number(t.takeProfit).toFixed(5)}</span></div>}
                       </div>
                     </div>
                   </td>
                 </tr>
-              )}
+                );
+              })()}
             </React.Fragment>
           );
         })}
