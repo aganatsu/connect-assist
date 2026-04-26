@@ -1444,6 +1444,33 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     }
   }
 
+  // ── Post-direction OB alignment check ──────────────────────────────────────
+  // Factor 2 runs before direction is known, so it scores any OB the price is inside.
+  // Now that direction is set, check if the OB type aligns with trade direction.
+  // Bullish OB = demand zone (supports longs). Bearish OB = supply zone (supports shorts).
+  // Counter-directional OB gets a heavy penalty (×0.3) because you're trading against the zone.
+  {
+    const obFactor = factors.find(f => f.name === "Order Block");
+    if (obFactor && obFactor.present && direction) {
+      // Extract OB type from the detail string (e.g., "Price inside bullish OB at...")
+      const obTypeBullish = obFactor.detail.includes("bullish OB");
+      const obTypeBearish = obFactor.detail.includes("bearish OB");
+      const obAligned = (direction === "long" && obTypeBullish)
+        || (direction === "short" && obTypeBearish);
+      if (!obAligned && (obTypeBullish || obTypeBearish)) {
+        // Counter-directional OB: heavy penalty
+        const oldWeight = obFactor.weight;
+        obFactor.weight = Math.round(obFactor.weight * 0.3 * 1000) / 1000;
+        const penalty = oldWeight - obFactor.weight;
+        score -= penalty;
+        const obType = obTypeBullish ? "bullish" : "bearish";
+        obFactor.detail += ` | OB direction mismatch: ${obType} OB vs ${direction} entry (×0.3 penalty)`;
+      } else if (obAligned) {
+        obFactor.detail += ` | OB aligned with ${direction} entry ✓`;
+      }
+    }
+  }
+
   // ── Factor 10: Displacement (max 1.0) ──
   // ICT: True displacement should create an FVG (institutional footprint).
   {
@@ -2046,8 +2073,8 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
   // Tier 1 (Core Setup ×2): Must have at least 2 to consider a trade
   // Tier 2 (Confirmation ×1): Adds confidence to the setup
   // Tier 3 (Bonus ×0.5): Nice to have, never required
-  const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality"]);
+  const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
   // Unicorn Model, Volume Profile, AMD Phase, Judas Swing
   // (Regime Alignment and Spread Quality are separate gates, not scored)
@@ -2075,7 +2102,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       // When both timeframes are available, adjust the effective regime based on agreement/disagreement.
       // Daily is the primary regime; 4H provides confirmation or caution.
       const { adjustment, detail } = regimeAlignmentAdjustment(
-        regimeInfo.regime, regimeInfo.confidence, direction, factors
+        regimeInfo.regime, regimeInfo.confidence, direction, factors, regimeInfo.bias
       );
 
       // Multi-TF modifier: if 4H disagrees with daily, reduce confidence in the alignment
@@ -2202,6 +2229,30 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
   const TIER_POINTS = { 1: 2, 2: 1, 3: 0.5 } as const;
 
+  // Max possible raw weight per factor (used for quality scaling)
+  // Each factor's weight is divided by its max to get a 0–1 quality ratio
+  const FACTOR_MAX_WEIGHT: Record<string, number> = {
+    "Market Structure": 2.5,
+    "Order Block": 2.0,
+    "Fair Value Gap": 2.0,
+    "Premium/Discount & Fib": 2.0,
+    "Session Quality": 1.5,
+    "Judas Swing": 0.75,
+    "PD/PW Levels": 1.5,
+    "Reversal Candle": 1.5,
+    "Liquidity Sweep": 1.5,
+    "Displacement": 1.0,
+    "Breaker Block": 1.0,
+    "Unicorn Model": 1.5,
+    "SMT Divergence": 1.0,
+    "Volume Profile": 0.75,
+    "AMD Phase": 1.5,
+    "Currency Strength": 1.5,
+    "Daily Bias": 1.5,
+    "Confluence Stack": 1.5,
+    "Pullback Health": 0.5,
+  };
+
   // Count tier 1 factors present (for the minimum gate)
   let tier1Count = 0;
   let tier1Max = 0;
@@ -2231,7 +2282,7 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
     "Market Structure": "marketStructure",
     "Order Block": "orderBlock",
     "Fair Value Gap": "fairValueGap",
-    "Premium/Discount": "premiumDiscountFib",
+    "Premium/Discount & Fib": "premiumDiscountFib",
     "Session Quality": "sessionQuality",
     "Judas Swing": "judasSwing",
     "PD/PW Levels": "pdPwLevels",
@@ -2260,26 +2311,36 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
 
     const pts = TIER_POINTS[tier as keyof typeof TIER_POINTS] || 0.5;
 
+    // Quality scaling: scale tier points by how good this factor's weight is
+    // relative to its maximum possible weight. A pristine OB (2.0/2.0 = 1.0)
+    // gets full tier points; a nearly-broken OB (0.3/2.0 = 0.15) gets 15%.
+    // Floor at 0.2 so a present-but-weak factor still contributes something.
+    const maxW = FACTOR_MAX_WEIGHT[f.name] || 1.0;
+    const qualityRatio = Math.min(1.0, Math.max(0.2, f.weight / maxW));
+
     if (tier === 1) {
       tier1Max++;
       if (f.present && f.weight > 0) {
         tier1Count++;
-        tieredScore += pts;
-        f.detail += ` [Tier 1: +${pts}pts]`;
+        const scaled = Math.round(pts * qualityRatio * 100) / 100;
+        tieredScore += scaled;
+        f.detail += ` [Tier 1: +${scaled}/${pts}pts, Q:${(qualityRatio * 100).toFixed(0)}%]`;
       }
     } else if (tier === 2) {
       tier2Max++;
       if (f.present && f.weight > 0) {
         tier2Count++;
-        tieredScore += pts;
-        f.detail += ` [Tier 2: +${pts}pt]`;
+        const scaled = Math.round(pts * qualityRatio * 100) / 100;
+        tieredScore += scaled;
+        f.detail += ` [Tier 2: +${scaled}/${pts}pt, Q:${(qualityRatio * 100).toFixed(0)}%]`;
       }
     } else {
       tier3Max++;
       if (f.present && f.weight > 0) {
         tier3Count++;
-        tieredScore += pts;
-        f.detail += ` [Tier 3: +${pts}pts]`;
+        const scaled = Math.round(pts * qualityRatio * 100) / 100;
+        tieredScore += scaled;
+        f.detail += ` [Tier 3: +${scaled}/${pts}pts, Q:${(qualityRatio * 100).toFixed(0)}%]`;
       }
     }
   }
@@ -2414,64 +2475,60 @@ function regimeAlignmentAdjustment(
   regime: string,
   confidence: number,
   direction: string | null,
-  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group?: string }>
+  factors: Array<{ name: string; present: boolean; weight: number; detail: string; group?: string }>,
+  regimeBias?: string | null // "bullish" | "bearish" | null — from classifyRegime().bias
 ): { adjustment: number; detail: string } {
   if (!direction || confidence < 0.5) {
     return { adjustment: 0, detail: "Regime unknown or low confidence — no adjustment" };
   }
 
-  // Determine if this is a trend-following or mean-reversion setup
-  const trendFactors = ["Market Structure", "Trend Direction", "Displacement"];
-  const rangeFactors = ["Premium/Discount", "Order Block", "Fair Value Gap", "Breaker Block"];
+  // The key question is: does the ENTRY DIRECTION align with the REGIME?
+  // This replaces the old trend-vs-range factor classification which incorrectly
+  // penalized pullback-to-OB entries (the highest-conviction ICT setup) as "range setups."
+  //
+  // Logic:
+  //   Trending regime + direction aligns with bias → bonus (with-trend entry)
+  //   Trending regime + direction opposes bias → penalty (counter-trend entry)
+  //   Ranging regime + any direction → small penalty (no clear edge)
+  //   Transitional → no adjustment
 
-  let trendScore = 0;
-  let rangeScore = 0;
-  for (const f of factors) {
-    if (!f.present) continue;
-    if (trendFactors.includes(f.name)) trendScore += f.weight;
-    if (rangeFactors.includes(f.name)) rangeScore += f.weight;
-  }
-
-  const isTrendSetup = trendScore > rangeScore;
-  const isRangeSetup = rangeScore > trendScore;
-
-  // Scale penalty/bonus by confidence (higher confidence = stronger effect)
   const scaleFactor = Math.min(1.0, confidence);
 
+  // Check if entry direction aligns with regime bias
+  const directionAligned = regimeBias
+    ? (direction === "long" && regimeBias === "bullish")
+      || (direction === "short" && regimeBias === "bearish")
+    : null; // null if no bias available
+
   if (regime === "strong_trend" || regime === "mild_trend") {
-    if (isTrendSetup) {
-      // Trend setup in trending market = small bonus
+    if (directionAligned === true) {
+      // With-trend entry in trending market = bonus
+      // This covers ALL with-trend setups: trend continuation, pullback-to-OB, OTE retracement
       const bonus = regime === "strong_trend" ? 0.5 : 0.25;
       return {
         adjustment: +(bonus * scaleFactor).toFixed(2),
-        detail: `Trend setup in ${regime.replace("_", " ")} market → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`
+        detail: `${direction} entry aligns with ${regime.replace("_", " ")} (${regimeBias}) → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`
       };
-    } else if (isRangeSetup) {
-      // Range/reversal setup in trending market = penalty
+    } else if (directionAligned === false) {
+      // Counter-trend entry in trending market = penalty
       const penalty = regime === "strong_trend" ? -1.5 : -0.75;
       return {
         adjustment: +(penalty * scaleFactor).toFixed(2),
-        detail: `Range setup in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`
+        detail: `${direction} entry opposes ${regime.replace("_", " ")} (${regimeBias}) → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`
       };
     }
+    // directionAligned === null: no bias info, no adjustment for trending
+    return { adjustment: 0, detail: `Trending regime but no bias info — no adjustment` };
   }
 
   if (regime === "choppy_range" || regime === "mild_range") {
-    if (isRangeSetup) {
-      // Range setup in ranging market = small bonus
-      const bonus = regime === "choppy_range" ? 0.5 : 0.25;
-      return {
-        adjustment: +(bonus * scaleFactor).toFixed(2),
-        detail: `Range setup in ${regime.replace("_", " ")} market → +${(bonus * scaleFactor).toFixed(1)} bonus (conf: ${(confidence * 100).toFixed(0)}%)`
-      };
-    } else if (isTrendSetup) {
-      // Trend setup in choppy market = penalty
-      const penalty = regime === "choppy_range" ? -1.5 : -0.75;
-      return {
-        adjustment: +(penalty * scaleFactor).toFixed(2),
-        detail: `Trend setup in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (conf: ${(confidence * 100).toFixed(0)}%)`
-      };
-    }
+    // In ranging markets, any directional trade has less edge
+    // Small penalty scaled by how choppy it is
+    const penalty = regime === "choppy_range" ? -0.75 : -0.25;
+    return {
+      adjustment: +(penalty * scaleFactor).toFixed(2),
+      detail: `Entry in ${regime.replace("_", " ")} market → ${(penalty * scaleFactor).toFixed(1)} penalty (no clear directional edge, conf: ${(confidence * 100).toFixed(0)}%)`
+    };
   }
 
   return { adjustment: 0, detail: `Transitional regime — no adjustment` };
