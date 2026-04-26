@@ -1,6 +1,49 @@
 import { supabase } from "@/integrations/supabase/client";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
+const functionCooldownUntil = new Map<string, number>();
+const functionResponseCache = new Map<string, { data: any; expiresAt: number }>();
+
+function functionCacheKey(functionName: string, body: Record<string, any>) {
+  return `${functionName}:${JSON.stringify(body)}`;
+}
+
+function getFunctionFallback(functionName: string, body: Record<string, any>) {
+  const cached = functionResponseCache.get(functionCacheKey(functionName, body));
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  if (functionName === "bot-scanner") {
+    const action = body?.action;
+    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) return [];
+    if (action === "manual_scan") return { error: "Scanner is temporarily unavailable. Please try again shortly.", started: false, pairsScanned: 0, signalsFound: 0, tradesPlaced: 0 };
+    return { ok: false, error: "Scanner is temporarily unavailable. Please try again shortly.", fallback: true };
+  }
+
+  if (functionName === "broker-execute") {
+    const action = body?.action;
+    if (["open_trades", "trade_history"].includes(action)) return [];
+    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
+    if (["place_order", "close_trade", "modify_trade"].includes(action)) return { error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.", fallback: true };
+  }
+
+  if (functionName === "paper-trading") {
+    const action = body?.action;
+    if (action === "status") return { ok: false, error: "Paper trading service is temporarily unavailable. Please try again shortly.", fallback: true, engine_status: "unknown", positions: [], orders: [] };
+    if (["place_order", "close_position", "update_position", "start_engine", "pause_engine", "stop_engine", "kill_switch", "reset_account", "reset_balance_only", "set_balance", "set_execution_mode"].includes(action)) return { error: "Paper trading is temporarily unavailable. Please retry shortly.", fallback: true };
+  }
+
+  return undefined;
+}
+
+function cacheSuccessfulFunctionResponse(functionName: string, body: Record<string, any>, data: any) {
+  const action = body?.action;
+  const cacheable =
+    (functionName === "broker-execute" && ["account_summary", "account_balance", "connection_status", "open_trades", "trade_history"].includes(action)) ||
+    (functionName === "paper-trading" && action === "status");
+  if (cacheable && data && !data.error) {
+    functionResponseCache.set(functionCacheKey(functionName, body), { data, expiresAt: Date.now() + 60_000 });
+  }
+}
 
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
