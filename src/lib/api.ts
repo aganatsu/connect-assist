@@ -1,11 +1,82 @@
 import { supabase } from "@/integrations/supabase/client";
 
 let brokerExecuteQueue: Promise<void> = Promise.resolve();
+const functionCooldownUntil = new Map<string, number>();
+const functionResponseCache = new Map<string, { data: any; expiresAt: number }>();
+
+function functionCacheKey(functionName: string, body: Record<string, any>) {
+  return `${functionName}:${JSON.stringify(body)}`;
+}
+
+function getFunctionFallback(functionName: string, body: Record<string, any>) {
+  const cached = functionResponseCache.get(functionCacheKey(functionName, body));
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  if (functionName === "bot-scanner") {
+    const action = body?.action;
+    if (["scan_logs", "staged_setups", "active_staged", "pending_orders", "active_pending"].includes(action)) return [];
+    if (action === "manual_scan") return { error: "Scanner is temporarily unavailable. Please try again shortly.", started: false, pairsScanned: 0, signalsFound: 0, tradesPlaced: 0 };
+    return { ok: false, error: "Scanner is temporarily unavailable. Please try again shortly.", fallback: true };
+  }
+
+  if (functionName === "broker-execute") {
+    const action = body?.action;
+    if (["open_trades", "trade_history"].includes(action)) return [];
+    if (["account_summary", "account_balance", "connection_status", "symbol_specs", "validate_symbol"].includes(action)) return { ok: false, error: "Broker service is temporarily unavailable. Please try again shortly.", fallback: true };
+    if (["place_order", "close_trade", "modify_trade"].includes(action)) return { error: "Broker execution is temporarily unavailable. The order was not sent; please retry shortly.", fallback: true };
+  }
+
+  if (functionName === "paper-trading") {
+    const action = body?.action;
+    if (action === "status") return { ok: false, error: "Paper trading service is temporarily unavailable. Please try again shortly.", fallback: true, engine_status: "unknown", positions: [], orders: [] };
+    if (["place_order", "close_position", "update_position", "start_engine", "pause_engine", "stop_engine", "kill_switch", "reset_account", "reset_balance_only", "set_balance", "set_execution_mode"].includes(action)) return { error: "Paper trading is temporarily unavailable. Please retry shortly.", fallback: true };
+  }
+
+  return undefined;
+}
+
+function cacheSuccessfulFunctionResponse(functionName: string, body: Record<string, any>, data: any) {
+  const action = body?.action;
+  const cacheable =
+    (functionName === "broker-execute" && ["account_summary", "account_balance", "connection_status", "open_trades", "trade_history"].includes(action)) ||
+    (functionName === "paper-trading" && action === "status");
+  if (cacheable && data && !data.error) {
+    functionResponseCache.set(functionCacheKey(functionName, body), { data, expiresAt: Date.now() + 60_000 });
+  }
+}
 
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
     try {
-      return await supabase.functions.invoke(functionName, { body });
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text ? { message: text } : null;
+      }
+      if (!response.ok) {
+        return {
+          data,
+          error: {
+            message: `Edge function returned ${response.status}: ${response.statusText || "Error"}${text ? `, ${text}` : ""}`,
+            status: response.status,
+            context: { status: response.status, response },
+          },
+        };
+      }
+      return { data, error: null };
     } catch (error) {
       return { data: null, error };
     }
@@ -31,6 +102,12 @@ export async function invokeFunction<T = any>(
   functionName: string,
   body: Record<string, any>
 ): Promise<T> {
+  const cooldownUntil = functionCooldownUntil.get(functionName) || 0;
+  const cooldownFallback = getFunctionFallback(functionName, body);
+  if (cooldownFallback !== undefined && cooldownUntil > Date.now()) {
+    return cooldownFallback as T;
+  }
+
   let { data, error } = await invokeSupabaseFunction(functionName, body);
 
   // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry up to 2x with backoff.
@@ -49,6 +126,10 @@ export async function invokeFunction<T = any>(
   for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
     await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
     ({ data, error } = await invokeSupabaseFunction(functionName, body));
+  }
+
+  if (isTransient503(error, data)) {
+    functionCooldownUntil.set(functionName, Date.now() + 15_000);
   }
 
   // Bot scanner data is dashboard/polling data. If the hosted function is briefly
@@ -154,6 +235,8 @@ export async function invokeFunction<T = any>(
 
   if (error) throw new Error(error.message || `${functionName} failed`);
   if (data?.error && !data?.fallback) throw new Error(data.error);
+  functionCooldownUntil.delete(functionName);
+  cacheSuccessfulFunctionResponse(functionName, body, data);
   return data as T;
 }
 
