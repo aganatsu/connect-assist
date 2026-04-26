@@ -22,7 +22,7 @@ import {
   detectDisplacement, tagDisplacementQuality,
   detectBreakerBlocks, detectUnicornSetups,
   detectJudasSwing, detectReversalCandle,
-  calculatePDLevels, calculatePremiumDiscount,
+  calculatePDLevels,
   computeOpeningRange, calculateSLTP,
   // Confluence stacking, sweep reclaim, pullback decay
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
@@ -680,9 +680,9 @@ function runFullConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | n
       // Derived S/R proximity bonus (new)
       // If price is near an active (unbroken) BOS-derived S/R level, that's a high-quality reaction zone
       const derivedSR = structure.derivedSR;
-      if (derivedSR && derivedSR.active.length > 0 && typeof currentPrice === "number") {
+      if (derivedSR && derivedSR.active.length > 0 && typeof lastPrice === "number") {
         const atr = calculateATR(candles);
-        const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(currentPrice - sr.price) < atr * 0.5);
+        const nearActiveSR = derivedSR.active.find((sr: any) => Math.abs(lastPrice - sr.price) < atr * 0.5);
         if (nearActiveSR) {
           structurePts += 0.2;
           detail += ` | Near active BOS-derived ${nearActiveSR.type} at ${nearActiveSR.price.toFixed(5)}`;
@@ -4118,7 +4118,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const orFlag = pairConfig.openingRange?.enabled ? 1 : 0;
     const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
     const smtFlag = smtPair && YAHOO_SYMBOLS[smtPair] ? 1 : 0;
-    const multiTFRegimeEnabled = pairConfig.multiTFRegimeEnabled !== false; // ON by default
+    const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
     const fetchPromises: Promise<Candle[]>[] = [
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
