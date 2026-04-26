@@ -27,9 +27,9 @@ export interface ZoneOverlay {
 
 export interface TradeLevels {
   entry: number;
-  originalSL: number;
+  originalSL: number | null;
   currentSL: number | null;
-  takeProfit: number;
+  takeProfit: number | null;
   direction: "BUY" | "SELL";
 }
 
