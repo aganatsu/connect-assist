@@ -77,8 +77,9 @@ export default function TradeReplay() {
     const items: TradeItem[] = [];
 
     // Open positions
-    if (status?.positions) {
-      for (const p of status.positions) {
+    const positions = Array.isArray(status?.positions) ? status.positions : [];
+    if (positions.length > 0) {
+      for (const p of positions) {
         items.push({
           position_id: p.id || p.positionId,
           symbol: p.symbol,
@@ -96,8 +97,9 @@ export default function TradeReplay() {
     }
 
     // Closed trades
-    if (status?.tradeHistory) {
-      for (const t of status.tradeHistory) {
+    const history = Array.isArray(status?.tradeHistory) ? status.tradeHistory : [];
+    if (history.length > 0) {
+      for (const t of history) {
         items.push({
           position_id: t.id || t.positionId,
           symbol: t.symbol,
@@ -116,8 +118,9 @@ export default function TradeReplay() {
     }
 
     // Staged setups
-    if (Array.isArray(stagedSetups)) {
-      for (const s of stagedSetups) {
+    const staged = Array.isArray(stagedSetups) ? stagedSetups : [];
+    if (staged.length > 0) {
+      for (const s of staged) {
         items.push({
           position_id: s.id || s.setup_id || `staged-${s.symbol}`,
           symbol: s.symbol,
@@ -157,7 +160,10 @@ export default function TradeReplay() {
     queryFn: async () => {
       if (!selectedTrade?.symbol) return [];
       const result = await marketApi.candles(selectedTrade.symbol, timeframe, 300);
-      return Array.isArray(result) ? result : [];
+      if (Array.isArray(result)) return result;
+      if (result?.values && Array.isArray(result.values)) return result.values;
+      if (result?.data && Array.isArray(result.data)) return result.data;
+      return [];
     },
     enabled: !!selectedTrade?.symbol,
     staleTime: 60000,
@@ -224,7 +230,7 @@ export default function TradeReplay() {
     const z: ZoneOverlay[] = [];
 
     // Find the most recent scan log that has details for this symbol
-    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    const logs = Array.isArray(scanLogs) ? scanLogs : (scanLogs?.logs ? (Array.isArray(scanLogs.logs) ? scanLogs.logs : []) : []);
     let scanDetail: any = null;
     for (const log of logs) {
       const details = log.details_json?.details || log.details_json || [];
@@ -239,7 +245,8 @@ export default function TradeReplay() {
 
     // Order Blocks
     if (snap.orderBlock?.zones || snap.orderBlocks) {
-      const obs = snap.orderBlock?.zones || snap.orderBlocks || [];
+      const obsRaw = snap.orderBlock?.zones || snap.orderBlocks || [];
+      const obs = Array.isArray(obsRaw) ? obsRaw : [];
       for (const ob of obs) {
         z.push({
           type: "ob",
@@ -253,7 +260,8 @@ export default function TradeReplay() {
 
     // FVGs
     if (snap.fvg?.zones || snap.fvgs) {
-      const fvgs = snap.fvg?.zones || snap.fvgs || [];
+      const fvgsRaw = snap.fvg?.zones || snap.fvgs || [];
+      const fvgs = Array.isArray(fvgsRaw) ? fvgsRaw : [];
       for (const fvg of fvgs) {
         z.push({
           type: "fvg",
@@ -267,7 +275,8 @@ export default function TradeReplay() {
 
     // S/R levels from structure intel
     if (snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR) {
-      const srLevels = snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR || [];
+      const srRaw = snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR || [];
+      const srLevels = Array.isArray(srRaw) ? srRaw : [];
       for (const sr of srLevels) {
         const price = sr.price || sr.level || 0;
         z.push({
@@ -282,7 +291,8 @@ export default function TradeReplay() {
 
     // Liquidity pools
     if (snap.liquiditySweep?.pools || snap.liquidityPools) {
-      const pools = snap.liquiditySweep?.pools || snap.liquidityPools || [];
+      const poolsRaw = snap.liquiditySweep?.pools || snap.liquidityPools || [];
+      const pools = Array.isArray(poolsRaw) ? poolsRaw : [];
       for (const pool of pools.slice(0, 10)) { // limit to 10 most relevant
         const price = pool.level || pool.price || 0;
         z.push({
@@ -297,7 +307,8 @@ export default function TradeReplay() {
 
     // Breaker blocks
     if (snap.breakerBlock?.zones || snap.breakerBlocks) {
-      const breakers = snap.breakerBlock?.zones || snap.breakerBlocks || [];
+      const breakersRaw = snap.breakerBlock?.zones || snap.breakerBlocks || [];
+      const breakers = Array.isArray(breakersRaw) ? breakersRaw : [];
       for (const brk of breakers) {
         z.push({
           type: "breaker",
