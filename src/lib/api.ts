@@ -1,5 +1,17 @@
 import { supabase } from "@/integrations/supabase/client";
 
+let brokerExecuteQueue: Promise<void> = Promise.resolve();
+
+async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
+  const run = () => supabase.functions.invoke(functionName, { body });
+  if (functionName !== "broker-execute") return run();
+
+  const previous = brokerExecuteQueue.catch(() => undefined);
+  const current = previous.then(run);
+  brokerExecuteQueue = current.then(() => undefined, () => undefined);
+  return current;
+}
+
 // Detect auth errors from the edge function (401 / Unauthorized / bad_jwt / missing sub claim)
 function isAuthError(error: any, data: any): boolean {
   const msg = (error?.message || data?.error || "").toString().toLowerCase();
@@ -13,7 +25,7 @@ export async function invokeFunction<T = any>(
   functionName: string,
   body: Record<string, any>
 ): Promise<T> {
-  let { data, error } = await supabase.functions.invoke(functionName, { body });
+  let { data, error } = await invokeSupabaseFunction(functionName, body);
 
   // Transient platform 503 (SUPABASE_EDGE_RUNTIME_ERROR / cold-boot) — retry up to 2x with backoff.
   const isTransient503 = (err: any, d: any): boolean => {
@@ -30,7 +42,7 @@ export async function invokeFunction<T = any>(
 
   for (let attempt = 0; attempt < 4 && isTransient503(error, data); attempt++) {
     await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
-    ({ data, error } = await supabase.functions.invoke(functionName, { body }));
+    ({ data, error } = await invokeSupabaseFunction(functionName, body));
   }
 
   // Bot scanner data is dashboard/polling data. If the hosted function is briefly
@@ -114,7 +126,7 @@ export async function invokeFunction<T = any>(
   if (isAuthError(error, data)) {
     const { error: refreshErr } = await supabase.auth.refreshSession();
     if (!refreshErr) {
-      ({ data, error } = await supabase.functions.invoke(functionName, { body }));
+      ({ data, error } = await invokeSupabaseFunction(functionName, body));
     }
     if (isAuthError(error, data)) {
       await supabase.auth.signOut().catch(() => {});
@@ -447,6 +459,10 @@ export const brokerExecApi = {
     invokeFunction("broker-execute", { action: "account_summary", connectionId }),
   openTrades: (connectionId: string) =>
     invokeFunction("broker-execute", { action: "open_trades", connectionId }),
+  connectionStatus: (connectionId: string) =>
+    invokeFunction("broker-execute", { action: "connection_status", connectionId }),
+  validateSymbol: (connectionId: string, symbol: string, brokerSymbol?: string) =>
+    invokeFunction("broker-execute", { action: "validate_symbol", connectionId, symbol, brokerSymbol }),
   placeOrder: (connectionId: string, order: { symbol: string; direction: string; size: number; stopLoss?: number; takeProfit?: number }) =>
     invokeFunction("broker-execute", { action: "place_order", connectionId, ...order }),
   closeTrade: (connectionId: string, tradeId: string) =>

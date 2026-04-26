@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy, Wand2 } from "lucide-react";
-import { brokerApi, settingsApi } from "@/lib/api";
+import { brokerApi, brokerExecApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { BotConfigModal } from "@/components/BotConfigModal";
@@ -181,10 +181,7 @@ function BrokerSettings() {
   const checkStatus = async (connectionId: string, name: string) => {
     const t = toast.loading(`Checking ${name}...`);
     try {
-      const { data, error } = await supabase.functions.invoke("broker-execute", {
-        body: { action: "connection_status", connectionId },
-      });
-      if (error) throw error;
+      const data = await brokerExecApi.connectionStatus(connectionId);
       toast.dismiss(t);
       if (!data?.ok) {
         toast.error(`✗ ${name}: ${data?.error || "status check failed"}${data?.details ? ` — ${data.details}` : ""}`, { duration: 8000 });
@@ -212,10 +209,7 @@ function BrokerSettings() {
   const validateBrokerSymbol = async (connectionId: string, appSymbol: string, brokerSymbol?: string) => {
     const t = toast.loading(`Validating ${brokerSymbol || appSymbol}...`);
     try {
-      const { data, error } = await supabase.functions.invoke("broker-execute", {
-        body: { action: "validate_symbol", connectionId, symbol: appSymbol, brokerSymbol },
-      });
-      if (error) throw error;
+      const data = await brokerExecApi.validateSymbol(connectionId, appSymbol, brokerSymbol);
       toast.dismiss(t);
       if (data?.ok) toast.success(`✓ ${appSymbol} → ${data.brokerSymbol}`);
       else toast.error(`✗ ${data?.brokerSymbol || brokerSymbol || appSymbol}: ${data?.error || "not found at broker"}`);

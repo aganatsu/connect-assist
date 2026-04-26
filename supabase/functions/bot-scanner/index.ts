@@ -4273,7 +4273,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                   if (conn.broker_type === "metaapi") {
                     metaAccountIdForSpread = conn.account_id;
                     authTokenForSpread = conn.api_key;
-                    if (metaAccountIdForSpread.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authTokenForSpread)) {
+                    if (metaAccountIdForSpread?.startsWith("eyJ") && authTokenForSpread && /^[0-9a-f-]{36}$/.test(authTokenForSpread)) {
                       authTokenForSpread = conn.account_id;
                       metaAccountIdForSpread = conn.api_key;
                     }
