@@ -978,7 +978,7 @@ export type Database = {
           deviations: string | null
           direction: string
           entry_price: number | null
-          entry_price_old: string
+          entry_price_old: string | null
           entry_time: string
           exit_price: number | null
           exit_price_old: string | null
@@ -1017,7 +1017,7 @@ export type Database = {
           deviations?: string | null
           direction: string
           entry_price?: number | null
-          entry_price_old: string
+          entry_price_old?: string | null
           entry_time: string
           exit_price?: number | null
           exit_price_old?: string | null
@@ -1056,7 +1056,7 @@ export type Database = {
           deviations?: string | null
           direction?: string
           entry_price?: number | null
-          entry_price_old?: string
+          entry_price_old?: string | null
           entry_time?: string
           exit_price?: number | null
           exit_price_old?: string | null
