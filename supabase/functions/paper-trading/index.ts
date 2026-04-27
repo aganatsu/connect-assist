@@ -1249,6 +1249,36 @@ Deno.serve(async (req) => {
         if (!isLong && tp >= entry) throw new Error("Take profit must be below entry for short");
       }
 
+      // ── Per-Trade Management Overrides ──
+      // Accepts tradeOverrides object to override global config for this specific trade.
+      // Supported fields: breakEvenEnabled, breakEvenPips, trailingStopEnabled, trailingStopPips,
+      //   trailingStopActivation, partialTPEnabled, partialTPPercent, partialTPLevel,
+      //   maxHoldEnabled, maxHoldHours
+      // Pass null to clear all overrides (revert to global config).
+      if (payload.tradeOverrides !== undefined) {
+        if (payload.tradeOverrides === null) {
+          updates.trade_overrides = null; // Clear overrides — revert to global config
+        } else {
+          const allowedKeys = [
+            'breakEvenEnabled', 'breakEvenPips',
+            'trailingStopEnabled', 'trailingStopPips', 'trailingStopActivation',
+            'partialTPEnabled', 'partialTPPercent', 'partialTPLevel',
+            'maxHoldEnabled', 'maxHoldHours',
+          ];
+          const sanitized: Record<string, any> = {};
+          for (const key of allowedKeys) {
+            if (payload.tradeOverrides[key] !== undefined) {
+              sanitized[key] = payload.tradeOverrides[key];
+            }
+          }
+          // Merge with existing overrides (don't wipe fields not included in this update)
+          const existing = pos.trade_overrides
+            ? (typeof pos.trade_overrides === 'string' ? JSON.parse(pos.trade_overrides) : pos.trade_overrides)
+            : {};
+          updates.trade_overrides = JSON.stringify({ ...existing, ...sanitized });
+        }
+      }
+
       if (Object.keys(updates).length === 0) return respond({ success: true, unchanged: true });
 
       const { data: updated, error: updErr } = await supabase

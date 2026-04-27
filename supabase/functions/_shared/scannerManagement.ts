@@ -340,8 +340,39 @@ export async function manageOpenPositions(
 
       // Parse existing signal_reason
       let signalData: any = {};
-      try { signalData = JSON.parse(pos.signal_reason || "{}"); } catch {}
+      try { signalData = JSON.parse(pos.signal_reason || "{}"); } catch {};
       const exitFlags = signalData.exitFlags || {};
+
+      // ── Per-Trade Overrides: individual position settings override global config ──
+      // If trade_overrides JSON exists on this position, those values take priority.
+      // Missing fields fall back to the global config values read above.
+      let posTrailingEnabled = trailingEnabled;
+      let posTrailingPips = trailingPips;
+      let posTrailingActivation = trailingActivation;
+      let posBreakEvenEnabled = breakEvenEnabled;
+      let posBreakEvenPips = breakEvenPips;
+      let posPartialTPEnabled = partialTPEnabled;
+      let posPartialTPPercent = partialTPPercent;
+      let posPartialTPLevel = partialTPLevel;
+      let posMaxHoldEnabled = maxHoldEnabled;
+      let posMaxHoldHours = maxHoldHours;
+      if (pos.trade_overrides) {
+        let overrides: any = {};
+        try { overrides = typeof pos.trade_overrides === 'string' ? JSON.parse(pos.trade_overrides) : pos.trade_overrides; } catch {}
+        if (overrides.trailingStopEnabled !== undefined) posTrailingEnabled = overrides.trailingStopEnabled;
+        if (overrides.trailingStopPips !== undefined) posTrailingPips = overrides.trailingStopPips;
+        if (overrides.trailingStopActivation !== undefined) posTrailingActivation = overrides.trailingStopActivation;
+        if (overrides.breakEvenEnabled !== undefined) posBreakEvenEnabled = overrides.breakEvenEnabled;
+        if (overrides.breakEvenPips !== undefined) posBreakEvenPips = overrides.breakEvenPips;
+        if (overrides.partialTPEnabled !== undefined) posPartialTPEnabled = overrides.partialTPEnabled;
+        if (overrides.partialTPPercent !== undefined) posPartialTPPercent = overrides.partialTPPercent;
+        if (overrides.partialTPLevel !== undefined) posPartialTPLevel = overrides.partialTPLevel;
+        if (overrides.maxHoldEnabled !== undefined) posMaxHoldEnabled = overrides.maxHoldEnabled;
+        if (overrides.maxHoldHours !== undefined) posMaxHoldHours = overrides.maxHoldHours;
+        // Direct SL/TP override: if user manually set a new SL or TP price
+        // These are applied immediately via the update-trade API, not here.
+        // Management respects the current pos.stop_loss and pos.take_profit values.
+      }
 
       // Calculate current R-multiple (how many risk units in profit)
       const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
@@ -373,7 +404,7 @@ export async function manageOpenPositions(
 
       // ── 1. MAX HOLD TIME CHECK ──
       // If maxHoldEnabled and maxHoldHours is set and exceeded, flag for tightening
-      if (maxHoldEnabled && maxHoldHours > 0 && holdHours >= maxHoldHours) {
+      if (posMaxHoldEnabled && posMaxHoldHours > 0 && holdHours >= posMaxHoldHours) {
         // Move SL to breakeven or close if in profit
         if (rMultiple > 0) {
           const beSL = pos.direction === "long"
@@ -383,7 +414,7 @@ export async function manageOpenPositions(
           if (shouldMove) {
             const attribution = makeAttribution(
               "max_hold_exceeded",
-              `Position held ${holdHours.toFixed(1)}h, max allowed ${maxHoldHours}h — SL moved to breakeven`,
+              `Position held ${holdHours.toFixed(1)}h, max allowed ${posMaxHoldHours}h — SL moved to breakeven`,
             );
             const updatedSignal = {
               ...signalData,
@@ -399,7 +430,7 @@ export async function manageOpenPositions(
               positionId: pos.position_id, symbol, action: "sl_tightened",
               reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
             });
-            console.log(`[mgmt ${scanCycleId}] MAX HOLD ${symbol} | ${holdHours.toFixed(1)}h/${maxHoldHours}h | SL→BE at ${beSL.toFixed(5)}`);
+            console.log(`[mgmt ${scanCycleId}] MAX HOLD ${symbol} | ${holdHours.toFixed(1)}h/${posMaxHoldHours}h | SL→BE at ${beSL.toFixed(5)}`);
             continue;
           }
         }
@@ -410,10 +441,10 @@ export async function manageOpenPositions(
       // This ensures BE activates proportionally to the trade's risk — a 40-pip SL trade
       // won't get stopped at BE on a normal pullback the way a 20-pip fixed trigger would.
       // breakEvenPips is now interpreted as a fallback; primary trigger is R-based.
-      const beActivationR = breakEvenPips > 0 && riskPips > 0
-        ? Math.min(2.0, Math.max(1.0, breakEvenPips / riskPips))  // At least 1R, capped at 2R max
+      const beActivationR = posBreakEvenPips > 0 && riskPips > 0
+        ? Math.min(2.0, Math.max(1.0, posBreakEvenPips / riskPips))  // At least 1R, capped at 2R max
         : 1.0;  // Default: activate BE at 1R
-      if (breakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
+      if (posBreakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
         const profitPipsAbs = Math.abs(profitPips);
         const beSL = pos.direction === "long"
           ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
@@ -453,16 +484,16 @@ export async function manageOpenPositions(
       // letting the trade run freely to its first target.
       const trailingAlreadyActivated = exitFlags.trailingStopActivated === true;
       // Proportional trail distance: use config trailingPips as a minimum, but prefer 50% of SL distance
-      const proportionalTrailPips = Math.max(trailingPips, riskPips * 0.5);
+      const proportionalTrailPips = Math.max(posTrailingPips, riskPips * 0.5);
       // If partial TP is enabled, delay trailing activation until partial TP has fired
-      const partialTPBlocksTrailing = partialTPEnabled && !exitFlags.partialTPActivated;
-      if (trailingEnabled && !trailingAlreadyActivated && !partialTPBlocksTrailing) {
+      const partialTPBlocksTrailing = posPartialTPEnabled && !exitFlags.partialTPActivated;
+      if (posTrailingEnabled && !trailingAlreadyActivated && !partialTPBlocksTrailing) {
         // ── Phase A: First-time activation ──
-        const activationR = trailingActivation === "after_1r" ? 1.0
-          : trailingActivation === "after_0.5r" ? 0.5
-          : trailingActivation === "after_1.5r" ? 1.5
-          : trailingActivation === "after_2r" ? 2.0
-          : trailingActivation === "immediate" ? 0.0
+        const activationR = posTrailingActivation === "after_1r" ? 1.0
+          : posTrailingActivation === "after_0.5r" ? 0.5
+          : posTrailingActivation === "after_1.5r" ? 1.5
+          : posTrailingActivation === "after_2r" ? 2.0
+          : posTrailingActivation === "immediate" ? 0.0
           : 1.0;
 
         if (rMultiple >= activationR) {
@@ -472,7 +503,7 @@ export async function manageOpenPositions(
           updatedFlags.trailingStopActivated = true;
           updatedFlags.trailingStopLevel = newTrailLevel;
           updatedFlags.trailingStopPips = Math.round(proportionalTrailPips * 10) / 10; // Store the actual proportional distance
-          updatedFlags.trailingStopActivation = trailingActivation;
+          updatedFlags.trailingStopActivation = posTrailingActivation;
           exitFlagsUpdated = true;
 
           // Also move the actual SL if the trail level is better than current SL
@@ -480,7 +511,7 @@ export async function manageOpenPositions(
           if (shouldMoveSL) {
             const attribution = makeAttribution(
               "trailing_enabled",
-              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL moved to ${newTrailLevel.toFixed(5)}`,
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${posTrailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL moved to ${newTrailLevel.toFixed(5)}`,
             );
             const updatedSignal = {
               ...signalData,
@@ -501,7 +532,7 @@ export async function manageOpenPositions(
           } else {
             const attribution = makeAttribution(
               "trailing_enabled",
-              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${trailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL already better, keeping ${sl.toFixed(5)}`,
+              `Trailing stop activated at ${rMultiple.toFixed(2)}R (trigger: ${posTrailingActivation}, distance: ${proportionalTrailPips.toFixed(1)} pips = 0.5× SL) — SL already better, keeping ${sl.toFixed(5)}`,
             );
             actions.push({
               positionId: pos.position_id, symbol, action: "trailing_enabled",
@@ -510,10 +541,10 @@ export async function manageOpenPositions(
             console.log(`[mgmt ${scanCycleId}] TRAILING ON ${symbol} | ${rMultiple.toFixed(2)}R | SL already better at ${sl.toFixed(5)}`);
           }
         }
-      } else if (trailingEnabled && trailingAlreadyActivated && rMultiple > 0) {
+      } else if (posTrailingEnabled && trailingAlreadyActivated && rMultiple > 0) {
         // ── Phase B: Trailing tightening — ratchet SL forward ──
         const prevTrailLevel = exitFlags.trailingStopLevel ?? sl;
-        const effectiveTrailPips = exitFlags.trailingStopPips ?? trailingPips;
+        const effectiveTrailPips = exitFlags.trailingStopPips ?? posTrailingPips;
         const newTrailLevel = pos.direction === "long"
           ? currentPrice - (effectiveTrailPips * spec.pipSize)
           : currentPrice + (effectiveTrailPips * spec.pipSize);
@@ -555,21 +586,21 @@ export async function manageOpenPositions(
       // Use partialTPActivated (new format). Old positions stored partialTP
       // as config intent — check the dedicated Activated field.
       const partialAlreadyActivated = exitFlags.partialTPActivated === true;
-      if (partialTPEnabled && !partialAlreadyActivated && rMultiple >= partialTPLevel) {
+      if (posPartialTPEnabled && !partialAlreadyActivated && rMultiple >= posPartialTPLevel) {
         updatedFlags.partialTPActivated = true;
-        updatedFlags.partialTPPercent = partialTPPercent;
-        updatedFlags.partialTPLevel = partialTPLevel;
+        updatedFlags.partialTPPercent = posPartialTPPercent;
+        updatedFlags.partialTPLevel = posPartialTPLevel;
         exitFlagsUpdated = true;
 
         const attribution = makeAttribution(
           "partial_enabled",
-          `Partial TP enabled at ${rMultiple.toFixed(2)}R — ${partialTPPercent}% at ${partialTPLevel}R`,
+          `Partial TP enabled at ${rMultiple.toFixed(2)}R — ${posPartialTPPercent}% at ${posPartialTPLevel}R`,
         );
         actions.push({
           positionId: pos.position_id, symbol, action: "partial_enabled",
           reason: attribution.detail, attribution,
         });
-        console.log(`[mgmt ${scanCycleId}] PARTIAL TP ${symbol} | ${rMultiple.toFixed(2)}R | ${partialTPPercent}% at ${partialTPLevel}R`);
+        console.log(`[mgmt ${scanCycleId}] PARTIAL TP ${symbol} | ${rMultiple.toFixed(2)}R | ${posPartialTPPercent}% at ${posPartialTPLevel}R`);
       }
 
       // ── 5. STRUCTURE INVALIDATION CHECK ──
