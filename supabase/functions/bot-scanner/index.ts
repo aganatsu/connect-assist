@@ -3612,7 +3612,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Without this, management reads stale entry-time prices and can't fire trailing/BE/TP logic.
   // Uses the same fetchCandles chain (MetaAPI→TwelveData→Yahoo) as the rest of the scanner.
   if (openPosArr.length > 0) {
-    const posSymbols = [...new Set(openPosArr.map((p: any) => p.symbol))];
+    const posSymbols: string[] = [...new Set(openPosArr.map((p: any) => p.symbol as string))];
     const livePriceMap: Record<string, number> = {};
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
