@@ -85,6 +85,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
   { tab: "instruments", label: "Volatility Filter (ATR)", keywords: ["atr", "volatility", "filter", "min", "max"] },
   { tab: "instruments", label: "Global Spread Override", keywords: ["spread", "max", "pips", "per-instrument", "auto"] },
+  { tab: "instruments", label: "Correlation Filter", keywords: ["correlation", "correlated", "pairs", "conflict", "hedge", "doubling", "exposure", "smt"] },
+  { tab: "instruments", label: "Max Correlated Positions", keywords: ["correlation", "max", "positions", "limit", "same direction"] },
   // Sessions
   { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "off-hours", "offhours"] },
   { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
@@ -150,7 +152,7 @@ const BASE_CONFIG = {
       "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
     },
     spreadFilterEnabled: true, maxSpreadPips: 0, volatilityFilterEnabled: false,
-    minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8,
+    minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8, maxCorrelatedPositions: 1,
   },
   sessions: {
     filter: ["london", "newyork"],
@@ -1236,6 +1238,32 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       )}
                       {!(config.instruments?.volatilityFilterEnabled) && (
                         <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot trades regardless of market volatility.</p>
+                      )}
+                    </div>
+                    {/* ── Correlation Filter ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="Correlation Filter" description="Prevent conflicting or doubling exposure on correlated pairs" />
+                      <ToggleField label="Enable Correlation Filter" description="Block trades that conflict with or double exposure on open positions" checked={config.instruments?.correlationFilterEnabled ?? false} onChange={v => updateField('instruments', 'correlationFilterEnabled', v)} />
+                      {(config.instruments?.correlationFilterEnabled) && (
+                        <>
+                          <FieldGroup label="Max Correlated Positions" description="Maximum same-direction correlated pairs allowed before blocking. E.g., 1 = only one EUR long pair at a time.">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.instruments?.maxCorrelatedPositions ?? 1]} onValueChange={v => updateField('instruments', 'maxCorrelatedPositions', v[0])} min={1} max={5} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-8 text-right">{config.instruments?.maxCorrelatedPositions ?? 1}</span>
+                            </div>
+                          </FieldGroup>
+                          <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
+                            <p className="text-xs text-muted-foreground mb-2 font-medium">How it works:</p>
+                            <div className="space-y-1.5 text-xs text-muted-foreground">
+                              <p><span className="text-red-400 font-medium">Blocks conflicts:</span> Long EUR/USD + Long USD/CHF (betting against yourself on USD)</p>
+                              <p><span className="text-yellow-400 font-medium">Limits doubling:</span> Long EUR/USD + Long GBP/USD (both selling USD — capped by max above)</p>
+                              <p><span className="text-cyan font-medium">SMT pairs:</span> EUR/USD↔GBP/USD, USD/JPY↔USD/CHF, AUD/USD↔NZD/USD, XAU/USD↔XAG/USD, BTC/USD↔ETH/USD</p>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      {!(config.instruments?.correlationFilterEnabled) && (
+                        <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot may open conflicting or doubling positions on correlated pairs.</p>
                       )}
                     </div>
                   </div>
