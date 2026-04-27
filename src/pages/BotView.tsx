@@ -24,6 +24,7 @@ import { CloseAuditLog } from "@/components/CloseAuditLog";
 import { BrokerLog } from "@/components/BrokerLog";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { ExpandedPositionCard } from "@/components/ExpandedPositionCard";
+import { OverrideBadge } from "@/components/TradeOverrideEditor";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
 import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
@@ -501,7 +502,7 @@ export default function BotView() {
                             onClick={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}>
                             <td className="py-1.5 px-1 text-center text-muted-foreground text-[10px]">{idx + 1}</td>
                             <td className="py-1.5 px-1 text-muted-foreground text-[10px] whitespace-nowrap">{new Date(p.openTime).toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" })} {new Date(p.openTime).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</td>
-                            <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                            <td className="py-1.5 px-1 font-medium"><span className="inline-flex items-center gap-1">{p.symbol}<OverrideBadge position={p} /></span></td>
                             <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>{p.direction === "long" ? "▲" : "▼"}</td>
                             <td className="py-1.5 px-1 text-right">{entry.toFixed(5)}</td>
                             <td className="py-1.5 px-1 text-right">{current.toFixed(5)}</td>

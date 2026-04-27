@@ -7,6 +7,7 @@ import { formatMoney } from "@/lib/marketData";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
 import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
+import { TradeOverrideEditor } from "./TradeOverrideEditor";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -542,6 +543,9 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
       {/* ═══ ROW 6: SL/TP Editor ═══ */}
       <SLTPEditor position={p} onSaved={onSaved} />
+
+      {/* ═══ ROW 7: Per-Trade Management Overrides ═══ */}
+      <TradeOverrideEditor position={p} onSaved={onSaved} />
     </div>
   );
 }

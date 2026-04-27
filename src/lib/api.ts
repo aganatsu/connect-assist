@@ -344,7 +344,7 @@ export const paperApi = {
     invokeFunction("paper-trading", { action: "place_order", ...order }),
   closePosition: (positionId: string, exitPrice?: number, reason?: string) =>
     invokeFunction("paper-trading", { action: "close_position", positionId, exitPrice, reason }),
-  updatePosition: (positionId: string, updates: { stopLoss?: number | null; takeProfit?: number | null }) =>
+  updatePosition: (positionId: string, updates: { stopLoss?: number | null; takeProfit?: number | null; tradeOverrides?: Record<string, any> | null }) =>
     invokeFunction("paper-trading", { action: "update_position", positionId, ...updates }),
   startEngine: () => invokeFunction("paper-trading", { action: "start_engine" }),
   pauseEngine: () => invokeFunction("paper-trading", { action: "pause_engine" }),
