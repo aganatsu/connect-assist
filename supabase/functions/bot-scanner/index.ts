@@ -4564,15 +4564,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
-  // Runs every scan cycle. The game plan uses HTF data (D1/4H) already available
-  // from FOTSI candle fetches + per-pair fetches. Lightweight — no extra API calls.
+  // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
+  // Config: gamePlanEnabled (bool), gamePlanNotify (bool), gamePlanRefreshHours (number)
   // ═══════════════════════════════════════════════════════════════════════════
   let activeGamePlan: SessionGamePlan | null = null;
   try {
     const currentSessionName = getCurrentSession();
     const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
+    const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
+    const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     if (gamePlanEnabled) {
-      console.log(`[scan ${scanCycleId}] Game Plan: generating for ${currentSessionName} session...`);
+      // ── Session dedup: check if a game plan already exists for this session ──
+      const { data: existingGP } = await supabase
+        .from("scan_logs")
+        .select("id, created_at, details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .contains("details_json", { type: "game_plan" })
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const lastGP = existingGP?.[0];
+      const lastGPSession = lastGP?.details_json?.session;
+      const lastGPType = lastGP?.details_json?.type;
+      const lastGPTime = lastGP?.created_at ? new Date(lastGP.created_at).getTime() : 0;
+      const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
+      const isSameSession = lastGPType === "game_plan" && lastGPSession === currentSessionName;
+      const isStillFresh = hoursSinceLastGP < gamePlanRefreshHours;
+
+      if (isSameSession && isStillFresh) {
+        // Reuse existing game plan for trade filtering — don't regenerate or notify
+        try {
+          const cached = lastGP.details_json;
+          activeGamePlan = {
+            session: cached.session,
+            generatedAt: cached.generated_at,
+            plans: cached.plans || [],
+            focusPairs: cached.focus_pairs || [],
+            newsEvents: cached.newsEvents || [],
+            summary: cached.summary || "",
+          } as SessionGamePlan;
+          console.log(`[scan ${scanCycleId}] Game Plan: reusing ${currentSessionName} plan (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h)`);
+        } catch (e: any) {
+          console.warn(`[scan ${scanCycleId}] Game Plan: failed to parse cached plan, will regenerate`);
+        }
+      }
+
+      if (!activeGamePlan) {
+      console.log(`[scan ${scanCycleId}] Game Plan: generating NEW plan for ${currentSessionName} session...`);
       const instrumentPlans: InstrumentGamePlan[] = [];
       // Fetch HTF data for each enabled instrument (batched to respect rate limits)
       const GP_BATCH_SIZE = 3;
@@ -4644,8 +4682,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             summary: activeGamePlan.summary,
           },
         });
-        // Send Telegram notification with game plan summary
-        if (telegramChatIds.length > 0 && activeGamePlan.summary) {
+        // Send Telegram notification with game plan summary (only for NEW plans, respects gamePlanNotify toggle)
+        if (gamePlanNotify && telegramChatIds.length > 0 && activeGamePlan.summary) {
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -4657,10 +4695,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               console.warn(`[game-plan] Telegram send error [${chatId}]: ${e?.message}`);
             }
           }));
+        } else if (!gamePlanNotify) {
+          console.log(`[scan ${scanCycleId}] Game Plan: Telegram notifications disabled by config`);
         }
       } else {
         console.warn(`[scan ${scanCycleId}] Game Plan: no valid plans generated (insufficient data)`);
       }
+      } // close if (!activeGamePlan) — new plan generation block
     }
   } catch (e: any) {
     console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
@@ -5054,11 +5095,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       );
       // ── Game Plan Filter Gate ──
       // Check if the signal direction aligns with the session game plan bias.
-      // Misaligned trades are rejected with a clear reason.
+      // Respects config: gamePlanFilterEnabled (bool), gamePlanMinConfidence (number).
+      const gpFilterEnabled = (config as any).gamePlanFilterEnabled !== false; // ON by default
+      const gpMinConfidence = Number((config as any).gamePlanMinConfidence) || 50;
       const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
-      if (!gpFilter.allowed) {
-        gates.push({ passed: false, reason: gpFilter.reason });
-        console.log(`[scan ${scanCycleId}] ❌ ${pair}: ${gpFilter.reason}`);
+      if (gpFilterEnabled && !gpFilter.allowed) {
+        // Check if the bias confidence exceeds the minimum threshold
+        const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+        const biasConf = pairPlan?.biasConfidence ?? 0;
+        if (biasConf >= gpMinConfidence) {
+          gates.push({ passed: false, reason: gpFilter.reason });
+          console.log(`[scan ${scanCycleId}] ❌ ${pair}: ${gpFilter.reason} (confidence ${biasConf}% >= ${gpMinConfidence}% threshold)`);
+        } else {
+          // Confidence too low to enforce the filter — allow the trade
+          gates.push({ passed: true, reason: `Game plan: bias confidence ${biasConf}% below ${gpMinConfidence}% threshold — filter skipped` });
+          console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: Game plan bias confidence ${biasConf}% < ${gpMinConfidence}% threshold — allowing trade`);
+        }
+      } else if (!gpFilterEnabled && !gpFilter.allowed) {
+        // Filter disabled — log but don't block
+        gates.push({ passed: true, reason: `Game plan filter disabled — would have rejected: ${gpFilter.reason}` });
+        console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Game plan filter OFF (would reject: ${gpFilter.reason})`);
       } else if (activeGamePlan) {
         gates.push({ passed: true, reason: gpFilter.reason });
       }

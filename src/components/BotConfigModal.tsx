@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -105,6 +105,11 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "openingRange", label: "OR Key Levels", keywords: ["key levels", "or", "support", "resistance"] },
   { tab: "openingRange", label: "Premium/Discount from OR", keywords: ["premium", "discount", "or"] },
   { tab: "openingRange", label: "Wait for OR Completion", keywords: ["wait", "completion", "or"] },
+  // Game Plan
+  { tab: "gamePlan", label: "Enable Game Plan", keywords: ["game plan", "premarket", "session bias", "dol", "draw on liquidity"] },
+  { tab: "gamePlan", label: "Game Plan Notifications", keywords: ["game plan", "telegram", "notify", "notification", "alert"] },
+  { tab: "gamePlan", label: "Game Plan Refresh Interval", keywords: ["game plan", "refresh", "hours", "regenerate", "frequency"] },
+  { tab: "gamePlan", label: "Game Plan Trade Filter", keywords: ["game plan", "filter", "gate", "bias", "reject", "alignment"] },
 ];
 
 const HighlightContext = createContext<Set<string>>(new Set());
@@ -336,6 +341,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
     { id: "protection", label: "Protection", icon: ShieldAlert },
     { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
+    { id: "gamePlan", label: "Game Plan", icon: Crosshair },
   ];
 
   // Search filtering — compute once per render
@@ -1333,6 +1339,33 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                     <ToggleField label="Wait for OR Completion" description="Don't trade until the opening range candle count is fully formed" checked={config.openingRange?.waitForCompletion ?? true} onChange={v => updateField('openingRange', 'waitForCompletion', v)} />
                     {!config.openingRange?.enabled && (
                       <p className="text-[10px] text-muted-foreground italic">Enable the master toggle above to activate sub-features.</p>
+                    )}
+                  </div>
+                )}
+                {effectiveActiveTab === "gamePlan" && (
+                  <div className="space-y-5">
+                    <SectionHeader title="Pre-Session Game Plan" description="Automatically generates session bias, Draw on Liquidity targets, and trade scenarios before each session. Only trades aligned with the game plan bias are taken." />
+                    <ToggleField label="Enable Game Plan" description="Master toggle — when enabled, the bot generates a game plan once per session and uses it to filter trades" checked={config.gamePlanEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanEnabled: v }))} />
+                    <ToggleField label="Telegram Notifications" description="Send the game plan summary to Telegram when a new plan is generated (once per session, not every scan)" checked={config.gamePlanNotify !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanNotify: v }))} />
+                    <ToggleField label="Trade Filter Gate" description="Reject trades that contradict the game plan bias (e.g., block longs when bias is bearish). Disable to use game plan for information only without filtering." checked={config.gamePlanFilterEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanFilterEnabled: v }))} />
+                    <FieldGroup label="Refresh Interval (hours)" description="How often to regenerate the game plan within the same session. Default is 4 hours — the plan stays fresh for this long before a new one is generated.">
+                      <Input type="number" value={config.gamePlanRefreshHours ?? 4} onChange={e => setConfig((prev: any) => ({ ...prev, gamePlanRefreshHours: Math.max(1, Math.min(12, parseInt(e.target.value) || 4)) }))} min={1} max={12} step={1} className="h-9 text-sm" disabled={!config.gamePlanEnabled} />
+                    </FieldGroup>
+                    <FieldGroup label="Minimum Bias Confidence (%)" description="Only use the game plan bias as a trade filter when confidence exceeds this threshold. Below this, the filter is skipped (trades allowed regardless of bias).">
+                      <div className="flex items-center gap-3">
+                        <Slider value={[config.gamePlanMinConfidence ?? 50]} onValueChange={([v]) => setConfig((prev: any) => ({ ...prev, gamePlanMinConfidence: v }))} min={20} max={90} step={5} className="flex-1" disabled={!config.gamePlanEnabled} />
+                        <span className="text-sm font-mono w-10 text-right">{config.gamePlanMinConfidence ?? 50}%</span>
+                      </div>
+                    </FieldGroup>
+                    {!config.gamePlanEnabled && (
+                      <p className="text-[10px] text-muted-foreground italic">Enable the master toggle above to activate game plan features.</p>
+                    )}
+                    {config.gamePlanEnabled && (
+                      <div className="border border-border rounded p-3 bg-secondary/30">
+                        <p className="text-[11px] text-muted-foreground">
+                          <strong className="text-foreground">How it works:</strong> The game plan runs once per session (London, NY, Asian). It analyzes D1/4H structure, identifies Draw on Liquidity targets, and generates conditional trade scenarios. The plan is cached for {config.gamePlanRefreshHours ?? 4} hours — subsequent scans reuse it without regenerating. Trades that contradict the bias are rejected with a clear reason in the scan log.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
