@@ -3998,6 +3998,182 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.warn(`[scan ${scanCycleId}] rateMap build failed: ${e?.message} — falling back to legacy sizing`);
   }
 
+  // ── SL/TP Breach Check: close paper positions where price has crossed SL or TP ──
+  // The management engine updates SL/TP in the DB but never closes positions.
+  // For paper trading (no real broker SL enforcement), we must detect and close here.
+  // Runs AFTER price refresh (current_price is fresh) and AFTER rateMap build (PnL conversion available).
+  try {
+    const breachCandidates = openPosArr.filter((p: any) =>
+      (p.stop_loss || p.take_profit) && p.current_price
+    );
+    const breachedIds: string[] = []; // track IDs to splice from openPosArr after loop
+    for (const pos of breachCandidates) {
+      const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+      const currentPrice = parseFloat(pos.current_price);
+      const sl = parseFloat(pos.stop_loss || "0");
+      const tp = parseFloat(pos.take_profit || "0");
+      const isLong = pos.direction === "long";
+      if (!currentPrice || isNaN(currentPrice)) continue;
+
+      let hitPrice: number | null = null;
+      let closeReason: string | null = null;
+
+      // SL breach: long price <= SL, short price >= SL
+      if (sl > 0 && ((isLong && currentPrice <= sl) || (!isLong && currentPrice >= sl))) {
+        hitPrice = sl;
+        closeReason = "sl_hit";
+      }
+      // TP breach: long price >= TP, short price <= TP
+      // SL takes priority if both are breached simultaneously (shouldn't happen, but defensive)
+      if (!hitPrice && tp > 0 && ((isLong && currentPrice >= tp) || (!isLong && currentPrice <= tp))) {
+        hitPrice = tp;
+        closeReason = "tp_hit";
+      }
+
+      if (hitPrice && closeReason) {
+        const entry = parseFloat(pos.entry_price);
+        const size = parseFloat(pos.size);
+        const diff = isLong ? hitPrice - entry : entry - hitPrice;
+        const quoteToUSD = getQuoteToUSDRate(pos.symbol, rateMap);
+        const pnl = diff * spec.lotUnits * size * quoteToUSD;
+        const pnlPips = diff / spec.pipSize;
+        const nowClose = new Date().toISOString();
+
+        // 1. Delete from paper_positions
+        await supabase.from("paper_positions").delete()
+          .eq("position_id", pos.position_id).eq("user_id", userId);
+
+        // 2. Insert into paper_trade_history (matches close-on-reverse field set)
+        await supabase.from("paper_trade_history").insert({
+          user_id: userId, position_id: pos.position_id, order_id: pos.order_id || "",
+          symbol: pos.symbol, direction: pos.direction, size: pos.size,
+          entry_price: pos.entry_price, exit_price: hitPrice.toString(),
+          open_time: pos.open_time || nowClose, closed_at: nowClose,
+          close_reason: closeReason,
+          pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
+          signal_score: pos.signal_score || "0",
+          signal_reason: pos.signal_reason || "",
+          bot_id: BOT_ID,
+          stop_loss: pos.stop_loss || null, take_profit: pos.take_profit || null,
+        });
+
+        // 3. Update paper_accounts balance + peak_balance (scoped to bot)
+        const balQ = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", userId);
+        if (account.bot_id) balQ.eq("bot_id", BOT_ID);
+        const curBal = parseFloat((await balQ.single()).data?.balance || "10000");
+        const newBal = curBal + pnl;
+        const newPeak = Math.max(newBal, parseFloat(account.peak_balance || "10000"));
+        const balUpd = supabase.from("paper_accounts").update({
+          balance: newBal.toFixed(2), peak_balance: newPeak.toFixed(2),
+        }).eq("user_id", userId);
+        if (account.bot_id) balUpd.eq("bot_id", BOT_ID);
+        await balUpd;
+        // Keep in-memory account in sync for subsequent position sizing
+        account.balance = newBal.toFixed(2);
+        account.peak_balance = newPeak.toFixed(2);
+
+        // 4. Audit log
+        const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
+        console.log("[close]", JSON.stringify({
+          position_id: pos.position_id, symbol: pos.symbol, direction: pos.direction,
+          broker_connection_ids: mirroredIds, pnl: pnl.toFixed(2), exit_price: hitPrice,
+          close_reason: closeReason, close_source: "scanner_breach_check", scan_cycle_id: scanCycleId,
+        }));
+        try {
+          const auditRows = (mirroredIds.length > 0 ? mirroredIds : [null]).map((cid: string | null) => ({
+            user_id: userId, position_id: pos.position_id, symbol: pos.symbol,
+            broker_connection_id: cid, close_reason: closeReason, close_source: "scanner_breach_check",
+            pnl: pnl.toFixed(2), exit_price: hitPrice!.toString(),
+            scan_cycle_id: scanCycleId,
+            detail_json: { trigger: "price_breach", sl, tp, currentPrice, hitPrice },
+          }));
+          await supabase.from("close_audit_log").insert(auditRows);
+        } catch (auditErr: any) {
+          console.warn(`[close] audit insert failed for ${closeReason} ${pos.position_id}: ${auditErr?.message}`);
+        }
+
+        // 5. Mirror close to broker if live mode + mirrored connections exist
+        if (account.execution_mode === "live" && mirroredIds.length > 0) {
+          const { data: closeConns } = await supabase.from("broker_connections")
+            .select("*").eq("user_id", userId).eq("broker_type", "metaapi")
+            .eq("is_active", true).in("id", mirroredIds);
+          if (closeConns && closeConns.length > 0) {
+            for (const conn of closeConns) {
+              try {
+                let authToken = conn.api_key;
+                let metaAccountId = conn.account_id;
+                if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                  authToken = conn.account_id;
+                  metaAccountId = conn.api_key;
+                }
+                const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                if (!posRes.ok) { console.warn(`SL/TP close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
+                const brokerPositions: any[] = JSON.parse(posBody);
+                const commentTag = `paper:${pos.position_id}`;
+                const shortTag = commentTag.slice(0, 28);
+                const brokerPos = brokerPositions.find((bp: any) =>
+                  bp.comment && (bp.comment.includes(commentTag) || bp.comment.startsWith(shortTag))
+                );
+                if (!brokerPos) {
+                  console.log(`SL/TP close [${conn.display_name}]: no matching comment-tagged position for paper:${pos.position_id} — skipping`);
+                  continue;
+                }
+                const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
+                  method: "POST", headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }),
+                });
+                console.log(`SL/TP close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${pos.position_id}`);
+              } catch (brokerErr: any) {
+                console.warn(`SL/TP close [${conn.display_name}] error: ${brokerErr?.message}`);
+              }
+            }
+          }
+        } else if (account.execution_mode === "live" && mirroredIds.length === 0) {
+          console.log(`SL/TP close: paper:${pos.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
+        }
+
+        // 6. Telegram notification
+        if (telegramChatIds.length > 0) {
+          const emoji = closeReason === "tp_hit" ? "🎯" : "🛑";
+          const label = closeReason === "tp_hit" ? "TAKE PROFIT HIT" : "STOP LOSS HIT";
+          const pnlEmoji = pnl >= 0 ? "✅" : "❌";
+          const msg = `${emoji} <b>${label}</b>\n\n` +
+            `<b>Symbol:</b> ${pos.symbol} (${pos.direction.toUpperCase()})\n` +
+            `<b>Entry:</b> ${pos.entry_price}\n` +
+            `<b>Exit:</b> ${hitPrice}\n` +
+            `<b>P&L:</b> ${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)\n` +
+            `<b>Size:</b> ${pos.size} lots`;
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: msg }),
+              });
+            } catch (tgErr: any) {
+              console.warn(`Telegram ${closeReason} notify failed [${chatId}]:`, tgErr?.message);
+            }
+          }));
+        }
+
+        // Mark for removal from openPosArr
+        breachedIds.push(pos.position_id);
+        console.log(`[scan ${scanCycleId}] SL/TP BREACH: ${pos.symbol} ${pos.direction} closed at ${hitPrice} (${closeReason}), PnL: $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)`);
+      }
+    }
+    // Remove closed positions from openPosArr so they aren't processed further this cycle
+    if (breachedIds.length > 0) {
+      for (let i = openPosArr.length - 1; i >= 0; i--) {
+        if (breachedIds.includes(openPosArr[i].position_id)) {
+          openPosArr.splice(i, 1);
+        }
+      }
+      console.log(`[scan ${scanCycleId}] SL/TP breach check: closed ${breachedIds.length} position(s), ${openPosArr.length} remaining`);
+    }
+  } catch (breachErr: any) {
+    console.warn(`[scan ${scanCycleId}] SL/TP breach check error: ${breachErr?.message}`);
+  }
+
   // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
   let _fotsiResult: FOTSIResult | null = null;
   try {
