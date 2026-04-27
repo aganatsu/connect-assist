@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
-import { formatMoney } from "@/lib/marketData";
+import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
 import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
@@ -32,12 +32,8 @@ function priceAtR(direction: string, entry: number, sl: number, rMultiple: numbe
 }
 
 function getPipSize(symbol: string): number {
-  const s = symbol.toUpperCase();
-  if (s.includes("JPY") || s.includes("XAU") || s.includes("GOLD")) return 0.01;
-  if (s.includes("XAG") || s.includes("SILVER")) return 0.001;
-  if (s.includes("BTC") || s.includes("ETH")) return 1;
-  if (s.includes("US30") || s.includes("SPX") || s.includes("NAS")) return 1;
-  return 0.0001;
+  const inst = INSTRUMENTS.find(i => i.symbol === symbol);
+  return inst?.pipSize ?? 0.0001;
 }
 
 function formatPrice(price: number, symbol: string): string {
@@ -202,7 +198,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   // BE trigger level
   const riskDist = riskSl != null ? (direction === "long" ? entry - riskSl : riskSl - entry) : null;
   const beR = ef.breakEvenPips != null && riskDist && riskDist > 0
-    ? (ef.breakEvenPips * pipSize) / riskDist
+    ? Math.min(2.0, Math.max(1.0, (ef.breakEvenPips * pipSize) / riskDist))
     : null;
   const bePrice = beR != null && riskSl != null ? priceAtR(direction, entry, riskSl, beR) : null;
 

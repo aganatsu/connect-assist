@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
-import { tradesApi } from "@/lib/api";
+import { tradesApi, paperApi } from "@/lib/api";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { toast } from "sonner";
 import {
@@ -48,6 +48,11 @@ export default function JournalView() {
   const { data: tradesResponse, isLoading } = useQuery({
     queryKey: ["trades", journalPage],
     queryFn: () => tradesApi.list(journalPageSize, journalPage * journalPageSize),
+  });
+  const { data: accountStatus } = useQuery({
+    queryKey: ["paper-status-journal"],
+    queryFn: () => paperApi.status(),
+    staleTime: 60_000,
   });
   // Support both old (array) and new (paginated object) response shapes
   const trades: any[] = Array.isArray(tradesResponse) ? tradesResponse : (tradesResponse?.data ?? []);
@@ -112,17 +117,29 @@ export default function JournalView() {
   }, [filteredTrades]);
 
   const equityCurveData = useMemo(() => {
-    let cum = 10000;
-    return filteredTrades.filter((t: any) => t.status === "closed").map((t: any) => {
+    // Reconstruct starting balance: current balance minus total closed P&L
+    const closedTrades = filteredTrades.filter((t: any) => t.status === "closed");
+    const totalClosedPnl = closedTrades.reduce((s: number, t: any) => s + parseFloat(t.pnl_amount || "0"), 0);
+    const currentBalance = accountStatus?.balance ?? 10000;
+    let cum = currentBalance - totalClosedPnl;
+    // Sort oldest-first for chronological equity curve
+    const sorted = [...closedTrades].sort((a: any, b: any) => {
+      const da = a.exit_time || a.entry_time || "";
+      const db = b.exit_time || b.entry_time || "";
+      return da.localeCompare(db);
+    });
+    return sorted.map((t: any) => {
       cum += parseFloat(t.pnl_amount || "0");
-      return { date: t.entry_time?.split("T")[0] ?? "", equity: cum };
-    }).reverse();
-  }, [filteredTrades]);
+      const dateStr = (t.exit_time || t.entry_time)?.split("T")[0] ?? "";
+      return { date: dateStr, equity: cum };
+    });
+  }, [filteredTrades, accountStatus]);
 
   const dailyPnlData = useMemo(() => {
     const map: Record<string, number> = {};
     filteredTrades.filter((t: any) => t.status === "closed").forEach((t: any) => {
-      const date = t.entry_time?.split("T")[0] ?? "";
+      // Use exit_time (when P&L was realized) for daily grouping, consistent with backend
+      const date = (t.exit_time || t.entry_time)?.split("T")[0] ?? "";
       map[date] = (map[date] || 0) + parseFloat(t.pnl_amount || "0");
     });
     return Object.entries(map).map(([date, pnl]) => ({ date, pnl })).sort((a, b) => a.date.localeCompare(b.date));

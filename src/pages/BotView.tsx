@@ -479,8 +479,7 @@ export default function BotView() {
                         const current = parseFloat(p.currentPrice);
                         const sl = p.stopLoss ? parseFloat(p.stopLoss) : null;
                         // Original SL for R-multiple: prefer stored originalSL, else current SL if management hasn't fired
-                        const origSl = sr.originalSL != null ? parseFloat(sr.originalSL)
-                          : ((!ef.breakEvenActivated && !ef.trailingStopActivated) ? sl : sl);
+                        const origSl = sr.originalSL != null ? parseFloat(sr.originalSL) : sl;
                         // R-multiple calculation (uses original SL as risk denominator)
                         const riskPips = origSl !== null ? Math.abs(entry - origSl) / pipSize : 0;
                         const profitPips = p.direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;

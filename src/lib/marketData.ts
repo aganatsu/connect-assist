@@ -44,7 +44,7 @@ export const INSTRUMENTS: Instrument[] = [
   { symbol: 'XAG/USD', name: 'Silver / US Dollar', type: 'commodity', pipSize: 0.001, pointValue: 1, contractSize: 5000 },
   { symbol: 'US Oil', name: 'Crude Oil', type: 'commodity', pipSize: 0.01, pointValue: 1, contractSize: 1000 },
   // ── Crypto ──
-  { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', type: 'crypto', pipSize: 0.01, pointValue: 1, contractSize: 1 },
+  { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', type: 'crypto', pipSize: 1.0, pointValue: 1, contractSize: 1 },
   { symbol: 'ETH/USD', name: 'Ethereum / US Dollar', type: 'crypto', pipSize: 0.01, pointValue: 1, contractSize: 1 },
 ];
 
