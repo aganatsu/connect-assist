@@ -1,0 +1,156 @@
+{
+  "score": 39,
+  "rawScore": 8,
+  "direction": "long",
+  "bias": "bullish",
+  "strongFactorCount": 5,
+  "enabledMax": 20.5,
+  "tieredScoring": {
+    "tier1Count": 2,
+    "tier1Max": 4,
+    "tier2Count": 3,
+    "tier2Max": 7,
+    "tier3Count": 2,
+    "tier3Max": 9,
+    "tieredScore": 8,
+    "tieredMax": 20.5,
+    "tier1GatePassed": true,
+    "tier1GateReason": "Tier 1 gate passed: 2/4 core factors (Market Structure)",
+    "regimeGatePassed": true,
+    "regimeGateReason": "",
+    "spreadGatePassed": true,
+    "spreadGateReason": "Spread OK: 10.1% of ATR"
+  },
+  "factorSummary": [
+    {
+      "name": "Market Structure",
+      "present": true,
+      "weight": 2.5,
+      "tier": 1
+    },
+    {
+      "name": "Order Block",
+      "present": false,
+      "weight": 2,
+      "tier": 1
+    },
+    {
+      "name": "Fair Value Gap",
+      "present": false,
+      "weight": 2,
+      "tier": 1
+    },
+    {
+      "name": "Premium/Discount & Fib",
+      "present": true,
+      "weight": 2,
+      "tier": 1
+    },
+    {
+      "name": "Session Quality",
+      "present": true,
+      "weight": 1.5,
+      "tier": 2
+    },
+    {
+      "name": "Judas Swing",
+      "present": true,
+      "weight": 0.75,
+      "tier": 3
+    },
+    {
+      "name": "PD/PW Levels",
+      "present": false,
+      "weight": 1.5,
+      "tier": 2
+    },
+    {
+      "name": "Reversal Candle",
+      "present": false,
+      "weight": 1.5,
+      "tier": 2
+    },
+    {
+      "name": "Liquidity Sweep",
+      "present": true,
+      "weight": 1.5,
+      "tier": 2
+    },
+    {
+      "name": "Displacement",
+      "present": false,
+      "weight": 1,
+      "tier": 2
+    },
+    {
+      "name": "Breaker Block",
+      "present": false,
+      "weight": 1,
+      "tier": 3
+    },
+    {
+      "name": "Unicorn Model",
+      "present": false,
+      "weight": 1.5,
+      "tier": 3
+    },
+    {
+      "name": "SMT Divergence",
+      "present": false,
+      "weight": 1,
+      "tier": 3
+    },
+    {
+      "name": "Volume Profile",
+      "present": true,
+      "weight": 0.75,
+      "tier": 3
+    },
+    {
+      "name": "AMD Phase",
+      "present": false,
+      "weight": 1.5,
+      "tier": 3
+    },
+    {
+      "name": "Currency Strength",
+      "present": false,
+      "weight": 1.5,
+      "tier": 3
+    },
+    {
+      "name": "Daily Bias",
+      "present": false,
+      "weight": 1.5,
+      "tier": 3
+    },
+    {
+      "name": "Confluence Stack",
+      "present": true,
+      "weight": 1.5,
+      "tier": 2
+    },
+    {
+      "name": "Pullback Health",
+      "present": false,
+      "weight": 0.5,
+      "tier": 2
+    },
+    {
+      "name": "Power of 3 Combo",
+      "present": false,
+      "weight": 0,
+      "tier": 3
+    },
+    {
+      "name": "Regime Alignment",
+      "present": false,
+      "weight": 0
+    },
+    {
+      "name": "Spread Quality",
+      "present": false,
+      "weight": 0
+    }
+  ]
+}
