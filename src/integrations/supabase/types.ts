@@ -379,6 +379,7 @@ export type Database = {
           symbol: string
           take_profit: number | null
           take_profit_old: string | null
+          trade_overrides: Json | null
           trigger_price: string | null
           user_id: string
         }
@@ -408,6 +409,7 @@ export type Database = {
           symbol: string
           take_profit?: number | null
           take_profit_old?: string | null
+          trade_overrides?: Json | null
           trigger_price?: string | null
           user_id: string
         }
@@ -437,6 +439,7 @@ export type Database = {
           symbol?: string
           take_profit?: number | null
           take_profit_old?: string | null
+          trade_overrides?: Json | null
           trigger_price?: string | null
           user_id?: string
         }
@@ -630,6 +633,30 @@ export type Database = {
           symbol?: string
           take_profit?: number
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scan_history: {
+        Row: {
+          bot_id: string | null
+          created_at: string | null
+          id: string
+          payload: Json
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string | null
+          created_at?: string | null
+          id?: string
+          payload?: Json
+          user_id: string
+        }
+        Update: {
+          bot_id?: string | null
+          created_at?: string | null
+          id?: string
+          payload?: Json
           user_id?: string
         }
         Relationships: []
