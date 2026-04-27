@@ -35,6 +35,11 @@ import {
   detectOptimalStyle,
 } from "../_shared/smcAnalysis.ts";
 import {
+  generateInstrumentGamePlan, buildSessionGamePlan, filterTradeByGamePlan,
+  getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews,
+  type SessionGamePlan, type InstrumentGamePlan, type SessionName,
+} from "../_shared/gamePlan.ts";
+import {
   classifySetupType, manageOpenPositions,
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
@@ -4557,6 +4562,110 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
   console.log(`[scan ${scanCycleId}] Positions: ${currentOpenCount}/${maxOpen} — room for ${maxOpen - currentOpenCount} new entries, proceeding with full scan`);
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
+  // Runs every scan cycle. The game plan uses HTF data (D1/4H) already available
+  // from FOTSI candle fetches + per-pair fetches. Lightweight — no extra API calls.
+  // ═══════════════════════════════════════════════════════════════════════════
+  let activeGamePlan: SessionGamePlan | null = null;
+  try {
+    const currentSessionName = getCurrentSession();
+    const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
+    if (gamePlanEnabled) {
+      console.log(`[scan ${scanCycleId}] Game Plan: generating for ${currentSessionName} session...`);
+      const instrumentPlans: InstrumentGamePlan[] = [];
+      // Fetch HTF data for each enabled instrument (batched to respect rate limits)
+      const GP_BATCH_SIZE = 3;
+      const GP_BATCH_DELAY = 1200;
+      for (let i = 0; i < config.instruments.length; i += GP_BATCH_SIZE) {
+        const batch = config.instruments.slice(i, i + GP_BATCH_SIZE);
+        const batchPlans = await Promise.all(batch.map(async (sym: string) => {
+          try {
+            // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
+            const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
+              fetchCandles(sym, "1d", "1y").catch(() => [] as Candle[]),
+              fetchCandles(sym, "4h", "1mo").catch(() => [] as Candle[]),
+              fetchCandles(sym, getYahooInterval(config.entryTimeframe), getYahooRange(config.entryTimeframe)).catch(() => [] as Candle[]),
+              fetchCandles(sym, "1h", "5d").catch(() => [] as Candle[]),
+            ]);
+            if (gpDaily.length < 10 || gpEntry.length < 10) return null;
+            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName);
+          } catch (e: any) {
+            console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
+            return null;
+          }
+        }));
+        for (const plan of batchPlans) {
+          if (plan) instrumentPlans.push(plan);
+        }
+        if (i + GP_BATCH_SIZE < config.instruments.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
+      }
+      if (instrumentPlans.length > 0) {
+        activeGamePlan = buildSessionGamePlan(currentSessionName, instrumentPlans);
+        console.log(`[scan ${scanCycleId}] Game Plan: ${currentSessionName} — ${activeGamePlan.focusPairs.length} focus pairs: [${activeGamePlan.focusPairs.join(", ")}]`);
+        for (const plan of instrumentPlans) {
+          const emoji = plan.bias === "bullish" ? "🟢" : plan.bias === "bearish" ? "🔴" : "⚪";
+          console.log(`[scan ${scanCycleId}] Game Plan ${emoji} ${plan.symbol}: ${plan.bias} (${plan.biasConfidence}%) | DOL: ${plan.dol?.description || "none"} | Regime: ${plan.regime} | Trade: ${plan.tradeable}`);
+        }
+        // Fetch economic calendar events and enrich game plan with news awareness
+        try {
+          const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+          const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+          const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
+          if (newsEvents.length > 0) {
+            activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
+            console.log(`[scan ${scanCycleId}] Game Plan: ${newsEvents.length} news events found (${newsEvents.filter(e => e.impact === "high").length} high-impact)`);
+          } else {
+            console.log(`[scan ${scanCycleId}] Game Plan: no relevant news events today`);
+          }
+        } catch (e: any) {
+          console.warn(`[scan ${scanCycleId}] Game Plan: news fetch error (non-fatal): ${e?.message}`);
+        }
+        // Store game plan in scan_logs for dashboard retrieval
+        await supabase.from("scan_logs").insert({
+          user_id: userId,
+          bot_id: BOT_ID,
+          pairs_scanned: 0,
+          signals_found: 0,
+          trades_placed: 0,
+          details_json: {
+            type: "game_plan",
+            session: currentSessionName,
+            generated_at: activeGamePlan.generatedAt,
+            focus_pairs: activeGamePlan.focusPairs,
+            plans: activeGamePlan.plans.map(p => ({
+              symbol: p.symbol, bias: p.bias, biasConfidence: p.biasConfidence,
+              biasReasoning: p.biasReasoning, dol: p.dol, regime: p.regime,
+              amdPhase: p.amdPhase, zone: p.zone, htfTrend: p.htfTrend,
+              h4Trend: p.h4Trend, tradeable: p.tradeable, skipReason: p.skipReason,
+              scenarios: p.scenarios, keyLevels: p.keyLevels.slice(0, 10),
+            })),
+            newsEvents: activeGamePlan.newsEvents || [],
+            summary: activeGamePlan.summary,
+          },
+        });
+        // Send Telegram notification with game plan summary
+        if (telegramChatIds.length > 0 && activeGamePlan.summary) {
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: activeGamePlan!.summary }),
+              });
+            } catch (e: any) {
+              console.warn(`[game-plan] Telegram send error [${chatId}]: ${e?.message}`);
+            }
+          }));
+        }
+      } else {
+        console.warn(`[scan ${scanCycleId}] Game Plan: no valid plans generated (insufficient data)`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
+  }
+
   for (const pair of config.instruments) {
     if (!YAHOO_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
@@ -4943,8 +5052,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap,
       );
+      // ── Game Plan Filter Gate ──
+      // Check if the signal direction aligns with the session game plan bias.
+      // Misaligned trades are rejected with a clear reason.
+      const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
+      if (!gpFilter.allowed) {
+        gates.push({ passed: false, reason: gpFilter.reason });
+        console.log(`[scan ${scanCycleId}] ❌ ${pair}: ${gpFilter.reason}`);
+      } else if (activeGamePlan) {
+        gates.push({ passed: true, reason: gpFilter.reason });
+      }
       const allPassed = gates.every(g => g.passed);
       detail.gates = gates;
+      detail.gamePlan = gpFilter; // attach game plan filter result to scan detail
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs
