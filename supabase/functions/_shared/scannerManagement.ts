@@ -374,8 +374,10 @@ export async function manageOpenPositions(
         // Management respects the current pos.stop_loss and pos.take_profit values.
       }
 
-      // Calculate current R-multiple (how many risk units in profit)
-      const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
+      // Calculate current R-multiple using ORIGINAL SL (not the moved SL after BE/trailing)
+      // signalData.originalSL is stored at trade open time; fall back to current SL for legacy trades
+      const originalSl = signalData.originalSL != null ? parseFloat(signalData.originalSL) : sl;
+      const riskPips = Math.abs(entryPrice - originalSl) / spec.pipSize;
       const profitPips = pos.direction === "long"
         ? (currentPrice - entryPrice) / spec.pipSize
         : (entryPrice - currentPrice) / spec.pipSize;

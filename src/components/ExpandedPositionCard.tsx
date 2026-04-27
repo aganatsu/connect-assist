@@ -162,31 +162,38 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
   const pipSize = getPipSize(p.symbol);
 
   // Original SL for R-multiple calculation
-  const originalSl = sl != null ? (
-    ef.trailingStopActivated && ef.trailingStopPips
-      ? (direction === "long" ? entry - ef.trailingStopPips * pipSize : entry + ef.trailingStopPips * pipSize)
-      : sl
-  ) : null;
+  // Priority: 1) sr.originalSL (stored at trade open — new trades)
+  //           2) If BE/trailing haven't fired yet, current SL IS the original
+  //           3) Fall back to current SL (best we can do for legacy trades)
+  const storedOriginalSl = sr.originalSL != null ? parseFloat(sr.originalSL) : null;
+  const originalSl = storedOriginalSl
+    ?? ((!ef.breakEvenActivated && !ef.trailingStopActivated) ? sl : null)
+    ?? sl; // last resort: use current SL (may be moved, but better than a bogus number)
   const riskSl = originalSl ?? sl;
 
   // R-multiple (current floating R based on live price)
   const currentR = riskSl != null ? calcRMultiple(direction, entry, current, riskSl) : null;
 
   // Locked R (guaranteed R based on where trailing SL sits, not current price)
-  const lockedR = (ef.trailingStopActivated && sl != null && riskSl != null)
+  // Only meaningful when trailing is active AND SL is on the profit side of entry
+  const rawLockedR = (ef.trailingStopActivated && sl != null && riskSl != null)
     ? calcRMultiple(direction, entry, sl, riskSl)
     : null;
+  // Cap: locked R can never exceed current R (you can't lock more than you have)
+  const lockedR = (rawLockedR != null && currentR != null)
+    ? Math.min(rawLockedR, currentR)
+    : rawLockedR;
 
   // Locked P&L in dollars (what you'd get if trailing SL is hit)
-  // Uses the same formula as current P&L but with SL as exit price instead of current price
   const lockedPnl = (ef.trailingStopActivated && sl != null)
     ? (() => {
         const diff = direction === "long" ? sl - entry : entry - sl;
         const pipsLocked = diff / pipSize;
-        // Approximate dollar value: use the ratio of current pnl to current pips
         const currentPnlPips = direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;
         if (Math.abs(currentPnlPips) > 0.001 && p.pnl != null) {
-          return (pipsLocked / currentPnlPips) * p.pnl;
+          const raw = (pipsLocked / currentPnlPips) * p.pnl;
+          // Cap: locked P&L can never exceed current floating P&L
+          return p.pnl >= 0 ? Math.min(raw, p.pnl) : Math.max(raw, p.pnl);
         }
         return null;
       })()

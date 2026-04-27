@@ -470,15 +470,19 @@ export default function BotView() {
                     <tbody>
                       {botPositions.map((p: any, idx: number) => {
                         // Parse exitFlags for management columns
-                        let ef: any = {};
-                        try { const parsed = JSON.parse(p.signalReason || "{}"); ef = parsed.exitFlags || {}; } catch {}
+                        let sr: any = {};
+                        try { sr = JSON.parse(p.signalReason || "{}"); } catch {}
+                        let ef: any = sr.exitFlags || {};
                         const inst = INSTRUMENTS.find((i: any) => i.symbol === p.symbol);
                         const pipSize = inst?.pipSize || 0.0001;
                         const entry = parseFloat(p.entryPrice);
                         const current = parseFloat(p.currentPrice);
                         const sl = p.stopLoss ? parseFloat(p.stopLoss) : null;
-                        // R-multiple calculation
-                        const riskPips = sl !== null ? Math.abs(entry - sl) / pipSize : 0;
+                        // Original SL for R-multiple: prefer stored originalSL, else current SL if management hasn't fired
+                        const origSl = sr.originalSL != null ? parseFloat(sr.originalSL)
+                          : ((!ef.breakEvenActivated && !ef.trailingStopActivated) ? sl : sl);
+                        // R-multiple calculation (uses original SL as risk denominator)
+                        const riskPips = origSl !== null ? Math.abs(entry - origSl) / pipSize : 0;
                         const profitPips = p.direction === "long" ? (current - entry) / pipSize : (entry - current) / pipSize;
                         const rMult = riskPips > 0 ? profitPips / riskPips : 0;
                         // BE status
