@@ -1589,7 +1589,7 @@ function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: 
             <span className="text-xs font-medium">Spread Quality</span>
             <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-mono text-muted-foreground">info</Badge>
           </div>
-          <p className="text-[10px] text-muted-foreground">Shows indicative spread-to-ATR ratio from Yahoo Finance data. Does not block trades — your actual broker spread (ECN/raw) is checked at execution time. Displayed for awareness only.</p>
+          <p className="text-[10px] text-muted-foreground">Shows indicative spread-to-ATR ratio from market data. Does not block trades — your actual broker spread (ECN/raw) is checked at execution time. Displayed for awareness only.</p>
         </div>
       </div>
     </div>

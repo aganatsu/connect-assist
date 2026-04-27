@@ -27,7 +27,7 @@ import { botConfigApi, backtestApi } from "@/lib/api";
 interface BacktestTrade {
   id: string; symbol: string; direction: "long" | "short";
   entryTime: string; exitTime: string; entryPrice: number; exitPrice: number;
-  size: number; pnl: number; pnlPips: number; confluenceScore: number;
+  size: number; pnl: number; pnlPips: number; commission: number; confluenceScore: number;
   closeReason: string;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
@@ -40,6 +40,7 @@ interface BacktestStats {
   bestTrade: number; worstTrade: number;
   consecutiveWins: number; consecutiveLosses: number;
   longsWinRate: number; shortsWinRate: number; tradesPerMonth: number;
+  totalCommission: number; netPnl: number;
 }
 interface BacktestResponse {
   trades: BacktestTrade[];
@@ -51,7 +52,7 @@ interface BacktestResponse {
   diagnostics?: {
     totalCandlesFetched: number;
     totalCandlesEvaluated: number;
-    skippedNoYahooSymbol: number;
+    skippedUnsupportedSymbol: number;
     skippedInsufficientData: number;
     skippedWeekend: number;
     skippedSession: number;
@@ -74,6 +75,21 @@ interface BacktestResponse {
     enabledDays: number[];
     entryTimeframe: string;
     scanIntervalMinutes: number;
+  };
+  walkForward?: {
+    folds: {
+      fold: number; startDate: string; endDate: string;
+      trades: number; wins: number; losses: number; winRate: number;
+      totalPnl: number; profitFactor: number; maxDrawdownPct: number;
+      sharpeRatio: number; avgRR: number;
+    }[];
+    summary: {
+      totalFolds: number; activeFolds: number; profitableFolds: number;
+      consistencyScore: number; winRateStdDev: number;
+      bestFold: { fold: number; pnl: number; winRate: number } | null;
+      worstFold: { fold: number; pnl: number; winRate: number } | null;
+      verdict: "robust" | "moderate" | "fragile";
+    };
   };
 }
 
@@ -176,6 +192,8 @@ export default function Backtest() {
   const [tradingStyle, setTradingStyle] = useState("day_trader");
   const [slippagePips, setSlippagePips] = useState(0.5);
   const [spreadPips, setSpreadPips] = useState(0); // 0 = use per-instrument typicalSpread from SPECS
+  const [commissionPerLot, setCommissionPerLot] = useState(0); // USD per standard lot round-trip (e.g. 7 for ECN)
+  const [walkForwardFolds, setWalkForwardFolds] = useState(0); // 0=disabled, 2-20 folds
   const [selectedSymbols, setSelectedSymbols] = useState(["EUR/USD", "GBP/USD", "XAU/USD"]);
 
   // UI state
@@ -312,7 +330,8 @@ export default function Backtest() {
     try {
       const response = await backtestApi.start({
         instruments: selectedSymbols, startDate, endDate, startingBalance,
-        config, tradingStyle, slippagePips, spreadPips,
+        config, tradingStyle, slippagePips, spreadPips, commissionPerLot,
+        ...(walkForwardFolds >= 2 ? { walkForwardFolds } : {}),
       });
       if ((response as any)?.error) throw new Error((response as any).error);
       const runId = response.runId;
@@ -327,7 +346,7 @@ export default function Backtest() {
       setProgressPct(0);
       setIsRunning(false);
     }
-  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, config, startPolling]);
+  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, config, startPolling]);
 
   // ── Derived Data ──
   const monthlyPnl = useMemo(() => {
@@ -472,6 +491,18 @@ export default function Backtest() {
                   <input type="number" value={spreadPips} onChange={e => setSpreadPips(Number(e.target.value))}
                     min={0} max={10} step={0.1} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
                   <span className="text-[9px] text-muted-foreground">pips (0=auto)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[10px] text-muted-foreground uppercase">Commission</label>
+                  <input type="number" value={commissionPerLot} onChange={e => setCommissionPerLot(Number(e.target.value))}
+                    min={0} max={50} step={0.5} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
+                  <span className="text-[9px] text-muted-foreground">$/lot RT</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-[10px] text-muted-foreground uppercase">Walk-Forward</label>
+                  <input type="number" value={walkForwardFolds} onChange={e => setWalkForwardFolds(Number(e.target.value))}
+                    min={0} max={20} step={1} className="w-16 bg-secondary border border-border rounded px-2 py-1 text-xs" />
+                  <span className="text-[9px] text-muted-foreground">folds (0=off)</span>
                 </div>
                 <Separator orientation="vertical" className="h-5" />
                 <div className="flex items-center gap-2">
@@ -948,18 +979,18 @@ export default function Backtest() {
               priority: 7,
               icon: "\u{1F4C9}",
               title: `${d.skippedInsufficientData} instruments had insufficient data`,
-              detail: `Yahoo Finance provides limited historical data for intraday timeframes (~60 days for 15m, ~2 years for 1h).`,
+              detail: `Market data providers have limited historical data for intraday timeframes (~60 days for 15m, ~2 years for 1h).`,
               action: `Shorten your date range, or switch to 1h timeframe for longer backtests. Daily timeframe has the most historical data.`,
             });
           }
 
-          // Advice 8: No Yahoo symbol
-          if (d.skippedNoYahooSymbol > 0) {
+          // Advice 8: No supported symbol
+          if (d.skippedUnsupportedSymbol > 0) {
             advice.push({
               priority: 8,
               icon: "\u274C",
-              title: `${d.skippedNoYahooSymbol} instruments have no Yahoo symbol mapping`,
-              detail: `These instruments were skipped because they don't have a Yahoo Finance ticker mapping in the backend.`,
+              title: `${d.skippedUnsupportedSymbol} instruments have no market data provider mapping`,
+              detail: `These instruments were skipped because they don't have a supported ticker mapping in the backend.`,
               action: `Remove unsupported instruments from your selection. Stick to major forex pairs, popular indices, gold, and BTC/ETH.`,
             });
           }
@@ -1092,7 +1123,7 @@ export default function Backtest() {
                   {[
                     { label: "Signals Passed", value: d.signalsGenerated, warn: d.signalsGenerated === 0 },
                     { label: "Trades Opened", value: d.tradesOpened, warn: d.tradesOpened === 0 },
-                    { label: "No Yahoo Symbol", value: d.skippedNoYahooSymbol, warn: d.skippedNoYahooSymbol > 0 },
+                    { label: "Unsupported Symbol", value: d.skippedUnsupportedSymbol, warn: d.skippedUnsupportedSymbol > 0 },
                   ].map(item => (
                     <div key={item.label} className={`px-3 py-2 border rounded text-center ${item.warn ? 'border-warning/50 bg-warning/10' : 'border-border/40'}`}>
                       <p className="text-[10px] text-muted-foreground">{item.label}</p>
@@ -1166,6 +1197,7 @@ export default function Backtest() {
                   { label: "Avg Loss", value: formatMoney(-results.stats.avgLoss), color: "text-destructive" },
                   { label: "Longs WR", value: `${results.stats.longsWinRate.toFixed(1)}%`, color: results.stats.longsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
                   { label: "Shorts WR", value: `${results.stats.shortsWinRate.toFixed(1)}%`, color: results.stats.shortsWinRate >= 50 ? "text-success" : "text-muted-foreground" },
+                  ...(results.stats.totalCommission > 0 ? [{ label: "Total Commission", value: formatMoney(-results.stats.totalCommission), color: "text-warning", sub: `${results.stats.totalTrades} trades` }] : []),
                 ].map(s => (
                   <Card key={s.label} className="border-border/30">
                     <CardContent className="pt-2.5 pb-2">
@@ -1176,6 +1208,64 @@ export default function Backtest() {
                   </Card>
                 ))}
               </div>
+
+              {/* Walk-Forward Validation Results */}
+              {results.walkForward && (
+                <Card className="border-border/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <BarChart3 className="h-4 w-4 text-cyan" /> Walk-Forward Validation
+                      <span className={`ml-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        results.walkForward.summary.verdict === "robust" ? "bg-success/20 text-success" :
+                        results.walkForward.summary.verdict === "moderate" ? "bg-warning/20 text-warning" :
+                        "bg-destructive/20 text-destructive"
+                      }`}>{results.walkForward.summary.verdict}</span>
+                      <span className="text-[10px] text-muted-foreground ml-1">
+                        {results.walkForward.summary.consistencyScore}% consistency ({results.walkForward.summary.profitableFolds}/{results.walkForward.summary.activeFolds} profitable)
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-[10px]">
+                        <thead>
+                          <tr className="border-b border-border/30">
+                            <th className="text-left py-1 px-2 text-muted-foreground">Fold</th>
+                            <th className="text-left py-1 px-2 text-muted-foreground">Period</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">Trades</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">Win Rate</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">P&L</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">PF</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">Max DD</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">Sharpe</th>
+                            <th className="text-right py-1 px-2 text-muted-foreground">Avg RR</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {results.walkForward.folds.map((f: any) => (
+                            <tr key={f.fold} className={`border-b border-border/10 ${f.totalPnl > 0 ? '' : 'opacity-60'}`}>
+                              <td className="py-1 px-2 font-mono">{f.fold}</td>
+                              <td className="py-1 px-2 text-muted-foreground">{f.startDate} → {f.endDate}</td>
+                              <td className="py-1 px-2 text-right font-mono">{f.trades}</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.winRate >= 50 ? 'text-success' : 'text-destructive'}`}>{f.winRate.toFixed(1)}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.totalPnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(f.totalPnl, true)}</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.profitFactor >= 1.5 ? 'text-success' : f.profitFactor >= 1 ? 'text-warning' : 'text-destructive'}`}>{f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</td>
+                              <td className="py-1 px-2 text-right font-mono text-destructive">{f.maxDrawdownPct.toFixed(1)}%</td>
+                              <td className={`py-1 px-2 text-right font-mono ${f.sharpeRatio >= 1 ? 'text-success' : 'text-muted-foreground'}`}>{f.sharpeRatio.toFixed(2)}</td>
+                              <td className="py-1 px-2 text-right font-mono">{f.avgRR.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-2 flex gap-4 text-[9px] text-muted-foreground">
+                      <span>Win Rate StdDev: {results.walkForward.summary.winRateStdDev}%</span>
+                      {results.walkForward.summary.bestFold && <span>Best: Fold {results.walkForward.summary.bestFold.fold} ({formatMoney(results.walkForward.summary.bestFold.pnl, true)})</span>}
+                      {results.walkForward.summary.worstFold && <span>Worst: Fold {results.walkForward.summary.worstFold.fold} ({formatMoney(results.walkForward.summary.worstFold.pnl, true)})</span>}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Equity Curve + Monthly P&L */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

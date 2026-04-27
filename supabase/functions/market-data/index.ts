@@ -2,9 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 
-// market-data: unified candle/quote endpoint with MetaAPI → Twelve Data → Yahoo failover.
+// market-data: unified candle/quote endpoint with MetaAPI → Twelve Data → Polygon.io failover.
 // If the caller is authenticated and has an active MetaAPI broker connection, we prefer it.
-// Otherwise we fall back to Twelve Data, then Yahoo.
+// Otherwise we fall back to Twelve Data, then Polygon.io.
 
 async function loadBrokerConn(req: Request): Promise<BrokerConn | null> {
   const authHeader = req.headers.get("Authorization");

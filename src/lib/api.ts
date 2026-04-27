@@ -241,7 +241,7 @@ export async function invokeFunction<T = any>(
 }
 
 // ── Market Data ──
-export type CandleSource = "metaapi" | "twelvedata" | "yahoo" | "none" | "unknown";
+export type CandleSource = "metaapi" | "twelvedata" | "polygon" | "none" | "unknown";
 export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
 
 // Low-level fetch so we can read the x-data-source response header
@@ -269,7 +269,7 @@ async function fetchMarketData(body: Record<string, any>): Promise<{ data: any; 
 export const marketApi = {
   candles: (symbol: string, interval: string, outputsize = 200) =>
     invokeFunction("market-data", { action: "candles", symbol, interval, outputsize }),
-  // Returns candles plus the source ("metaapi" | "twelvedata" | "yahoo") so the UI
+  // Returns candles plus the source ("metaapi" | "twelvedata" | "polygon") so the UI
   // can surface where prices are actually coming from.
   candlesWithMeta: async (symbol: string, interval: string, outputsize = 200): Promise<CandlesWithMeta> => {
     const { data, source } = await fetchMarketData({ action: "candles", symbol, interval, outputsize });
@@ -367,6 +367,8 @@ export const backtestApi = {
     tradingStyle?: string;
     slippagePips?: number;
     spreadPips?: number;
+    commissionPerLot?: number;
+    walkForwardFolds?: number;
   }) => invokeFunction<{ runId: string; status: string; message: string }>("backtest-engine", { action: "start", ...params }),
   status: (runId: string) => invokeFunction<{
     id: string; status: string; progress: number; progress_message: string;

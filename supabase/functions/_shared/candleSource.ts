@@ -2,7 +2,7 @@
 // Order of preference:
 //   1. MetaAPI (broker feed) — same prices as execution, zero drift
 //   2. Twelve Data — real FX/indices/crypto, documented API
-//   3. Yahoo Finance — last-resort fallback (15-min delayed, undocumented)
+//   3. Polygon.io — paid fallback (real-time forex/indices/crypto, documented API)
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
@@ -23,7 +23,7 @@ export interface Candle {
 const _tdRequestTimestamps: number[] = [];
 const TD_RATE_LIMIT = 50;   // 50 of 55 — 5 credit safety margin
 const TD_RATE_WINDOW_MS = 60_000;
-const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Yahoo
+const TD_MAX_WAIT_MS = 25_000; // Wait up to 25s before falling back to Polygon
 let _tdThrottleCount = 0;      // Track how many times we throttled this invocation
 
 async function waitForTwelveDataSlot(): Promise<boolean> {
@@ -36,9 +36,9 @@ async function waitForTwelveDataSlot(): Promise<boolean> {
     // Calculate wait time until oldest request expires
     const waitMs = _tdRequestTimestamps[0] + TD_RATE_WINDOW_MS - now + 200; // +200ms buffer
     if (waitMs > TD_MAX_WAIT_MS) {
-      // If wait is too long, skip to Yahoo fallback instead of blocking
+      // If wait is too long, skip to Polygon fallback instead of blocking
       _tdThrottleCount++;
-      console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms (>${TD_MAX_WAIT_MS}ms), skipping to Yahoo (throttle #${_tdThrottleCount})`);
+      console.warn(`[candleSource] TwelveData rate limit: would wait ${waitMs}ms (>${TD_MAX_WAIT_MS}ms), skipping to Polygon (throttle #${_tdThrottleCount})`);
       return false;
     }
     _tdThrottleCount++;
@@ -100,21 +100,28 @@ export interface BrokerConn {
 }
 
 // ─── Symbol mapping per provider ─────────────────────────────────────
-const YAHOO_SYMBOLS: Record<string, string> = {
-  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
-  "USD/CHF": "USDCHF=X",
-  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
-  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
-  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
-  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
-  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
-  "AUD/CHF": "AUDCHF=X", "AUD/NZD": "AUDNZD=X", "CAD/CHF": "CADCHF=X",
-  "CHF/JPY": "CHFJPY=X", "NZD/CAD": "NZDCAD=X", "NZD/CHF": "NZDCHF=X",
-  "NZD/JPY": "NZDJPY=X",
-  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
-  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
+// Polygon.io uses C:EURUSD for forex, I:DJI for indices, X:BTCUSD for crypto,
+// and standard tickers for commodities futures.
+const POLYGON_SYMBOLS: Record<string, string> = {
+  // Forex Majors
+  "EUR/USD": "C:EURUSD", "GBP/USD": "C:GBPUSD", "USD/JPY": "C:USDJPY",
+  "AUD/USD": "C:AUDUSD", "NZD/USD": "C:NZDUSD", "USD/CAD": "C:USDCAD",
+  "USD/CHF": "C:USDCHF",
+  // Forex Crosses
+  "EUR/GBP": "C:EURGBP", "EUR/JPY": "C:EURJPY", "GBP/JPY": "C:GBPJPY",
+  "EUR/AUD": "C:EURAUD", "EUR/CAD": "C:EURCAD", "EUR/CHF": "C:EURCHF",
+  "EUR/NZD": "C:EURNZD", "GBP/AUD": "C:GBPAUD", "GBP/CAD": "C:GBPCAD",
+  "GBP/CHF": "C:GBPCHF", "GBP/NZD": "C:GBPNZD", "AUD/CAD": "C:AUDCAD",
+  "AUD/JPY": "C:AUDJPY", "CAD/JPY": "C:CADJPY",
+  "AUD/CHF": "C:AUDCHF", "AUD/NZD": "C:AUDNZD", "CAD/CHF": "C:CADCHF",
+  "CHF/JPY": "C:CHFJPY", "NZD/CAD": "C:NZDCAD", "NZD/CHF": "C:NZDCHF",
+  "NZD/JPY": "C:NZDJPY",
+  // Indices (Polygon uses I: prefix for indices)
+  "US30": "I:DJI", "NAS100": "I:NDX", "SPX500": "I:SPX",
+  // Commodities (Polygon uses standard futures tickers)
+  "XAU/USD": "C:XAUUSD", "XAG/USD": "C:XAGUSD", "US Oil": "C:USOIL",
+  // Crypto
+  "BTC/USD": "X:BTCUSD", "ETH/USD": "X:ETHUSD",
 };
 
 // Twelve Data uses standard pair format with a slash (e.g. "EUR/USD") for FX,
@@ -152,21 +159,28 @@ function canonicalInterval(input: string): string {
   return m[input] || input;
 }
 
-function yahooInterval(canon: string): string {
-  // Yahoo doesn't natively support 4h — caller aggregates from 1h
-  const m: Record<string, string> = {
-    "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-    "1h": "60m", "4h": "60m", "1d": "1d", "1w": "1wk",
+// Polygon.io uses {multiplier}/{timespan} format: e.g. 15/minute, 1/hour, 1/day
+function polygonTimespan(canon: string): { multiplier: number; timespan: string } {
+  const m: Record<string, { multiplier: number; timespan: string }> = {
+    "1m": { multiplier: 1, timespan: "minute" },
+    "5m": { multiplier: 5, timespan: "minute" },
+    "15m": { multiplier: 15, timespan: "minute" },
+    "30m": { multiplier: 30, timespan: "minute" },
+    "1h": { multiplier: 1, timespan: "hour" },
+    "4h": { multiplier: 4, timespan: "hour" },
+    "1d": { multiplier: 1, timespan: "day" },
+    "1w": { multiplier: 1, timespan: "week" },
   };
-  return m[canon] || "15m";
+  return m[canon] || { multiplier: 15, timespan: "minute" };
 }
 
-function yahooRange(canon: string): string {
-  const m: Record<string, string> = {
-    "1m": "1d", "5m": "5d", "15m": "5d", "30m": "5d",
-    "1h": "30d", "4h": "60d", "1d": "1y", "1w": "2y",
+// How far back to look for each canonical interval
+function polygonLookbackDays(canon: string): number {
+  const m: Record<string, number> = {
+    "1m": 1, "5m": 5, "15m": 7, "30m": 14,
+    "1h": 30, "4h": 60, "1d": 365, "1w": 730,
   };
-  return m[canon] || "5d";
+  return m[canon] || 7;
 }
 
 function twelveDataInterval(canon: string): string {
@@ -452,7 +466,7 @@ async function twelveDataCandles(
 
   // H8: Check rate limit before making request
   const hasSlot = await waitForTwelveDataSlot();
-  if (!hasSlot) return []; // Skip to Yahoo fallback
+  if (!hasSlot) return []; // Skip to Polygon fallback
 
   const interval = twelveDataInterval(canon);
   const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
@@ -502,39 +516,69 @@ async function twelveDataCandles(
   }
 }
 
-// ─── Yahoo Finance ────────────────────────────────────────────────────
-async function yahooCandles(
+/// ─── Polygon.io ───────────────────────────────────────────────────
+async function polygonCandles(
   symbol: string,
   canon: string,
+  limit: number,
 ): Promise<Candle[]> {
-  const ySym = YAHOO_SYMBOLS[symbol];
-  if (!ySym) return [];
-  const interval = yahooInterval(canon);
-  const range = yahooRange(canon);
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ySym}?interval=${interval}&range=${range}`;
+  const apiKey = Deno.env.get("POLYGON_API_KEY");
+  if (!apiKey) return [];
+  const pgSym = POLYGON_SYMBOLS[symbol];
+  if (!pgSym) return [];
+
+  const { multiplier, timespan } = polygonTimespan(canon);
+  const lookbackDays = polygonLookbackDays(canon);
+  const to = new Date();
+  const from = new Date(to.getTime() - lookbackDays * 86_400_000);
+  const fromStr = from.toISOString().slice(0, 10);
+  const toStr = to.toISOString().slice(0, 10);
+
+  // Polygon Aggregates (Bars) endpoint
+  // https://polygon.io/docs/forex/get_v2_aggs_ticker__forexticker__range__multiplier___timespan___from___to
+  const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(pgSym)}/range/${multiplier}/${timespan}/${fromStr}/${toStr}?adjusted=true&sort=asc&limit=${Math.min(limit, 50000)}&apiKey=${apiKey}`;
+
   try {
-    const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const result = data?.chart?.result?.[0];
-    if (!result) return [];
-    const ts: number[] = result.timestamp || [];
-    const q = result.indicators?.quote?.[0];
-    if (!q) return [];
-    const candles: Candle[] = [];
-    for (let i = 0; i < ts.length; i++) {
-      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i];
-      if (o == null || h == null || l == null || c == null) continue;
-      candles.push({
-        datetime: new Date(ts[i] * 1000).toISOString(),
-        open: Number(o), high: Number(h), low: Number(l), close: Number(c),
-        volume: q.volume?.[i] ?? undefined,
-      });
+    const res = await fetch(url);
+    if (res.status === 429) {
+      console.warn(`[candleSource] Polygon 429 rate limited for ${symbol}, backing off 3s`);
+      await new Promise(r => setTimeout(r, 3000));
+      const retryRes = await fetch(url);
+      if (!retryRes.ok) return [];
+      const retryData = await retryRes.json();
+      if (!Array.isArray(retryData?.results)) return [];
+      return retryData.results.map((bar: any) => ({
+        datetime: new Date(bar.t).toISOString(),
+        open: Number(bar.o), high: Number(bar.h), low: Number(bar.l), close: Number(bar.c),
+        volume: bar.v != null ? Number(bar.v) : undefined,
+      })).filter((c: Candle) =>
+        Number.isFinite(c.open) && Number.isFinite(c.high) &&
+        Number.isFinite(c.low) && Number.isFinite(c.close)
+      );
     }
-    return candles;
+    if (!res.ok) {
+      console.warn(`[candleSource] Polygon ${res.status} for ${symbol} ${canon}`);
+      return [];
+    }
+    const data = await res.json();
+    if (data?.status === "ERROR" || !Array.isArray(data?.results)) {
+      if (data?.error) console.warn(`[candleSource] Polygon: ${data.error}`);
+      return [];
+    }
+    return data.results.map((bar: any) => ({
+      datetime: new Date(bar.t).toISOString(),
+      open: Number(bar.o),
+      high: Number(bar.h),
+      low: Number(bar.l),
+      close: Number(bar.c),
+      volume: bar.v != null ? Number(bar.v) : undefined,
+    })).filter((c: Candle) =>
+      Number.isFinite(c.open) && Number.isFinite(c.high) &&
+      Number.isFinite(c.low) && Number.isFinite(c.close)
+    );
   } catch (e: any) {
-    console.warn(`[candleSource] Yahoo fetch error: ${e?.message}`);
-    return [];
+    console.warn(`[candleSource] Polygon fetch error: ${e?.message}`);
+     return [];
   }
 }
 
@@ -569,7 +613,7 @@ export interface FetchOptions {
 
 export interface FetchResult {
   candles: Candle[];
-  source: "metaapi" | "twelvedata" | "yahoo" | "none";
+  source: "metaapi" | "twelvedata" | "polygon" | "none";
 }
 
 // ─── Per-scan source tally (opt-in) ──────────────────────────────────
@@ -578,22 +622,22 @@ export interface FetchResult {
 export interface SourceTally {
   metaapi: number;
   twelvedata: number;
-  yahoo: number;
+  polygon: number;
   none: number;
-  primary: "metaapi" | "twelvedata" | "yahoo" | "none";
+  primary: "metaapi" | "twelvedata" | "polygon" | "none";
 }
-let _activeTally: { metaapi: number; twelvedata: number; yahoo: number; none: number } | null = null;
+let _activeTally: { metaapi: number; twelvedata: number; polygon: number; none: number } | null = null;
 
 export function beginScanSourceTally(): void {
-  _activeTally = { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+  _activeTally = { metaapi: 0, twelvedata: 0, polygon: 0, none: 0 };
 }
 
 export function endScanSourceTally(): SourceTally {
-  const t = _activeTally ?? { metaapi: 0, twelvedata: 0, yahoo: 0, none: 0 };
+  const t = _activeTally ?? { metaapi: 0, twelvedata: 0, polygon: 0, none: 0 };
   _activeTally = null;
   // "primary" = the source that served the most candle requests this cycle
-  const entries: ["metaapi" | "twelvedata" | "yahoo" | "none", number][] = [
-    ["metaapi", t.metaapi], ["twelvedata", t.twelvedata], ["yahoo", t.yahoo], ["none", t.none],
+  const entries: ["metaapi" | "twelvedata" | "polygon" | "none", number][] = [
+    ["metaapi", t.metaapi], ["twelvedata", t.twelvedata], ["polygon", t.polygon], ["none", t.none],
   ];
   entries.sort((a, b) => b[1] - a[1]);
   return { ...t, primary: entries[0][1] > 0 ? entries[0][0] : "none" };
@@ -653,13 +697,12 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
     return { candles: td.slice(-limit), source: "twelvedata" };
   }
 
-  // Yahoo fallback (with 4h aggregation if needed)
-  let yc = await yahooCandles(opts.symbol, canon);
-  if (canon === "4h" && yc.length > 0) yc = aggregateTo4H(yc);
-  if (yc.length > 0) {
-    if (_activeTally) _activeTally.yahoo++;
-    setCachedCandles(opts.symbol, canon, yc, "yahoo");
-    return { candles: yc.slice(-limit), source: "yahoo" };
+  // Polygon.io fallback
+  const pg = await polygonCandles(opts.symbol, canon, limit);
+  if (pg.length >= 30) {
+    if (_activeTally) _activeTally.polygon++;
+    setCachedCandles(opts.symbol, canon, pg, "polygon");
+    return { candles: pg.slice(-limit), source: "polygon" };
   }
 
   // M3: Retry once after 2 seconds if all sources failed
@@ -674,13 +717,12 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
     return { candles: tdRetry.slice(-limit), source: "twelvedata" };
   }
 
-  // Retry Yahoo
-  let ycRetry = await yahooCandles(opts.symbol, canon);
-  if (canon === "4h" && ycRetry.length > 0) ycRetry = aggregateTo4H(ycRetry);
-  if (ycRetry.length > 0) {
-    if (_activeTally) _activeTally.yahoo++;
-    setCachedCandles(opts.symbol, canon, ycRetry, "yahoo");
-    return { candles: ycRetry.slice(-limit), source: "yahoo" };
+  // Retry Polygon
+  const pgRetry = await polygonCandles(opts.symbol, canon, limit);
+  if (pgRetry.length >= 30) {
+    if (_activeTally) _activeTally.polygon++;
+    setCachedCandles(opts.symbol, canon, pgRetry, "polygon");
+    return { candles: pgRetry.slice(-limit), source: "polygon" };
   }
 
   console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon} after retry`);

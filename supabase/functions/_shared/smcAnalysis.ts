@@ -18,7 +18,7 @@
  *                detectAMDPhase, detectSilverBullet, detectMacroWindow,
  *                detectSession, detectOptimalStyle
  *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize, getQuoteToUSDRate
- *   Constants:   SPECS, YAHOO_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
+ *   Constants:   SPECS, SUPPORTED_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
  *                STYLE_OVERRIDES, DEFAULTS
  */
 
@@ -282,22 +282,31 @@ export const SPECS: Record<string, { pipSize: number; lotUnits: number; type: st
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, type: "crypto", marginPerLot: 1000, maxSpread: 5, typicalSpread: 2.0 },
 };
 
-export const YAHOO_SYMBOLS: Record<string, string> = {
-  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
-  "USD/CHF": "USDCHF=X",
-  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
-  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
-  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
-  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
-  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
-  "AUD/CHF": "AUDCHF=X", "AUD/NZD": "AUDNZD=X", "CAD/CHF": "CADCHF=X",
-  "CHF/JPY": "CHFJPY=X", "NZD/CAD": "NZDCAD=X", "NZD/CHF": "NZDCHF=X",
-  "NZD/JPY": "NZDJPY=X",
-  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
-  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
+// Canonical set of supported trading instruments.
+// Keys are internal symbol names; values are Polygon.io tickers.
+export const SUPPORTED_SYMBOLS: Record<string, string> = {
+  // Forex Majors
+  "EUR/USD": "C:EURUSD", "GBP/USD": "C:GBPUSD", "USD/JPY": "C:USDJPY",
+  "AUD/USD": "C:AUDUSD", "NZD/USD": "C:NZDUSD", "USD/CAD": "C:USDCAD",
+  "USD/CHF": "C:USDCHF",
+  // Forex Crosses
+  "EUR/GBP": "C:EURGBP", "EUR/JPY": "C:EURJPY", "GBP/JPY": "C:GBPJPY",
+  "EUR/AUD": "C:EURAUD", "EUR/CAD": "C:EURCAD", "EUR/CHF": "C:EURCHF",
+  "EUR/NZD": "C:EURNZD", "GBP/AUD": "C:GBPAUD", "GBP/CAD": "C:GBPCAD",
+  "GBP/CHF": "C:GBPCHF", "GBP/NZD": "C:GBPNZD", "AUD/CAD": "C:AUDCAD",
+  "AUD/JPY": "C:AUDJPY", "CAD/JPY": "C:CADJPY",
+  "AUD/CHF": "C:AUDCHF", "AUD/NZD": "C:AUDNZD", "CAD/CHF": "C:CADCHF",
+  "CHF/JPY": "C:CHFJPY", "NZD/CAD": "C:NZDCAD", "NZD/CHF": "C:NZDCHF",
+  "NZD/JPY": "C:NZDJPY",
+  // Indices
+  "US30": "I:DJI", "NAS100": "I:NDX", "SPX500": "I:SPX",
+  // Commodities
+  "XAU/USD": "C:XAUUSD", "XAG/USD": "C:XAGUSD", "US Oil": "C:USOIL",
+  // Crypto
+  "BTC/USD": "X:BTCUSD", "ETH/USD": "X:ETHUSD",
 };
+/** @deprecated Use SUPPORTED_SYMBOLS instead */
+export const YAHOO_SYMBOLS = SUPPORTED_SYMBOLS;
 
 export const SMT_PAIRS: Record<string, string> = {
   "EUR/USD": "GBP/USD", "GBP/USD": "EUR/USD",

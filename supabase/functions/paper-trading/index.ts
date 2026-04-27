@@ -1,35 +1,38 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 
-// ─── Yahoo Finance Symbol Mapping ───────────────────────────────────
-const YAHOO_SYMBOLS: Record<string, string> = {
+// ─── TwelveData Symbol Mapping (for live prices) ────────────────────
+const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   // Forex Majors
-  "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-  "AUD/USD": "AUDUSD=X", "NZD/USD": "NZDUSD=X", "USD/CAD": "USDCAD=X",
-  "USD/CHF": "USDCHF=X",
+  "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
+  "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
+  "USD/CHF": "USD/CHF",
   // Forex Crosses
-  "EUR/GBP": "EURGBP=X", "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X",
-  "EUR/AUD": "EURAUD=X", "EUR/CAD": "EURCAD=X", "EUR/CHF": "EURCHF=X",
-  "EUR/NZD": "EURNZD=X", "GBP/AUD": "GBPAUD=X", "GBP/CAD": "GBPCAD=X",
-  "GBP/CHF": "GBPCHF=X", "GBP/NZD": "GBPNZD=X", "AUD/CAD": "AUDCAD=X",
-  "AUD/JPY": "AUDJPY=X", "CAD/JPY": "CADJPY=X",
+  "EUR/GBP": "EUR/GBP", "EUR/JPY": "EUR/JPY", "GBP/JPY": "GBP/JPY",
+  "EUR/AUD": "EUR/AUD", "EUR/CAD": "EUR/CAD", "EUR/CHF": "EUR/CHF",
+  "EUR/NZD": "EUR/NZD", "GBP/AUD": "GBP/AUD", "GBP/CAD": "GBP/CAD",
+  "GBP/CHF": "GBP/CHF", "GBP/NZD": "GBP/NZD", "AUD/CAD": "AUD/CAD",
+  "AUD/JPY": "AUD/JPY", "CAD/JPY": "CAD/JPY",
   // Indices
-  "US30": "YM=F", "NAS100": "NQ=F", "SPX500": "ES=F",
+  "US30": "DJI", "NAS100": "IXIC", "SPX500": "SPX",
   // Commodities
-  "XAU/USD": "GC=F", "XAG/USD": "SI=F", "US Oil": "CL=F",
+  "XAU/USD": "XAU/USD", "XAG/USD": "XAG/USD", "US Oil": "WTI/USD",
   // Crypto
-  "BTC/USD": "BTC-USD", "ETH/USD": "ETH-USD",
+  "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
 };
 
 async function fetchLivePrice(symbol: string): Promise<number | null> {
-  const yahooSymbol = YAHOO_SYMBOLS[symbol];
-  if (!yahooSymbol) return null;
+  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
+  if (!apiKey) return null;
+  const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
+  if (!tdSymbol) return null;
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=1d`;
-    const res = await fetch(url, { headers: { "User-Agent": "SMC-Trading-Dashboard/1.0" } });
+    const url = `https://api.twelvedata.com/price?symbol=${encodeURIComponent(tdSymbol)}&apikey=${apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
     const data = await res.json();
-    const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
-    return price ? Number(price) : null;
+    if (data?.status === "error" || !data?.price) return null;
+    return Number(data.price);
   } catch {
     return null;
   }
@@ -89,7 +92,7 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "ETH/USD": { pipSize: 0.01, lotUnits: 1, marginPerLot: 1000 },
 };
 
-// ─── Hardcoded fallback rates (approximate) — used when Yahoo Finance fails ──
+// ─── Hardcoded fallback rates (approximate) — used when TwelveData is unavailable ──
 // These prevent catastrophic PnL miscalculation (e.g., treating JPY as USD = 142x error)
 const FALLBACK_RATES: Record<string, number> = {
   "USD/JPY": 142.0,
@@ -743,7 +746,7 @@ Deno.serve(async (req) => {
 
     // Build live conversion rates only for write/engine actions. The dashboard
     // status endpoint is polled frequently and must stay fast/read-only; doing
-    // multiple external Yahoo requests on every cold status worker was causing
+    // multiple external API requests on every cold status worker was causing
     // runtime churn and intermittent hosted 503s.
     if (action !== "status" && Object.keys(_rateMap).length === 0) {
       try {
