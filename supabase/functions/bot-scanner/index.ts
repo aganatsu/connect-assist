@@ -4656,7 +4656,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
-      const { data: existingGP } = await supabase
+      // Primary approach: use contains filter on JSONB
+      let lastGP: any = null;
+      const { data: existingGP, error: gpQueryError } = await supabase
         .from("scan_logs")
         .select("id, created_at, details_json")
         .eq("user_id", userId)
@@ -4664,13 +4666,35 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         .contains("details_json", { type: "game_plan" })
         .order("created_at", { ascending: false })
         .limit(1);
-      const lastGP = existingGP?.[0];
+      
+      if (gpQueryError || !existingGP || existingGP.length === 0) {
+        // Fallback: if contains filter fails or returns nothing, fetch recent scan_logs and filter in JS
+        if (gpQueryError) {
+          console.warn(`[scan ${scanCycleId}] Game Plan dedup: contains query failed (${gpQueryError.message}), using fallback`);
+        }
+        const { data: recentLogs } = await supabase
+          .from("scan_logs")
+          .select("id, created_at, details_json")
+          .eq("user_id", userId)
+          .eq("bot_id", BOT_ID)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        // Find the most recent game_plan entry by checking in JS
+        lastGP = (recentLogs || []).find((log: any) => log.details_json?.type === "game_plan") || null;
+        console.log(`[scan ${scanCycleId}] Game Plan dedup fallback: searched ${recentLogs?.length || 0} recent logs, found game_plan: ${!!lastGP}`);
+      } else {
+        lastGP = existingGP[0];
+        console.log(`[scan ${scanCycleId}] Game Plan dedup: found existing plan from ${lastGP?.created_at}`);
+      }
+
       const lastGPSession = lastGP?.details_json?.session;
       const lastGPType = lastGP?.details_json?.type;
       const lastGPTime = lastGP?.created_at ? new Date(lastGP.created_at).getTime() : 0;
       const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
       const isSameSession = lastGPType === "game_plan" && lastGPSession === currentSessionName;
       const isStillFresh = hoursSinceLastGP < gamePlanRefreshHours;
+
+      console.log(`[scan ${scanCycleId}] Game Plan dedup check: session=${currentSessionName}, lastSession=${lastGPSession}, sameSession=${isSameSession}, hoursSince=${hoursSinceLastGP.toFixed(2)}, fresh=${isStillFresh}, refreshHours=${gamePlanRefreshHours}`);
 
       if (isSameSession && isStillFresh) {
         // Reuse existing game plan for trade filtering — don't regenerate or notify
@@ -4684,10 +4708,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             newsEvents: cached.newsEvents || [],
             summary: cached.summary || "",
           } as SessionGamePlan;
-          console.log(`[scan ${scanCycleId}] Game Plan: reusing ${currentSessionName} plan (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h)`);
+          console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING ${currentSessionName} plan (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h) — NO notification sent`);
         } catch (e: any) {
-          console.warn(`[scan ${scanCycleId}] Game Plan: failed to parse cached plan, will regenerate`);
+          console.warn(`[scan ${scanCycleId}] Game Plan: failed to parse cached plan, will regenerate: ${e?.message}`);
         }
+      } else {
+        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${!lastGP ? 'no existing plan found' : !isSameSession ? `session changed (${lastGPSession} → ${currentSessionName})` : `plan expired (${hoursSinceLastGP.toFixed(1)}h > ${gamePlanRefreshHours}h)`}`);
       }
 
       if (!activeGamePlan) {
