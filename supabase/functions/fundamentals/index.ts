@@ -48,6 +48,29 @@ Deno.serve(async (req) => {
       return respond(relevant);
     }
 
+    // ── News Impact Analysis — returns directional bias per currency/pair ──
+    if (action === "news_impact") {
+      // Import the news impact engine
+      const { analyzeNewsImpact, getNewsPairBias, checkNewsAlignment } = await import("../_shared/newsImpact.ts");
+      const now = new Date();
+      // Get events from the last 6 hours and next 6 hours (captures released + upcoming)
+      const windowMs = 6 * 60 * 60 * 1000;
+      const relevantEvents = events.filter(e => {
+        const t = new Date(e.scheduledTime).getTime();
+        return Math.abs(t - now.getTime()) <= windowMs;
+      });
+      const impacts = analyzeNewsImpact(relevantEvents);
+      // If pair is specified, return pair-specific bias
+      if (pair) {
+        const pairBias = getNewsPairBias(pair, impacts);
+        const direction = (await req.clone().json()).direction; // optional
+        const alignment = direction ? checkNewsAlignment(pair, direction, impacts) : null;
+        return respond({ pair, pairBias, alignment, impacts: impacts.map(i => ({ name: i.event.name, currency: i.event.currency, impact: i.event.impact, directionalImpact: i.directionalImpact, confidence: i.confidence, reasoning: i.reasoning, category: i.category })) });
+      }
+      // No pair — return all impacts
+      return respond({ impacts: impacts.map(i => ({ name: i.event.name, currency: i.event.currency, impact: i.event.impact, directionalImpact: i.directionalImpact, confidence: i.confidence, reasoning: i.reasoning, category: i.category })) });
+    }
+
     if (action === "high_impact_check") {
       const now = Date.now();
       const window = withinMinutes * 60 * 1000;
@@ -83,7 +106,7 @@ async function fetchCalendar() {
       id: `live_${i}`, name: r.title, currency: r.country, country: r.country,
       impact: r.impact?.toLowerCase() === "high" ? "high" : r.impact?.toLowerCase() === "medium" ? "medium" : "low",
       scheduledTime: new Date(r.date).toISOString(),
-      forecast: r.forecast || null, previous: r.previous || null,
+      forecast: r.forecast || null, previous: r.previous || null, actual: r.actual || null,
       affectedPairs: CURRENCY_PAIRS[r.country] || [],
     }));
     cache = { data: events, at: Date.now() };

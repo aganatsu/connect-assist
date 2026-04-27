@@ -44,6 +44,10 @@ import {
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
 import {
+  analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
+  type NewsEvent, type NewsImpactResult,
+} from "../_shared/newsImpact.ts";
+import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
   normalizeSessionFilter,
@@ -4730,6 +4734,50 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (newsEvents.length > 0) {
             activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
             console.log(`[scan ${scanCycleId}] Game Plan: ${newsEvents.length} news events found (${newsEvents.filter(e => e.impact === "high").length} high-impact)`);
+            // ── News Impact Analysis: understand WHAT the news means ──
+            try {
+              const newsImpacts = analyzeNewsImpact(newsEvents as any);
+              const impactSummaries: string[] = [];
+              for (const impact of newsImpacts) {
+                if (impact.directionalImpact !== "unknown" && impact.directionalImpact !== "neutral") {
+                  impactSummaries.push(impact.reasoning);
+                }
+              }
+              // Enrich each instrument plan with news directional bias
+              for (const plan of activeGamePlan.plans) {
+                const pairBias = getNewsPairBias(plan.symbol, newsImpacts);
+                (plan as any).newsBias = {
+                  pairBias: pairBias.pairBias,
+                  strength: pairBias.strength,
+                  summary: pairBias.summary,
+                  baseBias: pairBias.baseBias.bias,
+                  quoteBias: pairBias.quoteBias.bias,
+                };
+                // If news strongly supports or opposes the technical bias, note it
+                if (pairBias.netStrength >= 40) {
+                  const aligned = (plan.bias === "bullish" && pairBias.pairBias === "bullish") ||
+                                  (plan.bias === "bearish" && pairBias.pairBias === "bearish");
+                  if (aligned) {
+                    (plan as any).newsConfirmation = `NEWS CONFIRMS: ${pairBias.summary}`;
+                  } else if (plan.bias !== "neutral" && pairBias.pairBias !== "neutral") {
+                    (plan as any).newsConflict = `⚠ NEWS CONFLICTS: ${pairBias.summary}`;
+                  }
+                }
+              }
+              if (impactSummaries.length > 0) {
+                activeGamePlan.summary += `\n\n📊 News Impact Analysis:\n` + impactSummaries.join("\n");
+              }
+              // Store impacts for the trade filter to use
+              (activeGamePlan as any).newsImpacts = newsImpacts.map(i => ({
+                name: i.event.name, currency: i.event.currency, impact: i.event.impact,
+                directionalImpact: i.directionalImpact, confidence: i.confidence,
+                reasoning: i.reasoning, category: i.category,
+                actual: i.event.actual, forecast: i.event.forecast, previous: i.event.previous,
+              }));
+              console.log(`[scan ${scanCycleId}] News Impact: ${newsImpacts.length} events analyzed, ${impactSummaries.length} with directional signal`);
+            } catch (nie: any) {
+              console.warn(`[scan ${scanCycleId}] News Impact analysis error (non-fatal): ${nie?.message}`);
+            }
           } else {
             console.log(`[scan ${scanCycleId}] Game Plan: no relevant news events today`);
           }
@@ -4754,8 +4802,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               amdPhase: p.amdPhase, zone: p.zone, htfTrend: p.htfTrend,
               h4Trend: p.h4Trend, tradeable: p.tradeable, skipReason: p.skipReason,
               scenarios: p.scenarios, keyLevels: p.keyLevels.slice(0, 10),
+              newsBias: (p as any).newsBias || null,
+              newsConfirmation: (p as any).newsConfirmation || null,
+              newsConflict: (p as any).newsConflict || null,
             })),
             newsEvents: activeGamePlan.newsEvents || [],
+            newsImpacts: (activeGamePlan as any).newsImpacts || [],
             summary: activeGamePlan.summary,
           },
         });
@@ -5194,6 +5246,30 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Game plan filter OFF (would reject: ${gpFilter.reason})`);
       } else if (activeGamePlan) {
         gates.push({ passed: true, reason: gpFilter.reason });
+      }
+      // ── News Impact Alignment Gate ──
+      // If we have analyzed news impacts, check if the trade direction aligns with news bias.
+      // This is an ADVISORY gate — only blocks when news strongly conflicts (strength >= 40).
+      const newsImpacts = (activeGamePlan as any)?.newsImpacts;
+      if (newsImpacts && newsImpacts.length > 0 && (config as any).newsFilterEnabled !== false) {
+        try {
+          const newsAlignment = checkNewsAlignment(pair, analysis.direction as "long" | "short", newsImpacts);
+          if (newsAlignment.conflicting) {
+            // Strong news conflict — block the trade
+            gates.push({ passed: false, reason: `News conflict: ${newsAlignment.advisory}` });
+            console.log(`[scan ${scanCycleId}] ❌ ${pair}: News strongly opposes ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
+          } else if (!newsAlignment.aligned && newsAlignment.strength >= 25) {
+            // Moderate conflict — log warning but allow
+            gates.push({ passed: true, reason: `News caution: ${newsAlignment.advisory}` });
+            console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: News mildly opposes ${analysis.direction} (${newsAlignment.strength}% strength) — allowing`);
+          } else if (newsAlignment.aligned && newsAlignment.strength >= 30) {
+            // News supports the trade — log confirmation
+            gates.push({ passed: true, reason: `News confirms: ${newsAlignment.advisory}` });
+            console.log(`[scan ${scanCycleId}] ✅ ${pair}: News supports ${analysis.direction} (${newsAlignment.pairBias} bias, ${newsAlignment.strength}% strength)`);
+          }
+        } catch (naErr: any) {
+          console.warn(`[scan ${scanCycleId}] News alignment check error (non-fatal): ${naErr?.message}`);
+        }
       }
       const allPassed = gates.every(g => g.passed);
       detail.gates = gates;
