@@ -20,6 +20,7 @@ import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
 import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
+import GamePlan from "./pages/GamePlan";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient();
@@ -41,6 +42,7 @@ const App = () => (
                 <Route path="/chart" element={<ProtectedRoute><Chart /></ProtectedRoute>} />
                 <Route path="/ict-analysis" element={<ProtectedRoute><IctAnalysis /></ProtectedRoute>} />
                 <Route path="/fundamentals" element={<ProtectedRoute><Fundamentals /></ProtectedRoute>} />
+                <Route path="/game-plan" element={<ProtectedRoute><GamePlan /></ProtectedRoute>} />
                 <Route path="/bot" element={<ProtectedRoute><ErrorBoundary><BotView /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/journal" element={<ProtectedRoute><Journal /></ProtectedRoute>} />
                 <Route path="/backtest" element={<ProtectedRoute><ErrorBoundary><Backtest /></ErrorBoundary></ProtectedRoute>} />

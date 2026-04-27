@@ -32,6 +32,7 @@ import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
+import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
@@ -443,6 +444,7 @@ export default function BotView() {
                 <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
                 <TabsTrigger value="watchlist" className="text-[11px] h-6">Watchlist</TabsTrigger>
                 <TabsTrigger value="pending-orders" className="text-[11px] h-6">Pending Orders</TabsTrigger>
+                <TabsTrigger value="game-plan" className="text-[11px] h-6">Game Plan</TabsTrigger>
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -583,6 +585,9 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="pending-orders" className="flex-1 overflow-auto mt-1">
                 <PendingOrdersPanel />
+              </TabsContent>
+              <TabsContent value="game-plan" className="flex-1 overflow-auto mt-1">
+                <GamePlanPanel />
               </TabsContent>
             </Tabs>
           </div>

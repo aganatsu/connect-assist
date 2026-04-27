@@ -1,4 +1,4 @@
-import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor } from "lucide-react";
+import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -11,6 +11,7 @@ const navItems = [
   { title: "Chart", url: "/chart", icon: LineChart },
   { title: "ICT Analysis", url: "/ict-analysis", icon: Brain },
   { title: "Fundamentals", url: "/fundamentals", icon: Calendar },
+  { title: "Game Plan", url: "/game-plan", icon: Crosshair },
   { title: "Bot", url: "/bot", icon: Bot },
   { title: "Journal", url: "/journal", icon: BookOpen },
   { title: "Backtest", url: "/backtest", icon: FlaskConical },
