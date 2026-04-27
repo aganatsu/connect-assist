@@ -4163,9 +4163,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (filled) {
           // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
           // Multiple limit orders can fill in the same cycle — enforce limits before creating position.
-          const currentOpenCount = openPosArr.filter((p: any) => p.position_status === "open" || !p.position_status).length;
-          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol && (p.position_status === "open" || !p.position_status)).length;
-          if (currentOpenCount >= (config.maxOpenPositions || 3)) {
+          const currentOpenCount = openPosArr.length;
+          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
+          if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
             console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
             await supabase.from("pending_orders").update({
               status: "cancelled",
@@ -4357,8 +4357,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Dynamic Scan Skip: management-only mode when max positions reached ──
   // Reads maxOpenPositions from live config each cycle — fully dynamic.
   // If positions close or config.maxOpenPositions increases, scanning resumes next cycle.
-  const currentOpenCount = openPosArr.filter((p: any) => p.position_status === "open" || !p.position_status).length;
-  const maxOpen = config.maxOpenPositions || 3;
+  // Note: openPosArr was already filtered to position_status="open" by the Supabase query (line 3607),
+  // so .length IS the true open count. The redundant filter was removed to prevent edge-case miscount.
+  const currentOpenCount = openPosArr.length;
+  const maxOpen = parseInt(String(config.maxOpenPositions), 10) || 3;
+  console.log(`[scan ${scanCycleId}] SCAN-STOP CHECK: ${currentOpenCount} open positions, maxOpen=${maxOpen}, config.maxOpenPositions=${config.maxOpenPositions} (type: ${typeof config.maxOpenPositions})`);
   if (currentOpenCount >= maxOpen) {
     console.log(`[scan ${scanCycleId}] MAX POSITIONS REACHED (${currentOpenCount}/${maxOpen}) — management only, skipping new entry scan. Saves API credits & compute.`);
     // Still ran: price refresh + management (trailing SL, break-even, partial TP, close-on-reverse, structure invalidation)
