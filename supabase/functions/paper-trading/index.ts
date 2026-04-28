@@ -763,18 +763,18 @@ Deno.serve(async (req) => {
     if (action === "status") {
       const { data: account } = await supabase.from("paper_accounts").select("*").eq("user_id", user.id).maybeSingle();
 
-      // H17: Daily PnL base reset — if the day has changed, reset daily_pnl_base to current balance
+      // H17: Daily PnL base reset — if the day has changed, reset daily_pnl_base to 0
+      // daily_pnl_base = 0 means today's P&L = balance - 0 = balance (tracks realised gains since midnight)
       if (account) {
         const todayDate = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
         const lastResetDate = account.daily_pnl_base_date || "";
         if (lastResetDate !== todayDate) {
-          const currentBalance = parseFloat(String(account.balance ?? "10000"));
           await supabase.from("paper_accounts")
-            .update({ daily_pnl_base: currentBalance.toString(), daily_pnl_base_date: todayDate })
+            .update({ daily_pnl_base: "0", daily_pnl_base_date: todayDate })
             .eq("user_id", user.id);
-          account.daily_pnl_base = currentBalance.toString();
+          account.daily_pnl_base = "0";
           account.daily_pnl_base_date = todayDate;
-          console.log(`[PnL Reset] User ${user.id}: daily_pnl_base reset to ${currentBalance} for ${todayDate}`);
+          console.log(`[PnL Reset] User ${user.id}: daily_pnl_base reset to 0 for ${todayDate}`);
         }
       }
 
@@ -1447,9 +1447,10 @@ Deno.serve(async (req) => {
       const balStr = newBalance.toFixed(2);
       // Reset peak_balance to the new balance — this is a fresh starting point
       // Prevents drawdown gate from triggering (e.g., setting $100 with old peak of $10k = 99% drawdown)
+      const todayDate = new Date().toISOString().split("T")[0];
       await supabase.from("paper_accounts").update({
         balance: balStr, peak_balance: balStr, daily_pnl_base: balStr,
-        daily_pnl_date: "", kill_switch_active: false,
+        daily_pnl_base_date: todayDate, kill_switch_active: false,
       }).eq("user_id", user.id);
       return respond({ success: true, balance: balStr });
     }
@@ -1457,9 +1458,10 @@ Deno.serve(async (req) => {
     // ── Reset Balance Only: preserves positions, trade history, scan logs, reasonings, post-mortems ──
     if (action === "reset_balance_only") {
       const startBal = await getConfiguredStartingBalance();
+      const todayDate = new Date().toISOString().split("T")[0];
       await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, daily_pnl_base: startBal,
-        daily_pnl_date: "", scan_count: 0, signal_count: 0, rejected_count: 0,
+        balance: startBal, peak_balance: startBal, daily_pnl_base: "0",
+        daily_pnl_base_date: todayDate, scan_count: 0, signal_count: 0, rejected_count: 0,
         kill_switch_active: false,
       }).eq("user_id", user.id);
       return respond({ success: true, startingBalance: startBal });
@@ -1468,17 +1470,19 @@ Deno.serve(async (req) => {
     // ── Full Reset: wipes everything and resets balance to configured starting balance ──
     if (action === "reset_account") {
       const startBal = await getConfiguredStartingBalance();
+      const todayDate = new Date().toISOString().split("T")[0];
       await supabase.from("paper_positions").delete().eq("user_id", user.id);
       await supabase.from("paper_trade_history").delete().eq("user_id", user.id);
       await supabase.from("trade_reasonings").delete().eq("user_id", user.id);
       await supabase.from("trade_post_mortems").delete().eq("user_id", user.id);
       await supabase.from("scan_logs").delete().eq("user_id", user.id);
+      await supabase.from("trades").delete().eq("user_id", user.id);
       await supabase.from("paper_accounts").update({
-        balance: startBal, peak_balance: startBal, is_running: false, is_paused: false,
-        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: startBal,
-        daily_pnl_date: "", kill_switch_active: false, execution_mode: "paper",
+        balance: startBal, peak_balance: startBal, is_running: false, is_paused: true,
+        scan_count: 0, signal_count: 0, rejected_count: 0, daily_pnl_base: "0",
+        daily_pnl_base_date: todayDate, kill_switch_active: false, execution_mode: "paper",
       }).eq("user_id", user.id);
-      return respond({ success: true, startingBalance: startBal });
+      return respond({ success: true, startingBalance: startBal, paused: true });
     }
 
     if (action === "set_execution_mode") {
