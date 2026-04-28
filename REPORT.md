@@ -1,82 +1,101 @@
-# Task: SL Floor Enforcement & Tier 1 Gate Tightening
+# Task: fix-reset-daily-baseline-v2
 
-## Branch: manus/sl-floor-and-tier1-gate
+## Branch: manus/fix-reset-daily-baseline-v2
 
 ## Behavior changes
 
-1. **Structure invalidation SL tightening now enforces a per-instrument floor.** Previously, the 50% tightening on CHoCH could push the SL arbitrarily close to the entry price (e.g., 12 pips on GBP/USD when the entry floor is 25 pips). Now, the tightened SL is clamped so it cannot be closer than the management floor (approximately 60% of the entry-time MIN_SL_PIPS). For GBP/USD, the management floor is 15 pips; for EUR/USD, 12 pips; for XAU/USD, 30 pips. This means some trades that previously had their SL tightened to very small distances will now have a wider (safer) SL after structure invalidation.
+1. **Paper-trading reset paths now use the correct column `daily_pnl_base_date`** instead of the legacy `daily_pnl_date`. Previously, resets wrote to the wrong column, so the bot-scanner's Gate 7 never saw the reset date and would fall back to using current balance as the base (making daily loss always 0%).
 
-2. **Tier 1 confluence gate raised from 2 to 3 core factors.** Trades now require at least 3 of the 4 Tier 1 factors (Market Structure, Order Block, FVG, Premium/Discount & Fib) to pass the gate. Previously, 2 factors sufficed, which allowed entries with only Market Structure + Premium/Discount — directional bias without an institutional entry trigger. This change will **reject trades** that previously passed with only 2 Tier 1 factors. The intent is to filter out low-conviction setups that lack an OB or FVG confirmation.
+2. **Paper-trading `reset_account` now sets `is_paused: true`** instead of `is_paused: false`. Previously, a full reset would leave the bot running, which could immediately start taking trades on a freshly wiped account before the user reviews settings.
+
+3. **Paper-trading `reset_account` now deletes from the `trades` table** in addition to the existing 5 tables. Previously, live/pending trade records were orphaned after a full reset.
+
+4. **Paper-trading `reset_account` response now includes `paused: true`** so the frontend can reflect the paused state immediately without a refetch.
+
+5. **Bot-scanner Gate 7 now reads `daily_pnl_base_date`** instead of `daily_pnl_date`. This aligns it with what both the paper-trading and bot-scanner day-rollover paths write.
+
+6. **Bot-scanner day-rollover now writes `daily_pnl_base_date`** instead of `daily_pnl_date`. This aligns it with the paper-trading day-rollover and with Gate 7.
+
+7. **Migration added to drop the legacy `daily_pnl_date` column** from `paper_accounts`. This prevents future confusion between the two columns.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/scannerManagement.ts` | Added SL floor enforcement after the structure invalidation 50% tightening calculation (lines 641–663). The floor uses a `MGMT_SL_FLOOR_PIPS` lookup table (~60% of the entry-time `MIN_SL_PIPS` values). If the tightened SL distance from entry is below the floor, it is clamped. A log line is emitted when the floor activates. The attribution message was also updated to include the floor value. |
-| `supabase/functions/_shared/confluenceScoring.ts` | Changed the Tier 1 minimum gate threshold from `tier1Count >= 2` to `tier1Count >= 3`. Updated the failure reason message from "need at least 2" to "need at least 3". |
-| `supabase/functions/_shared/__snapshots__/confluenceScoring.snapshot.json` | Updated snapshot: gate reason message now says "need at least 3". |
-| `supabase/functions/_shared/__snapshots__/confluenceScoring.bearish.snapshot.json` | Updated snapshot: gate reason message now says "need at least 3". |
-| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot: `tier1GatePassed` changed from `true` to `false` (the ranging fixture had 2 Tier 1 factors, which no longer passes). Gate reason updated. |
-| `supabase/functions/_shared/slFloorAndTier1Gate.test.ts` | **New file.** 5 tests covering both changes. |
+| `supabase/functions/paper-trading/index.ts` | Fixed column name in `set_balance`, `reset_balance_only`, `reset_account` paths (daily_pnl_date -> daily_pnl_base_date with today's date). Fixed `reset_account`: is_paused -> true, added trades table deletion, added paused:true to response. |
+| `supabase/functions/bot-scanner/index.ts` | Fixed Gate 7 column read (daily_pnl_date -> daily_pnl_base_date). Fixed day-rollover column write (daily_pnl_date -> daily_pnl_base_date). |
+| `supabase/functions/paper-trading/reset.test.ts` | New test file with 14 tests covering all reset paths, column names, Gate 7 math. |
+| `supabase/migrations/20260428120000_drop_legacy_daily_pnl_date.sql` | Migration to drop the orphaned `daily_pnl_date` column. |
 
-### Extra caution: scannerManagement.ts
+## Extra caution file changes
 
-The change to `scannerManagement.ts` adds a floor enforcement block inside the structure invalidation tightening path (the `if (structureAgainst && hasFreshCHoCH)` branch). The logic is:
+### paper-trading/index.ts
 
-1. After calculating `newSL` via the existing 50% tightening formula, compute the distance from entry to the proposed new SL.
-2. Look up the management floor for the instrument from `MGMT_SL_FLOOR_PIPS` (a static lookup table mirroring `MIN_SL_PIPS` at ~60% values).
-3. If the distance is below the floor, clamp `newSL` to exactly the floor distance from entry.
-4. The existing `shouldTighten` guard (which prevents widening) still runs after the floor check.
+Three reset/set paths (`set_balance`, `reset_balance_only`, `reset_account`) were writing to the legacy column `daily_pnl_date` (which existed in the DB but was never read by Gate 7 after the `daily_pnl_base_date` column was introduced). All three now write to `daily_pnl_base_date` with today's ISO date string. The `reset_account` path also had `is_paused: false` changed to `is_paused: true` (preventing the bot from auto-starting after a full reset), and a new `trades` table deletion was added to match the other 5 table deletions. The `daily_pnl_base` values remain set to `startBal` (for resets) and `balStr` (for set_balance), which is the correct semantic: the PnL base should equal the current balance at the time of reset.
 
-This change does **not** alter the one-shot flag, the rMultiple guard, or any other management path. It only affects the SL value produced by structure invalidation tightening.
+### bot-scanner/index.ts
+
+Two changes, both column name corrections only:
+1. Gate 7 (line 983): `account.daily_pnl_date === todayStr` changed to `account.daily_pnl_base_date === todayStr`. This is required because the day-rollover now writes to `daily_pnl_base_date`. Without this change, Gate 7 would always fall back to `actualBase = balance`, making `dailyLoss = 0` and effectively disabling the daily loss protection.
+2. Day-rollover (lines 1963-1966): `daily_pnl_date: todayStr` changed to `daily_pnl_base_date: todayStr`. Aligns with what paper-trading writes and what Gate 7 reads.
+
+No gate logic was changed. The formula `dailyLoss = actualBase - balance; dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0` is untouched.
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `SL floor: structure invalidation cannot tighten GBP/USD below 15 pips` | GBP/USD long with 25-pip SL, CHoCH fires, 50% tightening would produce 12 pips, but floor clamps to 15 pips. Asserts `newSLDistPips >= 14.9`. |
-| `SL floor: tightening that already respects floor is not clamped` | GBP/USD long with 50-pip SL, 50% tightening produces 25.5 pips (above 15-pip floor). Asserts no unnecessary clamping (`newSLDistPips >= 20`). |
-| `SL floor: one-shot flag prevents repeated tightening` | Position with `structureInvalidationFired: true` in exitFlags. Asserts no `sl_tightened` action is produced. |
-| `Tier 1 gate: fewer than 3 core factors now FAILS` | Flat candle fixture produces 0 Tier 1 factors. Asserts `tier1GatePassed === false` and reason includes "need at least 3". |
-| `Tier 1 gate reason message references threshold of 3` | Asserts the gate failure reason string contains "need at least 3". |
+| `reset_balance_only: daily_pnl_base equals startBal` | Verifies daily_pnl_base is set to startBal, not "0" |
+| `reset_balance_only: uses daily_pnl_base_date column` | Verifies correct column name, no legacy column |
+| `reset_account: is_paused is true, not false` | Verifies is_paused: true |
+| `reset_account: deletes from trades table` | Verifies trades table deletion present |
+| `reset_account: daily_pnl_base equals startBal` | Verifies daily_pnl_base is set to startBal, not "0" |
+| `reset_account: uses daily_pnl_base_date column` | Verifies correct column name, no legacy column |
+| `day-rollover: daily_pnl_base equals currentBalance` | Verifies H17 block sets daily_pnl_base to currentBalance |
+| `reset_account: response includes paused: true` | Verifies response includes paused flag |
+| `set_balance: uses daily_pnl_base_date column` | Verifies correct column name in set_balance path |
+| `global: no references to wrong column in paper-trading` | Scans entire file for legacy column references |
+| `reset_account: deletes from all 6 required tables` | Verifies all 6 tables are deleted |
+| `bot-scanner: no references to wrong column` | Scans entire bot-scanner file for legacy column references |
+| `Gate 7 math: $10000 base, $9500 balance -> 5%` | Verifies Gate 7 triggers at exactly the limit |
+| `Gate 7 math: $10000 base, $9999 balance -> 0.01%` | Verifies Gate 7 passes for small losses |
 
 ## Tests run
 
 ```
-$ deno test --allow-all --no-check supabase/functions/_shared/
-ok | 92 passed | 0 failed (4s)
+$ deno test --allow-all --no-check supabase/functions/_shared/ supabase/functions/paper-trading/ supabase/functions/backtest-engine/
+ok | 217 passed | 0 failed (5s)
 ```
 
-All 92 tests pass (87 existing + 5 new). The `--no-check` flag is needed due to pre-existing type errors in `crossEngineEquivalence.test.ts` (unrelated to this change).
+14 new tests + 203 existing tests, all passing.
 
 ## Regression check
 
-**Confluence scoring regression:** The 3 snapshot tests (`confluenceScoring.test.ts`) were updated to reflect the new threshold. The ranging snapshot now correctly shows `tier1GatePassed: false` with 2 factors (was `true` before). The bullish and bearish snapshots already had `tier1GatePassed: false` with 1 factor — only the reason message text changed ("at least 2" → "at least 3").
+1. **Gate 7 formula unchanged.** The only changes to bot-scanner Gate 7 are the column name in the date comparison. The arithmetic (`dailyLoss = actualBase - balance`, `dailyLossPercent = ...`) is identical.
 
-**SL floor regression:** The test `SL floor: tightening that already respects floor is not clamped` verifies that wide SLs (50 pips) are not affected by the floor. The floor only activates when the tightened SL would be dangerously close to entry.
+2. **daily_pnl_base values correct.** Unlike the previous PR (manus/fix-reset-and-daily-baseline) which set daily_pnl_base to "0" (breaking Gate 7), this PR keeps the original semantics: `startBal` for resets, `currentBalance` for day-rollover, `balStr` for set_balance.
 
-**No other code paths affected:** The floor enforcement is scoped entirely within the `if (structureAgainst && hasFreshCHoCH)` block. No other SL modification paths (trailing stop, break-even, session tightening) are touched.
+3. **Column alignment verified.** All 3 writers (paper-trading day-rollover, bot-scanner day-rollover, reset paths) and the 1 reader (Gate 7) now use `daily_pnl_base_date`. Verified by grep: zero references to `daily_pnl_date` in non-comment lines of both files.
 
 ## Open questions
 
-1. **Management floor values:** The `MGMT_SL_FLOOR_PIPS` table uses ~60% of the entry-time `MIN_SL_PIPS` values. Should these be configurable per user, or are the static values acceptable? Currently they are hardcoded in `scannerManagement.ts`.
+1. **Migration timing.** The migration to drop `daily_pnl_date` should be applied AFTER this code is deployed. If the migration runs before the code is deployed, the old code (still referencing `daily_pnl_date`) will error. Recommend: deploy code first, verify, then apply migration.
 
-2. **Tier 1 gate at 3:** This is a significant filter change. With 4 Tier 1 factors (Market Structure, OB, FVG, Premium/Discount), requiring 3 means every valid trade needs at least one of OB or FVG plus Market Structure plus Premium/Discount. Is this the right balance, or should we consider an "entry trigger" sub-gate instead (require at least one of OB/FVG specifically)?
-
-3. **Limit order fill SL floor (secondary bug):** The SL floor is enforced relative to market price at signal time, but limit orders fill at a different price. This means the effective SL distance from the fill price can be less than the floor. This is a separate issue not addressed in this PR.
+2. **Previous PR branch.** The branch `manus/fix-reset-and-daily-baseline` (from the previous task) set `daily_pnl_base = "0"` which would break Gate 7. That branch should NOT be merged. This branch supersedes it with correct values.
 
 ## Suggested PR title and description
 
-**Title:** `[sl-floor-and-tier1-gate] Enforce SL floor in structure invalidation + raise Tier 1 gate to 3`
+**Title:** fix: align daily_pnl_base_date column across scanner, gate, and reset paths
 
 **Description:**
 
-Two changes to improve trade quality and risk management:
+Fixes the column name mismatch between paper-trading and bot-scanner for the daily PnL baseline tracking. All code paths now consistently use `daily_pnl_base_date` instead of the legacy `daily_pnl_date` column.
 
-**1. SL Floor in Structure Invalidation**
-The structure invalidation tightening (CHoCH against trade direction) previously moved SL 50% closer to current price with no lower bound. This could produce dangerously tight SLs (e.g., 12 pips on GBP/USD when the entry minimum is 25 pips). Now, the tightened SL is clamped to a per-instrument management floor (~60% of entry-time MIN_SL_PIPS).
+Also fixes:
+- `reset_account` sets `is_paused: true` (was `false` -- bot could auto-start after reset)
+- `reset_account` deletes from `trades` table (was missing)
+- `reset_account` response includes `paused: true` for frontend
 
-**2. Tier 1 Gate: 2 → 3**
-Raised the minimum Tier 1 factor count from 2 to 3. Losing trades were observed passing with only Market Structure + Premium/Discount (directional bias without institutional entry trigger). Now requires at least one of OB or FVG in addition to structure and zone.
+Includes migration to drop the orphaned `daily_pnl_date` column (apply after deploy).
 
-**Testing:** 5 new tests, 92 total passing. Snapshot regression verified.
+14 new tests, 217 total passing.
