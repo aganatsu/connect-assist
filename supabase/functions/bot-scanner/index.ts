@@ -980,7 +980,7 @@ async function runSafetyGates(
   // Gate 7: Daily loss limit
   const todayStr = new Date().toISOString().slice(0, 10);
   const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
-  const actualBase = account.daily_pnl_date === todayStr ? dailyPnlBase : balance;
+  const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
   const dailyLoss = actualBase - balance;
   const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
   if (dailyLossPercent >= config.maxDailyLoss) {
@@ -1960,9 +1960,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // Update daily PnL base if new day
   const todayStr = now.toISOString().slice(0, 10);
-  if (account.daily_pnl_date !== todayStr) {
+  if (account.daily_pnl_base_date !== todayStr) {
     const pnlUpdate = supabase.from("paper_accounts").update({
-      daily_pnl_date: todayStr,
+      daily_pnl_base_date: todayStr,
       daily_pnl_base: account.balance,
     }).eq("user_id", userId);
     // If account has bot_id, scope the update to this bot only
