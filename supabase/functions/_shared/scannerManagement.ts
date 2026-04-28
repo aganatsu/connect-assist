@@ -638,9 +638,33 @@ export async function manageOpenPositions(
               // Tighten SL to reduce loss — move SL 50% closer to current price
               const currentSLDistance = Math.abs(currentPrice - sl);
               const tightenedDistance = currentSLDistance * 0.5;
-              const newSL = pos.direction === "long"
+              let newSL = pos.direction === "long"
                 ? currentPrice - tightenedDistance
                 : currentPrice + tightenedDistance;
+
+              // ── SL Floor Enforcement ──────────────────────────────────
+              // Prevent structure invalidation from tightening SL below the
+              // per-instrument minimum. Use 60% of the static floor as the
+              // management floor — tighter than entry (acknowledging the
+              // adverse CHoCH) but still wide enough to avoid noise stop-outs.
+              const MGMT_SL_FLOOR_PIPS: Record<string, number> = {
+                "GBP/JPY": 21, "EUR/JPY": 18, "USD/JPY": 15,
+                "AUD/JPY": 15, "CAD/JPY": 15, "NZD/JPY": 15, "CHF/JPY": 15,
+                "GBP/USD": 15, "GBP/AUD": 18, "GBP/CAD": 18, "GBP/NZD": 18, "GBP/CHF": 15,
+                "EUR/USD": 12, "EUR/GBP": 9, "EUR/AUD": 15, "EUR/CAD": 15, "EUR/NZD": 15, "EUR/CHF": 11,
+                "AUD/USD": 11, "NZD/USD": 11, "USD/CAD": 11, "USD/CHF": 11,
+                "AUD/CAD": 12, "AUD/NZD": 12, "AUD/CHF": 12, "NZD/CAD": 12, "NZD/CHF": 12, "CAD/CHF": 11,
+                "XAU/USD": 30, "BTC/USD": 90,
+              };
+              const mgmtFloorPips = MGMT_SL_FLOOR_PIPS[symbol] ?? 10;
+              const mgmtFloorDistance = mgmtFloorPips * spec.pipSize;
+              const newSLDistFromEntry = Math.abs(entryPrice - newSL);
+              if (newSLDistFromEntry < mgmtFloorDistance) {
+                newSL = pos.direction === "long"
+                  ? entryPrice - mgmtFloorDistance
+                  : entryPrice + mgmtFloorDistance;
+                console.log(`[mgmt ${scanCycleId}] SL FLOOR enforced ${symbol} | tightened SL capped at ${mgmtFloorPips} pips from entry`);
+              }
 
               // Only tighten (never widen)
               const shouldTighten = pos.direction === "long" ? newSL > sl : newSL < sl;
@@ -651,7 +675,7 @@ export async function manageOpenPositions(
 
                 const attribution = makeAttribution(
                   "structure_invalidated",
-                  `CHoCH against ${pos.direction} detected (${chochAgainst.length} events) — structure now ${currentStructure.trend} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)} (one-shot, won't repeat)`,
+                  `CHoCH against ${pos.direction} detected (${chochAgainst.length} events) — structure now ${currentStructure.trend} — SL tightened from ${sl.toFixed(5)} to ${newSL.toFixed(5)} (floor: ${mgmtFloorPips}p, one-shot)`,
                   {
                     trend: currentStructure.trend,
                     chochCount: chochAgainst.length,

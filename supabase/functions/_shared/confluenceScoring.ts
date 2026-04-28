@@ -2001,11 +2001,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     score = 0;
   }
 
-  // Tier 1 minimum gate: need at least 2 core factors
-  const tier1GatePassed = tier1Count >= 2;
+  // Tier 1 minimum gate: need at least 3 core factors
+  // Raised from 2→3 to prevent low-quality entries that only have
+  // Market Structure + Premium/Discount (directional bias without
+  // an institutional entry trigger like OB or FVG).
+  const tier1GatePassed = tier1Count >= 3;
   const tier1GateReason = tier1GatePassed
     ? `Tier 1 gate passed: ${tier1Count}/4 core factors (${["Market Structure", "Order Block", "FVG", "Premium/Discount"].filter(n => factors.find(f => f.name === n && f.present && f.weight > 0)).join(", ")})`
-    : `Tier 1 gate FAILED: only ${tier1Count}/4 core factors — need at least 2 of: Market Structure, Order Block, FVG, Premium/Discount`;
+    : `Tier 1 gate FAILED: only ${tier1Count}/4 core factors — need at least 3 of: Market Structure, Order Block, FVG, Premium/Discount`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;
