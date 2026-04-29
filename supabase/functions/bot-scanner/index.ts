@@ -962,8 +962,9 @@ async function runSafetyGates(
     const pSize = parseFloat(p.size || "0");
     const spec = SPECS[p.symbol] || SPECS["EUR/USD"];
     if (pSL > 0 && pEntry > 0) {
-      // Actual risk = |entry - SL| * lotUnits * size
-      const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize;
+      // Actual risk in USD = |entry - SL| * lotUnits * size * quoteToUSD
+      const quoteToUSD = getQuoteToUSDRate(p.symbol, rateMap);
+      const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize * quoteToUSD;
       totalRiskDollars += riskPerUnit;
     } else {
       // Fallback: assume configured risk% if SL is missing

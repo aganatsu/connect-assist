@@ -1,101 +1,104 @@
-# Task: fix-reset-daily-baseline-v2
+# Task: fix-gate6-heat-quotetousd
 
-## Branch: manus/fix-reset-daily-baseline-v2
+## Branch: manus/fix-gate6-heat-quotetousd
 
 ## Behavior changes
 
-1. **Paper-trading reset paths now use the correct column `daily_pnl_base_date`** instead of the legacy `daily_pnl_date`. Previously, resets wrote to the wrong column, so the bot-scanner's Gate 7 never saw the reset date and would fall back to using current balance as the base (making daily loss always 0%).
+1. **Gate 6 portfolio heat now converts each position's risk to USD before summing.** Previously, risk was computed in the quote currency of each pair and then divided by the USD-denominated balance. This inflated heat for JPY-quoted pairs by ~142x and deflated it for GBP-quoted pairs by ~0.79x. After the fix, all risk amounts are in USD.
 
-2. **Paper-trading `reset_account` now sets `is_paused: true`** instead of `is_paused: false`. Previously, a full reset would leave the bot running, which could immediately start taking trades on a freshly wiped account before the user reviews settings.
-
-3. **Paper-trading `reset_account` now deletes from the `trades` table** in addition to the existing 5 tables. Previously, live/pending trade records were orphaned after a full reset.
-
-4. **Paper-trading `reset_account` response now includes `paused: true`** so the frontend can reflect the paused state immediately without a refetch.
-
-5. **Bot-scanner Gate 7 now reads `daily_pnl_base_date`** instead of `daily_pnl_date`. This aligns it with what both the paper-trading and bot-scanner day-rollover paths write.
-
-6. **Bot-scanner day-rollover now writes `daily_pnl_base_date`** instead of `daily_pnl_date`. This aligns it with the paper-trading day-rollover and with Gate 7.
-
-7. **Migration added to drop the legacy `daily_pnl_date` column** from `paper_accounts`. This prevents future confusion between the two columns.
+2. **Concrete impact on gate pass/fail:**
+   - A single CAD/JPY position with 30-pip SL and 0.5 lots on a $10,000 account previously showed **150% heat** (gate blocked). It now correctly shows **~1.06% heat** (gate passes).
+   - A single USD/CHF position with 30-pip SL and 0.5 lots previously showed **1.5% heat**. It now correctly shows **~1.70% heat** (modest increase, gate still passes).
+   - USD-quoted pairs (EUR/USD, GBP/USD, etc.) are unchanged — quoteToUSD = 1.0.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/paper-trading/index.ts` | Fixed column name in `set_balance`, `reset_balance_only`, `reset_account` paths (daily_pnl_date -> daily_pnl_base_date with today's date). Fixed `reset_account`: is_paused -> true, added trades table deletion, added paused:true to response. |
-| `supabase/functions/bot-scanner/index.ts` | Fixed Gate 7 column read (daily_pnl_date -> daily_pnl_base_date). Fixed day-rollover column write (daily_pnl_date -> daily_pnl_base_date). |
-| `supabase/functions/paper-trading/reset.test.ts` | New test file with 14 tests covering all reset paths, column names, Gate 7 math. |
-| `supabase/migrations/20260428120000_drop_legacy_daily_pnl_date.sql` | Migration to drop the orphaned `daily_pnl_date` column. |
+| `supabase/functions/bot-scanner/index.ts` | Added `getQuoteToUSDRate(p.symbol, rateMap)` call inside Gate 6 loop (line 966) and multiplied `riskPerUnit` by `quoteToUSD` (line 967). One line added, one line changed. |
+| `supabase/functions/bot-scanner/gate6Heat.test.ts` | New test file: 6 tests covering structural verification, 4 quote-currency categories, and the fallback branch. |
+| `REPORT.md` | This file. |
 
-## Extra caution file changes
+## Extra-caution file explanation: bot-scanner/index.ts
 
-### paper-trading/index.ts
+The change is a **two-line edit** inside the Gate 6 portfolio heat loop (lines 964–968). The existing line:
 
-Three reset/set paths (`set_balance`, `reset_balance_only`, `reset_account`) were writing to the legacy column `daily_pnl_date` (which existed in the DB but was never read by Gate 7 after the `daily_pnl_base_date` column was introduced). All three now write to `daily_pnl_base_date` with today's ISO date string. The `reset_account` path also had `is_paused: false` changed to `is_paused: true` (preventing the bot from auto-starting after a full reset), and a new `trades` table deletion was added to match the other 5 table deletions. The `daily_pnl_base` values remain set to `startBal` (for resets) and `balStr` (for set_balance), which is the correct semantic: the PnL base should equal the current balance at the time of reset.
+```ts
+const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize;
+```
 
-### bot-scanner/index.ts
+was replaced with:
 
-Two changes, both column name corrections only:
-1. Gate 7 (line 983): `account.daily_pnl_date === todayStr` changed to `account.daily_pnl_base_date === todayStr`. This is required because the day-rollover now writes to `daily_pnl_base_date`. Without this change, Gate 7 would always fall back to `actualBase = balance`, making `dailyLoss = 0` and effectively disabling the daily loss protection.
-2. Day-rollover (lines 1963-1966): `daily_pnl_date: todayStr` changed to `daily_pnl_base_date: todayStr`. Aligns with what paper-trading writes and what Gate 7 reads.
+```ts
+const quoteToUSD = getQuoteToUSDRate(p.symbol, rateMap);
+const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize * quoteToUSD;
+```
 
-No gate logic was changed. The formula `dailyLoss = actualBase - balance; dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0` is untouched.
+`getQuoteToUSDRate` is the same function already used at line 621 (position sizing), line 1017 (Gate 8 cost-adjusted RR), and line 2084 (PnL conversion). The `rateMap` parameter is already passed to `runSafetyGates` at line 892 and supplied at the call site (line 3210). No new imports, no new functions, no signature changes.
+
+The fallback branch (line 970–971: `balance * (riskPerTrade / 100)`) was not changed because it already computes in USD (balance is USD, riskPerTrade is a percentage).
 
 ## Tests added
 
-| Test | Assertion |
-|------|-----------|
-| `reset_balance_only: daily_pnl_base equals startBal` | Verifies daily_pnl_base is set to startBal, not "0" |
-| `reset_balance_only: uses daily_pnl_base_date column` | Verifies correct column name, no legacy column |
-| `reset_account: is_paused is true, not false` | Verifies is_paused: true |
-| `reset_account: deletes from trades table` | Verifies trades table deletion present |
-| `reset_account: daily_pnl_base equals startBal` | Verifies daily_pnl_base is set to startBal, not "0" |
-| `reset_account: uses daily_pnl_base_date column` | Verifies correct column name, no legacy column |
-| `day-rollover: daily_pnl_base equals currentBalance` | Verifies H17 block sets daily_pnl_base to currentBalance |
-| `reset_account: response includes paused: true` | Verifies response includes paused flag |
-| `set_balance: uses daily_pnl_base_date column` | Verifies correct column name in set_balance path |
-| `global: no references to wrong column in paper-trading` | Scans entire file for legacy column references |
-| `reset_account: deletes from all 6 required tables` | Verifies all 6 tables are deleted |
-| `bot-scanner: no references to wrong column` | Scans entire bot-scanner file for legacy column references |
-| `Gate 7 math: $10000 base, $9500 balance -> 5%` | Verifies Gate 7 triggers at exactly the limit |
-| `Gate 7 math: $10000 base, $9999 balance -> 0.01%` | Verifies Gate 7 passes for small losses |
+| Test | Asserts |
+|------|---------|
+| `Gate 6 source contains quoteToUSD conversion` | Structural: the fix exists in the source code (regex match for `getQuoteToUSDRate(p.symbol, rateMap)` inside Gate 6 block) |
+| `Test 1: EUR/USD (USD-quoted)` | Heat = 1.5% for both old and new code (quoteToUSD = 1.0, no change) |
+| `Test 2: CAD/JPY (JPY-quoted)` | Fixed heat = 1.056%, old heat = 150.0% (inflation ratio ~142x confirmed) |
+| `Test 3: USD/CHF (CHF-quoted)` | Fixed heat = 1.705%, old heat = 1.5% (old/new ratio = 0.88, the USD/CHF rate) |
+| `Test 4: Mixed EUR/USD + CAD/JPY` | Total heat = sum of individual heats (2.556%), old code produced >150% |
+| `Test 5: Missing SL fallback` | Both old and new produce 1.0% (fallback branch is already in USD) |
 
 ## Tests run
 
 ```
-$ deno test --allow-all --no-check supabase/functions/_shared/ supabase/functions/paper-trading/ supabase/functions/backtest-engine/
-ok | 217 passed | 0 failed (5s)
+$ deno test --allow-all --no-check supabase/functions/
+ok | 223 passed | 0 failed (5s)
 ```
 
-14 new tests + 203 existing tests, all passing.
+6 new tests + 217 existing tests, all passing.
 
 ## Regression check
 
-1. **Gate 7 formula unchanged.** The only changes to bot-scanner Gate 7 are the column name in the date comparison. The arithmetic (`dailyLoss = actualBase - balance`, `dailyLossPercent = ...`) is identical.
+### Hand-computed math (side-by-side)
 
-2. **daily_pnl_base values correct.** Unlike the previous PR (manus/fix-reset-and-daily-baseline) which set daily_pnl_base to "0" (breaking Gate 7), this PR keeps the original semantics: `startBal` for resets, `currentBalance` for day-rollover, `balStr` for set_balance.
+**CAD/JPY: entry 110.00, SL 110.30, size 0.5, balance $10,000**
 
-3. **Column alignment verified.** All 3 writers (paper-trading day-rollover, bot-scanner day-rollover, reset paths) and the 1 reader (Gate 7) now use `daily_pnl_base_date`. Verified by grep: zero references to `daily_pnl_date` in non-comment lines of both files.
+| Step | Old (buggy) | New (fixed) |
+|------|-------------|-------------|
+| SL distance | 0.30 | 0.30 |
+| x lotUnits | x 100,000 | x 100,000 |
+| x size | x 0.5 | x 0.5 |
+| x quoteToUSD | (missing) | x 1/142 = 0.00704 |
+| riskPerUnit | 15,000 (JPY) | $105.63 |
+| / balance | / $10,000 | / $10,000 |
+| **heat** | **150.0%** (wrong) | **1.056%** (correct) |
+
+**EUR/USD: entry 1.0850, SL 1.0820, size 0.5, balance $10,000**
+
+| Step | Old | New |
+|------|-----|-----|
+| SL distance | 0.0030 | 0.0030 |
+| x lotUnits | x 100,000 | x 100,000 |
+| x size | x 0.5 | x 0.5 |
+| x quoteToUSD | (missing, but = 1.0) | x 1.0 |
+| riskPerUnit | $150.00 | $150.00 |
+| **heat** | **1.5%** (correct) | **1.5%** (correct) |
+
+USD-quoted pairs are unchanged. JPY-quoted pairs drop from ~143x inflation to correct values. CHF/CAD/GBP/AUD/NZD-quoted pairs receive modest corrections proportional to their exchange rate.
 
 ## Open questions
 
-1. **Migration timing.** The migration to drop `daily_pnl_date` should be applied AFTER this code is deployed. If the migration runs before the code is deployed, the old code (still referencing `daily_pnl_date`) will error. Recommend: deploy code first, verify, then apply migration.
-
-2. **Previous PR branch.** The branch `manus/fix-reset-and-daily-baseline` (from the previous task) set `daily_pnl_base = "0"` which would break Gate 7. That branch should NOT be merged. This branch supersedes it with correct values.
+None. The fix is minimal, well-scoped, and verified by hand computation. The `getQuoteToUSDRate` function and `rateMap` were already in scope — this was a missing multiplication.
 
 ## Suggested PR title and description
 
-**Title:** fix: align daily_pnl_base_date column across scanner, gate, and reset paths
+**Title:** fix(gate6): convert portfolio heat risk to USD via quoteToUSD
 
 **Description:**
 
-Fixes the column name mismatch between paper-trading and bot-scanner for the daily PnL baseline tracking. All code paths now consistently use `daily_pnl_base_date` instead of the legacy `daily_pnl_date` column.
+Gate 6 (portfolio heat) computed each position's risk as `|entry - SL| x lotUnits x size` and divided by the USD balance. For non-USD-quoted pairs, this produced risk in the quote currency (JPY, CHF, etc.) instead of USD, inflating JPY heat by ~142x and distorting CHF/CAD/GBP heat by their respective exchange rates.
 
-Also fixes:
-- `reset_account` sets `is_paused: true` (was `false` -- bot could auto-start after reset)
-- `reset_account` deletes from `trades` table (was missing)
-- `reset_account` response includes `paused: true` for frontend
+**Fix:** multiply `riskPerUnit` by `getQuoteToUSDRate(p.symbol, rateMap)` — the same conversion already used by position sizing (line 621) and cost-adjusted RR (line 1017).
 
-Includes migration to drop the orphaned `daily_pnl_date` column (apply after deploy).
-
-14 new tests, 217 total passing.
+**Impact:** JPY-cross positions that previously showed 100%+ heat now show their true ~1% risk. USD-quoted pairs are unchanged. 6 new tests with hand-computed expected values. Full suite: 223 passed, 0 failed.
