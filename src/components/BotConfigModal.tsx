@@ -66,6 +66,10 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
+  { tab: "entry_exit", label: "Enable Limit Orders", keywords: ["limit", "pending", "order", "ob", "fvg", "zone", "entry type"] },
+  { tab: "entry_exit", label: "Limit Order Expiry", keywords: ["limit", "expiry", "pending", "cancel", "minutes"] },
+  { tab: "entry_exit", label: "Limit Order Distance", keywords: ["limit", "distance", "pips", "max", "min"] },
+  { tab: "entry_exit", label: "Limit Order Zone Preference", keywords: ["limit", "zone", "ob", "fvg", "nearest", "prefer"] },
   { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
   { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
   { tab: "entry_exit", label: "Close on Reverse Signal", keywords: ["reverse", "close", "opposite"] },
@@ -941,6 +945,45 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         <Input type="number" value={config.entry?.slBufferPips ?? 2} onChange={e => updateField('entry', 'slBufferPips', parseFloat(e.target.value) || 0)} step={0.5} min={0} max={20} className="h-9 text-sm" />
                       </FieldGroup>
                       <ToggleField label="Close on Reverse Signal" description="Auto-close position when an opposite signal appears" checked={config.entry?.closeOnReverse ?? false} onChange={v => updateField('entry', 'closeOnReverse', v)} />
+                    </div>
+
+                    {/* ── Limit Orders (Pending Orders) ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Limit Orders</p>
+                      <ToggleField label="Enable Limit Orders" description="Place pending limit orders at OB/FVG zone edges instead of immediate market orders. Better entries but may miss fast moves." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
+                      {config.entry?.limitOrderEnabled && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Expiry Time (minutes)" description="How long a pending limit order stays active before auto-cancelling">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.entry?.limitOrderExpiryMinutes ?? 60]} onValueChange={v => updateField('entry', 'limitOrderExpiryMinutes', v[0])} min={15} max={480} step={15} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-16 text-right">{config.entry?.limitOrderExpiryMinutes ?? 60}m</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Max Distance (pips)" description="Skip limit order if zone is further than this from current price — too far means low fill probability">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.entry?.limitOrderMaxDistancePips ?? 30]} onValueChange={v => updateField('entry', 'limitOrderMaxDistancePips', v[0])} min={5} max={100} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMaxDistancePips ?? 30}</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Min Distance (pips)" description="If price is already within this distance of the zone, use market order instead — no point waiting">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.entry?.limitOrderMinDistancePips ?? 3]} onValueChange={v => updateField('entry', 'limitOrderMinDistancePips', v[0])} min={0} max={20} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMinDistancePips ?? 3}</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Preferred Zone" description="Which zone type to target for the limit entry price">
+                            <Select value={config.entry?.limitOrderPreferZone ?? "ob"} onValueChange={v => updateField('entry', 'limitOrderPreferZone', v)}>
+                              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="ob">Order Block (OB midpoint)</SelectItem>
+                                <SelectItem value="fvg">Fair Value Gap (FVG midpoint)</SelectItem>
+                                <SelectItem value="nearest">Nearest Zone (closest to price)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </FieldGroup>
+                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot places a limit order at the zone's consequent encroachment (midpoint) instead of entering at market. If no valid zone is found within distance limits, a market order is used as fallback.</p>
+                        </div>
+                      )}
                     </div>
 
                     {/* ── Stop Loss Method ── */}
