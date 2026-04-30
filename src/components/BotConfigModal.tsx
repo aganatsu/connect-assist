@@ -35,6 +35,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Unicorn Model", keywords: ["unicorn", "breaker", "fvg overlap"] },
   { tab: "strategy", label: "Session Quality", keywords: ["session", "kill zone", "silver bullet", "macro", "timing", "ict"] },
   { tab: "strategy", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated"] },
+  { tab: "strategy", label: "SMT Opposite Veto", keywords: ["smt", "veto", "opposite", "block"] },
   { tab: "strategy", label: "Volume Profile", keywords: ["volume", "profile", "poc", "hvn", "lvn", "tpo", "value area"] },
   { tab: "strategy", label: "Trend Direction", keywords: ["trend", "direction", "entry", "timeframe", "higher highs", "lower lows"] },
   { tab: "strategy", label: "Daily Bias", keywords: ["daily", "bias", "htf", "higher timeframe", "bullish", "bearish"] },
@@ -658,6 +659,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="Silver Bullet Windows" description="ICT macro windows (London 08-09, AM 15-16, PM 19-20 UTC). +1.0 pt, +0.5 combo bonus when overlapping a kill zone" checked={config.strategy?.useSilverBullet ?? true} onChange={v => updateField('strategy', 'useSilverBullet', v)} />
                       <ToggleField label="ICT Macro Windows" description="8 institutional reprice windows (~20min each). +0.5 pt, +0.5 combo bonus when overlapping a Silver Bullet" checked={config.strategy?.useMacroWindows ?? true} onChange={v => updateField('strategy', 'useMacroWindows', v)} />
                       <ToggleField label="SMT Divergence" description="Compares pair vs correlated pair (e.g. EUR/USD vs GBP/USD). +1.0 pt when one sweeps liquidity but the other holds" checked={config.strategy?.useSMT ?? true} onChange={v => updateField('strategy', 'useSMT', v)} />
+                      <ToggleField label="SMT Opposite Veto" description="Block trades where SMT divergence opposes signal direction. Hard veto — trade will not be placed regardless of score" checked={config.strategy?.smtOppositeVeto ?? true} onChange={v => updateField('strategy', 'smtOppositeVeto', v)} />
                       <ToggleField label="Volume Profile" description="TPO-based volume profile: POC (Point of Control), HVN/LVN detection. +0.75 pts when price at key volume node" checked={config.strategy?.useVolumeProfile ?? true} onChange={v => updateField('strategy', 'useVolumeProfile', v)} />
                       <ToggleField label="Daily Bias" description="Higher timeframe daily bias confirmation. +1.0 pts when daily candle structure aligns with trade direction" checked={config.strategy?.useDailyBias ?? true} onChange={v => updateField('strategy', 'useDailyBias', v)} />
                       <ToggleField label="AMD Phase Detection" description="Accumulation→Manipulation→Distribution. +1.0 pt when bias-aligned phase detected. Power of 3 combo bonus (+1.0) when AMD + Sweep/Judas + Trend all align" checked={config.strategy?.useAMD ?? true} onChange={v => updateField('strategy', 'useAMD', v)} />
