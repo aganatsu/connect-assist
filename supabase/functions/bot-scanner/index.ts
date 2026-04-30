@@ -146,6 +146,7 @@ const DEFAULTS = {
   // minConfluence threshold always means "X% of enabled factors aligned".
   normalizedScoring: true,  // Percentage-based scoring is now the default
   useSMT: true,
+  smtOppositeVeto: true,  // When true, block trades where SMT divergence opposes signal direction
   useFOTSI: true,
   // ── Setup Staging / Watchlist ──
   stagingEnabled: true,
@@ -725,6 +726,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useMacroWindows: strategy.useMacroWindows ?? true,
     // SMT Divergence (defaults true)
     useSMT: strategy.useSMT ?? true,
+    // SMT Opposite Veto (defaults true — block trades where SMT opposes signal)
+    smtOppositeVeto: strategy.smtOppositeVeto ?? raw.smtOppositeVeto ?? true,
     // VWAP confluence (defaults true)
     useVWAP: strategy.useVWAP ?? true,
     vwapProximityPips: strategy.vwapProximityPips ?? 15,
@@ -1007,7 +1010,7 @@ async function runSafetyGates(
   }
 
   // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
-  {
+  if (config.smtOppositeVeto !== false) {
     const smtFactor = analysis.factors?.find((f: any) => f.name === "SMT Divergence");
     if (smtFactor && smtFactor.detail && smtFactor.detail.includes("opposite to signal direction")) {
       gates.push({ passed: false, reason: `SMT divergence opposite — vetoed` });
