@@ -1,104 +1,126 @@
-# Task: fix-gate6-heat-quotetousd
-
-## Branch: manus/fix-gate6-heat-quotetousd
+# Task: SMT Opposite Veto Gate
+## Branch: manus/smt-opposite-veto
 
 ## Behavior changes
 
-1. **Gate 6 portfolio heat now converts each position's risk to USD before summing.** Previously, risk was computed in the quote currency of each pair and then divided by the USD-denominated balance. This inflated heat for JPY-quoted pairs by ~142x and deflated it for GBP-quoted pairs by ~0.79x. After the fix, all risk amounts are in USD.
-
-2. **Concrete impact on gate pass/fail:**
-   - A single CAD/JPY position with 30-pip SL and 0.5 lots on a $10,000 account previously showed **150% heat** (gate blocked). It now correctly shows **~1.06% heat** (gate passes).
-   - A single USD/CHF position with 30-pip SL and 0.5 lots previously showed **1.5% heat**. It now correctly shows **~1.70% heat** (modest increase, gate still passes).
-   - USD-quoted pairs (EUR/USD, GBP/USD, etc.) are unchanged — quoteToUSD = 1.0.
+1. **Trades where SMT divergence is detected opposite to the signal direction are now blocked.** Previously, the SMT factor scored 0 points when opposed but did not prevent the trade from being placed. Now, Gate 9b explicitly vetoes such trades with reason "SMT divergence opposite — vetoed". This is a hard block — the trade will not be placed regardless of overall confluence score.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Added `getQuoteToUSDRate(p.symbol, rateMap)` call inside Gate 6 loop (line 966) and multiplied `riskPerUnit` by `quoteToUSD` (line 967). One line added, one line changed. |
-| `supabase/functions/bot-scanner/gate6Heat.test.ts` | New test file: 6 tests covering structural verification, 4 quote-currency categories, and the fallback branch. |
-| `REPORT.md` | This file. |
+| `supabase/functions/bot-scanner/index.ts` | Added Gate 9b (SMT Opposite Veto) — 9 lines inserted between Gate 9 and Gate 10 |
+| `supabase/functions/bot-scanner/smtVeto.test.ts` | New test file — 6 tests (5 behavioral + 1 structural verification) |
+| `REPORT.md` | This report |
 
 ## Extra-caution file explanation: bot-scanner/index.ts
 
-The change is a **two-line edit** inside the Gate 6 portfolio heat loop (lines 964–968). The existing line:
+The change is a **9-line insertion** at line 1009, between Gate 9 (min confluence) and Gate 10 (min R:R). It adds a new gate entry to the `gates[]` array. The logic is:
 
-```ts
-const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize;
+1. Find the "SMT Divergence" factor in `analysis.factors`
+2. If found AND its `detail` string contains the exact phrase `"opposite to signal direction"` → push a failing gate
+3. Otherwise → push a passing gate
+
+No existing lines were modified. No function signatures changed. No imports added. The gate uses the same `analysis.factors` array that is already computed and available at this point in the function.
+
+## Exact code added
+
+Inserted at line 1009 of `bot-scanner/index.ts` (between Gate 9 "Min confluence" and Gate 10 "Min R:R"):
+
+```typescript
+  // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
+  {
+    const smtFactor = analysis.factors?.find((f: any) => f.name === "SMT Divergence");
+    if (smtFactor && smtFactor.detail && smtFactor.detail.includes("opposite to signal direction")) {
+      gates.push({ passed: false, reason: `SMT divergence opposite — vetoed` });
+    } else {
+      gates.push({ passed: true, reason: `SMT veto: no opposition detected` });
+    }
+  }
 ```
 
-was replaced with:
+## Gate sequence position
 
-```ts
-const quoteToUSD = getQuoteToUSDRate(p.symbol, rateMap);
-const riskPerUnit = Math.abs(pEntry - pSL) * spec.lotUnits * pSize * quoteToUSD;
-```
+- Gate 9 (line 1002): Min confluence score check
+- **Gate 9b (line 1009): SMT Opposite Veto** ← NEW
+- Gate 10 (line 1019): Min R:R (spread + commission adjusted)
 
-`getQuoteToUSDRate` is the same function already used at line 621 (position sizing), line 1017 (Gate 8 cost-adjusted RR), and line 2084 (PnL conversion). The `rateMap` parameter is already passed to `runSafetyGates` at line 892 and supplied at the call site (line 3210). No new imports, no new functions, no signature changes.
-
-The fallback branch (line 970–971: `balance * (riskPerTrade / 100)`) was not changed because it already computes in USD (balance is USD, riskPerTrade is a percentage).
+The gate appears in the `gates[]` array in the reasoning JSON stored in `signal_reason` on every trade (line ~3597), and in `detail.gates` on every scan detail (line 3263).
 
 ## Tests added
 
-| Test | Asserts |
-|------|---------|
-| `Gate 6 source contains quoteToUSD conversion` | Structural: the fix exists in the source code (regex match for `getQuoteToUSDRate(p.symbol, rateMap)` inside Gate 6 block) |
-| `Test 1: EUR/USD (USD-quoted)` | Heat = 1.5% for both old and new code (quoteToUSD = 1.0, no change) |
-| `Test 2: CAD/JPY (JPY-quoted)` | Fixed heat = 1.056%, old heat = 150.0% (inflation ratio ~142x confirmed) |
-| `Test 3: USD/CHF (CHF-quoted)` | Fixed heat = 1.705%, old heat = 1.5% (old/new ratio = 0.88, the USD/CHF rate) |
-| `Test 4: Mixed EUR/USD + CAD/JPY` | Total heat = sum of individual heats (2.556%), old code produced >150% |
-| `Test 5: Missing SL fallback` | Both old and new produce 1.0% (fallback branch is already in USD) |
+| # | Test name | Assertion |
+|---|-----------|-----------|
+| 1 | `SMT opposite to signal direction → veto (trade blocked)` | Factor detail "SMT detected (bearish) but opposite to signal direction" → gate fails |
+| 2 | `SMT aligned with signal direction → pass (trade proceeds)` | Factor detail "SMT aligned: ..." → gate passes |
+| 3 | `SMT not detected (no divergence found) → pass` | Factor detail "No SMT divergence detected on GBP/USD" → gate passes |
+| 4 | `SMT factor missing from factors array → pass` | No SMT factor in array, also tests undefined/null factors → gate passes |
+| 5 | `Detail with 'opposite' in different context → pass (no false positive)` | "opposite leg structure", scrambled words, "opposite to signal strength" → all pass (no veto) |
+| 6 | `Source code presence verification` | Confirms Gate 9b comment, exact phrase, reason string, and position between Gate 9 and Gate 10 in source |
 
 ## Tests run
 
 ```
 $ deno test --allow-all --no-check supabase/functions/
-ok | 223 passed | 0 failed (5s)
+ok | 229 passed | 0 failed (5s)
 ```
 
-6 new tests + 217 existing tests, all passing.
+Breakdown:
+- 35 calcPnl tests ✓
+- 92 confluenceScoring tests ✓
+- 47 crossEngineEquivalence tests ✓
+- 5 slFloorAndTier1Gate tests ✓
+- 5 gate6Heat tests ✓
+- 6 smtVeto tests ✓ (NEW)
+- 14 reset tests ✓
+- 25 liveBacktestParity tests ✓
 
 ## Regression check
 
-### Hand-computed math (side-by-side)
+1. **No existing gate logic was modified.** Gate 9b is purely additive — it inserts a new entry into the `gates[]` array without touching any other gate's logic or position.
+2. **The gate always pushes exactly one entry** (either pass or fail), maintaining the invariant that every gate produces exactly one GateResult.
+3. **The matching phrase "opposite to signal direction" is the exact string produced by `confluenceScoring.ts` line 1219** — confirmed by grep. No other factor uses this exact phrase in a way that could false-positive (the AMD factor uses "opposite to signal direction" in a different factor name, but Gate 9b specifically looks for `name === "SMT Divergence"` first).
+4. **All 223 pre-existing tests pass unchanged** — the new gate does not alter scoring, detection, or any other gate's behavior.
 
-**CAD/JPY: entry 110.00, SL 110.30, size 0.5, balance $10,000**
+## Hand-traced example
 
-| Step | Old (buggy) | New (fixed) |
-|------|-------------|-------------|
-| SL distance | 0.30 | 0.30 |
-| x lotUnits | x 100,000 | x 100,000 |
-| x size | x 0.5 | x 0.5 |
-| x quoteToUSD | (missing) | x 1/142 = 0.00704 |
-| riskPerUnit | 15,000 (JPY) | $105.63 |
-| / balance | / $10,000 | / $10,000 |
-| **heat** | **150.0%** (wrong) | **1.056%** (correct) |
+**Trade: EUR/USD short, 2026-04-30 15:00:22 UTC**
 
-**EUR/USD: entry 1.0850, SL 1.0820, size 0.5, balance $10,000**
+The `factorScores` array in `signal_reason` includes:
+```json
+{ "name": "SMT Divergence", "present": false, "weight": 0, "detail": "SMT detected (bearish) but opposite to signal direction" }
+```
 
-| Step | Old | New |
-|------|-----|-----|
-| SL distance | 0.0030 | 0.0030 |
-| x lotUnits | x 100,000 | x 100,000 |
-| x size | x 0.5 | x 0.5 |
-| x quoteToUSD | (missing, but = 1.0) | x 1.0 |
-| riskPerUnit | $150.00 | $150.00 |
-| **heat** | **1.5%** (correct) | **1.5%** (correct) |
-
-USD-quoted pairs are unchanged. JPY-quoted pairs drop from ~143x inflation to correct values. CHF/CAD/GBP/AUD/NZD-quoted pairs receive modest corrections proportional to their exchange rate.
+Gate 9b walk-through:
+1. `analysis.factors?.find(f => f.name === "SMT Divergence")` → finds the factor above ✓
+2. `smtFactor.detail` → `"SMT detected (bearish) but opposite to signal direction"` ✓
+3. `smtFactor.detail.includes("opposite to signal direction")` → `true` ✓
+4. Gate pushes: `{ passed: false, reason: "SMT divergence opposite — vetoed" }`
+5. Later: `gates.every(g => g.passed)` → `false` (at least one gate failed)
+6. **Trade would NOT have been placed.** The -$269 loss from this and similar trades would have been avoided.
 
 ## Open questions
 
-None. The fix is minimal, well-scoped, and verified by hand computation. The `getQuoteToUSDRate` function and `rateMap` were already in scope — this was a missing multiplication.
+None. The implementation is straightforward and self-contained.
 
 ## Suggested PR title and description
 
-**Title:** fix(gate6): convert portfolio heat risk to USD via quoteToUSD
+**Title:** `[smt-opposite-veto] Add Gate 9b: block trades with SMT divergence opposing signal direction`
 
 **Description:**
+```
+Analysis of 25 paper trades over 48h shows trades where SMT divergence
+opposes the signal direction perform significantly worse:
+- WITH SMT-opposite: 33% WR, net -$269 (6 trades)
+- WITHOUT: 68% WR, net +$172 (19 trades)
 
-Gate 6 (portfolio heat) computed each position's risk as `|entry - SL| x lotUnits x size` and divided by the USD balance. For non-USD-quoted pairs, this produced risk in the quote currency (JPY, CHF, etc.) instead of USD, inflating JPY heat by ~142x and distorting CHF/CAD/GBP heat by their respective exchange rates.
+This PR adds a hard veto gate (Gate 9b) that blocks trade placement when
+the SMT Divergence factor detail contains "opposite to signal direction".
 
-**Fix:** multiply `riskPerUnit` by `getQuoteToUSDRate(p.symbol, rateMap)` — the same conversion already used by position sizing (line 621) and cost-adjusted RR (line 1017).
+The gate is:
+- Positioned after the score gate (Gate 9) and before R:R (Gate 10)
+- Hardcoded (not configurable) — testing the hypothesis first
+- One-way: only blocks, never modifies scoring or other gates
 
-**Impact:** JPY-cross positions that previously showed 100%+ heat now show their true ~1% risk. USD-quoted pairs are unchanged. 6 new tests with hand-computed expected values. Full suite: 223 passed, 0 failed.
+6 new tests, 229 total passing, 0 failed.
+```

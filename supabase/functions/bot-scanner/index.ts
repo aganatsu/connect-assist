@@ -1006,6 +1006,16 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `Score ${analysis.score} meets threshold` });
   }
 
+  // Gate 9b: SMT Opposite Veto — block trades where SMT divergence opposes signal direction
+  {
+    const smtFactor = analysis.factors?.find((f: any) => f.name === "SMT Divergence");
+    if (smtFactor && smtFactor.detail && smtFactor.detail.includes("opposite to signal direction")) {
+      gates.push({ passed: false, reason: `SMT divergence opposite — vetoed` });
+    } else {
+      gates.push({ passed: true, reason: `SMT veto: no opposition detected` });
+    }
+  }
+
   // Gate 10: Min R:R (spread + commission adjusted)
   // Subtract typical spread cost AND estimated commission cost from reward to get effective R:R.
   if (analysis.stopLoss && analysis.takeProfit) {
