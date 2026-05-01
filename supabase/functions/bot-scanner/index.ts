@@ -1441,6 +1441,26 @@ Deno.serve(async (req) => {
       return respond(data || []);
     }
 
+    // ── Management-Only Cron (1-minute cycle) ──
+    // Refreshes prices, runs trailing/BE/partial TP, checks pending order fills/expiry.
+    // Does NOT run the full scan or place new trades. Designed for pg_cron every 1 min.
+    if (action === "manage") {
+      const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
+        .eq("is_running", true).eq("kill_switch_active", false);
+      const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
+      if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", managed: 0 });
+      const results = [];
+      for (const account of accounts) {
+        try {
+          const result = await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
+          results.push({ userId: account.user_id, ...result });
+        } catch (e: any) {
+          results.push({ userId: account.user_id, error: e.message });
+        }
+      }
+      return respond({ managed: results.length, results });
+    }
+
      if (action === "scan" || action === "cron") {
       const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
         .eq("is_running", true).eq("kill_switch_active", false);
@@ -1468,7 +1488,7 @@ Deno.serve(async (req) => {
   }
 });
 
-async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean }) {
+async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
@@ -1477,9 +1497,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
+  // Management-only runs skip the lock entirely — they're lightweight and shouldn't block scans.
   //
   // For manual scans: force-clear any stale lock first. The user explicitly clicked
   // "Scan Now" — they should never be blocked by a lock left behind by a crashed cron scan.
+  if (!opts?.isManagementOnly) {
   if (opts?.isManualScan) {
     await supabase
       .from("paper_accounts")
@@ -1501,6 +1523,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.log(`[scan-lock] skipped — overlap detected for user ${userId}`);
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
   }
+  } // end scan-lock block (skipped for management-only)
 
   let account: any = null;
   try {
@@ -1508,9 +1531,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── Scan Interval Gate ──
   // Skip this scan if not enough time has elapsed since the last scan.
-  // Manual scans (passed via context) always bypass this gate.
+  // Manual scans and management-only runs always bypass this gate.
   const intervalMinutes = config.scanIntervalMinutes || 15;
-  if (!opts?.isManualScan) {
+  if (!opts?.isManualScan && !opts?.isManagementOnly) {
     const { data: lastScan } = await supabase
       .from("scan_logs")
       .select("created_at")
@@ -1587,7 +1610,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const effectiveDay = isFxOpenSundayEvening ? 1 : nyDay; // pretend Sunday-evening is Monday
   const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
   const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
-  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto) {
+  if (!config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
 
@@ -2589,6 +2612,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled`);
+  }
+
+  // ── Management-Only Early Return ──
+  // When called with isManagementOnly, we've already done: config load, style resolve,
+  // price refresh, management (trailing/BE/partial/structure), broker sync, telegram,
+  // and pending order monitoring. Skip the full pair analysis loop.
+  if (opts?.isManagementOnly) {
+    const activeActions = managementActions.filter(a => a.action !== "no_change");
+    console.log(`[manage ${scanCycleId}] Management-only complete: ${activeActions.length} actions, ${pendingFilled} fills, ${pendingExpired} expired`);
+    return {
+      pairsScanned: 0,
+      signalsFound: 0,
+      tradesPlaced: pendingFilled,
+      mode: "management_only",
+      managementActions: activeActions,
+      pendingOrders: { filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled },
+      scanCycleId,
+    };
   }
 
   // ── Dynamic Scan Skip: management-only mode when max positions reached ──
@@ -4117,12 +4158,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
-    try {
-      const lockRelease = supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
-      if (account?.bot_id) lockRelease.eq("bot_id", BOT_ID);
-      await lockRelease;
-    } catch (e: any) {
-      console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
+    // Only release lock if we acquired one (management-only skips locking)
+    if (!opts?.isManagementOnly) {
+      try {
+        const lockRelease = supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+        if (account?.bot_id) lockRelease.eq("bot_id", BOT_ID);
+        await lockRelease;
+      } catch (e: any) {
+        console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
+      }
     }
   }
 }
