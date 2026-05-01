@@ -427,39 +427,15 @@ export const scannerApi = {
     if (error) throw new Error(error.message);
     return { success: true };
   },
-  // Pending / Limit Orders
+  // Pending / Limit Orders — routed through bot-scanner edge function (uses adminClient, bypasses RLS)
   activePending: async (): Promise<PendingOrder[]> => {
-    const { data, error } = await (supabase as any)
-      .from("pending_orders")
-      .select("*")
-      .eq("bot_id", "smc")
-      .eq("status", "pending")
-      .order("placed_at", { ascending: false });
-    if (error) throw new Error(error.message);
-    return data || [];
+    return invokeFunction<PendingOrder[]>("bot-scanner", { action: "active_pending" });
   },
   allPending: async (): Promise<PendingOrder[]> => {
-    const { data, error } = await (supabase as any)
-      .from("pending_orders")
-      .select("*")
-      .eq("bot_id", "smc")
-      .order("placed_at", { ascending: false })
-      .limit(100);
-    if (error) throw new Error(error.message);
-    return data || [];
+    return invokeFunction<PendingOrder[]>("bot-scanner", { action: "pending_orders", status: "all" });
   },
   cancelPending: async (orderId: string) => {
-    const { error } = await (supabase as any)
-      .from("pending_orders")
-      .update({
-        status: "cancelled",
-        cancel_reason: "Manually cancelled by user",
-        resolved_at: new Date().toISOString(),
-      })
-      .eq("order_id", orderId)
-      .eq("status", "pending");
-    if (error) throw new Error(error.message);
-    return { success: true };
+    return invokeFunction("bot-scanner", { action: "cancel_pending", orderId });
   },
 };
 
