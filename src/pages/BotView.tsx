@@ -1329,8 +1329,56 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Exit Strategy + Filters ── */}
-                          <SignalReasoningCard signalReason={t.signalReason || ""} />
+                          {/* ── Exit Strategy + Filters (inline for rich data) ── */}
+                          {(() => {
+                            const exitFlags = sr.exitFlags ?? null;
+                            const spreadFilter = sr.spreadFilter ?? null;
+                            const newsFilter = sr.newsFilter ?? null;
+                            const exitRows: { label: string; value: string }[] = [];
+                            if (exitFlags) {
+                              if (exitFlags.trailingStopPips != null) exitRows.push({ label: "Trailing Stop", value: `${exitFlags.trailingStopPips} pips${exitFlags.trailingStopActivation ? ` (${exitFlags.trailingStopActivation})` : ""}` });
+                              if (exitFlags.breakEvenPips != null) exitRows.push({ label: "Break Even", value: `${exitFlags.breakEvenPips} pips` });
+                              if (exitFlags.partialTPPercent != null || exitFlags.partialTPLevel != null) exitRows.push({ label: "Partial TP", value: `${exitFlags.partialTPPercent ?? "—"}% @ ${exitFlags.partialTPLevel != null ? `${exitFlags.partialTPLevel}R` : "—"}` });
+                              if (exitFlags.tpRatio != null) exitRows.push({ label: "TP Ratio", value: `${exitFlags.tpRatio}` });
+                              if (exitFlags.maxHoldHours != null) exitRows.push({ label: "Max Hold", value: `${exitFlags.maxHoldHours}h` });
+                            }
+                            return (
+                              <>
+                                {exitRows.length > 0 && (
+                                  <div>
+                                    <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Exit Strategy</p>
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                      {exitRows.map((r, i) => (
+                                        <div key={i} className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+                                          <span className="text-muted-foreground text-[9px]">{r.label}</span>
+                                          <span className="font-mono text-[9px] text-foreground">{r.value}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {(spreadFilter || newsFilter) && (
+                                  <div>
+                                    <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Filters</p>
+                                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                                      {spreadFilter && (
+                                        <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+                                          <span className="text-muted-foreground text-[9px]">Spread</span>
+                                          <span className="font-mono text-[9px] text-foreground">{spreadFilter.enabled ? "on" : "off"}{spreadFilter.maxPips != null ? ` · max ${spreadFilter.maxPips} pips` : ""}</span>
+                                        </div>
+                                      )}
+                                      {newsFilter && (
+                                        <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+                                          <span className="text-muted-foreground text-[9px]">News</span>
+                                          <span className="font-mono text-[9px] text-foreground">{newsFilter.enabled ? "on" : "off"}{newsFilter.pauseMinutes != null ? ` · pause ${newsFilter.pauseMinutes} min` : ""}</span>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </>
                       ) : (
                         /* ── Legacy fallback: old trades without rich data ── */
