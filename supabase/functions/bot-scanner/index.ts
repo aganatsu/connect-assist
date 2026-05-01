@@ -2338,7 +2338,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let pendingExpired = 0;
   let pendingCancelled = 0;
   let pendingPlaced = 0;
-  const { data: activePendingOrders } = await adminClient.from("pending_orders").select("*")
+  const { data: activePendingOrders } = await supabase.from("pending_orders").select("*")
     .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
     .order("placed_at", { ascending: true });
 
@@ -2348,7 +2348,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         // Check expiry first
         if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
-          await adminClient.from("pending_orders").update({
+          await supabase.from("pending_orders").update({
             status: "expired",
             cancel_reason: "TTL expired",
             resolved_at: new Date().toISOString(),
@@ -2365,14 +2365,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const lastCandle = pendingCandles[pendingCandles.length - 1];
 
         // Update current price on the pending order
-        await adminClient.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
+        await supabase.from("pending_orders").update({ current_price: currentPrice }).eq("order_id", pending.order_id).eq("user_id", userId);
 
         const entryPrice = parseFloat(pending.entry_price);
         const slLevel = parseFloat(pending.stop_loss);
 
         // Check SL invalidation: if price has blown past the SL, cancel the order
         if (pending.direction === "long" && currentPrice < slLevel) {
-          await adminClient.from("pending_orders").update({
+          await supabase.from("pending_orders").update({
             status: "cancelled",
             cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
             resolved_at: new Date().toISOString(),
@@ -2382,7 +2382,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
         if (pending.direction === "short" && currentPrice > slLevel) {
-          await adminClient.from("pending_orders").update({
+          await supabase.from("pending_orders").update({
             status: "cancelled",
             cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
             resolved_at: new Date().toISOString(),
@@ -2404,7 +2404,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
           if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
             console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
-            await adminClient.from("pending_orders").update({
+            await supabase.from("pending_orders").update({
               status: "cancelled",
               cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at fill time`,
               resolved_at: new Date().toISOString(),
@@ -2414,7 +2414,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
           if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
             console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
-            await adminClient.from("pending_orders").update({
+            await supabase.from("pending_orders").update({
               status: "cancelled",
               cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at fill time`,
               resolved_at: new Date().toISOString(),
@@ -2487,7 +2487,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             timeframe: config.entryTimeframe || "15min",
           });
 
-          await adminClient.from("pending_orders").update({
+          await supabase.from("pending_orders").update({
             status: "filled",
             fill_reason: `Price touched ${entryPrice} (candle low: ${lastCandle.low}, high: ${lastCandle.high})`,
             filled_at: nowStr,
@@ -3504,7 +3504,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
           }, rateMap, undefined, avgCommissionPerLot);
 
-          const { error: pendingInsertErr } = await adminClient.from("pending_orders").insert({
+          const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
             order_id: pendingOrderId,
