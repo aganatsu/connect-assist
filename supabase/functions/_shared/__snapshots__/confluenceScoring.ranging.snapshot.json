@@ -15,7 +15,7 @@
     "tieredScore": 8,
     "tieredMax": 20.5,
     "tier1GatePassed": false,
-    "tier1GateReason": "Tier 1 gate FAILED: only 2/4 core factors \u2014 need at least 3 of: Market Structure, Order Block, FVG, Premium/Discount",
+    "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib",
     "regimeGatePassed": true,
     "regimeGateReason": "",
     "spreadGatePassed": true,
