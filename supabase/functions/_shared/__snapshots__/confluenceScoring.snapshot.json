@@ -15,9 +15,9 @@
     "tieredScore": 7,
     "tieredMax": 20.5,
     "tier1GatePassed": false,
-    "tier1GateReason": "Tier 1 gate FAILED: only 1/4 core factors \u2014 need at least 3 of: Market Structure, Order Block, FVG, Premium/Discount",
+    "tier1GateReason": "Tier 1 gate FAILED: only 1 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib",
     "regimeGatePassed": false,
-    "regimeGateReason": "Regime mismatch: strong trend \u2014 short entry opposes strong trend (neutral) \u2192 -1.1 penalty (conf: 75%)",
+    "regimeGateReason": "Regime mismatch: strong trend — short entry opposes strong trend (neutral) → -1.1 penalty (conf: 75%)",
     "spreadGatePassed": true,
     "spreadGateReason": "Spread OK: 14.3% of ATR"
   },

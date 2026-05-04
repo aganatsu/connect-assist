@@ -1604,21 +1604,33 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       }
     };
 
-    // Rule 1: Unicorn fires → Breaker = 0, FVG = 0
-    // Unicorn IS Breaker + FVG overlap, so scoring all three is triple-counting.
+    // Rule 1: Unicorn fires → Breaker = 0, FVG stays.
+    // Unicorn = Breaker Block + FVG overlap. The Breaker Block is already
+    // represented inside the Unicorn, so zero it to avoid double-counting.
+    // FVG is kept because the Unicorn is a *better* FVG (FVG + Breaker confluence);
+    // zeroing FVG would penalize the highest-conviction setups.
+    // If FVG is NOT separately present (price inside Unicorn overlap but not
+    // independently inside an FVG), Unicorn is promoted to Tier 1 so it can
+    // fill the FVG's role as a core setup factor.
     const unicorn = findFactor("Unicorn Model");
     if (unicorn && unicorn.present) {
       const breaker = findFactor("Breaker Block");
       const fvg = findFactor("Fair Value Gap");
+      // Always zero the Breaker Block — it's subsumed by the Unicorn
       if (breaker && breaker.present) {
         score -= breaker.weight;
         breaker.weight = 0;
         breaker.detail += " [zeroed: absorbed by Unicorn Model]";
       }
+      // FVG stays scored. Tag it for clarity but do NOT zero it.
       if (fvg && fvg.present) {
-        score -= fvg.weight;
-        fvg.weight = 0;
-        fvg.detail += " [zeroed: absorbed by Unicorn Model]";
+        fvg.detail += " [confirmed: part of Unicorn confluence]";
+      }
+      // If FVG is absent or not present, promote Unicorn to fill the Tier 1 slot.
+      // This ensures a Unicorn entry (which IS an FVG + Breaker overlap) always
+      // counts as at least a Tier 1 core factor.
+      if (!fvg || !fvg.present || fvg.weight <= 0) {
+        (unicorn as any)._promotedToTier1 = true;
       }
     }
 
@@ -1632,8 +1644,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     }
 
     // Rule 3: OB + FVG both inside same zone → cap combined at 3.0
-    // Only applies when Unicorn did NOT fire (Rule 1 already handles that case).
-    if (!(unicorn && unicorn.present)) {
+    // Applies regardless of Unicorn (Rule 1 no longer zeroes FVG).
+    {
       const ob = findFactor("Order Block");
       const fvg2 = findFactor("Fair Value Gap");
       if (ob && ob.present && fvg2 && fvg2.present) {
@@ -1705,7 +1717,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
   const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
-  // Unicorn Model, Volume Profile, AMD Phase, Judas Swing
+  // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
+  // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)
   // (Regime Alignment and Spread Quality are separate gates, not scored)
 
   // Tag each factor with its tier for display
@@ -1716,6 +1729,17 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       (f as any).tier = 2;
     } else {
       (f as any).tier = 3;
+    }
+  }
+
+  // Unicorn Tier 1 promotion: when FVG is absent but Unicorn fires,
+  // promote Unicorn from Tier 3 → Tier 1 so it fills the FVG's core slot.
+  // A Unicorn IS an FVG + Breaker overlap, so it qualifies as a core setup factor.
+  {
+    const uniF = factors.find(f => f.name === "Unicorn Model");
+    if (uniF && (uniF as any)._promotedToTier1) {
+      (uniF as any).tier = 1;
+      uniF.detail += " [promoted to Tier 1: filling FVG core slot]";
     }
   }
 
@@ -1849,8 +1873,9 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   //     → Must have at least 2 Tier 1 factors to consider a trade
   //   Tier 2 (Confirmation): PD/PW Levels, Liquidity Sweep, Displacement, Reversal Candle, Session Quality
   //     → Each present Tier 2 factor scores 1 point
-  //   Tier 3 (Bonus): Everything else (Currency Strength, SMT, Daily Bias, Breaker, Unicorn, Volume, AMD, Judas)
+  //   Tier 3 (Bonus): Everything else (Currency Strength, SMT, Daily Bias, Breaker, Unicorn*, Volume, AMD, Judas)
   //     → Each present Tier 3 factor scores 0.5 points
+  //   *Unicorn is promoted to Tier 1 when FVG is absent (it IS an FVG + Breaker overlap)
   //   Regime and Spread are separate pass/fail gates — they do NOT affect the score.
   //
   // Max possible = (4 × 2) + (5 × 1) + (8 × 0.5) + Po3 bonus (1.0) + OR bonus (2.0) = 20
@@ -2006,9 +2031,15 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Market Structure + Premium/Discount (directional bias without
   // an institutional entry trigger like OB or FVG).
   const tier1GatePassed = tier1Count >= 3;
+  // Build display list: include Unicorn when it was promoted to Tier 1
+  const tier1DisplayNames = ["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib", "Unicorn Model"];
+  const tier1PresentNames = tier1DisplayNames.filter(n => {
+    const f = factors.find(ff => ff.name === n);
+    return f && f.present && f.weight > 0 && (f as any).tier === 1;
+  });
   const tier1GateReason = tier1GatePassed
-    ? `Tier 1 gate passed: ${tier1Count}/4 core factors (${["Market Structure", "Order Block", "FVG", "Premium/Discount"].filter(n => factors.find(f => f.name === n && f.present && f.weight > 0)).join(", ")})`
-    : `Tier 1 gate FAILED: only ${tier1Count}/4 core factors — need at least 3 of: Market Structure, Order Block, FVG, Premium/Discount`;
+    ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})`
+    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;
