@@ -479,6 +479,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   {
     let pts = 0;
     let detail = "";
+    let _matchedFvgHasDisplacement = false; // Fix C: track across scope boundary
     if (config.enableFVG !== false) {
       // P1: pip-size lookup for FVG min-size filter (default 0.0001 if symbol unknown)
       const _sym = (config as any)._currentSymbol as string | undefined;
@@ -497,12 +498,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         }
         return true;
       });
-      // Directional context: prefer FVGs aligned with trade direction (now available)
-      // Bullish FVG (gap up) = support for longs; Bearish FVG (gap down) = resistance for shorts
+      // Directional context: ONLY use FVGs aligned with trade direction.
+      // Bullish FVG (gap up) = support for longs; Bearish FVG (gap down) = resistance for shorts.
+      // Fix A: Counter-directional FVGs are NOT valid entry zones — a bearish FVG is sell-side
+      // imbalance, entering long there is fighting institutional flow.
       const trendHint = direction === "long" ? "bullish" : direction === "short" ? "bearish" : null;
-      // Prefer directionally-aligned FVGs, but fall back to any FVG
       const alignedFVGs = trendHint ? activeFVGs.filter(f => f.type === trendHint) : activeFVGs;
-      const fvgPool = alignedFVGs.length > 0 ? alignedFVGs : activeFVGs;
+      // Fix A: No fallback to counter-directional FVGs — only aligned FVGs qualify
+      const fvgPool = alignedFVGs;
       const insideFVG = fvgPool.find(f => lastPrice >= f.low && lastPrice <= f.high);
       if (insideFVG) {
         const ce = (insideFVG.high + insideFVG.low) / 2; // Consequent Encroachment
@@ -510,12 +513,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         const distFromCE = Math.abs(lastPrice - ce);
         const nearCE = fvgRange > 0 && (distFromCE / fvgRange) <= 0.15; // within 15% of CE
         const isAligned = trendHint ? insideFVG.type === trendHint : true;
+        // Fix A: Since fvgPool is now aligned-only, isAligned is always true when we reach here.
+        // Keeping the variable for clarity but counter-directional path is dead code.
         if (nearCE) {
-          pts = isAligned ? 2.0 : 1.0; // Counter-directional FVG at CE gets half score
-          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)}${isAligned ? " — optimal entry" : " — counter-directional, reduced"}`;
+          pts = 2.0;
+          detail = `Price at CE (${ce.toFixed(5)}) of ${insideFVG.type} FVG ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} — optimal entry`;
         } else {
-          pts = isAligned ? 1.5 : 0.75;
-          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})${isAligned ? "" : " — counter-directional"}`;
+          pts = 1.5;
+          detail = `Price inside ${insideFVG.type} FVG at ${insideFVG.low.toFixed(5)}-${insideFVG.high.toFixed(5)} (CE: ${ce.toFixed(5)})`;
         }
         // Quality scaling: scale base pts by FVG quality (0-8, max 8)
         const fvgQuality = insideFVG.quality ?? 4; // default 4 (mid-range) for backward compat
@@ -538,17 +543,18 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           detail += ` [respected ${respectCount}x, +${respectBonus.toFixed(2)}]`;
         } else if (fvgState === "partially_filled") {
           // Partially filled: scale down based on how much is filled
+          // Fix B: FVGs filled >75% are dead zones — set pts to 0 (present: false)
           if (fillPct <= 30) {
             detail += ` [${fillPct.toFixed(0)}% filled — still viable]`;
           } else if (fillPct <= 60) {
             pts *= 0.75;
             detail += ` [${fillPct.toFixed(0)}% filled, score \u00d70.75]`;
-          } else if (fillPct <= 85) {
+          } else if (fillPct <= 75) {
             pts *= 0.45;
             detail += ` [${fillPct.toFixed(0)}% filled, score \u00d70.45]`;
           } else {
-            pts *= 0.2;
-            detail += ` [${fillPct.toFixed(0)}% filled — nearly dead, score \u00d70.2]`;
+            pts = 0;
+            detail += ` [${fillPct.toFixed(0)}% filled — dead zone, disqualified]`;
           }
         }
 
@@ -561,6 +567,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         }
         if ((insideFVG as any).hasDisplacement) {
           detail += " [displacement-created, scored via Factor 10]";
+          _matchedFvgHasDisplacement = true; // Fix C: propagate to tier logic
         }
       } else if (activeFVGs.length > 0) {
         // FVGs exist but price not inside any — no score (ICT: entry requires price AT the level)
@@ -575,7 +582,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "FVGs disabled";
     }
     { const s = applyWeightScale(pts, "fairValueGap", 2.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Fair Value Gap", present: pts > 0, weight: s.displayWeight, detail: detail || "No active FVGs", group: "Order Flow Zones" }); }
+    const fvgFactor: any = { name: "Fair Value Gap", present: pts > 0, weight: s.displayWeight, detail: detail || "No active FVGs", group: "Order Flow Zones" };
+    // Fix C: stash displacement status for tier demotion logic downstream
+    fvgFactor._hasDisplacement = _matchedFvgHasDisplacement;
+    factors.push(fvgFactor); }
   }
 
   // ── Factor 4: Premium/Discount & Fibonacci (max 2.5, group-capped) ──
@@ -1740,6 +1750,22 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     if (uniF && (uniF as any)._promotedToTier1) {
       (uniF as any).tier = 1;
       uniF.detail += " [promoted to Tier 1: filling FVG core slot]";
+    }
+  }
+
+  // Fix C: Demote FVG from Tier 1 → Tier 2 when the matched FVG was NOT created by displacement.
+  // The FVG's `hasDisplacement` property is tagged at detection time by tagDisplacementQuality(),
+  // so it correctly reflects whether displacement existed when the FVG was created (regardless of
+  // how many candles ago that was). Without displacement, an FVG is just a random gap — it still
+  // scores points but should not satisfy the "3 core factors" Tier 1 gate.
+  {
+    const fvgF = factors.find(f => f.name === "Fair Value Gap");
+    if (fvgF && fvgF.present && (fvgF as any).tier === 1) {
+      // Check if the FVG that was scored had displacement. We stash this during Factor 3 scoring.
+      if (!(fvgF as any)._hasDisplacement) {
+        (fvgF as any).tier = 2;
+        fvgF.detail += " [demoted to Tier 2: no displacement confirmation]";
+      }
     }
   }
 
