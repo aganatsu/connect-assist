@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,7 @@ import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
   TrendingUp, TrendingDown, Minus, Clock, ShieldCheck, ShieldX,
   ChevronDown, ChevronUp, Plus, Settings, Activity, Monitor, RefreshCw,
-  Eye, EyeOff, PanelRightClose, PanelRightOpen,
+  Eye, EyeOff, PanelRightClose, PanelRightOpen, MoreVertical, Wallet,
 } from "lucide-react";
 import { BotConfigModal } from "@/components/BotConfigModal";
 
@@ -36,10 +36,17 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
+import { MobilePositionCard } from "@/components/MobilePositionCard";
 
 export default function BotView() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
+  const [mobileAccountSheet, setMobileAccountSheet] = useState(false);
+  const [mobileScanDetailSheet, setMobileScanDetailSheet] = useState(false);
   const [orderFormOpen, setOrderFormOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [liveModeConfirm, setLiveModeConfirm] = useState(false);
@@ -49,6 +56,18 @@ export default function BotView() {
 
   const [customBalanceInput, setCustomBalanceInput] = useState("");
   const [showSetBalance, setShowSetBalance] = useState(false);
+
+  // Manual scan polling state — keeps spinner active while background scan runs
+  const [scanPolling, setScanPolling] = useState(false);
+  const scanPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanStartedAtRef = useRef<string | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (scanPollRef.current) clearInterval(scanPollRef.current);
+    };
+  }, []);
 
   // Panel visibility — persisted in localStorage
   const [showSidebar, setShowSidebar] = useState(() => {
@@ -152,7 +171,50 @@ export default function BotView() {
       }
 
       if (data.started) {
-        toast.info("Scan started — results will appear in the next refresh", { duration: 5000 });
+        // Backend fired the scan in background — start polling for completion
+        setScanPolling(true);
+        scanStartedAtRef.current = new Date().toISOString();
+
+        // Poll scan-logs every 3s to detect when the new scan lands
+        if (scanPollRef.current) clearInterval(scanPollRef.current);
+        scanPollRef.current = setInterval(async () => {
+          try {
+            const logs = await scannerApi.logs();
+            if (logs && logs.length > 0) {
+              const latestScanTime = logs[0]?.scanned_at;
+              // If the latest scan is newer than when we started, scan is done
+              if (latestScanTime && scanStartedAtRef.current && latestScanTime > scanStartedAtRef.current) {
+                // Scan completed — stop polling
+                if (scanPollRef.current) clearInterval(scanPollRef.current);
+                scanPollRef.current = null;
+                setScanPolling(false);
+                scanStartedAtRef.current = null;
+
+                // Refresh all relevant queries
+                queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
+                queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+                setSelectedScanIdx(0);
+                setSelectedPairIdx(0);
+
+                toast.success("Scan complete — results updated", { duration: 4000 });
+              }
+            }
+          } catch (e) {
+            // Silently ignore polling errors
+          }
+        }, 3000);
+
+        // Safety timeout — stop polling after 90s regardless
+        setTimeout(() => {
+          if (scanPollRef.current) {
+            clearInterval(scanPollRef.current);
+            scanPollRef.current = null;
+            setScanPolling(false);
+            scanStartedAtRef.current = null;
+            queryClient.invalidateQueries({ queryKey: ["scan-logs"] });
+          }
+        }, 90000);
+
         return;
       }
 
@@ -317,87 +379,146 @@ export default function BotView() {
           </span>
         </div>
 
-        {/* Top Control Bar */}
-        <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap text-[10px] md:text-[11px]">
-          <div className="flex items-center gap-1">
-            <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
-              <Play className="h-3 w-3 mr-1" /> Start
-            </Button>
-            <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
-              <Pause className="h-3 w-3 mr-1" /> Pause
-            </Button>
-            <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
-              <Square className="h-3 w-3 mr-1" /> Stop
-            </Button>
-          </div>
-
-          <div className="w-px h-5 bg-border" />
-
-          <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
-            <Plus className="h-3 w-3 mr-1" /> Order
-          </Button>
-          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
-            <Settings className="h-3 w-3 mr-1" /> Config
-          </Button>
-
-          <div className="w-px h-5 bg-border" />
-
-          {/* Engine status */}
-          <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
-            <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-            {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped"}
-          </span>
-
-          <span className={`text-[10px] font-medium px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
-            {d.executionMode === "live" ? "LIVE" : "PAPER"}
-          </span>
-
-          {activeConnections.length > 0 ? (
-            activeConnections.map((conn: any) => (
-              <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
-                <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
+        {/* Top Control Bar — responsive: compact on mobile, full on desktop */}
+        {isMobile ? (
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
+            {/* Left: Start/Pause/Stop (icon-only) + status */}
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
+                <Play className="h-3 w-3" />
+              </Button>
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused} title="Pause">
+                <Pause className="h-3 w-3" />
+              </Button>
+              <Button size="sm" variant="secondary" className="h-7 w-7 p-0" onClick={() => stopMut.mutate()} disabled={!d.isRunning} title="Stop">
+                <Square className="h-3 w-3" />
+              </Button>
+              <div className="w-px h-5 bg-border mx-0.5" />
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+                <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
+                {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}
               </span>
-            ))
-          ) : (
-            <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
-              <Monitor className="h-2.5 w-2.5" /> Connect Broker
-            </button>
-          )}
+              <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+                {d.executionMode === "live" ? "LIVE" : "PAPER"}
+              </span>
+            </div>
 
-          {/* Trading Style Badge */}
-          {(() => {
-            const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
-            const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
-            if (meta) {
-              return (
-                <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}>
-                  {meta.icon} {meta.label}
-                </span>
-              );
-            }
-            return null;
-          })()}
-
-          <div className="ml-auto flex items-center gap-2 flex-wrap">
-            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
-              {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Scan Now
-            </Button>
-            <div className="w-px h-5 bg-border" />
-            <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
-              if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
-            }}>
-              <AlertTriangle className="h-3 w-3 mr-1" /> Kill
-            </Button>
-
-            <div className="hidden md:flex gap-3 text-[10px] text-muted-foreground">
-              <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
-              <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
-              <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
-              <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
-              <span>WR: <strong className={`${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(0)}%</strong></span>
+            {/* Right: Scan + Overflow menu */}
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
+                {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
+              </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline" className="h-7 w-7 p-0">
+                    <MoreVertical className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuItem onClick={() => setOrderFormOpen(!orderFormOpen)}>
+                    <Plus className="h-3.5 w-3.5 mr-2" /> New Order
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setConfigOpen(true)}>
+                    <Settings className="h-3.5 w-3.5 mr-2" /> Bot Config
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setMobileAccountSheet(true)}>
+                    <Wallet className="h-3.5 w-3.5 mr-2" /> Account Details
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => {
+                      if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
+                    }}
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 mr-2" /> Kill Switch
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap text-[11px]">
+            <div className="flex items-center gap-1">
+              <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
+                <Play className="h-3 w-3 mr-1" /> Start
+              </Button>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => pauseMut.mutate()} disabled={!d.isRunning || d.isPaused}>
+                <Pause className="h-3 w-3 mr-1" /> Pause
+              </Button>
+              <Button size="sm" variant="secondary" className="h-7 text-[11px]" onClick={() => stopMut.mutate()} disabled={!d.isRunning}>
+                <Square className="h-3 w-3 mr-1" /> Stop
+              </Button>
+            </div>
+
+            <div className="w-px h-5 bg-border" />
+
+            <Button size="sm" className="h-7 text-[11px] bg-primary text-primary-foreground" onClick={() => setOrderFormOpen(!orderFormOpen)}>
+              <Plus className="h-3 w-3 mr-1" /> Order
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setConfigOpen(true)}>
+              <Settings className="h-3 w-3 mr-1" /> Config
+            </Button>
+
+            <div className="w-px h-5 bg-border" />
+
+            {/* Engine status */}
+            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
+              {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped"}
+            </span>
+
+            <span className={`text-[10px] font-medium px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+              {d.executionMode === "live" ? "LIVE" : "PAPER"}
+            </span>
+
+            {activeConnections.length > 0 ? (
+              activeConnections.map((conn: any) => (
+                <span key={conn.id} className="text-[10px] font-medium px-1.5 py-0.5 bg-primary/20 text-primary flex items-center gap-1">
+                  <Monitor className="h-2.5 w-2.5" /> {conn.display_name} ✓
+                </span>
+              ))
+            ) : (
+              <button onClick={() => navigate("/settings")} className="text-[10px] font-medium px-1.5 py-0.5 bg-muted text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+                <Monitor className="h-2.5 w-2.5" /> Connect Broker
+              </button>
+            )}
+
+            {/* Trading Style Badge */}
+            {(() => {
+              const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
+              const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
+              if (meta) {
+                return (
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}>
+                    {meta.icon} {meta.label}
+                  </span>
+                );
+              }
+              return null;
+            })()}
+
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+                {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Scan Now"}
+              </Button>
+              <div className="w-px h-5 bg-border" />
+              <Button size="sm" variant="destructive" className="h-7 text-[11px]" onClick={() => {
+                if (window.confirm("⚠️ KILL SWITCH: This will close ALL open positions and halt trading. Are you sure?")) killMut.mutate();
+              }}>
+                <AlertTriangle className="h-3 w-3 mr-1" /> Kill
+              </Button>
+
+              <div className="flex gap-3 text-[10px] text-muted-foreground">
+                <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
+                <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
+                <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
+                <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
+                <span>WR: <strong className={`${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(0)}%</strong></span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Manual Order Form (collapsible) */}
         {orderFormOpen && (
@@ -429,6 +550,39 @@ export default function BotView() {
           </div>
         )}
 
+        {/* Mobile Account Summary Strip — tappable to open full account sheet */}
+        {isMobile && (
+          <button
+            onClick={() => setMobileAccountSheet(true)}
+            className="flex items-center gap-0 py-2 px-1 border-b border-border overflow-x-auto active:bg-secondary/20 transition-colors"
+          >
+            <div className="flex-1 min-w-[60px] text-center">
+              <div className="text-[9px] text-muted-foreground uppercase">Balance</div>
+              <div className="text-[12px] font-mono font-bold">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+            </div>
+            <div className="flex-1 min-w-[60px] text-center">
+              <div className="text-[9px] text-muted-foreground uppercase">Unrealized</div>
+              <div className={`text-[12px] font-mono font-bold ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
+                {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
+              </div>
+            </div>
+            <div className="flex-1 min-w-[60px] text-center">
+              <div className="text-[9px] text-muted-foreground uppercase">WR</div>
+              <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
+                {(d.winRate || 0).toFixed(0)}%
+              </div>
+            </div>
+            <div className="flex-1 min-w-[60px] text-center">
+              <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
+              <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
+            </div>
+            <div className="flex-1 min-w-[60px] text-center">
+              <div className="text-[9px] text-muted-foreground uppercase">DD</div>
+              <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
+            </div>
+          </button>
+        )}
+
         {/* Main workspace: 65/35 split */}
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
@@ -452,6 +606,23 @@ export default function BotView() {
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
                     <p className="text-xs font-medium text-muted-foreground">No open positions</p>
                     <p className="text-[10px] text-muted-foreground/70 mt-1">Click "+ Order" to place a trade or start the bot scanner</p>
+                  </div>
+                ) : isMobile ? (
+                  /* Mobile: card-based positions */
+                  <div className="divide-y divide-border/40">
+                    {botPositions.map((p: any) => (
+                      <MobilePositionCard
+                        key={p.id}
+                        position={p}
+                        isExpanded={expandedPosition === p.id}
+                        onToggle={() => setExpandedPosition(expandedPosition === p.id ? null : p.id)}
+                        onClose={(id) => {
+                          if (window.confirm(`Close ${p.symbol} ${p.direction} position?`)) {
+                            paperApi.closePosition(id).then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                          }
+                        }}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[800px]">
@@ -592,7 +763,8 @@ export default function BotView() {
             </Tabs>
           </div>
 
-          {/* Sidebar toggle — always visible */}
+          {/* Sidebar toggle — desktop only */}
+          {!isMobile && (
           <button
             onClick={toggleSidebar}
             className="hidden md:flex items-center justify-center w-5 h-10 my-auto rounded-l border border-r-0 border-border bg-card hover:bg-secondary/50 transition-colors self-center shrink-0"
@@ -600,9 +772,10 @@ export default function BotView() {
           >
             {showSidebar ? <PanelRightClose className="h-3 w-3 text-muted-foreground" /> : <PanelRightOpen className="h-3 w-3 text-muted-foreground" />}
           </button>
+          )}
 
-          {/* Right sidebar (~35%) */}
-          {showSidebar && (
+          {/* Right sidebar (~35%) — desktop only, mobile uses account sheet */}
+          {!isMobile && showSidebar && (
           <div className="flex-1 overflow-y-auto space-y-2 md:max-w-none">
 
             {/* Account Summary */}
@@ -685,8 +858,8 @@ export default function BotView() {
             <Card>
               <CardContent className="pt-3 pb-2 space-y-2 text-[11px]">
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Engine</p>
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending}>
-                  {scanMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} Manual Scan
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px]" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling}>
+                  {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
                 </Button>
                 {/* Set Balance — inline expandable */}
                 <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10" onClick={() => setShowSetBalance(!showSetBalance)}>
@@ -897,7 +1070,7 @@ export default function BotView() {
                           return (
                             <button
                               key={i}
-                              onClick={() => setSelectedPairIdx(i)}
+                              onClick={() => { setSelectedPairIdx(i); if (isMobile) setMobileScanDetailSheet(true); }}
                               className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                             >
                               <div className="min-w-0 flex items-center gap-1.5 flex-1">
@@ -919,8 +1092,8 @@ export default function BotView() {
               </div>
             </div>
 
-            {/* Right: Detail Breakdown (40%) */}
-            <div className="w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none">
+            {/* Right: Detail Breakdown (40%) — hidden on mobile, shown in sheet instead */}
+            <div className={`w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
               <div className="flex-1 overflow-y-auto">
                 {(() => {
@@ -947,6 +1120,122 @@ export default function BotView() {
         )}
 
         <BotConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
+
+        {/* Mobile: Account & Performance Bottom Sheet */}
+        <Sheet open={mobileAccountSheet} onOpenChange={setMobileAccountSheet}>
+          <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto rounded-t-2xl">
+            <SheetHeader className="pb-2">
+              <SheetTitle className="text-sm">Account & Performance</SheetTitle>
+            </SheetHeader>
+            <div className="space-y-3 pb-4">
+              {(() => {
+                const positions = botPositions;
+                const unrealizedPnl = positions.reduce((s: number, p: any) => s + (p.pnl || 0), 0);
+                const totalExposure = positions.reduce((s: number, p: any) => s + (parseFloat(p.size) || 0), 0);
+                const longCount = positions.filter((p: any) => p.direction === "long").length;
+                const shortCount = positions.filter((p: any) => p.direction === "short").length;
+                const equity = parseFloat(d.balance) + unrealizedPnl;
+                const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
+                const history = botTradeHistory;
+                const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
+                const avgWin = d.wins > 0 ? history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.wins : 0;
+                const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;
+                const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
+                return (
+                  <>
+                    {/* Account */}
+                    <div className="rounded-lg border border-border p-3 space-y-1.5 text-[12px]">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Account</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{formatMoney(d.balance)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{formatMoney(equity)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Unrealized P&L</span><span className={`font-mono font-bold ${unrealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(unrealizedPnl, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Daily P&L</span><span className={`font-mono ${d.dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(d.dailyPnl, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Return</span><span className={`font-mono ${profitPct >= 0 ? "text-success" : "text-destructive"}`}>{profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Drawdown</span><span className="font-mono">{(d.drawdown || 0).toFixed(1)}%</span></div>
+                    </div>
+                    {/* Exposure */}
+                    <div className="rounded-lg border border-border p-3 space-y-1.5 text-[12px]">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Exposure</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Open Positions</span><span className="font-mono font-bold">{positions.length}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Long / Short</span><span className="font-mono"><span className="text-success">{longCount}L</span> / <span className="text-destructive">{shortCount}S</span></span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Lots</span><span className="font-mono">{totalExposure.toFixed(2)}</span></div>
+                    </div>
+                    {/* Performance */}
+                    <div className="rounded-lg border border-border p-3 space-y-1.5 text-[12px]">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Performance</p>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Win Rate</span><span className={`font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(1)}%</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Win / Loss</span><span className="font-mono">{d.wins}W / {d.losses}L</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Total Trades</span><span className="font-mono">{d.totalTrades}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Realized P&L</span><span className={`font-mono ${totalRealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(totalRealizedPnl, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Win</span><span className="font-mono text-success">{formatMoney(avgWin, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Loss</span><span className="font-mono text-destructive">{formatMoney(avgLoss, true)}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Profit Factor</span><span className="font-mono">{profitFactor > 0 ? profitFactor.toFixed(2) : "—"}</span></div>
+                      <div className="flex justify-between"><span className="text-muted-foreground">Rejected</span><span className="font-mono text-warning">{d.rejectedCount}</span></div>
+                    </div>
+                    {/* Engine Controls */}
+                    <div className="rounded-lg border border-border p-3 space-y-2 text-[12px]">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider font-semibold mb-1">Engine Controls</p>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px]" onClick={() => { scanMut.mutate(); setMobileAccountSheet(false); }} disabled={scanMut.isPending || scanPolling}>
+                        {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Scan className="h-3 w-3 mr-1" />} {scanPolling ? "Scanning..." : "Manual Scan"}
+                      </Button>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-cyan-500/30 text-cyan-400" onClick={() => setShowSetBalance(!showSetBalance)}>
+                        <Settings className="h-3 w-3 mr-1" /> Set Balance
+                      </Button>
+                      {showSetBalance && (
+                        <div className="flex gap-1.5 items-center">
+                          <Input
+                            type="number"
+                            placeholder="e.g. 10000"
+                            value={customBalanceInput}
+                            onChange={e => setCustomBalanceInput(e.target.value)}
+                            className="h-7 text-[11px] flex-1 pl-5"
+                          />
+                          <Button size="sm" className="h-7 text-[11px] px-3 bg-cyan-600 text-white" disabled={setBalMut.isPending || !customBalanceInput} onClick={() => { const val = parseFloat(customBalanceInput); if (!isNaN(val) && val >= 0) setBalMut.mutate(val); }}>
+                            {setBalMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Apply"}
+                          </Button>
+                        </div>
+                      )}
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-amber-400" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
+                        <RefreshCw className="h-3 w-3 mr-1" /> Reset Balance
+                      </Button>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetMut.isPending}>
+                        Full Reset
+                      </Button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        {/* Mobile: Scan Detail Bottom Sheet */}
+        <Sheet open={mobileScanDetailSheet} onOpenChange={setMobileScanDetailSheet}>
+          <SheetContent side="bottom" className="max-h-[75vh] overflow-y-auto rounded-t-2xl">
+            <SheetHeader className="pb-2">
+              <SheetTitle className="text-sm flex items-center gap-2">
+                {(() => {
+                  const sel = latestDetailsClean[selectedPairIdx];
+                  if (!sel) return "Scan Detail";
+                  return (
+                    <>
+                      {sel.pair}
+                      {sel.direction === "long" ? <span className="text-success text-xs">▲ Long</span> : sel.direction === "short" ? <span className="text-destructive text-xs">▼ Short</span> : null}
+                      <span className="text-xs font-mono text-muted-foreground ml-auto">{typeof sel.score === "number" ? `${sel.score.toFixed(1)}%` : ""}</span>
+                    </>
+                  );
+                })()}
+              </SheetTitle>
+            </SheetHeader>
+            <div className="pb-4">
+              {(() => {
+                const selected = latestDetailsClean[selectedPairIdx];
+                if (!selected) return <p className="text-xs text-muted-foreground text-center py-8">No pair selected</p>;
+                return <ScanDetailInline signal={selected} />;
+              })()}
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
     </AppShell>
   );
