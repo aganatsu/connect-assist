@@ -126,6 +126,7 @@ const DEFAULTS = {
   cooldownMinutes: 0,
   closeOnReverse: false,
   // ── Exit toggles ──
+  structureInvalidationEnabled: false, // CHoCH-against SL tightening (disabled: fires too often on retracements)
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",

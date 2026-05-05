@@ -610,8 +610,9 @@ export async function manageOpenPositions(
       // ONE-SHOT: only fires once per position to prevent progressive squeeze.
       // Without this guard, repeated CHoCH detections would halve the SL distance
       // every scan cycle, squeezing it to near-zero and guaranteeing a stop-out.
+      const structureInvalidationEnabled = config.structureInvalidationEnabled ?? false;
       const structureInvalidationAlreadyFired = exitFlags.structureInvalidationFired === true;
-      if (!structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
+      if (structureInvalidationEnabled && !structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
         try {
           // C4 fix: Use the position's entry timeframe for structure invalidation
           // instead of hardcoded 15m. Scalpers (5m) need 5m structure checks,

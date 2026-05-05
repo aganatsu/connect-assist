@@ -151,6 +151,7 @@ Deno.test("SL floor: structure invalidation cannot tighten GBP/USD below 15 pips
   const chochCandles = generateBearishCHoCHFixture();
 
   const config = {
+    structureInvalidationEnabled: true, // explicitly enable for this test
     trailingStopEnabled: false,
     breakEvenEnabled: false,
     partialTPEnabled: false,
@@ -209,6 +210,7 @@ Deno.test("SL floor: tightening that already respects floor is not clamped", asy
   const chochCandles = generateBearishCHoCHFixture();
 
   const config = {
+    structureInvalidationEnabled: true, // explicitly enable for this test
     trailingStopEnabled: false,
     breakEvenEnabled: false,
     partialTPEnabled: false,
@@ -266,6 +268,7 @@ Deno.test("SL floor: one-shot flag prevents repeated tightening", async () => {
   const chochCandles = generateBearishCHoCHFixture();
 
   const config = {
+    structureInvalidationEnabled: true, // explicitly enable for this test
     trailingStopEnabled: false,
     breakEvenEnabled: false,
     partialTPEnabled: false,
