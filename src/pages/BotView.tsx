@@ -1386,6 +1386,23 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
+                          {/* ── Tier-Grouped Factor Breakdown ── */}
+                          {sr.factorScores && sr.factorScores.length > 0 && (
+                            <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
+                          )}
+                          {/* ── Risk Gates ── */}
+                          {sr.gates && sr.gates.length > 0 && (
+                            <div className="space-y-0.5">
+                              <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+                              {sr.gates.map((g: any, gi: number) => (
+                                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                                  <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+                                  <span>{g.reason}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
                           {/* ── Confluence Stacking ── */}
                           {sr.confluenceStacking && (
                             <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
@@ -1434,26 +1451,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Sweep Reclaim ── */}
-                          {sr.sweepReclaim && sr.sweepReclaim.reclaimedCount > 0 && (
-                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
-                              {sr.sweepReclaim.sweeps?.filter((sw: any) => sw.reclaimed).slice(0, 3).map((sw: any, si: number) => (
-                                <div key={si} className="flex flex-wrap items-center gap-1">
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    sw.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
-                                    : sw.createdDisplacement ? "bg-amber-500/20 text-amber-400"
-                                    : "bg-amber-500/15 text-amber-400"
-                                  }`}>
-                                    {sw.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM{sw.createdFVG ? " + FVG" : sw.createdDisplacement ? " + DISP" : ""}
-                                  </span>
-                                  <span className="text-[8px] text-foreground">at {sw.sweptLevel?.toFixed(5)}</span>
-                                  <span className="text-[8px] text-muted-foreground">(strength: {Math.round((sw.reclaimStrength || 0) * 100)}%)</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
                           {/* ── Pullback Health ── */}
                           {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
                             <div className={`rounded border px-2 py-1.5 space-y-1 ${
@@ -1488,6 +1485,26 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   ))}
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {/* ── Sweep Reclaim ── */}
+                          {sr.sweepReclaim && sr.sweepReclaim.reclaimedCount > 0 && (
+                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+                              {sr.sweepReclaim.sweeps?.filter((sw: any) => sw.reclaimed).slice(0, 3).map((sw: any, si: number) => (
+                                <div key={si} className="flex flex-wrap items-center gap-1">
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                    sw.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
+                                    : sw.createdDisplacement ? "bg-amber-500/20 text-amber-400"
+                                    : "bg-amber-500/15 text-amber-400"
+                                  }`}>
+                                    {sw.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM{sw.createdFVG ? " + FVG" : sw.createdDisplacement ? " + DISP" : ""}
+                                  </span>
+                                  <span className="text-[8px] text-foreground">at {sw.sweptLevel?.toFixed(5)}</span>
+                                  <span className="text-[8px] text-muted-foreground">(strength: {Math.round((sw.reclaimStrength || 0) * 100)}%)</span>
+                                </div>
+                              ))}
                             </div>
                           )}
 
@@ -1601,23 +1618,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                               )}
                             </div>
                           )}
-                          {/* ── Tier-Grouped Factor Breakdown ── */}
-                          {sr.factorScores && sr.factorScores.length > 0 && (
-                            <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
-                          )}
-                          {/* ── Risk Gates ── */}
-                          {sr.gates && sr.gates.length > 0 && (
-                            <div className="space-y-0.5">
-                              <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
-                              {sr.gates.map((g: any, gi: number) => (
-                                <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-                                  <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
-                                  <span>{g.reason}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
                           {/* ── Exit Strategy + Filters (inline for rich data) ── */}
                           {(() => {
                             const exitFlags = sr.exitFlags ?? null;
