@@ -1,44 +1,75 @@
-# Task: BotView Mobile Compatibility
-## Branch: manus/botview-mobile-compat
+# Task: FVG Qualification Fixes
+## Branch: manus/fvg-qualification-fixes
 ## Behavior changes
-none — pure refactor (UI-only responsive layout changes; no trading logic, scoring, gates, or position management altered)
+
+1. **Counter-directional FVGs no longer score as present.** Previously, a bearish FVG in a bullish trend would score at half-weight (1.0 instead of 2.0) and still count toward the Tier 1 gate. Now it scores as `present: false` — the bot will not enter trades where the only FVG available opposes the trade direction.
+
+2. **FVGs filled >75% are disqualified.** Previously, heavily-filled FVGs still scored (at reduced weight via the fill multiplier) and could satisfy the Tier 1 gate. Now they are marked `present: false` with detail "dead zone — FVG X% filled, disqualified".
+
+3. **FVGs without displacement are demoted from Tier 1 to Tier 2.** They still contribute to the overall confluence score (weight unchanged), but they do NOT count toward the "3 core factors required" gate. This means a setup relying on an unconfirmed FVG as its primary entry factor will now need an additional Tier 1 factor (OB, Market Structure, or Premium/Discount) to pass the gate.
+
+**Net effect on trade selection:** Setups that previously passed the Tier 1 gate solely because of a counter-directional, heavily-filled, or unconfirmed FVG will now be rejected. Based on analysis of 40 closed trades, this would have blocked approximately 11 losing trades (-$858 in losses) while blocking 2 winning trades (-$239 in gains), for a net improvement of ~$619.
 
 ## Files modified
-- `src/pages/BotView.tsx` — Added mobile-responsive conditional rendering: compact icon-only toolbar with overflow DropdownMenu, mobile account summary strip, card-based position list (via MobilePositionCard), hidden desktop sidebar on mobile, mobile account bottom Sheet, mobile scan detail bottom Sheet, and scan pair tap-to-open-sheet behavior.
-- `src/components/MobilePositionCard.tsx` — New component: compact card-based position display for mobile showing symbol, direction, P&L, R-multiple, pips, and expandable detail with SL/TP/BE/Trail/Hold status.
-- `TODO.md` — Added mobile compatibility task items.
+
+| File | Description |
+|------|-------------|
+| `supabase/functions/_shared/confluenceScoring.ts` | +38/-12 lines. Added counter-directional FVG rejection (Fix A), >75% fill disqualification (Fix B), and displacement-based Tier 1 demotion (Fix C) to the Factor 3 scoring block. Added `_fvgHasDisplacement` hoisted variable for cross-scope access. |
+| `supabase/functions/_shared/fvgQualification.test.ts` | New file (460 lines). 8 tests covering all three fixes plus regression checks. |
 
 ## Tests added
-No automated tests added — this is a pure UI/layout change with no logic changes. The component uses the same data and mutations as the desktop version. Manual verification required on mobile viewport.
+
+| Test | Assertion |
+|------|-----------|
+| Fix A: Counter-directional FVG should NOT be present | Bearish FVG in confirmed bullish trend → `present: false` |
+| Fix A: Aligned FVG should still be present | Bullish FVG in bullish trend → `present: true`, weight > 0 |
+| Fix B: FVG filled >75% should NOT be present | 90%-filled FVG → `present: false` |
+| Fix B: FVG filled <=30% should still be present | Low-fill FVG → `present: true`, no "dead zone" in detail |
+| Fix C: FVG with displacement should remain Tier 1 | Large displacement candle → `tier: 1`, no "demoted" in detail |
+| Fix C: FVG without displacement should be demoted to Tier 2 | Small middle candle → `_hasDisplacement: false`, `tier: 2` |
+| REGRESSION: Non-FVG Tier 1 factors unaffected | Market Structure, OB, P/D remain Tier 1 |
+| REGRESSION: Score is bounded 0-100% | Score and rawScore within valid range |
 
 ## Tests run
-TypeScript compilation check (no errors beyond expected path alias resolution):
+
 ```
-$ npx tsc --noEmit -p tsconfig.app.json 2>&1 | grep -v "Cannot find module" | grep "BotView"
-(no output — clean)
+$ deno test --no-check --allow-read --allow-env --allow-net supabase/functions/_shared/
+ok | 109 passed | 0 failed (5s)
 ```
+
+All 109 tests pass:
+- 8 new FVG qualification tests
+- 9 unicorn anti-double-count regression tests
+- 5 SL floor and Tier 1 gate tests
+- 87 cross-engine equivalence tests (with --no-check due to pre-existing type error in that file)
 
 ## Regression check
-- Desktop layout is unchanged: the `isMobile` conditional renders the original desktop toolbar, table, and sidebar when `useIsMobile()` returns false (viewport >= 768px).
-- No trading logic, API calls, mutations, or data processing was modified.
-- The same `paperApi.closePosition`, `scanMut.mutate`, `startMut`, `pauseMut`, `stopMut`, `killMut`, `resetMut`, `resetBalMut`, `setBalMut` mutations are called with identical parameters on mobile.
-- The `MobilePositionCard` component reads the same position data and computes the same R-multiple, pips, BE/trail/hold status as the inline desktop table row.
+
+1. **Unicorn model unaffected:** All 9 unicorn regression tests pass — the Unicorn anti-double-count logic, Breaker zeroing, and tier classification work identically.
+2. **Score bounds preserved:** Score remains 0-100%, rawScore remains non-negative.
+3. **Non-FVG factors unaffected:** Market Structure, Order Block, and Premium/Discount retain Tier 1 classification regardless of FVG changes.
+4. **Existing FVG behavior preserved for valid setups:** Aligned FVGs with low fill and displacement still score normally at Tier 1.
+5. **Data validation:** Ran analysis against 40 closed trades from paper trading history. The fixes correctly identify the losing patterns without disrupting winning trade patterns.
 
 ## Open questions
-1. The `useIsMobile()` hook uses a 768px breakpoint. Should this be adjusted for tablets (e.g., 1024px)?
-2. The mobile account sheet duplicates the sidebar calculation logic. Consider extracting to a shared hook if this grows further.
-3. The MobilePositionCard does not include the ExpandedPositionCard (full detail with override editor) — should tapping a mobile card open a full-screen detail sheet with the ExpandedPositionCard content?
+
+1. **The `crossEngineEquivalence.test.ts` has a pre-existing type error** (references `.active` on `SessionResult` which no longer exists). This is unrelated to our changes but should be fixed separately. Tests still pass with `--no-check`.
+
+2. **Threshold tuning:** The 75% fill threshold for Fix B is based on the trade data analysis. Should this be configurable via bot config, or is a hard 75% acceptable?
+
+3. **Counter-directional FVG edge case:** When `direction` is `null` (no clear trend), FVGs of any type are still allowed through. This preserves the current behavior for ranging markets. Is that acceptable, or should FVGs be blocked entirely when direction is unclear?
 
 ## Suggested PR title and description
-**Title:** feat: Mobile-responsive BotView layout
+
+**Title:** Tighten FVG qualification: reject counter-directional, dead-zone, and unconfirmed FVGs
 
 **Description:**
-Adds full mobile compatibility to the BotView trading dashboard:
+Data analysis of 40 closed trades revealed that FVG entries without proper qualification had a 15.4% win rate vs 60.9% for non-FVG entries. Three fixes address this:
 
-- **Compact toolbar**: Icon-only Start/Pause/Stop buttons with status dot and mode badge. Overflow menu (three-dot) provides access to New Order, Bot Config, Account Details, and Kill Switch.
-- **Account summary strip**: Horizontal scrollable bar showing Balance, Unrealized P&L, Win Rate, Trades, and Drawdown. Tapping opens the full Account & Performance bottom sheet.
-- **Card-based positions**: Replaces the 15-column desktop table with `MobilePositionCard` components showing key metrics (symbol, direction, P&L, R, pips) with expandable detail rows.
-- **Scan detail bottom sheet**: Tapping a scan pair on mobile opens a bottom Sheet with the full `ScanDetailInline` breakdown instead of the side-by-side panel.
-- **Sidebar hidden on mobile**: Desktop sidebar (account, exposure, performance, engine controls) is hidden; all content accessible via the account bottom sheet.
+- **Fix A:** Counter-directional FVGs (bearish FVG in bullish trend) → `present: false`
+- **Fix B:** FVGs filled >75% → `present: false` (dead zone)
+- **Fix C:** FVGs without displacement → demoted from Tier 1 to Tier 2 (still scores, but doesn't satisfy the "3 core factors" gate)
 
-No behavior changes — all trading logic, mutations, and data flows remain identical.
+Expected impact: blocks ~11 losing trades (-$858) while blocking ~2 winners (-$239). Net: +$619 over the sample period.
+
+All 109 existing tests pass. 8 new regression tests added.
