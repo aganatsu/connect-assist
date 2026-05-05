@@ -35,3 +35,7 @@
 - [x] Write regression tests for all other anti-double-count rules
 - [x] Run full test suite — 238 passed, 0 failed (1 pre-existing unrelated)
 - [x] Write REPORT.md
+
+## UI Fixes
+
+- [ ] Fix manual "Scan Now" button — add loading spinner while scan is running, refresh results on completion
