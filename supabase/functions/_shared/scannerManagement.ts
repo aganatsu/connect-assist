@@ -30,6 +30,7 @@ import type {
 import {
   SPECS,
   analyzeMarketStructure,
+  detectSwingPoints,
 } from "./smcAnalysis.ts";
 
 // ─── Setup Classification Types ──────────────────────────────────────
@@ -310,6 +311,7 @@ export async function manageOpenPositions(
   const trailingEnabled = config.trailingStopEnabled ?? false;
   const trailingPips = config.trailingStopPips ?? 15;
   const trailingActivation = config.trailingStopActivation ?? "after_1r";
+  const trailingMode: "proportional" | "structure" = config.trailingStopMode ?? "proportional";
   const partialTPEnabled = config.partialTPEnabled ?? false;
   const partialTPPercent = config.partialTPPercent ?? 50;
   const partialTPLevel = config.partialTPLevel ?? 1.0;
@@ -349,6 +351,7 @@ export async function manageOpenPositions(
       let posTrailingEnabled = trailingEnabled;
       let posTrailingPips = trailingPips;
       let posTrailingActivation = trailingActivation;
+      let posTrailingMode = trailingMode;
       let posBreakEvenEnabled = breakEvenEnabled;
       let posBreakEvenPips = breakEvenPips;
       let posPartialTPEnabled = partialTPEnabled;
@@ -362,6 +365,7 @@ export async function manageOpenPositions(
         if (overrides.trailingStopEnabled !== undefined) posTrailingEnabled = overrides.trailingStopEnabled;
         if (overrides.trailingStopPips !== undefined) posTrailingPips = overrides.trailingStopPips;
         if (overrides.trailingStopActivation !== undefined) posTrailingActivation = overrides.trailingStopActivation;
+        if (overrides.trailingStopMode !== undefined) posTrailingMode = overrides.trailingStopMode;
         if (overrides.breakEvenEnabled !== undefined) posBreakEvenEnabled = overrides.breakEvenEnabled;
         if (overrides.breakEvenPips !== undefined) posBreakEvenPips = overrides.breakEvenPips;
         if (overrides.partialTPEnabled !== undefined) posPartialTPEnabled = overrides.partialTPEnabled;
@@ -547,39 +551,108 @@ export async function manageOpenPositions(
         // ── Phase B: Trailing tightening — ratchet SL forward ──
         const prevTrailLevel = exitFlags.trailingStopLevel ?? sl;
         const effectiveTrailPips = exitFlags.trailingStopPips ?? posTrailingPips;
-        const newTrailLevel = pos.direction === "long"
-          ? currentPrice - (effectiveTrailPips * spec.pipSize)
-          : currentPrice + (effectiveTrailPips * spec.pipSize);
+        let newTrailLevel: number | null = null;
+        let trailMethod = "proportional"; // track which method produced the trail for attribution
 
-        // Only ratchet forward (tighten), never widen
-        const shouldTighten = pos.direction === "long"
-          ? newTrailLevel > sl && newTrailLevel > prevTrailLevel
-          : newTrailLevel < sl && newTrailLevel < prevTrailLevel;
+        // ── Structure-based trailing: trail to swing points ──
+        if (posTrailingMode === "structure") {
+          try {
+            const trailTF = signalData.entryTimeframe || "15m";
+            const trailCandles = await fetchCandlesFn(symbol, trailTF, "2d").catch(() => [] as Candle[]);
+            if (trailCandles.length >= 20) {
+              // Detect swing points with ATR filter to ignore noise
+              const swings = detectSwingPoints(trailCandles, 3, 0.3);
+              const bufferPips = config.slBufferPips ?? 2;
+              const bufferPrice = bufferPips * spec.pipSize;
 
-        if (shouldTighten) {
-          updatedFlags.trailingStopLevel = newTrailLevel;
-          exitFlagsUpdated = true;
+              if (pos.direction === "long") {
+                // Find swing lows that are above current SL and below current price
+                const validSwingLows = swings
+                  .filter(s => s.type === "low" && s.price > sl && s.price < currentPrice)
+                  .map(s => s.price);
+                if (validSwingLows.length > 0) {
+                  // Pick the highest swing low (most protective)
+                  const bestSwing = Math.max(...validSwingLows);
+                  const candidateSL = bestSwing - bufferPrice;
+                  // Only use if it's actually better than current SL
+                  if (candidateSL > sl) {
+                    newTrailLevel = candidateSL;
+                    trailMethod = "structure";
+                  }
+                }
+              } else {
+                // Short: find swing highs that are below current SL and above current price
+                const validSwingHighs = swings
+                  .filter(s => s.type === "high" && s.price < sl && s.price > currentPrice)
+                  .map(s => s.price);
+                if (validSwingHighs.length > 0) {
+                  // Pick the lowest swing high (most protective)
+                  const bestSwing = Math.min(...validSwingHighs);
+                  const candidateSL = bestSwing + bufferPrice;
+                  // Only use if it's actually better (lower) than current SL
+                  if (candidateSL < sl) {
+                    newTrailLevel = candidateSL;
+                    trailMethod = "structure";
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // Structure trail failed — fall through to proportional
+            console.warn(`[mgmt ${scanCycleId}] Structure trail fetch failed for ${symbol}: ${e}`);
+          }
+        }
 
-          const attribution = makeAttribution(
-            "trailing_stop",
-            `Trailing SL tightened at ${rMultiple.toFixed(2)}R — SL moved from ${sl.toFixed(5)} to ${newTrailLevel.toFixed(5)} (${effectiveTrailPips} pips behind price)`,
-          );
-          const updatedSignal = {
-            ...signalData,
-            exitFlags: updatedFlags,
-            exitAttribution: [...(signalData.exitAttribution || []), attribution],
-          };
-          await supabase.from("paper_positions").update({
-            stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
-            signal_reason: JSON.stringify(updatedSignal),
-          }).eq("id", pos.id);
+        // ── Proportional fallback (or primary if mode is "proportional") ──
+        if (newTrailLevel === null) {
+          const proportionalLevel = pos.direction === "long"
+            ? currentPrice - (effectiveTrailPips * spec.pipSize)
+            : currentPrice + (effectiveTrailPips * spec.pipSize);
+          // Only use proportional if it would tighten
+          const proportionalTightens = pos.direction === "long"
+            ? proportionalLevel > sl && proportionalLevel > prevTrailLevel
+            : proportionalLevel < sl && proportionalLevel < prevTrailLevel;
+          if (proportionalTightens) {
+            newTrailLevel = proportionalLevel;
+            trailMethod = "proportional";
+          }
+        }
 
-          actions.push({
-            positionId: pos.position_id, symbol, action: "sl_tightened",
-            reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
-          });
-          console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${newTrailLevel.toFixed(5)}`);
-          continue;
+        // ── Apply the trail if we found a valid new level ──
+        if (newTrailLevel !== null) {
+          // Final safety: only ratchet forward, never widen
+          const shouldTighten = pos.direction === "long"
+            ? newTrailLevel > sl && newTrailLevel > prevTrailLevel
+            : newTrailLevel < sl && newTrailLevel < prevTrailLevel;
+
+          if (shouldTighten) {
+            updatedFlags.trailingStopLevel = newTrailLevel;
+            exitFlagsUpdated = true;
+
+            const trailDetail = trailMethod === "structure"
+              ? `Structure trail: SL moved to swing point at ${newTrailLevel.toFixed(5)}`
+              : `Proportional trail: SL moved ${effectiveTrailPips} pips behind price`;
+            const attribution = makeAttribution(
+              "trailing_stop",
+              `Trailing SL tightened at ${rMultiple.toFixed(2)}R [${trailMethod}] — SL moved from ${sl.toFixed(5)} to ${newTrailLevel.toFixed(5)} (${trailDetail})`,
+            );
+            const updatedSignal = {
+              ...signalData,
+              exitFlags: updatedFlags,
+              exitAttribution: [...(signalData.exitAttribution || []), attribution],
+            };
+            await supabase.from("paper_positions").update({
+              stop_loss: roundPrice(newTrailLevel, spec.pipSize).toString(),
+              signal_reason: JSON.stringify(updatedSignal),
+            }).eq("id", pos.id);
+
+            actions.push({
+              positionId: pos.position_id, symbol, action: "sl_tightened",
+              reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
+            });
+            console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN [${trailMethod}] ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${newTrailLevel.toFixed(5)}`);
+            continue;
+          }
         }
       }
 

@@ -2549,6 +2549,10 @@ export function computeConfluenceStacking(
     }
 
     // Layer 3: Fib level inside (or very near) the zone
+    // Only count the SINGLE closest Fib level to zone center — multiple Fib levels
+    // overlapping the same zone inflates the layer count without adding real confluence.
+    const zoneMidFib = (zone.low + zone.high) / 2;
+    let bestFibMatch: { pct: number; price: number; distance: number } | null = null;
     for (const fib of fibLevels) {
       const fibPrices: number[] = [];
       if (direction === "long" || !direction) fibPrices.push(fib.priceLong);
@@ -2556,16 +2560,22 @@ export function computeConfluenceStacking(
 
       for (const fibPrice of fibPrices) {
         if (fibPrice >= zone.low - fibTolerance && fibPrice <= zone.high + fibTolerance) {
+          const distance = Math.abs(fibPrice - zoneMidFib);
           const fibPct = Math.round(fib.ratio * 1000) / 10;
-          layers.push({
-            type: "fib",
-            label: `Fib ${fibPct}% at ${fibPrice.toFixed(5)}`,
-            priceRange: [fibPrice, fibPrice],
-          });
-          matchedFibs.push(fibPct);
-          break;
+          if (!bestFibMatch || distance < bestFibMatch.distance) {
+            bestFibMatch = { pct: fibPct, price: fibPrice, distance };
+          }
+          break; // Only check one price direction per ratio
         }
       }
+    }
+    if (bestFibMatch) {
+      layers.push({
+        type: "fib",
+        label: `Fib ${bestFibMatch.pct}% at ${bestFibMatch.price.toFixed(5)}`,
+        priceRange: [bestFibMatch.price, bestFibMatch.price],
+      });
+      matchedFibs.push(bestFibMatch.pct);
     }
 
     // Only create a stack if we have at least 2 layers

@@ -130,6 +130,7 @@ const DEFAULTS = {
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
+  trailingStopMode: "proportional" as "proportional" | "structure", // proportional = fixed-pip trail, structure = trail to swing points
   partialTPEnabled: false,
   partialTPPercent: 50,
   partialTPLevel: 1.0,
@@ -324,6 +325,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
     trailingStopPips: 15,           // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_1.5r", // Activates after partial TP at 1R + buffer
+    trailingStopMode: "structure" as "proportional" | "structure", // Trail to swing points instead of fixed pips
     breakEvenEnabled: true,
     breakEvenPips: 20,              // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
@@ -343,6 +345,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     trailingStopEnabled: true,
     trailingStopPips: 25,           // minimum trail; proportional (0.5× SL) may be larger
     trailingStopActivation: "after_2r", // Changed from 1R — let swings develop before trailing
+    trailingStopMode: "structure" as "proportional" | "structure", // Trail to swing points instead of fixed pips
     breakEvenEnabled: true,
     breakEvenPips: 40,              // fallback; R-based trigger (min 1R) takes precedence
     partialTPEnabled: true,
@@ -792,6 +795,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
     trailingStopPips: exit.trailingStopPips ?? raw.trailingStopPips ?? 15,
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
+    trailingStopMode: exit.trailingStopMode ?? raw.trailingStopMode ?? DEFAULTS.trailingStopMode,
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
