@@ -1,19 +1,19 @@
 {
-  "score": 34.1,
+  "score": 32.6,
   "rawScore": 7,
   "direction": "long",
   "bias": "bullish",
   "strongFactorCount": 5,
-  "enabledMax": 20.5,
+  "enabledMax": 21.5,
   "tieredScoring": {
     "tier1Count": 1,
     "tier1Max": 4,
     "tier2Count": 4,
-    "tier2Max": 7,
+    "tier2Max": 8,
     "tier3Count": 2,
     "tier3Max": 9,
     "tieredScore": 7,
-    "tieredMax": 20.5,
+    "tieredMax": 21.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 1 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib",
     "regimeGatePassed": false,
@@ -134,6 +134,12 @@
       "name": "Pullback Health",
       "present": false,
       "weight": 0.5,
+      "tier": 2
+    },
+    {
+      "name": "HTF POI Alignment",
+      "present": false,
+      "weight": 0,
       "tier": 2
     },
     {

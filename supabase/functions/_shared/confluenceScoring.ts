@@ -1597,6 +1597,102 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     factors.push({ name: "Pullback Health", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
   }
 
+  // ── Factor 23: HTF POI Alignment (max 2.0) ──
+  // Checks if current price is inside a higher-timeframe Point of Interest (FVG, OB, Breaker)
+  // detected on 4H or 1H candles. Being inside an HTF POI means the entry is backed by
+  // institutional activity on a higher timeframe — significantly increases probability.
+  {
+    let pts = 0;
+    let detail = "";
+    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] | null = (config as any)._htfPOIs || null;
+
+    if (htfPOIs && htfPOIs.length > 0) {
+      // Find all HTF POIs that contain the current price
+      const matchingPOIs = htfPOIs.filter(poi => lastPrice >= poi.low && lastPrice <= poi.high);
+
+      if (matchingPOIs.length > 0) {
+        // Score based on what we're inside
+        // 4H zones are more significant than 1H zones
+        // FVGs score highest (unfilled institutional orders), then OBs, then Breakers
+        const BOOST_MAP: Record<string, Record<string, number>> = {
+          "4H": { fvg: 0.8, ob: 0.7, breaker: 0.5 },
+          "1H": { fvg: 0.5, ob: 0.4, breaker: 0.3 },
+          "D":  { fvg: 1.0, ob: 0.8, breaker: 0.6 },
+        };
+
+        let totalBoost = 0;
+        const matchDetails: string[] = [];
+
+        // Directional alignment bonus: if HTF POI direction matches trade direction, extra boost
+        for (const poi of matchingPOIs) {
+          const baseBoost = BOOST_MAP[poi.timeframe]?.[poi.type] ?? 0.3;
+          let poiBoost = baseBoost;
+
+          // Directional alignment: bullish POI + long direction = aligned (or bearish + short)
+          const aligned = (direction === "long" && poi.direction === "bullish")
+            || (direction === "short" && poi.direction === "bearish");
+          const counter = (direction === "long" && poi.direction === "bearish")
+            || (direction === "short" && poi.direction === "bullish");
+
+          if (aligned) {
+            poiBoost *= 1.2; // 20% bonus for directional alignment
+          } else if (counter) {
+            poiBoost *= 0.5; // 50% reduction for counter-directional
+          }
+
+          totalBoost += poiBoost;
+          const alignStr = aligned ? "aligned" : counter ? "counter" : "";
+          matchDetails.push(`${poi.timeframe} ${poi.type.toUpperCase()} [${poi.low.toFixed(5)}-${poi.high.toFixed(5)}]${alignStr ? " (" + alignStr + ")" : ""}`);
+        }
+
+        // Cap total boost at 2.0
+        pts = Math.min(2.0, Math.round(totalBoost * 100) / 100);
+        detail = `Price inside HTF POI: ${matchDetails.join(", ")} → +${pts.toFixed(2)} boost`;
+
+        // Also inject HTF POIs as layers into the confluence stacking
+        for (const poi of matchingPOIs) {
+          const layerType = poi.type === "fvg" ? "htf_fvg" as const
+            : poi.type === "ob" ? "htf_ob" as const
+            : "htf_breaker" as const;
+          const layerLabel = `${poi.timeframe} ${poi.type === "fvg" ? "FVG" : poi.type === "ob" ? "OB" : "Breaker"}`;
+
+          // Add to existing confluence stacks that overlap with this HTF POI
+          for (const stack of confluenceStacks) {
+            const stackOverlapsHTF = stack.overlapZone[0] <= poi.high && stack.overlapZone[1] >= poi.low;
+            if (stackOverlapsHTF) {
+              stack.layers.push({ type: layerType, label: layerLabel, priceRange: [poi.low, poi.high] });
+              stack.layerCount = stack.layers.length;
+              stack.label += ` + ${layerLabel}`;
+            }
+          }
+
+          // If no existing stack overlaps, create a new standalone HTF POI stack
+          if (!confluenceStacks.some(s => s.overlapZone[0] <= poi.high && s.overlapZone[1] >= poi.low)) {
+            confluenceStacks.push({
+              layerCount: 1,
+              overlapZone: [poi.low, poi.high],
+              layers: [{ type: layerType, label: layerLabel, priceRange: [poi.low, poi.high] }],
+              label: layerLabel,
+              fibLevels: [],
+              directionalAlignment: direction
+                ? ((direction === "long" && poi.direction === "bullish") || (direction === "short" && poi.direction === "bearish")
+                  ? "aligned" : "counter")
+                : "neutral",
+            });
+          }
+        }
+      } else {
+        detail = `${htfPOIs.length} HTF POIs detected but price not inside any`;
+      }
+    } else {
+      detail = "No HTF POI data available";
+    }
+
+    // Apply weight scale and add to factors
+    score += pts;
+    factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" });
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -1725,7 +1821,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Tier 2 (Confirmation ×1): Adds confidence to the setup
   // Tier 3 (Bonus ×0.5): Nice to have, never required
   const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
   // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
   // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)
@@ -1931,6 +2027,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     "Daily Bias": 1.5,
     "Confluence Stack": 1.5,
     "Pullback Health": 0.5,
+    "HTF POI Alignment": 2.0,
   };
 
   // Count tier 1 factors present (for the minimum gate)
@@ -2117,6 +2214,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     fotsiAlignment: _fotsiAlignment, volumeProfile, regimeInfo, regime4HInfo,
     // Confluence stacking, sweep reclaim, pullback decay
     confluenceStacks, sweepReclaims, pullbackDecay,
+    // HTF POI alignment data
+    htfPOIs: (config as any)._htfPOIs || null,
     // ZigZag-based Fibonacci levels (retracements + extensions)
     fibLevels,
     // Cached daily structure (computed once, reusable by gates)

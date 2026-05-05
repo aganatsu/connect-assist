@@ -2929,17 +2929,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       fetchCandles(pair, entryInterval, entryRange),
       fetchCandles(pair, "1d", "1y"),
     ];
-    // Always fetch 4H for multi-TF regime (reuses 1h data if OR is also enabled)
+    // Always fetch 4H for multi-TF regime + HTF POI detection
     if (multiTFRegimeEnabled) fetchPromises.push(fetchCandles(pair, "4h", "1mo").catch(() => [] as Candle[]));
-    if (orFlag) fetchPromises.push(fetchCandles(pair, "1h", "2d"));
+    // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
+    fetchPromises.push(fetchCandles(pair, "1h", "5d").catch(() => [] as Candle[]));
     if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
     const h4Candles: Candle[] = multiTFRegimeEnabled ? fetched[2] : [];
     const h4Offset = multiTFRegimeEnabled ? 1 : 0;
-    const hourlyCandles = orFlag ? fetched[2 + h4Offset] : undefined;
-    const smtCandles = smtFlag ? fetched[2 + h4Offset + orFlag] : null;
+    // 1H candles always fetched (index = 2 + h4Offset)
+    const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
+    const smtCandles = smtFlag ? fetched[3 + h4Offset] : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -2959,7 +2961,58 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     (pairConfig as any)._fotsiResult = _fotsiResult;
     // Inject 4H candles for multi-TF regime classification
     (pairConfig as any)._h4Candles = h4Candles.length >= 20 ? h4Candles : null;
-    const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles);
+
+    // ── HTF POI Detection (Phase 1: FVGs, OBs, Breakers on 4H + 1H) ──
+    // Run structure detection on HTF candles and inject results for scoring boost.
+    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] = [];
+    if (h4Candles.length >= 20) {
+      const h4Structure = analyzeMarketStructure(h4Candles);
+      const h4StructureBreaks = [...h4Structure.bos, ...h4Structure.choch];
+      const h4FVGs = detectFVGs(h4Candles, h4StructureBreaks);
+      const h4OBs = detectOrderBlocks(h4Candles, h4StructureBreaks);
+      const h4Breakers = detectBreakerBlocks(h4OBs, h4Candles, h4StructureBreaks);
+      for (const fvg of h4FVGs) {
+        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
+          htfPOIs.push({ timeframe: "4H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
+        }
+      }
+      for (const ob of h4OBs) {
+        if (ob.state !== "broken" && ob.state !== "mitigated") {
+          htfPOIs.push({ timeframe: "4H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
+        }
+      }
+      for (const bb of h4Breakers) {
+        if (bb.isActive && bb.state !== "broken") {
+          htfPOIs.push({ timeframe: "4H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
+        }
+      }
+    }
+    if (hourlyCandles.length >= 20) {
+      const h1Structure = analyzeMarketStructure(hourlyCandles);
+      const h1StructureBreaks = [...h1Structure.bos, ...h1Structure.choch];
+      const h1FVGs = detectFVGs(hourlyCandles, h1StructureBreaks);
+      const h1OBs = detectOrderBlocks(hourlyCandles, h1StructureBreaks);
+      const h1Breakers = detectBreakerBlocks(h1OBs, hourlyCandles, h1StructureBreaks);
+      for (const fvg of h1FVGs) {
+        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
+          htfPOIs.push({ timeframe: "1H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
+        }
+      }
+      for (const ob of h1OBs) {
+        if (ob.state !== "broken" && ob.state !== "mitigated") {
+          htfPOIs.push({ timeframe: "1H", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
+        }
+      }
+      for (const bb of h1Breakers) {
+        if (bb.isActive && bb.state !== "broken") {
+          htfPOIs.push({ timeframe: "1H", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
+        }
+      }
+    }
+    // Inject HTF POIs for confluence scoring boost
+    (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
+
+    const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
 

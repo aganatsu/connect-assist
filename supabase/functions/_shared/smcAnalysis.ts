@@ -2386,7 +2386,7 @@ export interface InstrumentRegime {
 
 // ─── Confluence Stacking Types ───────────────────────────────────────
 export interface ConfluenceLayer {
-  type: "fvg" | "ob" | "sr" | "fib";
+  type: "fvg" | "ob" | "sr" | "fib" | "htf_fvg" | "htf_ob" | "htf_breaker";
   label: string;
   priceRange: [number, number]; // [low, high]
 }
@@ -2578,6 +2578,9 @@ export function computeConfluenceStacking(
         if (l.type === "ob") return "OB";
         if (l.type === "sr") return "S/R";
         if (l.type === "fib") return l.label.split(" at ")[0];
+        if (l.type === "htf_fvg") return l.label;
+        if (l.type === "htf_ob") return l.label;
+        if (l.type === "htf_breaker") return l.label;
         return l.type;
       });
       const label = layerLabels.join(" + ");
