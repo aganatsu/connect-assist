@@ -2261,7 +2261,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
   let _fotsiResult: FOTSIResult | null = null;
-  try {
+  if (config.useFOTSI === false) {
+    console.log(`[scan ${scanCycleId}] FOTSI disabled by config — skipping 28-pair fetch (saves ~28 API calls)`);
+  } else try {
     const fotsiPairs = getFOTSIPairNames();
     const fotsiCandleMap: Record<string, any[]> = {};
     // Batch fetch daily candles for all 28 FOTSI pairs in groups of 5 with 1.2s
