@@ -205,10 +205,15 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
   const scoredFactors = enabledFactors.filter(f => !INFO_ONLY.has(f.name));
   const infoFactors = enabledFactors.filter(f => INFO_ONLY.has(f.name));
 
-  // Group by tier
-  const tier1 = scoredFactors.filter(f => classifyTier(f) === 1);
-  const tier2 = scoredFactors.filter(f => classifyTier(f) === 2);
-  const tier3 = scoredFactors.filter(f => classifyTier(f) === 3);
+  // Group by tier, sorted: passed first (by weight desc), then failed (by name)
+  const sortByImportance = (items: FactorItem[]) => {
+    const passed = items.filter(f => f.present).sort((a, b) => b.weight - a.weight);
+    const failed = items.filter(f => !f.present).sort((a, b) => a.name.localeCompare(b.name));
+    return [...passed, ...failed];
+  };
+  const tier1 = sortByImportance(scoredFactors.filter(f => classifyTier(f) === 1));
+  const tier2 = sortByImportance(scoredFactors.filter(f => classifyTier(f) === 2));
+  const tier3 = sortByImportance(scoredFactors.filter(f => classifyTier(f) === 3));
 
   // Calculate points per tier
   const tierPoints = (items: FactorItem[], pointsEach: number) => {

@@ -2261,7 +2261,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
   // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
   let _fotsiResult: FOTSIResult | null = null;
-  try {
+  if (config.useFOTSI === false) {
+    console.log(`[scan ${scanCycleId}] FOTSI disabled by config — skipping 28-pair fetch (saves ~28 API calls)`);
+  } else try {
     const fotsiPairs = getFOTSIPairNames();
     const fotsiCandleMap: Record<string, any[]> = {};
     // Batch fetch daily candles for all 28 FOTSI pairs in groups of 5 with 1.2s
@@ -2964,6 +2966,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // ── HTF POI Detection (Phase 1: FVGs, OBs, Breakers on 4H + 1H) ──
     // Run structure detection on HTF candles and inject results for scoring boost.
+    console.log(`[scan ${scanCycleId}] ${pair} HTF candles: 4H=${h4Candles.length}, 1H=${hourlyCandles.length}`);
     const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] = [];
     if (h4Candles.length >= 20) {
       const h4Structure = analyzeMarketStructure(h4Candles);
@@ -3010,6 +3013,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     // Inject HTF POIs for confluence scoring boost
+    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfPOIs.length} (4H: ${htfPOIs.filter(p => p.timeframe === "4H").length}, 1H: ${htfPOIs.filter(p => p.timeframe === "1H").length})`);
     (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
 
     // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on 4H + 1H ──
@@ -3046,6 +3050,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Inject HTF Phase 2 data for confluence scoring
+    console.log(`[scan ${scanCycleId}] ${pair} HTF Phase 2: Fib4H=${htfFibLevels4H ? "yes" : "no"}, Fib1H=${htfFibLevels1H ? "yes" : "no"}, PD4H=${htfPD4H?.currentZone ?? "none"}, PD1H=${htfPD1H?.currentZone ?? "none"}, Liq4H=${htfLiquidityPools4H.length}, Liq1H=${htfLiquidityPools1H.length}`);
     (pairConfig as any)._htfFibLevels = { h4: htfFibLevels4H, h1: htfFibLevels1H };
     (pairConfig as any)._htfPD = { h4: htfPD4H, h1: htfPD1H };
     (pairConfig as any)._htfLiquidityPools = { h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
