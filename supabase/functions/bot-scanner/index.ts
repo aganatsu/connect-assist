@@ -3012,6 +3012,44 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Inject HTF POIs for confluence scoring boost
     (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
 
+    // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on 4H + 1H ──
+    // Run Fib, PD, and Liquidity detection on HTF candles for multi-TF scoring.
+    let htfFibLevels4H: any = null;
+    let htfFibLevels1H: any = null;
+    let htfPD4H: any = null;
+    let htfPD1H: any = null;
+    let htfLiquidityPools4H: LiquidityPool[] = [];
+    let htfLiquidityPools1H: LiquidityPool[] = [];
+
+    if (h4Candles.length >= 20) {
+      // 4H Fibonacci: ZigZag pivots → Fib levels
+      const h4Zigzag = detectZigZagPivots(h4Candles, 3, 10);
+      if (h4Zigzag.lastTwo) {
+        htfFibLevels4H = computeFibLevels(h4Zigzag.lastTwo[0], h4Zigzag.lastTwo[1]);
+      }
+      // 4H Premium/Discount zone
+      htfPD4H = calculatePremiumDiscount(h4Candles);
+      // 4H Liquidity Pools
+      htfLiquidityPools4H = detectLiquidityPools(h4Candles, 0.001, 2);
+    }
+
+    if (hourlyCandles.length >= 20) {
+      // 1H Fibonacci: ZigZag pivots → Fib levels
+      const h1Zigzag = detectZigZagPivots(hourlyCandles, 3, 10);
+      if (h1Zigzag.lastTwo) {
+        htfFibLevels1H = computeFibLevels(h1Zigzag.lastTwo[0], h1Zigzag.lastTwo[1]);
+      }
+      // 1H Premium/Discount zone
+      htfPD1H = calculatePremiumDiscount(hourlyCandles);
+      // 1H Liquidity Pools
+      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, 0.001, 2);
+    }
+
+    // Inject HTF Phase 2 data for confluence scoring
+    (pairConfig as any)._htfFibLevels = { h4: htfFibLevels4H, h1: htfFibLevels1H };
+    (pairConfig as any)._htfPD = { h4: htfPD4H, h1: htfPD1H };
+    (pairConfig as any)._htfLiquidityPools = { h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
+
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;

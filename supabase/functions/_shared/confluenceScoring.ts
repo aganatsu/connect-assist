@@ -1693,6 +1693,177 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" });
   }
 
+  // ── Factor 24: HTF Fib + Premium/Discount + Liquidity (max 2.5) ──────────────
+  // Checks if current price aligns with higher-timeframe Fibonacci levels,
+  // Premium/Discount zones, or Liquidity Pools detected on 4H and 1H candles.
+  // These provide institutional-level confluence from higher timeframes.
+  {
+    let pts = 0;
+    let detail = "";
+    const htfFibData: { h4: FibLevels | null; h1: FibLevels | null } | null = (config as any)._htfFibLevels || null;
+    const htfPDData: { h4: { currentZone: string; zonePercent: number; oteZone: boolean } | null; h1: { currentZone: string; zonePercent: number; oteZone: boolean } | null } | null = (config as any)._htfPD || null;
+    const htfLiqData: { h4: LiquidityPool[]; h1: LiquidityPool[] } | null = (config as any)._htfLiquidityPools || null;
+
+    const atrForTolerance = calculateATR(candles, 14);
+    const fibTolerance = atrForTolerance * 0.3; // Price must be within 0.3×ATR of Fib level
+    const matchDetails: string[] = [];
+
+    // ─── HTF Fibonacci Level Scoring ───
+    // 4H: 61.8%/OTE = +1.0, 50% = +0.6, 38.2% = +0.4
+    // 1H: 61.8%/OTE = +0.6, 50% = +0.4, 38.2% = +0.3
+    const FIB_SCORES: Record<string, { h4: number; h1: number }> = {
+      "0.618": { h4: 1.0, h1: 0.6 },
+      "0.705": { h4: 1.0, h1: 0.6 }, // OTE zone
+      "0.786": { h4: 1.0, h1: 0.6 }, // OTE zone
+      "0.5":   { h4: 0.6, h1: 0.4 },
+      "0.382": { h4: 0.4, h1: 0.3 },
+    };
+
+    const scoreFibLevels = (fibs: FibLevels, tf: "h4" | "h1", tfLabel: string) => {
+      if (!fibs || !fibs.retracements) return;
+      // Find the closest Fib level within tolerance (only count one per TF)
+      let bestFibScore = 0;
+      let bestFibLabel = "";
+      for (const level of fibs.retracements) {
+        const dist = Math.abs(lastPrice - level.price);
+        if (dist <= fibTolerance) {
+          const key = level.ratio.toFixed(3);
+          const scoreEntry = FIB_SCORES[key];
+          if (scoreEntry) {
+            const fibScore = scoreEntry[tf];
+            if (fibScore > bestFibScore) {
+              bestFibScore = fibScore;
+              bestFibLabel = `${tfLabel} Fib ${level.label}`;
+            }
+          }
+        }
+      }
+      if (bestFibScore > 0) {
+        pts += bestFibScore;
+        matchDetails.push(`${bestFibLabel} (+${bestFibScore.toFixed(1)})`);
+        // Add confluence stacking layer
+        const fibLevel = fibs.retracements.find(l => `${tfLabel} Fib ${l.label}` === bestFibLabel);
+        if (fibLevel) {
+          for (const stack of confluenceStacks) {
+            const stackOverlap = stack.overlapZone[0] <= fibLevel.price + fibTolerance && stack.overlapZone[1] >= fibLevel.price - fibTolerance;
+            if (stackOverlap) {
+              stack.layers.push({ type: "htf_fib" as const, label: bestFibLabel, priceRange: [fibLevel.price - fibTolerance, fibLevel.price + fibTolerance] });
+              stack.layerCount = stack.layers.length;
+              stack.label += ` + ${bestFibLabel}`;
+            }
+          }
+          // Standalone stack if no overlap
+          if (!confluenceStacks.some(s => s.overlapZone[0] <= fibLevel.price + fibTolerance && s.overlapZone[1] >= fibLevel.price - fibTolerance)) {
+            confluenceStacks.push({
+              layerCount: 1,
+              overlapZone: [fibLevel.price - fibTolerance, fibLevel.price + fibTolerance],
+              layers: [{ type: "htf_fib" as const, label: bestFibLabel, priceRange: [fibLevel.price - fibTolerance, fibLevel.price + fibTolerance] }],
+              label: bestFibLabel,
+              fibLevels: [fibLevel.ratio],
+              directionalAlignment: "neutral",
+            });
+          }
+        }
+      }
+    };
+
+    if (htfFibData) {
+      if (htfFibData.h4) scoreFibLevels(htfFibData.h4, "h4", "4H");
+      if (htfFibData.h1) scoreFibLevels(htfFibData.h1, "h1", "1H");
+    }
+
+    // ─── HTF Premium/Discount Zone Scoring ───
+    // Discount zone for longs / Premium for shorts = directionally aligned
+    // 4H: aligned = +0.8, OTE = +1.0; 1H: aligned = +0.5, OTE = +0.6
+    const scorePD = (pd: { currentZone: string; zonePercent: number; oteZone: boolean }, tf: "h4" | "h1", tfLabel: string) => {
+      if (!pd) return;
+      const aligned = (direction === "long" && pd.currentZone === "discount")
+        || (direction === "short" && pd.currentZone === "premium");
+      if (!aligned) return;
+
+      let pdScore = 0;
+      let pdLabel = "";
+      if (pd.oteZone) {
+        pdScore = tf === "h4" ? 1.0 : 0.6;
+        pdLabel = `${tfLabel} OTE Zone`;
+      } else {
+        pdScore = tf === "h4" ? 0.8 : 0.5;
+        pdLabel = `${tfLabel} ${pd.currentZone === "discount" ? "Discount" : "Premium"} Zone`;
+      }
+      pts += pdScore;
+      matchDetails.push(`${pdLabel} (+${pdScore.toFixed(1)})`);
+
+      // Add confluence stacking layer
+      for (const stack of confluenceStacks) {
+        // PD zones are broad — add to any stack where price currently is
+        const priceInStack = lastPrice >= stack.overlapZone[0] && lastPrice <= stack.overlapZone[1];
+        if (priceInStack) {
+          stack.layers.push({ type: "htf_pd" as const, label: pdLabel, priceRange: stack.overlapZone });
+          stack.layerCount = stack.layers.length;
+          stack.label += ` + ${pdLabel}`;
+        }
+      }
+    };
+
+    if (htfPDData) {
+      if (htfPDData.h4) scorePD(htfPDData.h4, "h4", "4H");
+      if (htfPDData.h1) scorePD(htfPDData.h1, "h1", "1H");
+    }
+
+    // ─── HTF Liquidity Pool Scoring ───
+    // Active pool in direction of trade (buy-side above for longs, sell-side below for shorts)
+    // 4H: +0.5, 1H: +0.3
+    const scoreLiquidity = (pools: LiquidityPool[], tf: "h4" | "h1", tfLabel: string) => {
+      if (!pools || pools.length === 0) return;
+      // For longs: look for buy-side liquidity ABOVE price (draw on liquidity / target)
+      // For shorts: look for sell-side liquidity BELOW price (draw on liquidity / target)
+      const activePools = pools.filter(p => p.state === "active");
+      let found = false;
+      for (const pool of activePools) {
+        if (direction === "long" && pool.type === "buy-side" && pool.price > lastPrice) {
+          found = true;
+          break;
+        }
+        if (direction === "short" && pool.type === "sell-side" && pool.price < lastPrice) {
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        const liqScore = tf === "h4" ? 0.5 : 0.3;
+        pts += liqScore;
+        const liqLabel = `${tfLabel} Liquidity Pool`;
+        matchDetails.push(`${liqLabel} (+${liqScore.toFixed(1)})`);
+
+        // Add confluence stacking layer
+        for (const stack of confluenceStacks) {
+          const priceInStack = lastPrice >= stack.overlapZone[0] && lastPrice <= stack.overlapZone[1];
+          if (priceInStack) {
+            stack.layers.push({ type: "htf_liquidity" as const, label: liqLabel, priceRange: stack.overlapZone });
+            stack.layerCount = stack.layers.length;
+            stack.label += ` + ${liqLabel}`;
+          }
+        }
+      }
+    };
+
+    if (htfLiqData) {
+      if (htfLiqData.h4) scoreLiquidity(htfLiqData.h4, "h4", "4H");
+      if (htfLiqData.h1) scoreLiquidity(htfLiqData.h1, "h1", "1H");
+    }
+
+    // Cap total at 2.5
+    pts = Math.min(2.5, Math.round(pts * 100) / 100);
+    if (matchDetails.length > 0) {
+      detail = `HTF Fib/PD/Liquidity: ${matchDetails.join(", ")} → +${pts.toFixed(2)}`;
+    } else {
+      detail = "No HTF Fib/PD/Liquidity alignment detected";
+    }
+
+    score += pts;
+    factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" });
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -1821,7 +1992,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Tier 2 (Confirmation ×1): Adds confidence to the setup
   // Tier 3 (Bonus ×0.5): Nice to have, never required
   const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
   // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
   // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)
@@ -2028,6 +2199,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     "Confluence Stack": 1.5,
     "Pullback Health": 0.5,
     "HTF POI Alignment": 2.0,
+    "HTF Fib + PD + Liquidity": 2.5,
   };
 
   // Count tier 1 factors present (for the minimum gate)
@@ -2139,12 +2311,103 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (po3Possible) tieredMax += 1.0;
   if (config.openingRange?.enabled) tieredMax += 2.0;
 
-  // Convert to percentage
+  // ─── HTF Tier 1 Gate Enhancement ──────────────────────────────────────────
+  // HTF zones (FVG, OB, Fib) can satisfy the corresponding Tier 1 slot
+  // when the entry-TF factor is absent AND price is currently inside the HTF zone.
+  // This allows higher-timeframe institutional zones to substitute for missing
+  // entry-timeframe triggers, recognizing that a 4H FVG is MORE significant than a 15m FVG.
+  {
+    const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] | null = (config as any)._htfPOIs || null;
+    const htfFibDataForGate: { h4: FibLevels | null; h1: FibLevels | null } | null = (config as any)._htfFibLevels || null;
+    const atrForGate = calculateATR(candles, 14);
+    const fibToleranceGate = atrForGate * 0.3;
+
+    // Check FVG slot: if entry-TF FVG is absent, can HTF FVG fill it?
+    const fvgFactor = factors.find(f => f.name === "Fair Value Gap");
+    const fvgAbsent = !fvgFactor || !fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1;
+    if (fvgAbsent && htfPOIs) {
+      const htfFVGContainingPrice = htfPOIs.find(poi => poi.type === "fvg" && lastPrice >= poi.low && lastPrice <= poi.high);
+      if (htfFVGContainingPrice) {
+        tier1Count++;
+        tier1Max++;
+        // Add a synthetic Tier 1 contribution to tieredScore
+        tieredScore += 2.0 * 0.8; // 80% quality since it's HTF substitute
+        const htfFvgDetail = `HTF ${htfFVGContainingPrice.timeframe} FVG [${htfFVGContainingPrice.low.toFixed(5)}-${htfFVGContainingPrice.high.toFixed(5)}] satisfying Tier 1 FVG slot`;
+        // Tag the HTF POI factor with the promotion info
+        const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
+        if (htfPoiFactor) {
+          htfPoiFactor.detail += ` [HTF FVG promoted to Tier 1: ${htfFvgDetail}]`;
+          (htfPoiFactor as any)._htfTier1FVG = true;
+        }
+      }
+    }
+
+    // Check OB slot: if entry-TF OB is absent, can HTF OB fill it?
+    const obFactor = factors.find(f => f.name === "Order Block");
+    const obAbsent = !obFactor || !obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1;
+    if (obAbsent && htfPOIs) {
+      const htfOBContainingPrice = htfPOIs.find(poi => poi.type === "ob" && lastPrice >= poi.low && lastPrice <= poi.high);
+      if (htfOBContainingPrice) {
+        tier1Count++;
+        tier1Max++;
+        tieredScore += 2.0 * 0.8;
+        const htfObDetail = `HTF ${htfOBContainingPrice.timeframe} OB [${htfOBContainingPrice.low.toFixed(5)}-${htfOBContainingPrice.high.toFixed(5)}] satisfying Tier 1 OB slot`;
+        const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
+        if (htfPoiFactor) {
+          htfPoiFactor.detail += ` [HTF OB promoted to Tier 1: ${htfObDetail}]`;
+          (htfPoiFactor as any)._htfTier1OB = true;
+        }
+      }
+    }
+
+    // Check Fib slot: if entry-TF Premium/Discount & Fib is absent, can HTF Fib fill it?
+    const fibFactor = factors.find(f => f.name === "Premium/Discount & Fib");
+    const fibAbsent = !fibFactor || !fibFactor.present || fibFactor.weight <= 0 || (fibFactor as any).tier !== 1;
+    if (fibAbsent && htfFibDataForGate) {
+      // Check if price is near a 4H Fib level (strongest HTF Fib)
+      let htfFibSatisfied = false;
+      let htfFibDetail = "";
+      const checkFibForGate = (fibs: FibLevels | null, tfLabel: string) => {
+        if (!fibs || !fibs.retracements || htfFibSatisfied) return;
+        for (const level of fibs.retracements) {
+          if (Math.abs(lastPrice - level.price) <= fibToleranceGate) {
+            // Only key Fib levels qualify for Tier 1 (38.2%, 50%, 61.8%, 70.5%, 78.6%)
+            if (level.ratio >= 0.382) {
+              htfFibSatisfied = true;
+              htfFibDetail = `HTF ${tfLabel} Fib ${level.label} at ${level.price.toFixed(5)} satisfying Tier 1 Fib slot`;
+              break;
+            }
+          }
+        }
+      };
+      checkFibForGate(htfFibDataForGate.h4, "4H");
+      if (!htfFibSatisfied) checkFibForGate(htfFibDataForGate.h1, "1H");
+      if (htfFibSatisfied) {
+        tier1Count++;
+        tier1Max++;
+        tieredScore += 2.0 * 0.7; // 70% quality for Fib substitute (less precise than FVG/OB)
+        const htfFibFactor = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
+        if (htfFibFactor) {
+          htfFibFactor.detail += ` [HTF Fib promoted to Tier 1: ${htfFibDetail}]`;
+          (htfFibFactor as any)._htfTier1Fib = true;
+        }
+      }
+    }
+  }
+
+  // Recalculate tieredMax after potential HTF Tier 1 additions
+  tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
+  const po3Possible2 = (config as any).enableStructureBreak !== false
+    && (config as any).useAMD !== false
+    && (config as any).enableLiquiditySweep !== false;
+  if (po3Possible2) tieredMax += 1.0;
+  if (config.openingRange?.enabled) tieredMax += 2.0;
+
+  // Recalculate score percentage after HTF Tier 1 adjustments
   const rawScore = Math.round(tieredScore * 100) / 100;
   const enabledMax = Math.round(tieredMax * 100) / 100;
-
   if (tieredMax > 0) {
-    score = Math.round((tieredScore / tieredMax) * 1000) / 10; // e.g., 72.3%
+    score = Math.round((tieredScore / tieredMax) * 1000) / 10;
   } else {
     score = 0;
   }
@@ -2154,15 +2417,21 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Market Structure + Premium/Discount (directional bias without
   // an institutional entry trigger like OB or FVG).
   const tier1GatePassed = tier1Count >= 3;
-  // Build display list: include Unicorn when it was promoted to Tier 1
+  // Build display list: include Unicorn when it was promoted to Tier 1, and HTF-promoted slots
   const tier1DisplayNames = ["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib", "Unicorn Model"];
   const tier1PresentNames = tier1DisplayNames.filter(n => {
     const f = factors.find(ff => ff.name === n);
     return f && f.present && f.weight > 0 && (f as any).tier === 1;
   });
+  // Add HTF-promoted slots to display
+  const htfPoiF = factors.find(f => f.name === "HTF POI Alignment");
+  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) tier1PresentNames.push("HTF FVG (Tier 1)");
+  if (htfPoiF && (htfPoiF as any)._htfTier1OB) tier1PresentNames.push("HTF OB (Tier 1)");
+  const htfFibF = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
+  if (htfFibF && (htfFibF as any)._htfTier1Fib) tier1PresentNames.push("HTF Fib (Tier 1)");
   const tier1GateReason = tier1GatePassed
     ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})`
-    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}`;
+    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}, HTF FVG/OB/Fib`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;
