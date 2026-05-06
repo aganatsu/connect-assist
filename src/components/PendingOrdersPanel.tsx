@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
+import { generatePendingOrderNarrative } from "@/lib/narrative";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
@@ -220,6 +221,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                   {" · "}
                   Score: <span className="text-foreground">{Number(order.signal_score).toFixed(1)}%</span>
                 </div>
+
+                {/* Narrative sentence */}
+                <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
+                  {generatePendingOrderNarrative(order)}
+                </p>
 
                 {/* Row 4: Expiry bar */}
                 <div className="space-y-1">

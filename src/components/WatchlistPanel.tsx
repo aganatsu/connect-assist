@@ -4,6 +4,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { scannerApi, type StagedSetup } from "@/lib/api";
+import { generateWatchlistNarrative } from "@/lib/narrative";
 import { toast } from "sonner";
 import {
   Eye, EyeOff, TrendingUp, TrendingDown, X, Clock,
@@ -169,6 +170,11 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           <span className="text-destructive text-[8px]">↓ {(setup.initial_score - setup.current_score).toFixed(1)}%</span>
         )}
       </div>
+
+      {/* Narrative sentence */}
+      <p className="text-[9px] text-muted-foreground/80 italic mt-1.5 leading-tight">
+        {generateWatchlistNarrative(setup)}
+      </p>
 
       {/* Expand/collapse for factors */}
       <button
