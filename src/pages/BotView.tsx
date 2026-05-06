@@ -30,6 +30,7 @@ import { FOTSIStrengthMeter } from "@/components/FOTSIStrengthMeter";
 import { RecommendationsDashboard } from "@/components/RecommendationsDashboard";
 import BrokerTradesTab from "@/components/BrokerTradesTab";
 import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { generateDetailNarrative, generateTradeEntryNarrative } from "@/lib/narrative";
 import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
@@ -1814,6 +1815,43 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Tier score summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
 
+      {/* Narrative sentence — plain-English thesis */}
+      {d.direction && d.direction !== "none" && (
+        <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
+          {generateDetailNarrative({
+            pair: d.pair,
+            direction: d.direction,
+            score: d.score,
+            status: d.status,
+            factors: d.factors,
+            tieredScoring: d.tieredScoring,
+            regimeData: d.regimeData,
+            rejectionReasons: d.rejectionReasons,
+            gates: d.gates,
+            staging: d.staging,
+            limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
+          })}
+        </p>
+      )}
+
+      {/* Trade Entry Thesis — shown for placed trades */}
+      {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
+        <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
+          <p className="text-[9px] text-success/90 leading-tight">
+            {generateTradeEntryNarrative({
+              pair: d.pair,
+              direction: d.direction,
+              score: d.score,
+              factors: d.factors,
+              tieredScoring: d.tieredScoring,
+              regimeData: d.regimeData,
+              staging: d.staging,
+              limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
+            })}
+          </p>
+        </div>
+      )}
+
       {/* Watchlist Origin Banner */}
       {d.staging?.action === "promoted_and_traded" && (
         <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
@@ -1933,6 +1971,34 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               </span>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Tier-Grouped Factors */}
+      {d.factors && (
+        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} />
+      )}
+
+      {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
+      {d.gates && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+          {d.gates.map((g: any, gi: number) => (
+            <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+              <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+              <span>{g.reason}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Rejection Reasons */}
+      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
+        <div className="space-y-0.5">
+          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+          {d.rejectionReasons.map((r: string, ri: number) => (
+            <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+          ))}
         </div>
       )}
 
@@ -2231,34 +2297,6 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               ))}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Tier-Grouped Factors */}
-      {d.factors && (
-        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} />
-      )}
-
-      {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
-      {d.gates && (
-        <div className="space-y-0.5">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
-          {d.gates.map((g: any, gi: number) => (
-            <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-              <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
-              <span>{g.reason}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Rejection Reasons */}
-      {d.rejectionReasons && d.rejectionReasons.length > 0 && (
-        <div className="space-y-0.5">
-          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
-          {d.rejectionReasons.map((r: string, ri: number) => (
-            <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
-          ))}
         </div>
       )}
 
