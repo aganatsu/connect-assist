@@ -915,6 +915,19 @@ async function runSafetyGates(
       // Soft mode: ranging allowed, only mismatch blocks
       if (htfTrend !== "ranging" && htfTrend !== entryBias) {
         gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+      } else if (htfTrend === "ranging" && analysis.regimeInfo) {
+        // Fix 4: When daily structure is ranging, consult regime directional bias.
+        // If regime has ≥60% confidence in a direction opposite to entry, block the trade.
+        const regBias = analysis.regimeInfo.bias; // "bullish" | "bearish" | "neutral"
+        const regConf = analysis.regimeInfo.confidence ?? 0; // 0-1 scale
+        const entryOpposesRegime =
+          (regBias === "bullish" && direction === "short") ||
+          (regBias === "bearish" && direction === "long");
+        if (entryOpposesRegime && regConf >= 0.60) {
+          gates.push({ passed: false, reason: `HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
+        } else {
+          gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
+        }
       } else {
         gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
       }

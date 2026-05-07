@@ -1,21 +1,21 @@
 {
-  "score": 31.1,
-  "rawScore": 7,
+  "score": 22.2,
+  "rawScore": 5,
   "direction": "long",
   "bias": "bullish",
-  "strongFactorCount": 5,
+  "strongFactorCount": 4,
   "enabledMax": 22.5,
   "tieredScoring": {
-    "tier1Count": 1,
+    "tier1Count": 0,
     "tier1Max": 4,
     "tier2Count": 4,
     "tier2Max": 9,
     "tier3Count": 2,
     "tier3Max": 9,
-    "tieredScore": 7,
+    "tieredScore": 5,
     "tieredMax": 22.5,
     "tier1GatePassed": false,
-    "tier1GateReason": "Tier 1 gate FAILED: only 1 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
+    "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": false,
     "regimeGateReason": "Regime mismatch: strong trend — long entry opposes strong trend (neutral) → -1.1 penalty (conf: 75%)",
     "spreadGatePassed": true,
@@ -25,7 +25,7 @@
     {
       "name": "Market Structure",
       "present": false,
-      "weight": 2.5,
+      "weight": 0,
       "tier": 1
     },
     {
@@ -42,7 +42,7 @@
     },
     {
       "name": "Premium/Discount & Fib",
-      "present": true,
+      "present": false,
       "weight": 2,
       "tier": 1
     },

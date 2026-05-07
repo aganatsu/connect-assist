@@ -321,16 +321,18 @@ Deno.test("Fixture A (bullish): returns a valid score and direction", () => {
   );
 });
 
-Deno.test("Fixture A (bullish): contains structure-related factors", () => {
+Deno.test("Fixture A (bullish): P/D factor correctly invalidated when retrace > 100%", () => {
+  // NOTE: The bullish fixture's ZigZag detects a 208% retracement, which Fix 2
+  // (ranging-direction-fixes branch) correctly invalidates. This is intentional:
+  // a >100% retrace means the swing thesis is broken.
   const candles = generateBullishFixture();
   const dailyCandles = generateBullishDailyCandles();
   const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
-  const factorNames = result.factors.filter((f: any) => f.present).map((f: any) => f.name);
-  // Should have at least one of: BOS, OB, FVG, Premium/Discount
-  const hasStructure = factorNames.some((n: string) =>
-    n.includes("BOS") || n.includes("Order Block") || n.includes("FVG") || n.includes("Premium")
-  );
-  assert(hasStructure, `Expected structure factors, got: ${factorNames.join(", ")}`);
+  const pdFactor = result.factors.find((f: any) => f.name === "Premium/Discount & Fib");
+  assertExists(pdFactor);
+  // With >100% retrace, P/D should be invalidated (present: false)
+  assert(!pdFactor.present || pdFactor.weight === 0,
+    `P/D factor should be invalidated with >100% retrace, got present=${pdFactor.present} weight=${pdFactor.weight}`);
 });
 
 Deno.test("Fixture B (bearish): returns a valid score and direction", () => {

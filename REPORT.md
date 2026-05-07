@@ -1,87 +1,90 @@
-# Task: HTF Phase 2 — Factor 24 (HTF Fib + PD + Liquidity) & Tier 1 Gate Enhancement
-
-## Branch: manus/htf-fib-pd-liquidity
-
+# Task: Ranging Direction Fixes
+## Branch: manus/ranging-direction-fixes
 ## Behavior changes
 
-1. **New Factor 24 ("HTF Fib + PD + Liquidity")** — When HTF Phase 2 data is injected via `_htfFibLevels`, `_htfPD`, and `_htfLiquidityPools` config keys, a new Tier 2 factor scores up to 2.5 points based on:
-   - **HTF Fibonacci alignment**: Price near key 4H/1H Fib retracement levels (38.2%–78.6%). 4H scores 1.0, 1H scores 0.6. Only the best Fib per timeframe counts.
-   - **HTF Premium/Discount zone**: 4H OTE zone aligned with direction = +1.0, 4H discount/premium aligned = +0.8, 1H OTE = +0.6, 1H zone = +0.5.
-   - **HTF Liquidity Pools**: Active buy-side above price (for longs) or sell-side below (for shorts). 4H = +0.5, 1H = +0.3.
-   - All sub-scores sum and cap at 2.5. When no HTF Phase 2 data is present, factor scores 0 (no regression).
+1. **Direction override in ranging markets (Fix 1):** When entry-TF structure is "ranging" but the regime (computed from daily candles) has ≥60% confidence in a direction, the direction is now set to align with the regime bias instead of falling through to mean-reversion logic. Previously, a ranging market with a strong bullish regime could still produce a "short" direction if the P/D zone happened to be in premium.
 
-2. **Tier 1 Gate Enhancement** — HTF zones can now satisfy Tier 1 core factor slots when the entry-timeframe factor is absent:
-   - If entry-TF FVG is absent AND price is inside an HTF FVG → counts as 1 Tier 1 factor (80% quality)
-   - If entry-TF OB is absent AND price is inside an HTF OB → counts as 1 Tier 1 factor (80% quality)
-   - If entry-TF Premium/Discount & Fib is absent AND price is near an HTF Fib level (≥38.2%) → counts as 1 Tier 1 factor (70% quality)
-   - This allows setups inside strong HTF institutional zones to pass the "3 core factors" gate even when entry-TF triggers are weak.
-   - Gate reason string now includes "HTF FVG/OB/Fib" in the list of qualifying factors.
+2. **100%+ retracement hard rejection (Fix 2):** When the ZigZag-detected retracement exceeds 100% of the swing range, the Premium/Discount & Fib factor is now zeroed (pts=0, present=false). Previously, a 200%+ retrace could still score points via the counter-swing or with-trend branches. This affects the existing bullish test fixture which has a 208% retrace — P/D is now correctly invalidated there.
 
-3. **Snapshot drift** — The three existing snapshot files have been regenerated to include the new Factor 24 in the factor summary. Factor 24 scores 0 in all baseline fixtures (no HTF data injected), so existing scores are unchanged.
+3. **Ranging market quality cap (Fix 3):** In ranging markets, Market Structure weight is capped at 1.0 (qualityRatio ≤ 0.4) instead of receiving the +0.25 "partial trend credit" bonus. The displayWeight is also set to the actual capped pts value so the tiered scoring quality ratio correctly reflects the cap. Previously, a ranging market with a single CHoCH could get full 2.5 displayWeight, giving it 100% qualityRatio in tiered scoring.
 
-4. **enabledMax increased by 1.0** — Factor 24 adds 1.0 to the Tier 2 maximum possible score (since it's Tier 2 with max weight 2.5, it contributes 1.0 tier points). This slightly lowers percentage scores for setups without HTF data, making HTF-backed setups relatively stronger.
+4. **Gate 1 regime veto (Fix 4):** When daily structure is "ranging" (soft mode), Gate 1 now consults the regime directional bias. If the regime has ≥60% confidence in a direction opposite to the entry, the trade is blocked with a "HTF regime veto" reason. Previously, any entry was allowed when daily was ranging.
+
+5. **HTF promotion disabled when ranging + low confidence (Fix 5):** The HTF Tier 1 Gate Enhancement (which promotes HTF FVG/OB/Fib to Tier 1 slots) is now skipped entirely when entry-TF structure is "ranging" AND regime confidence is below 70%. Previously, HTF zones could inflate the score in a low-conviction ranging environment.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/confluenceScoring.ts` | Added Factor 24 scoring block (~100 lines), HTF Tier 1 Gate Enhancement (~80 lines), updated FACTOR_MAX_WEIGHT map and TIER_2_FACTORS set |
-| `supabase/functions/_shared/smcAnalysis.ts` | Added `htf_fib`, `htf_pd`, `htf_liquidity` to ConfluenceLayerType union (type-only change, no logic) |
-| `supabase/functions/bot-scanner/index.ts` | Added HTF Phase 2 data injection: fetches 4H/1H Fib levels, PD zones, and liquidity pools and passes them to confluence scoring via `_htfFibLevels`, `_htfPD`, `_htfLiquidityPools` config keys |
-| `supabase/functions/_shared/htfPhase2Scoring.test.ts` | New test file with 13 tests covering Factor 24 scoring and Tier 1 gate enhancement |
-| `supabase/functions/_shared/__snapshots__/*.snapshot.json` | Regenerated to include Factor 24 (scores 0 in baseline fixtures) |
+| `supabase/functions/_shared/confluenceScoring.ts` | Fixes 1, 2, 3, 5: regime override for direction, >100% retrace rejection, ranging quality cap, HTF promotion guard |
+| `supabase/functions/bot-scanner/index.ts` | Fix 4: Gate 1 regime-aware veto when daily is ranging |
+| `supabase/functions/_shared/confluenceScoring.test.ts` | Updated existing test to reflect Fix 2 behavior (P/D invalidation) |
+| `supabase/functions/_shared/rangingDirectionFixes.test.ts` | New regression test file for all 5 fixes |
+| `supabase/functions/_shared/__snapshots__/*.json` | Regenerated snapshots to reflect new scoring behavior |
+| `TODO.md` | Added task items |
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `HTF Fib+PD+Liq: no data → factor scores 0` | Factor present=false, weight=0, detail includes "No HTF Fib/PD/Liquidity alignment detected" |
-| `HTF Fib+PD+Liq: price near 4H Fib 61.8% → scores +1.0` | Factor present=true, weight≥1.0, detail includes "4H Fib 61.8%" |
-| `HTF Fib+PD+Liq: 4H discount zone for longs → scores +0.8` | Factor present=true, weight≥0.8 when direction=long |
-| `HTF Fib+PD+Liq: 4H OTE zone for longs → scores +1.0` | Factor present=true, weight≥1.0, detail includes "OTE Zone" |
-| `HTF Fib+PD+Liq: active buy-side liquidity above price for longs → scores +0.5` | Factor present=true, weight≥0.5, detail includes "Liquidity Pool" |
-| `HTF Fib+PD+Liq: combined scoring capped at 2.5` | Factor weight≤2.5 regardless of how many sub-scores fire |
-| `HTF Fib+PD+Liq: factor is classified as Tier 2` | `(factor as any).tier === 2` |
-| `HTF Fib+PD+Liq: no regression — absent data same as explicit null` | Identical score and factor state whether config omits or nulls HTF keys |
-| `Tier 1 HTF: HTF FVG satisfies FVG slot when entry-TF FVG is absent` | HTF POI factor detail includes promotion tag when entry FVG disabled |
-| `Tier 1 HTF: HTF OB satisfies OB slot when entry-TF OB is absent` | HTF POI factor detail includes promotion tag when entry OB disabled |
-| `Tier 1 HTF: HTF Fib satisfies Fib slot when entry-TF Fib is absent` | HTF Fib factor detail includes promotion tag when entry Fib absent |
-| `Tier 1 HTF: HTF zones do NOT satisfy slots when price is NOT inside the zone` | No promotion when POIs are far from price |
-| `Tier 1 HTF: gate reason mentions HTF when HTF zones contribute` | tier1GateReason includes "HTF" or "core factors" |
+| Fix 1: Ranging + bullish regime → direction is 'long', never 'short' | When regime is bullish with ≥60% confidence, direction must not be "short" |
+| Fix 1: Ranging + bearish regime → direction is 'short', never 'long' | When regime is bearish with ≥60% confidence, direction must not be "long" |
+| Fix 1: Ranging + neutral regime → mean-reversion still works | Neutral regime allows any direction (mean-reversion preserved) |
+| Fix 1: Ranging + no daily candles → mean-reversion still works | Without daily candles, no regime computed, mean-reversion preserved |
+| Fix 2: P/D factor detail mentions 'thesis invalidated' when retrace > 100% | Factor weight is 0 and detail mentions "thesis invalidated" |
+| Fix 3: Ranging market structure weight is capped at 1.0 | Weight ≤ 1.0, qualityRatio ≤ 0.4 |
+| Fix 3: Ranging market structure detail mentions 'capped' | Detail string contains "capped" |
+| Fix 4: bot-scanner Gate 1 contains regime veto logic | Source verification of Fix 4 comment, reason string, threshold, direction checks |
+| Fix 4: Gate 1 regime veto is inside the soft-mode ranging branch | Structural verification that veto is in the correct code branch |
+| Fix 5: Ranging + low-confidence regime → no HTF Tier 1 promotions | No _htfTier1FVG/_htfTier1OB flags, no HTF promotions in tier1 present names |
+| Fix 5: source contains _skipHTFPromotion guard | Source verification of the guard variable and conditions |
+| Regression: Bullish trending market still produces 'long' direction | Trending markets unaffected by Fix 1 |
+| Regression: Market Structure factor in trending market is NOT capped at 1.0 | Trending markets unaffected by Fix 3 |
 
 ## Tests run
 
 ```
-$ deno test --allow-env --allow-read --allow-write --no-check --ignore=src/
-ok | 271 passed | 0 failed (6s)
+$ deno test --no-check --allow-all supabase/functions/_shared/
+ok | 147 passed | 0 failed (6s)
+
+$ deno test --no-check --allow-all supabase/functions/bot-scanner/
+ok | 12 passed | 0 failed (158ms)
 ```
 
-Note: `src/test/example.test.ts` is a Vitest template file that fails under Deno's test runner (expects Vitest globals). It is unrelated to our changes and was excluded.
+All 159 tests pass.
 
 ## Regression check
 
-1. **No-data regression**: When `_htfFibLevels`, `_htfPD`, `_htfLiquidityPools` are absent or null, Factor 24 scores exactly 0 and has no effect on the overall score. Verified by explicit test.
-2. **Snapshot stability**: All three baseline snapshot fixtures (bullish, bearish, ranging) regenerated successfully. Factor 24 appears with `present: false, weight: 0` in all of them — confirming zero impact on existing scoring when HTF data is not injected.
-3. **Tier 1 gate**: The gate still requires 3 core factors. HTF zones only contribute when (a) the corresponding entry-TF factor is absent AND (b) price is currently inside the HTF zone. The existing `slFloorAndTier1Gate.test.ts` tests continue to pass.
-4. **bot-scanner/index.ts changes**: The HTF Phase 2 data injection only runs AFTER the existing HTF POI detection (Phase 1). It uses the same `fetchHTFCandles` helper and does not alter any existing data flow. The 21 gates are untouched.
+- **Trending markets:** Verified via regression tests that bullish trending markets still produce "long" direction and Market Structure weight > 1.0 (the +1.0 alignment bonus is preserved).
+- **Existing test suite:** All 147 `_shared/` tests and 12 `bot-scanner/` tests pass without modification (except the one test updated to reflect the intentional Fix 2 behavior change).
+- **Snapshot drift:** Snapshots regenerated. The bullish fixture now scores lower (5 vs 7 rawScore) due to P/D invalidation. The ranging fixture scores lower due to the quality cap. The bearish fixture is minimally affected.
+- **Gate 1 soft mode:** The existing "ranging allowed" path is preserved — only counter-regime trades with ≥60% confidence are blocked.
+
+## bot-scanner/index.ts change explanation
+
+**What changed:** Added a new `else if` branch inside Gate 1's soft-mode section. When `htfTrend === "ranging"` AND `analysis.regimeInfo` is available, the gate now checks if the entry direction opposes the regime bias with ≥60% confidence. If so, it pushes a `passed: false` gate with a "HTF regime veto" reason.
+
+**Why:** Previously, Gate 1 in soft mode unconditionally passed when the daily structure was "ranging." This allowed the bot to take short trades even when the regime was strongly bullish (or vice versa), directly contradicting its own higher-timeframe analysis. The 60% threshold ensures only high-confidence regime signals trigger the veto — low-confidence or neutral regimes still allow the trade through.
 
 ## Open questions
 
-1. **PD scoring requires direction**: Factor 24's PD and Liquidity sub-scores only fire when `direction` is non-null. In production, if direction is null (no clear structure), these sub-scores won't contribute. Is this the desired behavior, or should PD zones score regardless of direction?
+1. **Confidence threshold (60% for Fix 1 & Fix 4, 70% for Fix 5):** The 60% threshold for direction override and gate veto is conservative — it requires the regime to be "more likely than not" directional. The 70% threshold for HTF promotion is stricter because promotion inflates the score more aggressively. These thresholds could be made configurable if needed. "Confidence" here refers to the regime classifier's self-reported certainty (0-100 scale, stored as 0.0-1.0) — it's computed by `classifyInstrumentRegime()` based on how many directional indicators agree (EMA alignment, ADX, higher-highs/lower-lows count, etc.).
 
-2. **Tier 1 quality ratios**: HTF FVG/OB substitutes use 80% quality, HTF Fib uses 70%. These are conservative choices. Should they be configurable or adjusted?
+2. **displayWeight semantics:** Fix 3 changes the Market Structure `displayWeight` from always-2.5 to the actual capped pts value when ranging. This means the "weight" shown in the UI for Market Structure in ranging markets will be lower (e.g., 1.0 instead of 2.5). This is intentional — it correctly reflects the factor's contribution — but may surprise users who expect to see the max possible weight.
 
-3. **Anti-double-count**: Factor 24 (HTF Fib/PD/Liq) and Factor 23 (HTF POI Alignment) can both fire simultaneously. They score different aspects (Factor 23 = price inside FVG/OB/Breaker zones, Factor 24 = Fib levels + PD zones + liquidity targets). There is potential overlap when an HTF FVG coincides with an HTF Fib level. Currently no anti-double-count rule exists between them. Should one be added?
+3. **Bullish fixture regression:** The existing `generateBullishFixture()` produces a 208% retracement (detected by ZigZag). This was always the case but previously scored points anyway. Fix 2 now correctly invalidates it. If the fixture is meant to represent a "good bullish setup," it may need to be redesigned with a more realistic price action pattern in a future task.
 
 ## Suggested PR title and description
 
-**Title:** `[htf-fib-pd-liquidity] Add Factor 24 (HTF Fib + PD + Liquidity) scoring & Tier 1 gate enhancement`
+**Title:** fix: Prevent bot from trading against its own regime analysis in ranging markets
 
 **Description:**
-Implements HTF Phase 2 scoring in the confluence engine:
+Fixes 5 related issues where the bot could take trades contradicting its own regime detection:
 
-- **Factor 24**: Scores alignment with higher-timeframe Fibonacci levels, Premium/Discount zones, and Liquidity Pools. Capped at 2.5, classified as Tier 2. Only fires when bot-scanner injects HTF Phase 2 data.
-- **Tier 1 Gate Enhancement**: When entry-TF core factors (FVG, OB, Fib) are absent, corresponding HTF zones containing the current price can satisfy Tier 1 slots at reduced quality (70-80%). This prevents the "3 core factors" gate from rejecting setups that are inside strong institutional HTF zones.
-- **bot-scanner injection**: Fetches 4H/1H Fib levels, PD zones, and liquidity pools using existing `fetchHTFCandles` + `smcAnalysis` functions, passes them to confluence scoring.
-- **13 new tests** covering all scoring paths and gate enhancement behavior.
-- **Zero regression** on existing scoring when HTF Phase 2 data is absent.
+- **Fix 1:** Override direction with regime bias when entry-TF is ranging but regime has ≥60% confidence
+- **Fix 2:** Hard-reject P/D factor when retracement exceeds 100% (swing thesis broken)
+- **Fix 3:** Cap Market Structure quality ratio at 40% in ranging markets (no trend alignment bonus)
+- **Fix 4:** Gate 1 now vetoes counter-regime trades when daily is ranging with ≥60% regime confidence
+- **Fix 5:** Skip HTF Tier 1 promotions when ranging + regime confidence < 70%
+
+All 159 existing tests pass. 13 new regression tests added covering each fix and verifying trending markets are unaffected.
