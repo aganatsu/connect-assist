@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ChevronDown, Info, ShieldCheck, ShieldX } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { ArrowUp, ChevronDown, Info, ShieldCheck, ShieldX } from "lucide-react";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -76,6 +76,44 @@ function classifyTier(f: FactorItem): number {
   return 3;
 }
 
+// ─── HTF Promotion Detection ────────────────────────────────────────
+// Detect HTF Tier 1 promotions from factor detail strings or flags.
+// These are HTF zones (FVG, OB, Fib) that substitute for missing entry-TF Tier 1 factors.
+
+interface HTFPromotion {
+  type: "FVG" | "OB" | "Fib";
+  detail: string;
+}
+
+function detectHTFPromotions(allFactors: FactorItem[]): HTFPromotion[] {
+  const promotions: HTFPromotion[] = [];
+
+  // Check HTF POI Alignment factor for FVG/OB promotions
+  const htfPoi = allFactors.find(f => f.name === "HTF POI Alignment");
+  if (htfPoi?.detail) {
+    const fvgMatch = htfPoi.detail.match(/\[HTF FVG promoted to Tier 1: ([^\]]+)\]/);
+    if (fvgMatch) promotions.push({ type: "FVG", detail: fvgMatch[1] });
+    const obMatch = htfPoi.detail.match(/\[HTF OB promoted to Tier 1: ([^\]]+)\]/);
+    if (obMatch) promotions.push({ type: "OB", detail: obMatch[1] });
+  }
+
+  // Check HTF Fib factor for Fib promotion
+  const htfFib = allFactors.find(f => f.name === "HTF Fib + PD + Liquidity");
+  if (htfFib?.detail) {
+    const fibMatch = htfFib.detail.match(/\[HTF Fib promoted to Tier 1: ([^\]]+)\]/);
+    if (fibMatch) promotions.push({ type: "Fib", detail: fibMatch[1] });
+  }
+
+  // Fallback: check for _htfTier1* flags (available on full factor objects from signal_reason)
+  if (promotions.length === 0) {
+    if (htfPoi && (htfPoi as any)._htfTier1FVG) promotions.push({ type: "FVG", detail: "HTF FVG at price (promoted)" });
+    if (htfPoi && (htfPoi as any)._htfTier1OB) promotions.push({ type: "OB", detail: "HTF OB at price (promoted)" });
+    if (htfFib && (htfFib as any)._htfTier1Fib) promotions.push({ type: "Fib", detail: "HTF Fib at price (promoted)" });
+  }
+
+  return promotions;
+}
+
 // ─── Sub-components ─────────────────────────────────────────────────
 
 function TierSection({
@@ -86,6 +124,7 @@ function TierSection({
   passPoints,
   totalPoints,
   defaultOpen,
+  htfPromotions,
 }: {
   tier: number;
   factors: FactorItem[];
@@ -94,6 +133,7 @@ function TierSection({
   passPoints: number;
   totalPoints: number;
   defaultOpen: boolean;
+  htfPromotions?: HTFPromotion[];
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const cfg = TIER_CONFIG[tier] || TIER_CONFIG[3];
@@ -137,6 +177,24 @@ function TierSection({
               </div>
             </div>
           ))}
+          {/* HTF Tier 1 Promotions — shown as distinct line items */}
+          {tier === 1 && htfPromotions && htfPromotions.length > 0 && (
+            <>
+              {htfPromotions.map((promo, i) => (
+                <div key={`htf-${i}`} className="flex items-start gap-1 text-[9px]">
+                  <span className="mt-0.5 text-blue-400">
+                    <ArrowUp className="h-2.5 w-2.5" />
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-blue-400 font-medium">
+                      HTF {promo.type} (promoted)
+                    </span>
+                    <span className="text-muted-foreground ml-1">— {promo.detail}</span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -228,6 +286,9 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
   // Use tieredScoring metadata if available (more accurate since backend calculates with actual weights)
   const ts = tieredScoring;
 
+  // Detect HTF Tier 1 promotions from all factors (including Tier 2/3 factors that carry promotion flags)
+  const htfPromotions = useMemo(() => detectHTFPromotions(factors), [factors]);
+
   return (
     <div className="space-y-1.5">
       {/* Tier score summary */}
@@ -250,6 +311,7 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
           passPoints={ts ? ts.tier1Count * 2 : t1.passPoints}
           totalPoints={ts ? ts.tier1Max * 2 : t1.totalPoints}
           defaultOpen={!compact}
+          htfPromotions={htfPromotions}
         />
       )}
       {tier2.length > 0 && (
