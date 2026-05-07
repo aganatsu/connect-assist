@@ -39,3 +39,11 @@
 ## UI Fixes
 
 - [ ] Fix manual "Scan Now" button — add loading spinner while scan is running, refresh results on completion
+
+## Ranging Direction & Scoring Fixes (manus/ranging-direction-fixes)
+
+- [ ] Fix 1: Regime override for direction in ranging markets — don't mean-revert against a trending regime (≥60% confidence)
+- [ ] Fix 2: 100%+ retracement hard rejection — if price retraces beyond the full move, invalidate P/D factor
+- [ ] Fix 3: Ranging market quality cap — "Ranging market — partial trend credit" should not pass at full quality
+- [ ] Fix 4: Gate 1 regime-aware — combine daily structure with regime data so "ranging daily structure" doesn't auto-pass counter-regime trades
+- [ ] Fix 5: HTF promotion disabled when entry-TF ranging + regime confidence < 70%

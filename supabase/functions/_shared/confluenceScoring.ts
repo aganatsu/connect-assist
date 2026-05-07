@@ -357,15 +357,20 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         pts += 1.0;
         detail += ` | Entry TF trend ${structure.trend} — aligned`;
       } else if (structure.trend === "ranging" && structurePts > 0) {
-        pts += 0.25;
-        detail += " | Ranging market — partial trend credit";
+        // Fix 3: Ranging market should NOT pass Tier 1 gate on structure alone.
+        // Remove the +0.25 bonus and cap the raw weight so qualityRatio stays ≤0.4.
+        // Max weight for Market Structure is 2.5, so 0.4 * 2.5 = 1.0 cap.
+        pts = Math.min(pts, 1.0);
+        detail += " | Ranging market — capped (no trend alignment bonus)";
       }
       // Cap at 2.5
       pts = Math.min(2.5, pts);
     } else {
       detail = "BOS/CHoCH disabled";
     }
-    { const s = applyWeightScale(pts, "marketStructure", 2.5, config); pts = s.pts; score += pts;
+    // Fix 3 (cont.): Use actual pts as displayWeight when ranging-capped, so qualityRatio reflects the cap
+    const msDisplayWeight = (structure.trend === "ranging") ? Math.min(pts, 2.5) : 2.5;
+    { const s = applyWeightScale(pts, "marketStructure", msDisplayWeight, config); pts = s.pts; score += pts;
     factors.push({ name: "Market Structure", present: pts > 0, weight: s.displayWeight, detail, group: "Market Structure" }); }
   }
 
@@ -469,8 +474,19 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       direction = "short"; // Strong trend override: allow discount shorts in strong downtrend
     }
   } else if (structure.trend === "ranging") {
-    if (pd.currentZone === "discount") direction = "long";
-    else if (pd.currentZone === "premium") direction = "short";
+    // Fix 1: If regime has a directional lean with ≥60% confidence, align with it
+    // instead of blindly mean-reverting (which caused shorts against bullish regimes).
+    const _regBias = regimeInfo?.bias; // "bullish" | "bearish" | "neutral"
+    const _regConf = regimeInfo?.confidence ?? 0; // 0-1 scale
+    if (_regBias === "bullish" && _regConf >= 0.60) {
+      direction = "long"; // Don't short against a bullish regime
+    } else if (_regBias === "bearish" && _regConf >= 0.60) {
+      direction = "short"; // Don't buy against a bearish regime
+    } else {
+      // Regime is truly neutral or below threshold — mean-reversion is valid
+      if (pd.currentZone === "discount") direction = "long";
+      else if (pd.currentZone === "premium") direction = "short";
+    }
   }
 
   // ── Factor 3: Fair Value Gap (max 2.0) ──
@@ -649,7 +665,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const isAccelerating = regimeInfo?.transition?.state === "accelerating";
 
     if (fibDirection === "long" || fibDirection === "short") {
-      if (swingTradeAlignment === "counter") {
+      // Fix 2: If price retraces beyond 100% of the swing, the thesis is invalidated.
+      // The swing structure is broken — no valid Fib confluence exists.
+      if (retrace > 100) {
+        pts = 0;
+        detail += ` | Price beyond 100% retracement (${retrace.toFixed(1)}%) — thesis invalidated`;
+      } else if (swingTradeAlignment === "counter") {
         // ── COUNTER-SWING ENTRY (reversal trade) ──
         // Trading against the last swing. For this to be a good entry:
         //   - LOW retrace = price is near the swing extreme = good reversal entry
@@ -2311,12 +2332,17 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (po3Possible) tieredMax += 1.0;
   if (config.openingRange?.enabled) tieredMax += 2.0;
 
-  // ─── HTF Tier 1 Gate Enhancement ──────────────────────────────────────────
+  // ─── HTF Tier 1 Gate Enhancement ──────────────────────────────────────────────────────
   // HTF zones (FVG, OB, Fib) can satisfy the corresponding Tier 1 slot
   // when the entry-TF factor is absent AND price is currently inside the HTF zone.
   // This allows higher-timeframe institutional zones to substitute for missing
   // entry-timeframe triggers, recognizing that a 4H FVG is MORE significant than a 15m FVG.
-  {
+  //
+  // Fix 5: Skip HTF promotion entirely when entry-TF structure is ranging AND
+  // regime confidence is below 70%. In a low-conviction ranging environment,
+  // promoting HTF zones inflates the score and leads to bad entries.
+  const _skipHTFPromotion = structure.trend === "ranging" && (regimeInfo?.confidence ?? 0) < 0.70;
+  if (!_skipHTFPromotion) {
     const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] | null = (config as any)._htfPOIs || null;
     const htfFibDataForGate: { h4: FibLevels | null; h1: FibLevels | null } | null = (config as any)._htfFibLevels || null;
     const atrForGate = calculateATR(candles, 14);
@@ -2393,7 +2419,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         }
       }
     }
-  }
+  } // end of !_skipHTFPromotion
 
   // Recalculate tieredMax after potential HTF Tier 1 additions
   tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
