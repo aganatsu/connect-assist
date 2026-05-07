@@ -309,13 +309,13 @@ Deno.test("HTF Fib+PD+Liq: no regression — absent data same as explicit null",
 
 // ─── Tier 1 Gate Enhancement Tests ──────────────────────────────────────────
 
-Deno.test("Tier 1 HTF: HTF FVG satisfies FVG slot when entry-TF FVG is absent", () => {
+Deno.test("Tier 1 HTF: HTF FVG does NOT satisfy FVG slot when entry-TF FVG is absent (nested required)", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);
   const lastPrice = candles[candles.length - 1].close;
 
   // Inject HTF POIs with a 4H FVG containing the current price
-  // Disable entry-TF FVG so it won't fire on its own
+  // Disable entry-TF FVG — with nested logic, HTF alone should NOT promote
   const config = {
     ...baseConfig,
     enableFVG: false, // Entry-TF FVG disabled → factor absent
@@ -328,24 +328,17 @@ Deno.test("Tier 1 HTF: HTF FVG satisfies FVG slot when entry-TF FVG is absent", 
   };
 
   const result = runConfluenceAnalysis(candles, daily, config);
-  const tiered = (result as any).tieredScoring;
-
-  // The HTF FVG should have contributed to tier1Count
-  // Check that the HTF POI factor has the promotion tag
   const htfPoiFactor = result.factors.find((f: any) => f.name === "HTF POI Alignment");
-  if (htfPoiFactor && htfPoiFactor.present) {
-    // If HTF POI is present (price is inside), it should have the Tier 1 promotion tag
-    assert(htfPoiFactor.detail.includes("HTF FVG promoted to Tier 1") || true,
-      "HTF FVG should be promoted when entry-TF FVG is absent and price is inside");
-  }
-
-  // Verify the tier1GateReason mentions HTF if promotion happened
-  if (tiered && tiered.tier1GateReason && tiered.tier1GateReason.includes("HTF FVG")) {
-    assert(true, "Tier 1 gate reason includes HTF FVG promotion");
+  // With nested containment: HTF alone should NOT get a Tier 1 promotion
+  if (htfPoiFactor) {
+    assert(!htfPoiFactor.detail.includes("HTF-confirmed FVG"),
+      "HTF FVG alone (without LTF FVG) should NOT be promoted to Tier 1");
+    assert(!(htfPoiFactor as any)._htfTier1FVG,
+      "_htfTier1FVG flag should NOT be set when entry-TF FVG is absent");
   }
 });
 
-Deno.test("Tier 1 HTF: HTF OB satisfies OB slot when entry-TF OB is absent", () => {
+Deno.test("Tier 1 HTF: HTF OB does NOT satisfy OB slot when entry-TF OB is absent (nested required)", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);
   const lastPrice = candles[candles.length - 1].close;
@@ -363,13 +356,16 @@ Deno.test("Tier 1 HTF: HTF OB satisfies OB slot when entry-TF OB is absent", () 
 
   const result = runConfluenceAnalysis(candles, daily, config);
   const htfPoiFactor = result.factors.find((f: any) => f.name === "HTF POI Alignment");
-  if (htfPoiFactor && htfPoiFactor.present) {
-    assert(htfPoiFactor.detail.includes("HTF OB promoted to Tier 1") || true,
-      "HTF OB should be promoted when entry-TF OB is absent and price is inside");
+  // With nested containment: HTF alone should NOT get a Tier 1 promotion
+  if (htfPoiFactor) {
+    assert(!htfPoiFactor.detail.includes("HTF-confirmed OB"),
+      "HTF OB alone (without LTF OB) should NOT be promoted to Tier 1");
+    assert(!(htfPoiFactor as any)._htfTier1OB,
+      "_htfTier1OB flag should NOT be set when entry-TF OB is absent");
   }
 });
 
-Deno.test("Tier 1 HTF: HTF Fib satisfies Fib slot when entry-TF Fib is absent", () => {
+Deno.test("Tier 1 HTF: HTF Fib does NOT satisfy Fib slot when entry-TF Fib is absent (nested required)", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);
   const lastPrice = candles[candles.length - 1].close;
@@ -401,13 +397,15 @@ Deno.test("Tier 1 HTF: HTF Fib satisfies Fib slot when entry-TF Fib is absent", 
   const result = runConfluenceAnalysis(candles, daily, config);
   const htfFibFactor = result.factors.find((f: any) => f.name === "HTF Fib + PD + Liquidity");
 
-  // If the entry-TF Fib factor is absent and HTF Fib is near price, it should be promoted
+  // With nested containment: HTF Fib alone should NOT promote when entry-TF Fib is absent
   const entryFibFactor = result.factors.find((f: any) => f.name === "Premium/Discount & Fib");
   if (entryFibFactor && (!entryFibFactor.present || entryFibFactor.weight <= 0)) {
-    // Entry-TF Fib is absent → HTF Fib should promote
-    if (htfFibFactor && htfFibFactor.present) {
-      assert(htfFibFactor.detail.includes("HTF Fib promoted to Tier 1"),
-        `Expected HTF Fib promotion detail, got: ${htfFibFactor.detail}`);
+    // Entry-TF Fib is absent → HTF Fib should NOT promote (needs LTF confirmation)
+    if (htfFibFactor) {
+      assert(!htfFibFactor.detail.includes("HTF Fib confirmed"),
+        `HTF Fib alone should NOT be confirmed when entry-TF Fib is absent, got: ${htfFibFactor.detail}`);
+      assert(!(htfFibFactor as any)._htfTier1Fib,
+        "_htfTier1Fib flag should NOT be set when entry-TF Fib is absent");
     }
   }
 });
@@ -440,12 +438,13 @@ Deno.test("Tier 1 HTF: HTF zones do NOT satisfy slots when price is NOT inside t
     "Should NOT promote when price is not inside HTF zone");
 });
 
-Deno.test("Tier 1 HTF: gate reason mentions HTF when HTF zones contribute", () => {
+Deno.test("Tier 1 HTF: gate reason does NOT mention HTF-nested when entry-TF factors are absent", () => {
   const candles = makeBullishCandles(50);
   const daily = makeDailyCandles(30);
   const lastPrice = candles[candles.length - 1].close;
 
   // Inject both HTF FVG and OB containing price, disable entry-TF versions
+  // With nested logic, these should NOT contribute since LTF factors are absent
   const config = {
     ...baseConfig,
     enableFVG: false,
@@ -462,11 +461,11 @@ Deno.test("Tier 1 HTF: gate reason mentions HTF when HTF zones contribute", () =
   const result = runConfluenceAnalysis(candles, daily, config);
   const tiered = (result as any).tieredScoring;
 
-  // If HTF zones promoted, the gate reason should include "HTF"
+  // With nested logic, HTF zones alone should NOT contribute to tier1Count
   if (tiered && tiered.tier1GateReason) {
-    // The gate reason should either pass (mentioning HTF) or fail (mentioning HTF as option)
     const reason = tiered.tier1GateReason;
-    assert(reason.includes("HTF") || reason.includes("core factors"),
-      `Gate reason should reference HTF or core factors, got: ${reason}`);
+    // Should NOT mention "HTF-nested" since no LTF factors are present to be nested
+    assert(!reason.includes("HTF-nested"),
+      `Gate reason should NOT mention HTF-nested when LTF factors are absent, got: ${reason}`);
   }
 });
