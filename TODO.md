@@ -47,3 +47,12 @@
 - [ ] Fix 3: Ranging market quality cap — "Ranging market — partial trend credit" should not pass at full quality
 - [ ] Fix 4: Gate 1 regime-aware — combine daily structure with regime data so "ranging daily structure" doesn't auto-pass counter-regime trades
 - [ ] Fix 5: HTF promotion disabled when entry-TF ranging + regime confidence < 70%
+
+## HTF Nested Entry Rework (manus/htf-nested-entry)
+
+- [ ] Rework HTF Tier 1 promotion: replace substitution logic with nested containment logic
+- [ ] LTF OB/FVG inside HTF zone gets quality boost / Tier 1 promotion
+- [ ] HTF zone alone (without LTF confirmation inside it) does NOT satisfy Tier 1
+- [ ] Write regression tests: nested entry qualifies, non-nested does not
+- [ ] Verify trending markets unaffected
+- [ ] Run full test suite

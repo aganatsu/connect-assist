@@ -2332,11 +2332,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (po3Possible) tieredMax += 1.0;
   if (config.openingRange?.enabled) tieredMax += 2.0;
 
-  // ─── HTF Tier 1 Gate Enhancement ──────────────────────────────────────────────────────
-  // HTF zones (FVG, OB, Fib) can satisfy the corresponding Tier 1 slot
-  // when the entry-TF factor is absent AND price is currently inside the HTF zone.
-  // This allows higher-timeframe institutional zones to substitute for missing
-  // entry-timeframe triggers, recognizing that a 4H FVG is MORE significant than a 15m FVG.
+  // ─── HTF Tier 1 Gate Enhancement (Nested Containment) ─────────────────────────────────
+  // ICT/SMC methodology: the A+ entry is a lower-timeframe OB/FVG that forms INSIDE
+  // a higher-timeframe institutional zone. The HTF zone is the "why" (smart money footprint),
+  // the LTF zone is the "when" (precise entry trigger).
+  //
+  // Logic: When an entry-TF factor IS present AND its zone is nested inside (overlaps with)
+  // a corresponding HTF zone, boost its quality to 95% and tag it as HTF-confirmed.
+  // HTF zones alone (without LTF confirmation) do NOT satisfy Tier 1.
   //
   // Fix 5: Skip HTF promotion entirely when entry-TF structure is ranging AND
   // regime confidence is below 70%. In a low-conviction ranging environment,
@@ -2348,75 +2351,115 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const atrForGate = calculateATR(candles, 14);
     const fibToleranceGate = atrForGate * 0.3;
 
-    // Check FVG slot: if entry-TF FVG is absent, can HTF FVG fill it?
+    // Helper: check if two zones overlap (LTF zone is inside or partially inside HTF zone)
+    const zonesOverlap = (ltfLow: number, ltfHigh: number, htfLow: number, htfHigh: number): boolean => {
+      return ltfLow <= htfHigh && ltfHigh >= htfLow;
+    };
+
+    // Check FVG: if entry-TF FVG IS present AND nested inside an HTF FVG → boost quality
     const fvgFactor = factors.find(f => f.name === "Fair Value Gap");
-    const fvgAbsent = !fvgFactor || !fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1;
-    if (fvgAbsent && htfPOIs) {
-      const htfFVGContainingPrice = htfPOIs.find(poi => poi.type === "fvg" && lastPrice >= poi.low && lastPrice <= poi.high);
-      if (htfFVGContainingPrice) {
-        tier1Count++;
-        tier1Max++;
-        // Add a synthetic Tier 1 contribution to tieredScore
-        tieredScore += 2.0 * 0.8; // 80% quality since it's HTF substitute
-        const htfFvgDetail = `HTF ${htfFVGContainingPrice.timeframe} FVG [${htfFVGContainingPrice.low.toFixed(5)}-${htfFVGContainingPrice.high.toFixed(5)}] satisfying Tier 1 FVG slot`;
-        // Tag the HTF POI factor with the promotion info
-        const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
-        if (htfPoiFactor) {
-          htfPoiFactor.detail += ` [HTF FVG promoted to Tier 1: ${htfFvgDetail}]`;
-          (htfPoiFactor as any)._htfTier1FVG = true;
+    const fvgPresent = fvgFactor && fvgFactor.present && fvgFactor.weight > 0;
+    if (fvgPresent && htfPOIs) {
+      // Find the LTF FVG that price is inside (the one that scored)
+      const trendHintForHTF = direction === "long" ? "bullish" : direction === "short" ? "bearish" : null;
+      const scoringFVG = fvgs.find(f => {
+        if (f.state === "filled") return false;
+        if (trendHintForHTF && f.type !== trendHintForHTF) return false;
+        return lastPrice >= f.low && lastPrice <= f.high;
+      });
+      if (scoringFVG) {
+        const htfFVGContainer = htfPOIs.find(poi =>
+          poi.type === "fvg" && zonesOverlap(scoringFVG.low, scoringFVG.high, poi.low, poi.high)
+        );
+        if (htfFVGContainer) {
+          // Nested entry confirmed: LTF FVG inside HTF FVG
+          // Boost the existing Tier 1 score to 95% quality (from whatever it was)
+          const currentTierPts = TIER_POINTS[1] || 2.0;
+          const currentQuality = fvgFactor.weight / (FACTOR_MAX_WEIGHT["Fair Value Gap"] || 2.0);
+          const boostedQuality = Math.max(currentQuality, 0.95);
+          const qualityDelta = boostedQuality - currentQuality;
+          if (qualityDelta > 0) {
+            tieredScore += currentTierPts * qualityDelta;
+          }
+          const htfFvgDetail = `LTF FVG [${scoringFVG.low.toFixed(5)}-${scoringFVG.high.toFixed(5)}] nested inside HTF ${htfFVGContainer.timeframe} FVG [${htfFVGContainer.low.toFixed(5)}-${htfFVGContainer.high.toFixed(5)}]`;
+          const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
+          if (htfPoiFactor) {
+            htfPoiFactor.detail += ` [HTF-confirmed FVG: ${htfFvgDetail}]`;
+            (htfPoiFactor as any)._htfTier1FVG = true;
+          }
+          fvgFactor.detail += " | HTF-nested (A+ entry)";
         }
       }
     }
 
-    // Check OB slot: if entry-TF OB is absent, can HTF OB fill it?
+    // Check OB: if entry-TF OB IS present AND nested inside an HTF OB → boost quality
     const obFactor = factors.find(f => f.name === "Order Block");
-    const obAbsent = !obFactor || !obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1;
-    if (obAbsent && htfPOIs) {
-      const htfOBContainingPrice = htfPOIs.find(poi => poi.type === "ob" && lastPrice >= poi.low && lastPrice <= poi.high);
-      if (htfOBContainingPrice) {
-        tier1Count++;
-        tier1Max++;
-        tieredScore += 2.0 * 0.8;
-        const htfObDetail = `HTF ${htfOBContainingPrice.timeframe} OB [${htfOBContainingPrice.low.toFixed(5)}-${htfOBContainingPrice.high.toFixed(5)}] satisfying Tier 1 OB slot`;
-        const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
-        if (htfPoiFactor) {
-          htfPoiFactor.detail += ` [HTF OB promoted to Tier 1: ${htfObDetail}]`;
-          (htfPoiFactor as any)._htfTier1OB = true;
+    const obPresent = obFactor && obFactor.present && obFactor.weight > 0;
+    if (obPresent && htfPOIs) {
+      // Find the LTF OB that price is inside (the one that scored)
+      const scoringOB = orderBlocks.find(ob =>
+        ob.state !== "broken" && !ob.mitigated && lastPrice >= ob.low && lastPrice <= ob.high
+      );
+      if (scoringOB) {
+        const htfOBContainer = htfPOIs.find(poi =>
+          poi.type === "ob" && zonesOverlap(scoringOB.low, scoringOB.high, poi.low, poi.high)
+        );
+        if (htfOBContainer) {
+          // Nested entry confirmed: LTF OB inside HTF OB
+          const currentTierPts = TIER_POINTS[1] || 2.0;
+          const currentQuality = obFactor.weight / (FACTOR_MAX_WEIGHT["Order Block"] || 2.0);
+          const boostedQuality = Math.max(currentQuality, 0.95);
+          const qualityDelta = boostedQuality - currentQuality;
+          if (qualityDelta > 0) {
+            tieredScore += currentTierPts * qualityDelta;
+          }
+          const htfObDetail = `LTF OB [${scoringOB.low.toFixed(5)}-${scoringOB.high.toFixed(5)}] nested inside HTF ${htfOBContainer.timeframe} OB [${htfOBContainer.low.toFixed(5)}-${htfOBContainer.high.toFixed(5)}]`;
+          const htfPoiFactor = factors.find(f => f.name === "HTF POI Alignment");
+          if (htfPoiFactor) {
+            htfPoiFactor.detail += ` [HTF-confirmed OB: ${htfObDetail}]`;
+            (htfPoiFactor as any)._htfTier1OB = true;
+          }
+          obFactor.detail += " | HTF-nested (A+ entry)";
         }
       }
     }
 
-    // Check Fib slot: if entry-TF Premium/Discount & Fib is absent, can HTF Fib fill it?
+    // Check Fib: if entry-TF Fib IS present AND near an HTF Fib → boost quality
     const fibFactor = factors.find(f => f.name === "Premium/Discount & Fib");
-    const fibAbsent = !fibFactor || !fibFactor.present || fibFactor.weight <= 0 || (fibFactor as any).tier !== 1;
-    if (fibAbsent && htfFibDataForGate) {
-      // Check if price is near a 4H Fib level (strongest HTF Fib)
-      let htfFibSatisfied = false;
+    const fibPresent = fibFactor && fibFactor.present && fibFactor.weight > 0;
+    if (fibPresent && htfFibDataForGate) {
+      // Check if the entry-TF Fib level aligns with an HTF Fib level
+      let htfFibConfirmed = false;
       let htfFibDetail = "";
-      const checkFibForGate = (fibs: FibLevels | null, tfLabel: string) => {
-        if (!fibs || !fibs.retracements || htfFibSatisfied) return;
+      const checkFibNested = (fibs: FibLevels | null, tfLabel: string) => {
+        if (!fibs || !fibs.retracements || htfFibConfirmed) return;
         for (const level of fibs.retracements) {
           if (Math.abs(lastPrice - level.price) <= fibToleranceGate) {
-            // Only key Fib levels qualify for Tier 1 (38.2%, 50%, 61.8%, 70.5%, 78.6%)
             if (level.ratio >= 0.382) {
-              htfFibSatisfied = true;
-              htfFibDetail = `HTF ${tfLabel} Fib ${level.label} at ${level.price.toFixed(5)} satisfying Tier 1 Fib slot`;
+              htfFibConfirmed = true;
+              htfFibDetail = `Entry-TF Fib confirmed by HTF ${tfLabel} Fib ${level.label} at ${level.price.toFixed(5)}`;
               break;
             }
           }
         }
       };
-      checkFibForGate(htfFibDataForGate.h4, "4H");
-      if (!htfFibSatisfied) checkFibForGate(htfFibDataForGate.h1, "1H");
-      if (htfFibSatisfied) {
-        tier1Count++;
-        tier1Max++;
-        tieredScore += 2.0 * 0.7; // 70% quality for Fib substitute (less precise than FVG/OB)
+      checkFibNested(htfFibDataForGate.h4, "4H");
+      if (!htfFibConfirmed) checkFibNested(htfFibDataForGate.h1, "1H");
+      if (htfFibConfirmed) {
+        // Boost Fib quality to 90% (slightly less than OB/FVG since Fib is a level not a zone)
+        const currentTierPts = TIER_POINTS[1] || 2.0;
+        const currentQuality = fibFactor.weight / (FACTOR_MAX_WEIGHT["Premium/Discount & Fib"] || 2.0);
+        const boostedQuality = Math.max(currentQuality, 0.90);
+        const qualityDelta = boostedQuality - currentQuality;
+        if (qualityDelta > 0) {
+          tieredScore += currentTierPts * qualityDelta;
+        }
         const htfFibFactor = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
         if (htfFibFactor) {
-          htfFibFactor.detail += ` [HTF Fib promoted to Tier 1: ${htfFibDetail}]`;
+          htfFibFactor.detail += ` [HTF Fib confirmed: ${htfFibDetail}]`;
           (htfFibFactor as any)._htfTier1Fib = true;
         }
+        fibFactor.detail += " | HTF-nested (A+ entry)";
       }
     }
   } // end of !_skipHTFPromotion
@@ -2449,12 +2492,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const f = factors.find(ff => ff.name === n);
     return f && f.present && f.weight > 0 && (f as any).tier === 1;
   });
-  // Add HTF-promoted slots to display
+  // Add HTF-nested confirmations to display
   const htfPoiF = factors.find(f => f.name === "HTF POI Alignment");
-  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) tier1PresentNames.push("HTF FVG (Tier 1)");
-  if (htfPoiF && (htfPoiF as any)._htfTier1OB) tier1PresentNames.push("HTF OB (Tier 1)");
+  if (htfPoiF && (htfPoiF as any)._htfTier1FVG) tier1PresentNames.push("FVG (HTF-nested)");
+  if (htfPoiF && (htfPoiF as any)._htfTier1OB) tier1PresentNames.push("OB (HTF-nested)");
   const htfFibF = factors.find(f => f.name === "HTF Fib + PD + Liquidity");
-  if (htfFibF && (htfFibF as any)._htfTier1Fib) tier1PresentNames.push("HTF Fib (Tier 1)");
+  if (htfFibF && (htfFibF as any)._htfTier1Fib) tier1PresentNames.push("Fib (HTF-nested)");
   const tier1GateReason = tier1GatePassed
     ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})`
     : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}, HTF FVG/OB/Fib`;

@@ -88,27 +88,27 @@ interface HTFPromotion {
 function detectHTFPromotions(allFactors: FactorItem[]): HTFPromotion[] {
   const promotions: HTFPromotion[] = [];
 
-  // Check HTF POI Alignment factor for FVG/OB promotions
+  // Check HTF POI Alignment factor for nested FVG/OB confirmations
   const htfPoi = allFactors.find(f => f.name === "HTF POI Alignment");
   if (htfPoi?.detail) {
-    const fvgMatch = htfPoi.detail.match(/\[HTF FVG promoted to Tier 1: ([^\]]+)\]/);
+    const fvgMatch = htfPoi.detail.match(/\[HTF-confirmed FVG: ([^\]]+)\]/);
     if (fvgMatch) promotions.push({ type: "FVG", detail: fvgMatch[1] });
-    const obMatch = htfPoi.detail.match(/\[HTF OB promoted to Tier 1: ([^\]]+)\]/);
+    const obMatch = htfPoi.detail.match(/\[HTF-confirmed OB: ([^\]]+)\]/);
     if (obMatch) promotions.push({ type: "OB", detail: obMatch[1] });
   }
 
-  // Check HTF Fib factor for Fib promotion
+  // Check HTF Fib factor for nested Fib confirmation
   const htfFib = allFactors.find(f => f.name === "HTF Fib + PD + Liquidity");
   if (htfFib?.detail) {
-    const fibMatch = htfFib.detail.match(/\[HTF Fib promoted to Tier 1: ([^\]]+)\]/);
+    const fibMatch = htfFib.detail.match(/\[HTF Fib confirmed: ([^\]]+)\]/);
     if (fibMatch) promotions.push({ type: "Fib", detail: fibMatch[1] });
   }
 
   // Fallback: check for _htfTier1* flags (available on full factor objects from signal_reason)
   if (promotions.length === 0) {
-    if (htfPoi && (htfPoi as any)._htfTier1FVG) promotions.push({ type: "FVG", detail: "HTF FVG at price (promoted)" });
-    if (htfPoi && (htfPoi as any)._htfTier1OB) promotions.push({ type: "OB", detail: "HTF OB at price (promoted)" });
-    if (htfFib && (htfFib as any)._htfTier1Fib) promotions.push({ type: "Fib", detail: "HTF Fib at price (promoted)" });
+    if (htfPoi && (htfPoi as any)._htfTier1FVG) promotions.push({ type: "FVG", detail: "LTF FVG nested inside HTF FVG (A+ entry)" });
+    if (htfPoi && (htfPoi as any)._htfTier1OB) promotions.push({ type: "OB", detail: "LTF OB nested inside HTF OB (A+ entry)" });
+    if (htfFib && (htfFib as any)._htfTier1Fib) promotions.push({ type: "Fib", detail: "Entry-TF Fib confirmed by HTF Fib (A+ entry)" });
   }
 
   return promotions;
@@ -187,7 +187,7 @@ function TierSection({
                   </span>
                   <div className="flex-1 min-w-0">
                     <span className="text-blue-400 font-medium">
-                      HTF {promo.type} (promoted)
+                      {promo.type} (HTF-nested)
                     </span>
                     <span className="text-muted-foreground ml-1">— {promo.detail}</span>
                   </div>
