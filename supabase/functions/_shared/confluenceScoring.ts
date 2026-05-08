@@ -70,6 +70,11 @@ export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   amdPhase: 1.0,
   currencyStrength: 1.5,
   dailyBias: 1.0,
+  // ── Added factors (config-sync-fixes) ──
+  htfPoiAlignment: 2.0,
+  htfFibPdLiquidity: 2.5,
+  confluenceStack: 1.5,
+  pullbackHealth: 0.5,
 };
 
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
@@ -1755,8 +1760,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     }
 
     // Apply weight scale and add to factors
-    score += pts;
-    factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" });
+    { const s = applyWeightScale(pts, "htfPoiAlignment", 2.0, config); pts = s.pts; score += pts;
+    factors.push({ name: "HTF POI Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
   // ── Factor 24: HTF Fib + Premium/Discount + Liquidity (max 2.5) ──────────────
@@ -1926,8 +1931,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No HTF Fib/PD/Liquidity alignment detected";
     }
 
-    score += pts;
-    factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" });
+    { const s = applyWeightScale(pts, "htfFibPdLiquidity", 2.5, config); pts = s.pts; score += pts;
+    factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
@@ -2311,6 +2316,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     "AMD Phase": "amdPhase",
     "Currency Strength": "currencyStrength",
     "Daily Bias": "dailyBias",
+    // ── Added factors (config-sync-fixes) ──
+    "HTF POI Alignment": "htfPoiAlignment",
+    "HTF Fib + PD + Liquidity": "htfFibPdLiquidity",
+    "Confluence Stack": "confluenceStack",
+    "Pullback Health": "pullbackHealth",
   };
 
   for (const f of factors) {

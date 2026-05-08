@@ -743,8 +743,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     // Regime scoring (UI writes under strategy.*; scanner reads at top level)
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
     regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
-    // Normalized scoring (opt-in: percentage-based scoring that auto-adjusts when factors are toggled)
-    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? false,
+    // Normalized scoring (percentage-based scoring that auto-adjusts when factors are toggled)
+    // Default: true — aligns with DEFAULTS object, UI default, and confluenceScoring output (always percentage)
+    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? true,
     // ── P1 tuning fields (now wired to scanner) ──
     obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
     fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
@@ -899,6 +900,14 @@ async function runSafetyGates(
 
   // Gate 1: HTF Bias Alignment
   // Uses cachedDailyStructure from analysis to avoid redundant computation
+  //
+  // RELATIONSHIP TO FALLING KNIFE GUARD (confluenceScoring.ts):
+  // The falling knife guard fires EARLIER (during direction determination) at 75% regime confidence,
+  // but ONLY when direction comes from P/D zone mean-reversion (fractals balanced, no daily BOS).
+  // Gate 1 fires HERE at 60% regime confidence for ANY ranging-market trade regardless of direction source.
+  // The 60-74% gap is intentional: Gate 1 catches trades where direction came from fractals or BOS
+  // but the regime still opposes. The falling knife guard catches the more dangerous P/D-only scenario
+  // at a higher threshold because it nullifies direction entirely (no trade generated at all).
   if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
     const htfStructure = analysis.cachedDailyStructure || analyzeMarketStructure(dailyCandles!);
     const htfTrend = htfStructure.trend;
