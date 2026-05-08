@@ -2188,8 +2188,22 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
       liquidityPools.filter(lp => lp.type === "sell-side" && lp.price < lastPrice && lp.strength >= 2).forEach(lp => targets.push(lp.price));
       targets.sort((a, b) => b - a);
     }
-    if (targets.length > 0) tp = targets[0];
-    else {
+    // Skip targets that produce R:R below minRiskReward.
+    // If nearest target is too close (e.g., PDL 1 pip away with SL 14 pips), use the next one.
+    const _minRR = config.minRiskReward ?? 1.0;
+    const viableTarget = slDistance > 0
+      ? targets.find(t => Math.abs(t - lastPrice) / slDistance >= _minRR)
+      : targets[0];
+    if (viableTarget !== undefined) {
+      tp = viableTarget;
+    } else if (targets.length > 0) {
+      // All structural targets produce sub-minimum R:R — fall back to rr_ratio method.
+      // This ensures we never take a trade with a target 1 pip away.
+      tp = direction === "long"
+        ? lastPrice + slDistance * (config.tpRatio || 2.0)
+        : lastPrice - slDistance * (config.tpRatio || 2.0);
+    } else {
+      // No structural targets at all — use fixed pips fallback
       const dist = (config.fixedTPPips || 50) * pipSize;
       tp = direction === "long" ? lastPrice + dist : lastPrice - dist;
     }
