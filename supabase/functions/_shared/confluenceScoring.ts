@@ -474,18 +474,45 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       direction = "short"; // Strong trend override: allow discount shorts in strong downtrend
     }
   } else if (structure.trend === "ranging") {
-    // Fix 1: If regime has a directional lean with ≥60% confidence, align with it
-    // instead of blindly mean-reverting (which caused shorts against bullish regimes).
-    const _regBias = regimeInfo?.bias; // "bullish" | "bearish" | "neutral"
-    const _regConf = regimeInfo?.confidence ?? 0; // 0-1 scale
-    if (_regBias === "bullish" && _regConf >= 0.60) {
-      direction = "long"; // Don't short against a bullish regime
-    } else if (_regBias === "bearish" && _regConf >= 0.60) {
-      direction = "short"; // Don't buy against a bearish regime
+    // ── Structure Authority: direction in ranging markets ──
+    // Hierarchy: (1) Fractal balance → (2) HTF daily structure → (3) P/D zone
+    // Regime (EMAs/ADX) is NEVER used as a direction generator.
+    // This prevents lagging indicators from overriding price action structure.
+
+    // Step 1: Check entry-TF fractal balance (leading indicator)
+    const s2f = structure.structureToFractal;
+    const bullRate = s2f?.bullishRate ?? 0; // % of swing highs broken (bullish breaks)
+    const bearRate = s2f?.bearishRate ?? 0; // % of swing lows broken (bearish breaks)
+    const fractalDelta = bullRate - bearRate; // positive = bullish lean, negative = bearish lean
+    const fractalThreshold = 0.15; // need 15% difference to be meaningful
+
+    if (fractalDelta > fractalThreshold) {
+      // Entry-TF fractals lean bullish — more highs being broken than lows
+      direction = "long";
+    } else if (fractalDelta < -fractalThreshold) {
+      // Entry-TF fractals lean bearish — more lows being broken than highs
+      direction = "short";
     } else {
-      // Regime is truly neutral or below threshold — mean-reversion is valid
-      if (pd.currentZone === "discount") direction = "long";
-      else if (pd.currentZone === "premium") direction = "short";
+      // Step 2: Fractals are balanced — check HTF daily structure (leading, not lagging)
+      const _dailyStructure = (dailyCandles && dailyCandles.length >= 10)
+        ? analyzeMarketStructure(dailyCandles) : null;
+      const dailyTrend = _dailyStructure?.trend;
+      const dailyBOS = _dailyStructure?.bos || [];
+      const dailyCHoCH = _dailyStructure?.choch || [];
+      // Only trust daily structure if it has actual BOS evidence (not just EMA-based)
+      const hasDailyBOS = dailyBOS.length > 0;
+
+      if (dailyTrend === "bullish" && hasDailyBOS) {
+        direction = "long"; // HTF structure confirms bullish — buy the pullback
+      } else if (dailyTrend === "bearish" && hasDailyBOS) {
+        direction = "short"; // HTF structure confirms bearish — sell the rally
+      } else {
+        // Step 3: Both entry-TF and HTF are truly neutral — use P/D zone (mean reversion)
+        // This is the ONLY case where P/D zone determines direction in ranging markets
+        if (pd.currentZone === "discount") direction = "long";
+        else if (pd.currentZone === "premium") direction = "short";
+        // If equilibrium — direction stays null (no trade)
+      }
     }
   }
 

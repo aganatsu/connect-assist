@@ -945,7 +945,58 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: "P/D zone OK" });
   }
 
-  // Gate 3: Instrument enabled
+  // Gate 3: Structural Conviction — block when entry-TF has 0% fractals in entry direction + chaotic structure
+  // This prevents the bot from taking trades where price action has ZERO evidence supporting the direction.
+  // Structure (leading) has veto power over regime (lagging) and P/D zone positioning.
+  {
+    const s2f = analysis.structure?.structureToFractal;
+    const s2fOverall = s2f?.overallRate ?? 1; // default to 1 (pass) if unavailable
+    const bullRate = s2f?.bullishRate ?? 0.5; // default to 0.5 (neutral) if unavailable
+    const bearRate = s2f?.bearishRate ?? 0.5;
+    const directionRate = direction === "long" ? bullRate : bearRate;
+    const oppositeRate = direction === "long" ? bearRate : bullRate;
+    // Block condition: 0% fractals in entry direction AND S2F < 35% (chaotic) AND opposite has activity
+    if (directionRate === 0 && s2fOverall < 0.35 && oppositeRate > 0) {
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
+    } else if (directionRate === 0 && oppositeRate > 0.3) {
+      // Softer block: 0% in direction + strong opposite (>30%) even if S2F is higher
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+    } else {
+      gates.push({ passed: true, reason: `Structural Conviction: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
+    }
+  }
+
+  // Gate 3b: Reaction Confirmation in Ranging Markets
+  // When entry-TF is ranging, require at least one "reaction" factor to be present.
+  // Reaction factors prove that price RESPONDED at the level, not just arrived there.
+  // Without reaction, the trade is based on position alone (coin flip in ranging markets).
+  {
+    const entryTrend = analysis.structure?.trend;
+    if (entryTrend === "ranging") {
+      const factors = analysis.factors || [];
+      const reactionFactors = [
+        "Displacement",         // Impulsive candle showing institutional aggression
+        "Reversal Candle",     // Pin bar / engulfing showing rejection
+        "Liquidity Sweep",     // Sweep + rejection = smart money entry
+        "AMD Phase",           // Full Accumulation-Manipulation-Distribution sequence
+      ];
+      const hasReaction = factors.some((f: any) =>
+        f.present && reactionFactors.some(rf => f.name?.includes(rf))
+      );
+      if (!hasReaction) {
+        gates.push({ passed: false, reason: `Reaction Confirmation BLOCKED: Ranging market with no reaction factor (need Displacement, Reversal, Sweep, or AMD)` });
+      } else {
+        const presentReactions = factors
+          .filter((f: any) => f.present && reactionFactors.some(rf => f.name?.includes(rf)))
+          .map((f: any) => f.name);
+        gates.push({ passed: true, reason: `Reaction confirmed in ranging market: ${presentReactions.join(", ")}` });
+      }
+    } else {
+      gates.push({ passed: true, reason: `Reaction gate skipped: trend is ${entryTrend} (not ranging)` });
+    }
+  }
+
+  // Gate 4: Instrument enabled
   if (!config.instruments.includes(symbol)) {
     gates.push({ passed: false, reason: `${symbol} not in enabled instruments` });
   } else {
@@ -1193,11 +1244,11 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 17: FOTSI Overbought/Oversold Veto — hard-block trades buying exhausted currencies
-  // Uses pre-computed FOTSI strengths from the scan cycle.
-  // BUY blocked if base TSI > +50 (buying overbought currency)
-  // SELL blocked if base TSI < -50 (selling oversold currency)
-  // Also checks quote currency curve for secondary veto.
+  // Gate 17: FOTSI Overbought/Oversold — softened from hard veto to heavy score penalty.
+  // Rationale: A structurally perfect setup (BOS + OB + FVG + sweep) should be able to override
+  // a lagging TSI reading. But a marginal setup won't pass the min confluence threshold after penalty.
+  // BUY penalized if base TSI > +50 (buying overbought currency)
+  // SELL penalized if base TSI < -50 (selling oversold currency)
   {
     const fotsi = (config as any)._fotsiResult as FOTSIResult | null;
     if (fotsi && config.useFOTSI !== false) {
@@ -1209,7 +1260,12 @@ async function runSafetyGates(
           base, quote, dir as "BUY" | "SELL",
           fotsi.strengths, fotsi.series,
         );
-        gates.push({ passed: !veto.vetoed, reason: veto.reason });
+        if (veto.vetoed) {
+          // Softened: gate passes but penalty was already applied upstream to effectiveScore
+          gates.push({ passed: true, reason: `FOTSI PENALTY (-2.0 applied): ${veto.reason}` });
+        } else {
+          gates.push({ passed: true, reason: veto.reason });
+        }
       } else {
         gates.push({ passed: true, reason: "FOTSI Gate: non-forex pair — skipped" });
       }
@@ -3310,9 +3366,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
+    // Apply FOTSI penalty (softened from hard veto to score reduction)
+    // Compute before threshold/staging checks so penalty actually affects trade qualification.
+    let fotsiPenalty = 0;
+    if (_fotsiResult && pairConfig.useFOTSI !== false && analysis.direction) {
+      const _fotsiCurrencies = parsePairCurrencies(pair);
+      if (_fotsiCurrencies) {
+        const [_fBase, _fQuote] = _fotsiCurrencies;
+        const _fDir = analysis.direction === "long" ? "BUY" : "SELL";
+        const _fVeto = checkOverboughtOversoldVeto(
+          _fBase, _fQuote, _fDir as "BUY" | "SELL",
+          _fotsiResult.strengths, _fotsiResult.series,
+        );
+        if (_fVeto.vetoed) {
+          fotsiPenalty = -2.0; // Heavy penalty but not a hard block
+        }
+      }
+    }
+    const effectiveScore = analysis.score + fotsiPenalty;
+
     // Determine if this is a staged setup being promoted
     let isPromotedFromStaging = false;
-    if (existingStaged && analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
+    if (existingStaged && effectiveScore >= adjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
       const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
@@ -3365,7 +3440,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-    if (analysis.score >= adjustedMinConfluence && analysis.direction && !isPaused) {
+    if (effectiveScore >= adjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates

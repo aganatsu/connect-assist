@@ -56,3 +56,13 @@
 - [ ] Write regression tests: nested entry qualifies, non-nested does not
 - [ ] Verify trending markets unaffected
 - [ ] Run full test suite
+
+## Structure Authority — Decision Hierarchy Fix (manus/structure-authority)
+
+- [ ] Fix 1: Replace regime as direction generator with HTF structure (Daily BOS/CHoCH) as tiebreaker
+- [ ] Fix 2: Use fractal balance as secondary direction signal in ranging markets (Bull% vs Bear%)
+- [ ] Fix 3: Add Structural Conviction Gate — block when 0% fractals in entry direction + S2F < 35%
+- [ ] Fix 4: Soften FOTSI Gate 17 from hard veto to heavy score penalty (-2.0)
+- [ ] Fix 5: Require at least one reaction factor (displacement, reversal, sweep rejection, AMD) in ranging markets
+- [ ] Write regression tests for all fixes
+- [ ] Run full test suite
