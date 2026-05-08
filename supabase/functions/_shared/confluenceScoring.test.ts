@@ -441,10 +441,11 @@ Deno.test("runConfluenceAnalysis: tieredScoring has valid counts", () => {
 });
 
 Deno.test("DEFAULT_FACTOR_WEIGHTS has 17 configurable factors", () => {
-  // The engine uses 22 internal factors but DEFAULT_FACTOR_WEIGHTS only exposes
-  // the 17 user-configurable ones (the other 5 are always-on bonus factors)
+  // The engine uses 22 internal factors but DEFAULT_FACTOR_WEIGHTS exposes
+  // the 21 user-configurable ones (added htfPoiAlignment, htfFibPdLiquidity,
+  // confluenceStack, pullbackHealth in config-sync-fixes)
   const keys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  assertEquals(keys.length, 17);
+  assertEquals(keys.length, 21);
 });
 
 // ═══════════════════════════════════════════════════════════════════════

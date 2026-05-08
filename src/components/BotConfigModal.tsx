@@ -1477,6 +1477,9 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; ti
   { key: "displacement", name: "Displacement", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Strong institutional candles" },
   { key: "reversalCandle", name: "Reversal Candle", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Reversal at key levels — primary entry trigger" },
   { key: "sessionQuality", name: "Session Quality", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Combined Kill Zone + Silver Bullet + Macro timing (7-tier scoring)" },
+  { key: "htfPoiAlignment", name: "HTF POI Alignment", defaultWeight: 2.0, tier: 2, tierPts: 1, description: "Price inside higher-timeframe OB/FVG/Breaker zone" },
+  { key: "htfFibPdLiquidity", name: "HTF Fib + PD + Liquidity", defaultWeight: 2.5, tier: 2, tierPts: 1, description: "HTF Fibonacci + Premium/Discount + Liquidity alignment" },
+  { key: "confluenceStack", name: "Confluence Stack", defaultWeight: 1.5, tier: 2, tierPts: 1, description: "Multiple POIs overlapping at same price level" },
   // Tier 3 — Bonus (×0.5 pts)
   { key: "currencyStrength", name: "Currency Strength", defaultWeight: 1.5, tier: 3, tierPts: 0.5, description: "FOTSI alignment" },
   { key: "smtDivergence", name: "SMT Divergence", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Correlated pair divergence" },
@@ -1486,6 +1489,7 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; ti
   { key: "volumeProfile", name: "Volume Profile", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "TPO-based POC/HVN/LVN (reduced: synthetic data)" },
   { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Accumulation→Manipulation→Distribution" },
   { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "NY midnight-anchored fake breakout + liquidity sweep" },
+  { key: "pullbackHealth", name: "Pullback Health", defaultWeight: 0.5, tier: 3, tierPts: 0.5, description: "Pullback decay analysis — healthy retracement vs exhaustion" },
 ];
 
 const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [
