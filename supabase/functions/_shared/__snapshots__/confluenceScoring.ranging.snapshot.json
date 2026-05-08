@@ -67,7 +67,7 @@
     {
       "name": "Reversal Candle",
       "present": false,
-      "weight": 1.5,
+      "weight": 0,
       "tier": 2
     },
     {
@@ -109,7 +109,7 @@
     {
       "name": "AMD Phase",
       "present": false,
-      "weight": 1.5,
+      "weight": -0.3,
       "tier": 3
     },
     {

@@ -1,23 +1,23 @@
 {
-  "score": 22.2,
-  "rawScore": 5,
-  "direction": "short",
-  "bias": "bearish",
-  "strongFactorCount": 4,
+  "score": 13.3,
+  "rawScore": 3,
+  "direction": null,
+  "bias": "neutral",
+  "strongFactorCount": 3,
   "enabledMax": 22.5,
   "tieredScoring": {
     "tier1Count": 0,
     "tier1Max": 4,
-    "tier2Count": 4,
+    "tier2Count": 3,
     "tier2Max": 9,
-    "tier3Count": 2,
+    "tier3Count": 0,
     "tier3Max": 9,
-    "tieredScore": 5,
+    "tieredScore": 3,
     "tieredMax": 22.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
-    "regimeGatePassed": false,
-    "regimeGateReason": "Regime mismatch: strong trend — short entry opposes strong trend (neutral) → -1.1 penalty (conf: 75%)",
+    "regimeGatePassed": true,
+    "regimeGateReason": "Regime OK: strong trend — Regime unknown or low confidence — no adjustment",
     "spreadGatePassed": true,
     "spreadGateReason": "Spread OK: 14.3% of ATR"
   },
@@ -60,14 +60,14 @@
     },
     {
       "name": "PD/PW Levels",
-      "present": true,
+      "present": false,
       "weight": 1.5,
       "tier": 2
     },
     {
       "name": "Reversal Candle",
       "present": false,
-      "weight": 1.5,
+      "weight": 0,
       "tier": 2
     },
     {
@@ -102,7 +102,7 @@
     },
     {
       "name": "Volume Profile",
-      "present": true,
+      "present": false,
       "weight": 0.75,
       "tier": 3
     },
@@ -120,7 +120,7 @@
     },
     {
       "name": "Daily Bias",
-      "present": true,
+      "present": false,
       "weight": 1.5,
       "tier": 3
     },

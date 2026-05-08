@@ -461,11 +461,14 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
 
   // ── Direction Determination (moved before Factors 3-4 so they can use actual direction) ──
   // Depends only on structure.trend and pd.currentZone, both computed before scoring.
-  let direction: "long" | "short" | null = null;
+  // If config.direction is explicitly set (e.g., by bot-scanner or tests), use it as override.
+  let direction: "long" | "short" | null = (config.direction === "long" || config.direction === "short") ? config.direction : null;
+  const directionOverridden = direction !== null;
   const hasRecentBOS = structure.bos.length > 0;
   const hasRecentCHoCH = structure.choch.length > 0;
   const strongTrend = hasRecentBOS && !hasRecentCHoCH; // BOS without CHoCH = strong continuation
 
+  if (!directionOverridden) {
   if (structure.trend === "bullish") {
     if (pd.currentZone !== "premium") {
       direction = "long"; // Normal: bullish trend + discount/equilibrium
@@ -512,34 +515,19 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       } else if (dailyTrend === "bearish" && hasDailyBOS) {
         direction = "short"; // HTF structure confirms bearish — sell the rally
       } else {
-        // Step 3: Both entry-TF and HTF are truly neutral — use P/D zone (mean reversion)
-        // This is the ONLY case where P/D zone determines direction in ranging markets.
-        // GUARD: Do NOT use P/D zone for mean-reversion when regime STRONGLY opposes.
-        // Buying discount in a 90% bearish regime = catching a falling knife.
-        // Selling premium in a 90% bullish regime = shorting a rocket.
-        // Threshold: regime confidence ≥ 75% in the opposing direction → no trade.
-        const regimeBias = regimeInfo?.bias; // "bullish" | "bearish" | "neutral"
-        const regimeConf = regimeInfo?.confidence ?? 0; // 0-1 scale
-        const pdDirection = pd.currentZone === "discount" ? "long"
-          : pd.currentZone === "premium" ? "short" : null;
-        const regimeOpposesP_D =
-          (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
-          (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
-
-        if (regimeOpposesP_D) {
-          // Falling knife / rocket protection: regime strongly opposes P/D mean-reversion.
-          // Direction stays null — no trade. The trend is your friend.
-          direction = null;
-        } else {
-          if (pd.currentZone === "discount") direction = "long";
-          else if (pd.currentZone === "premium") direction = "short";
-          // If equilibrium — direction stays null (no trade)
-        }
+        // Step 3 (Fix #8): Both entry-TF and HTF are truly neutral.
+        // REMOVED: P/D zone mean-reversion fallback.
+        // Rationale: P/D zone on entry TF is unreliable as a direction generator.
+        // "Discount" on 15M often just means price is actively falling (not "cheap").
+        // When structure (fractals + daily BOS) cannot determine direction, the correct
+        // answer is NO TRADE, not a coin-flip mean-reversion bet.
+        // The falling knife guard was a band-aid for this — removing the root cause.
+        direction = null;
       }
     }
   }
-
-  // ── Factor 3: Fair Value Gap (max 2.0) ──
+  } // end if (!directionOverridden)
+  // ── Factor 3: Fair Value Gap (max 2.0) ───
   // Displacement is scored ONLY via Factor 10 to avoid double-counting.
   // ICT: Consequent Encroachment (CE) = 50% of FVG is a key entry level.
   {
@@ -989,30 +977,65 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const atKeyLevel = atOB || atFVG || atPDPW;
       // Check for displacement on the reversal candle
       const hasDisp = displacement.isDisplacement;
-      if (atKeyLevel && hasDisp) {
-        pts = 1.5;
-        const levels: string[] = [];
-        if (atOB) levels.push("OB");
-        if (atFVG) levels.push("FVG");
-        if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversalCandle.type} reversal + displacement at key level (${levels.join(", ")}) — high-conviction entry`;
-      } else if (atKeyLevel) {
-        pts = 1.0;
-        const levels: string[] = [];
-        if (atOB) levels.push("OB");
-        if (atFVG) levels.push("FVG");
-        if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")}) — no displacement`;
-      } else if (hasDisp) {
-        pts = 0.5;
-        detail = `${reversalCandle.type} reversal with displacement but not at a key level`;
+
+      // ── BIDIRECTIONAL SCORING (Fix #8) ──
+      // Reversal candle direction must AGREE with trade direction.
+      // A bearish reversal on a long entry = market saying NO. Penalize, don't reward.
+      const reversalAligned = direction
+        ? (direction === "long" && reversalCandle.type === "bullish") ||
+          (direction === "short" && reversalCandle.type === "bearish")
+        : true; // no direction = treat as neutral (score normally)
+
+      if (reversalAligned) {
+        // Reversal confirms trade direction — score as before
+        if (atKeyLevel && hasDisp) {
+          pts = 1.5;
+          const levels: string[] = [];
+          if (atOB) levels.push("OB");
+          if (atFVG) levels.push("FVG");
+          if (atPDPW) levels.push("PD/PW level");
+          detail = `${reversalCandle.type} reversal + displacement at key level (${levels.join(", ")}) — high-conviction entry`;
+        } else if (atKeyLevel) {
+          pts = 1.0;
+          const levels: string[] = [];
+          if (atOB) levels.push("OB");
+          if (atFVG) levels.push("FVG");
+          if (atPDPW) levels.push("PD/PW level");
+          detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")}) — no displacement`;
+        } else if (hasDisp) {
+          pts = 0.5;
+          detail = `${reversalCandle.type} reversal with displacement but not at a key level`;
+        } else {
+          pts = 0.25;
+          detail = `${reversalCandle.type} reversal candle detected but not at a key level, no displacement`;
+        }
       } else {
-        pts = 0.25;
-        detail = `${reversalCandle.type} reversal candle detected but not at a key level, no displacement`;
+        // Reversal OPPOSES trade direction — penalize based on strength
+        if (atKeyLevel && hasDisp) {
+          pts = -1.0;
+          const levels: string[] = [];
+          if (atOB) levels.push("OB");
+          if (atFVG) levels.push("FVG");
+          if (atPDPW) levels.push("PD/PW level");
+          detail = `⚠ ${reversalCandle.type} reversal + displacement OPPOSES ${direction} at (${levels.join(", ")}) — strong contradiction`;
+        } else if (atKeyLevel) {
+          pts = -0.5;
+          const levels: string[] = [];
+          if (atOB) levels.push("OB");
+          if (atFVG) levels.push("FVG");
+          if (atPDPW) levels.push("PD/PW level");
+          detail = `⚠ ${reversalCandle.type} reversal OPPOSES ${direction} at (${levels.join(", ")}) — directional conflict`;
+        } else if (hasDisp) {
+          pts = -0.25;
+          detail = `⚠ ${reversalCandle.type} reversal + displacement OPPOSES ${direction} — not at key level`;
+        } else {
+          pts = 0;
+          detail = `${reversalCandle.type} reversal opposes ${direction} but weak (no key level, no displacement) — ignored`;
+        }
       }
     }
     { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    factors.push({ name: "Reversal Candle", present: pts !== 0, weight: pts, detail, group: "Price Action" }); }
   }
 
   // ── Factor 9: Liquidity Sweep (max 1.5) ──
@@ -1143,7 +1166,9 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Factor 2 runs before direction is known, so it scores any OB the price is inside.
   // Now that direction is set, check if the OB type aligns with trade direction.
   // Bullish OB = demand zone (supports longs). Bearish OB = supply zone (supports shorts).
-  // Counter-directional OB gets a heavy penalty (×0.3) because you're trading against the zone.
+  // Counter-directional OB gets a heavy penalty (×0.25) because you're trading against the zone.
+  // Fix #8: Increased from ×0.3 to ×0.25 — being inside supply while going long (or demand while going short)
+  // is a strong structural contradiction that should significantly reduce the score.
   {
     const obFactor = factors.find(f => f.name === "Order Block");
     if (obFactor && obFactor.present && direction) {
@@ -1153,13 +1178,13 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const obAligned = (direction === "long" && obTypeBullish)
         || (direction === "short" && obTypeBearish);
       if (!obAligned && (obTypeBullish || obTypeBearish)) {
-        // Counter-directional OB: heavy penalty
+        // Counter-directional OB: heavy penalty (reduce to 25% of original score)
         const oldWeight = obFactor.weight;
-        obFactor.weight = Math.round(obFactor.weight * 0.3 * 1000) / 1000;
+        obFactor.weight = Math.round(obFactor.weight * 0.25 * 1000) / 1000;
         const penalty = oldWeight - obFactor.weight;
         score -= penalty;
         const obType = obTypeBullish ? "bullish" : "bearish";
-        obFactor.detail += ` | OB direction mismatch: ${obType} OB vs ${direction} entry (×0.3 penalty)`;
+        obFactor.detail += ` | ⚠ OB direction mismatch: ${obType} OB vs ${direction} entry (×0.25 penalty)`;
       } else if (obAligned) {
         obFactor.detail += ` | OB aligned with ${direction} entry ✓`;
       }
@@ -1391,7 +1416,16 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           detail = `AMD ${amd.phase} + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
         }
       } else {
-        detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
+        // ── BIDIRECTIONAL AMD (Fix #8) ──
+        // AMD bias opposing trade direction = London sweep predicts the opposite move.
+        // Penalize based on phase: distribution (expansion confirmed) is worse than manipulation (still forming).
+        if (amd.phase === "distribution") {
+          pts = -0.5;
+          detail = `⚠ AMD ${amd.bias} bias OPPOSES ${direction} + distribution phase — expansion against you`;
+        } else {
+          pts = -0.3;
+          detail = `⚠ AMD ${amd.bias} bias OPPOSES ${direction} (phase: ${amd.phase}) — sweep predicts opposite`;
+        }
       }
     }
     // ── Asian range as key levels (FIX #7) ──
@@ -1416,7 +1450,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       }
     }
     { const s = applyWeightScale(pts, "amdPhase", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "AMD Phase", present: pts > 0, weight: s.displayWeight, detail, group: "AMD / Power of 3" }); }
+    factors.push({ name: "AMD Phase", present: pts > 0, weight: pts < 0 ? pts : s.displayWeight, detail, group: "AMD / Power of 3" }); }
   }
 
   // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
