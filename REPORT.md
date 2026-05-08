@@ -1,66 +1,52 @@
-# Task: Config Sync Fixes
-## Branch: manus/config-sync-fixes
+# Task: TP Next-Level Skip — R:R Minimum Enforcement
+
+## Branch: manus/tp-next-level-skip
+
 ## Behavior changes
 
-1. **normalizedScoring fallback** — When a bot config has no `normalizedScoring` field stored in the DB, the resolved default is now `true` instead of `false`. In practice this has zero effect because:
-   - All existing configs have the value stored in the DB
-   - The scoring engine always outputs percentages regardless of this flag
-   - The DEFAULTS object already said `true`
-   - Only affects brand-new configs created without the field
+1. **When `tpMethod = "next_level"`, targets that produce R:R below `minRiskReward` are now skipped.** Previously, the nearest structural target was always used regardless of how close it was to entry. Now the system iterates through sorted targets and picks the first one that satisfies the configured minimum R:R.
 
-2. **HTF POI Alignment and HTF Fib + PD + Liquidity factors** now respect user weight overrides via `applyWeightScale()`. Previously these two factors were hardcoded and could not be tuned from the UI. If a user had set a custom weight for these keys (unlikely since the UI didn't expose them), it would now take effect.
+2. **When ALL structural targets produce sub-minimum R:R, the system falls back to `rr_ratio` method** (TP = SL distance × `tpRatio`). Previously, it would use the nearest target even if it was 0.7 pips away with a 15-pip SL (R:R = 0.05).
 
-3. **Four new weight sliders** appear in the Bot Config Modal under Tier 2 (HTF POI Alignment, HTF Fib + PD + Liquidity, Confluence Stack) and Tier 3 (Pullback Health). Default weights match the existing hardcoded values, so no scoring change unless a user actively moves a slider.
+3. **Net effect on live trading**: Trades that previously passed all other gates but failed Gate 10 (R:R too low) due to a nearby structural target will now get a viable TP from the next target or the rr_ratio fallback. This means **some trades that were previously rejected will now pass** Gate 10 — but only when a valid structural target exists further away or the rr_ratio fallback produces adequate R:R.
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Fix `normalizedScoring` fallback from `false` to `true`; add clarifying comment above Gate 1 documenting relationship to Falling Knife guard |
-| `supabase/functions/_shared/confluenceScoring.ts` | Add 4 keys to `DEFAULT_FACTOR_WEIGHTS`; add 4 entries to `NAME_TO_KEY` map; wire `applyWeightScale()` to HTF POI and HTF Fib factors |
-| `src/components/BotConfigModal.tsx` | Add 4 new entries to `FACTOR_WEIGHT_DEFS` array (3 Tier 2, 1 Tier 3) |
-| `supabase/functions/_shared/confluenceScoring.test.ts` | Update factor count assertion from 17 to 21 |
-| `supabase/functions/backtest-engine/liveBacktestParity.test.ts` | Update factor count assertion from 17 to 21 |
-| `SYNC_AUDIT.md` | Full audit document of config sync state |
+- `supabase/functions/_shared/smcAnalysis.ts` — Modified `calculateSLTP()` next_level TP logic: replaced `tp = targets[0]` with R:R-aware target selection that skips sub-minimum targets and falls back to rr_ratio when none qualify.
+- `supabase/functions/_shared/tpNextLevelSkip.test.ts` — New test file with 5 regression tests covering: skip nearest target, use nearest when adequate, rr_ratio fallback, long direction, and higher minRiskReward config.
 
 ## Tests added
 
-None new — this change updates existing count assertions to reflect the 4 new keys. The existing `htfPOIAlignment.test.ts` (9 tests) and `htfPhase2Scoring.test.ts` (13 tests) serve as regression coverage for the weight scaling wiring.
+1. **"skips nearest target when R:R < minRiskReward"** — Short with PDL 0.7 pips away (R:R=0.05) → skips to sell-side pool at 15 pips (R:R=1.0)
+2. **"uses nearest target when R:R is adequate"** — Short with PDL giving R:R=3.14 → uses PDL correctly
+3. **"falls back to rr_ratio when ALL targets produce sub-minimum R:R"** — All targets within 2 pips → falls back to entry ± SL×tpRatio
+4. **"long direction skips close targets correctly"** — Long with ATR floor pushing SL to 15 pips → skips PDH, pool, PWH (all R:R < 1.0) → uses distant pool (R:R=1.47)
+5. **"respects higher minRiskReward config"** — With minRiskReward=2.0, skips targets with R:R 1.0 → uses target with R:R=2.33
 
 ## Tests run
 
 ```
-$ deno test --allow-all --no-check --ignore="./src"
-ok | 310 passed | 0 failed (6s)
+ok | 315 passed | 0 failed (7s)
 ```
-
-The 1 failure in `./src/test/example.test.ts` is a pre-existing Vitest internal state error unrelated to this change.
 
 ## Regression check
 
-- **Score parity**: Snapshot tests regenerated — scores, directions, tier counts, enabledMax are all identical to pre-change values.
-- **Weight scaling**: When `factorWeights` config is empty (default), `resolveWeightScale()` returns 1.0 for all new keys, meaning zero scoring change.
-- **UI**: New sliders default to the same values as the hardcoded weights, so no visual or behavioral change until a user actively adjusts them.
-- **HTF POI tests**: All 9 pass — confirms `weight: 0` when factor not present (correct behavior).
-- **HTF Fib tests**: All 13 pass — confirms weight scaling works correctly.
+- All 315 existing tests pass unchanged
+- The change only affects `tpMethod === "next_level"` — other TP methods (fixed_pips, atr_multiple, rr_ratio) are completely untouched
+- When R:R is adequate (target far enough from entry), behavior is identical to before (first target is used)
+- The ATR floor interaction was verified: SL distance used for R:R calculation is the FINAL SL distance (after ATR floor), ensuring consistency with Gate 10's own R:R check
 
 ## Open questions
 
-1. The `normalizedScoring` flag in the scoring engine is effectively dead code — the engine always outputs percentages. Should we remove the flag entirely and simplify the code path? (Low priority, no urgency.)
-
-2. The snapshot files were regenerated. The new snapshots capture the corrected `weight: 0` for absent HTF factors. This is the correct behavior (matches all other factors).
+None — the fix is straightforward and well-bounded.
 
 ## Suggested PR title and description
 
-**Title:** Fix config sync: normalizedScoring default, missing weight sliders, Gate 1 documentation
+**Title:** fix: next_level TP skips targets with sub-minimum R:R
 
 **Description:**
-Addresses 3 config sync issues identified during audit:
+Previously, `calculateSLTP()` with `tpMethod = "next_level"` always used the nearest structural target (PDL, PWL, liquidity pool) regardless of distance from entry. When the nearest target was very close (e.g., PDL 0.7 pips away with SL 14 pips), this produced R:R of 0.05 — which Gate 10 then rejected.
 
-1. **normalizedScoring fallback** — Config loading resolved to `false` when field was absent, contradicting `DEFAULTS` (true), UI (true), and scoring engine behavior (always percentage). Fixed to `true`.
+Now the TP logic iterates through sorted targets and picks the first one producing R:R >= `minRiskReward`. If no structural target qualifies, it falls back to `rr_ratio` method (TP = SL × tpRatio).
 
-2. **Missing factor weight sliders** — 4 factors (HTF POI Alignment, HTF Fib + PD + Liquidity, Confluence Stack, Pullback Health) scored points but had no UI slider for tuning. Added keys to `DEFAULT_FACTOR_WEIGHTS`, `NAME_TO_KEY`, and `FACTOR_WEIGHT_DEFS`. Also wired `applyWeightScale()` to HTF POI and HTF Fib (was missing).
-
-3. **Gate 1 vs Falling Knife documentation** — Added block comment explaining the intentional 60% vs 75% threshold difference and why both protection layers exist.
-
-All 310 tests pass. No scoring changes for default configs.
+This means trades with good setups but a nearby-but-useless structural target will now get a viable TP from the next target in the queue, rather than being rejected at Gate 10.
