@@ -508,10 +508,28 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         direction = "short"; // HTF structure confirms bearish — sell the rally
       } else {
         // Step 3: Both entry-TF and HTF are truly neutral — use P/D zone (mean reversion)
-        // This is the ONLY case where P/D zone determines direction in ranging markets
-        if (pd.currentZone === "discount") direction = "long";
-        else if (pd.currentZone === "premium") direction = "short";
-        // If equilibrium — direction stays null (no trade)
+        // This is the ONLY case where P/D zone determines direction in ranging markets.
+        // GUARD: Do NOT use P/D zone for mean-reversion when regime STRONGLY opposes.
+        // Buying discount in a 90% bearish regime = catching a falling knife.
+        // Selling premium in a 90% bullish regime = shorting a rocket.
+        // Threshold: regime confidence ≥ 75% in the opposing direction → no trade.
+        const regimeBias = regimeInfo?.bias; // "bullish" | "bearish" | "neutral"
+        const regimeConf = regimeInfo?.confidence ?? 0; // 0-1 scale
+        const pdDirection = pd.currentZone === "discount" ? "long"
+          : pd.currentZone === "premium" ? "short" : null;
+        const regimeOpposesP_D =
+          (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
+          (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
+
+        if (regimeOpposesP_D) {
+          // Falling knife / rocket protection: regime strongly opposes P/D mean-reversion.
+          // Direction stays null — no trade. The trend is your friend.
+          direction = null;
+        } else {
+          if (pd.currentZone === "discount") direction = "long";
+          else if (pd.currentZone === "premium") direction = "short";
+          // If equilibrium — direction stays null (no trade)
+        }
       }
     }
   }
