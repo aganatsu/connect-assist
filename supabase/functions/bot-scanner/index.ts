@@ -155,6 +155,10 @@ const DEFAULTS = {
   useSMT: true,
   smtOppositeVeto: true,  // When true, block trades where SMT divergence opposes signal direction
   useFOTSI: true,
+  // ── Impulse Zone Scoring ──
+  impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
+  impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
+  impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
   // ── Setup Staging / Watchlist ──
   stagingEnabled: true,
   watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
@@ -742,6 +746,10 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useAMD: strategy.useAMD ?? true,
     // FOTSI Currency Strength (defaults true)
     useFOTSI: strategy.useFOTSI ?? true,
+    // Impulse Zone Scoring (defaults true)
+    impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
+    impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
+    impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
     // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
     useVolumeProfile: strategy.useVolumeProfile ?? true,
     useTrendDirection: strategy.useTrendDirection ?? true,
@@ -3469,6 +3477,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           allZonesCount: zoneResult.allZones.length,
           h1HasZone: !!zoneResult.h1Result.bestZone,
           h4HasZone: !!zoneResult.h4Result?.bestZone,
+          scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
         console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone [${zoneResult.selectedTF || "none"}]: ${zoneResult.reason}`);
       } catch (zoneErr: any) {
@@ -3547,7 +3556,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
-    const effectiveScore = analysis.score + fotsiPenalty;
+    // Apply impulse zone penalty/bonus (soft scoring adjustment)
+    let impulseZonePenaltyVal = 0;
+    if (pairConfig.impulseZoneEnabled !== false) {
+      const izData = (detail as any).impulseZone;
+      if (izData) {
+        if (!izData.hasZone) {
+          // No valid zone found — apply penalty
+          impulseZonePenaltyVal = -(pairConfig.impulseZonePenalty ?? 2.0);
+        } else if (izData.bestZone?.priceAtZone) {
+          // Price is AT the zone — apply bonus
+          impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
+        }
+        // Zone exists but price not at it — no adjustment (neutral)
+      }
+    }
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
+    if (impulseZonePenaltyVal !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
+    }
 
     // Determine if this is a staged setup being promoted
     let isPromotedFromStaging = false;
