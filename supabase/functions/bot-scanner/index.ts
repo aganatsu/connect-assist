@@ -60,6 +60,7 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "../_shared/impulseZoneEngine.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -164,6 +165,15 @@ const DEFAULTS = {
   useSimpleDirection: false,       // When true, use ICT top-down direction (Daily→4H→1H) instead of old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
   simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
+  // ── Regime-Adaptive Exit Engine ──
+  regimeAdaptiveTPEnabled: false,  // When true, adjust TP based on market regime (trending → extend, ranging → tighten)
+  trendingRRMultiplier: 1.5,      // R:R multiplier in trending regimes
+  rangingRRMultiplier: 0.75,      // R:R multiplier in ranging regimes
+  adaptiveTrailingEnabled: false, // When true, use momentum-fade trailing instead of fixed-pip trailing
+  baseTrailATRMultiple: 1.5,      // Base trailing distance as ATR multiple
+  momentumFadeThreshold: 0.4,     // Body/range ratio below this = fading momentum
+  trailTightenFactor: 0.6,        // Multiply trail distance by this when momentum fading
+  trailWidenFactor: 1.3,          // Multiply trail distance by this when momentum strong
   // ── Setup Staging / Watchlist ──
   stagingEnabled: true,
   watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
@@ -759,6 +769,15 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? false,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
+    // ── Regime-Adaptive Exit Engine ──
+    regimeAdaptiveTPEnabled: strategy.regimeAdaptiveTPEnabled ?? raw.regimeAdaptiveTPEnabled ?? false,
+    trendingRRMultiplier: strategy.trendingRRMultiplier ?? raw.trendingRRMultiplier ?? 1.5,
+    rangingRRMultiplier: strategy.rangingRRMultiplier ?? raw.rangingRRMultiplier ?? 0.75,
+    adaptiveTrailingEnabled: strategy.adaptiveTrailingEnabled ?? raw.adaptiveTrailingEnabled ?? false,
+    baseTrailATRMultiple: strategy.baseTrailATRMultiple ?? raw.baseTrailATRMultiple ?? 1.5,
+    momentumFadeThreshold: strategy.momentumFadeThreshold ?? raw.momentumFadeThreshold ?? 0.4,
+    trailTightenFactor: strategy.trailTightenFactor ?? raw.trailTightenFactor ?? 0.6,
+    trailWidenFactor: strategy.trailWidenFactor ?? raw.trailWidenFactor ?? 1.3,
     // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
     useVolumeProfile: strategy.useVolumeProfile ?? true,
     useTrendDirection: strategy.useTrendDirection ?? true,
@@ -3788,6 +3807,38 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           tp = analysis.direction === "long"
             ? analysis.lastPrice + newRisk * config.tpRatio
             : analysis.lastPrice - newRisk * config.tpRatio;
+        }
+
+        // ── Regime-Adaptive TP Adjustment ──
+        // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
+        // Runs AFTER all SL/TP calculations but BEFORE the MIN_TP_PIPS gate.
+        if (config.regimeAdaptiveTPEnabled && analysis.regimeInfo) {
+          try {
+            const tpAdjust = adjustTPForRegime({
+              currentTP: tp,
+              entryPrice: analysis.lastPrice,
+              stopLoss: sl,
+              direction: analysis.direction as "long" | "short",
+              regimeInfo: analysis.regimeInfo,
+              atrValue: (analysis as any).atrValue ?? 0,
+              trendingRRMultiplier: config.trendingRRMultiplier ?? 1.5,
+              rangingRRMultiplier: config.rangingRRMultiplier ?? 0.75,
+            });
+            if (tpAdjust.adjustedTP !== tp) {
+              console.log(`[${pair}] Regime-adaptive TP: ${tpAdjust.reason}`);
+              tp = tpAdjust.adjustedTP;
+              detail.regimeTPAdjust = {
+                originalTP: tpAdjust.originalTP,
+                adjustedTP: tpAdjust.adjustedTP,
+                originalRR: tpAdjust.originalRR,
+                adjustedRR: tpAdjust.adjustedRR,
+                regime: tpAdjust.regime,
+                reason: tpAdjust.reason,
+              };
+            }
+          } catch (e) {
+            console.warn(`[${pair}] Regime TP adjust error:`, e);
+          }
         }
 
         // ── Minimum TP distance gate ──
