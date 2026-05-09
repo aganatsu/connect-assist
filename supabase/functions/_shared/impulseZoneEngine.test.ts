@@ -572,3 +572,122 @@ Deno.test("checkHistoricalSR — handles short lookback gracefully", () => {
   const result = checkHistoricalSR(candles, zones, 5);
   assertEquals(result[0].srConfirmed, false); // Not enough data to confirm
 });
+
+// ─── Multi-TF Tests ───────────────────────────────────────────────────────────
+
+import {
+  findBestEntryZoneMultiTF,
+  type MultiTFZoneResult,
+} from "./impulseZoneEngine.ts";
+
+Deno.test("findBestEntryZoneMultiTF — returns combined reason when neither TF has zone", () => {
+  // Flat candles — no impulse on either TF
+  const flat: Candle[] = [];
+  for (let i = 0; i < 30; i++) {
+    flat.push(makeCandle(1.0, 1.001, 0.999, 1.0, i));
+  }
+
+  const result = findBestEntryZoneMultiTF(flat, flat, flat, "bullish", 1.0);
+  assertEquals(result.bestZone, null);
+  assertEquals(result.selectedTF, null);
+  assert(result.reason.includes("No valid zone"), `Reason: ${result.reason}`);
+  assert(result.reason.includes("1H:"), "Should mention 1H result");
+  assert(result.reason.includes("4H:"), "Should mention 4H result");
+});
+
+Deno.test("findBestEntryZoneMultiTF — uses 1H when 4H has insufficient candles", () => {
+  const h1Candles = generateBullishImpulseCandles(50);
+  const shortH4: Candle[] = [makeCandle(1.0, 1.01, 0.99, 1.0, 0)]; // Too few
+
+  const result = findBestEntryZoneMultiTF(h1Candles, shortH4, h1Candles, "bullish", 1.03);
+
+  assertEquals(result.h4Result, null); // 4H not run
+  if (result.bestZone) {
+    assertEquals(result.selectedTF, "1H");
+  }
+});
+
+Deno.test("findBestEntryZoneMultiTF — uses 4H when 1H has no zone", () => {
+  // Flat 1H candles (no impulse), but valid 4H impulse
+  const flat1H: Candle[] = [];
+  for (let i = 0; i < 30; i++) {
+    flat1H.push(makeCandle(1.0, 1.001, 0.999, 1.0, i));
+  }
+  const h4Candles = generateBullishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(flat1H, h4Candles, flat1H, "bullish", 1.03);
+
+  if (result.bestZone) {
+    assertEquals(result.selectedTF, "4H");
+    assert(result.reason.includes("4H zone selected"));
+  }
+});
+
+Deno.test("findBestEntryZoneMultiTF — prefers higher score across TFs", () => {
+  // Both TFs have valid impulses — the one with higher score should win
+  const h1Candles = generateBullishImpulseCandles(50);
+  const h4Candles = generateBullishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(h1Candles, h4Candles, h1Candles, "bullish", 1.03);
+
+  if (result.bestZone) {
+    // Should have selected one of the TFs
+    assert(result.selectedTF === "1H" || result.selectedTF === "4H");
+    // The selected zone should have the highest score
+    const h1Score = result.h1Result.bestZone?.zone.totalScore ?? 0;
+    const h4Score = result.h4Result?.bestZone?.zone.totalScore ?? 0;
+    const selectedScore = result.bestZone.zone.totalScore;
+    assert(selectedScore >= h1Score && selectedScore >= h4Score,
+      `Selected score ${selectedScore} should be >= h1(${h1Score}) and h4(${h4Score})`);
+  }
+});
+
+Deno.test("findBestEntryZoneMultiTF — 4H wins on tie (HTF preferred)", () => {
+  // Create identical candles for both TFs — should produce same scores, 4H wins
+  const candles = generateBullishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(candles, candles, candles, "bullish", 1.03);
+
+  if (result.bestZone && result.h1Result.bestZone && result.h4Result?.bestZone) {
+    const h1Score = result.h1Result.bestZone.zone.totalScore;
+    const h4Score = result.h4Result.bestZone.zone.totalScore;
+    if (h1Score === h4Score) {
+      // On perfect tie, 4H should win
+      assertEquals(result.selectedTF, "4H");
+    }
+  }
+});
+
+Deno.test("findBestEntryZoneMultiTF — allZones combines both TFs", () => {
+  const h1Candles = generateBullishImpulseCandles(50);
+  const h4Candles = generateBullishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(h1Candles, h4Candles, h1Candles, "bullish", 1.03);
+
+  const h1ZoneCount = result.h1Result.allZones.length;
+  const h4ZoneCount = result.h4Result?.allZones.length ?? 0;
+  assertEquals(result.allZones.length, h1ZoneCount + h4ZoneCount);
+});
+
+Deno.test("findBestEntryZoneMultiTF — empty h4Candles array handled gracefully", () => {
+  const h1Candles = generateBullishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(h1Candles, [], h1Candles, "bullish", 1.03);
+
+  assertEquals(result.h4Result, null);
+  if (result.bestZone) {
+    assertEquals(result.selectedTF, "1H");
+  }
+});
+
+Deno.test("findBestEntryZoneMultiTF — bearish direction works on both TFs", () => {
+  const h1Candles = generateBearishImpulseCandles(50);
+  const h4Candles = generateBearishImpulseCandles(50);
+
+  const result = findBestEntryZoneMultiTF(h1Candles, h4Candles, h1Candles, "bearish", 1.03);
+
+  assert(result.reason.length > 0);
+  if (result.bestZone) {
+    assertEquals(result.bestZone.impulse.direction, "bearish");
+  }
+});
