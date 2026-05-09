@@ -6,6 +6,7 @@ import {
   parsePairCurrencies, getFOTSIPairNames,
   type FOTSIResult, type Currency,
 } from "../_shared/fotsi.ts";
+import { getFOTSIWithCache, setCachedFOTSI } from "../_shared/fotsiCache.ts";
 import {
   classifyInstrumentRegime,
   // Types
@@ -2341,38 +2342,49 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.warn(`[scan ${scanCycleId}] SL/TP breach check error: ${breachErr?.message}`);
   }
 
-  // ── FOTSI: Fetch 28 pairs and compute currency strengths once per scan cycle ──
+  // ── FOTSI: Fetch 28 pairs and compute currency strengths (with 4h cache) ──
   let _fotsiResult: FOTSIResult | null = null;
   if (config.useFOTSI === false) {
     console.log(`[scan ${scanCycleId}] FOTSI disabled by config — skipping 28-pair fetch (saves ~28 API calls)`);
   } else try {
-    const fotsiPairs = getFOTSIPairNames();
-    const fotsiCandleMap: Record<string, any[]> = {};
-    // Batch fetch daily candles for all 28 FOTSI pairs in groups of 5 with 1.2s
-    // inter-batch delay. At 50 req/min limit, 5 parallel requests per batch with
-    // ~1.2s spacing keeps us well under budget (~50 req in first minute).
-    const FOTSI_BATCH_SIZE = 5;
-    const FOTSI_BATCH_DELAY_MS = 1200;
-    for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
-      const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
-      );
-      for (let j = 0; j < batch.length; j++) {
-        if (batchResults[j] && batchResults[j].length >= 30) {
-          fotsiCandleMap[batch[j]] = batchResults[j];
-        }
-      }
-      // Delay between batches to stay within TwelveData rate limits
-      if (i + FOTSI_BATCH_SIZE < fotsiPairs.length) await new Promise(r => setTimeout(r, FOTSI_BATCH_DELAY_MS));
-    }
-    const fetchedCount = Object.keys(fotsiCandleMap).length;
-    if (fetchedCount >= 20) { // Need at least 20 of 28 pairs for meaningful FOTSI
-      _fotsiResult = computeFOTSI(fotsiCandleMap);
-      console.log(`[scan ${scanCycleId}] FOTSI computed: ${fetchedCount}/28 pairs, missing: [${_fotsiResult.missingPairs.join(", ")}]`);
-      console.log(`[scan ${scanCycleId}] FOTSI strengths: ${JSON.stringify(Object.fromEntries(Object.entries(_fotsiResult.strengths).map(([k, v]) => [k, (v as number).toFixed(1)])))}`); 
+    // Try cache first — avoids 28 API calls if result is fresh
+    const { result: cachedFotsi, fromCache } = await getFOTSIWithCache(supabase);
+    if (cachedFotsi && fromCache) {
+      _fotsiResult = cachedFotsi;
+      console.log(`[scan ${scanCycleId}] FOTSI loaded from cache (saves ~28 API calls)`);
     } else {
-      console.warn(`[scan ${scanCycleId}] FOTSI skipped: only ${fetchedCount}/28 pairs fetched (need ≥20)`);
+      // Cache miss or expired — compute fresh
+      const fotsiPairs = getFOTSIPairNames();
+      const fotsiCandleMap: Record<string, any[]> = {};
+      // Batch fetch daily candles for all 28 FOTSI pairs in groups of 5 with 1.2s
+      // inter-batch delay. At 50 req/min limit, 5 parallel requests per batch with
+      // ~1.2s spacing keeps us well under budget (~50 req in first minute).
+      const FOTSI_BATCH_SIZE = 5;
+      const FOTSI_BATCH_DELAY_MS = 1200;
+      for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
+        const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
+        );
+        for (let j = 0; j < batch.length; j++) {
+          if (batchResults[j] && batchResults[j].length >= 30) {
+            fotsiCandleMap[batch[j]] = batchResults[j];
+          }
+        }
+        // Delay between batches to stay within TwelveData rate limits
+        if (i + FOTSI_BATCH_SIZE < fotsiPairs.length) await new Promise(r => setTimeout(r, FOTSI_BATCH_DELAY_MS));
+      }
+      const fetchedCount = Object.keys(fotsiCandleMap).length;
+      if (fetchedCount >= 20) { // Need at least 20 of 28 pairs for meaningful FOTSI
+        _fotsiResult = computeFOTSI(fotsiCandleMap);
+        console.log(`[scan ${scanCycleId}] FOTSI computed fresh: ${fetchedCount}/28 pairs, missing: [${_fotsiResult.missingPairs.join(", ")}]`);
+        console.log(`[scan ${scanCycleId}] FOTSI strengths: ${JSON.stringify(Object.fromEntries(Object.entries(_fotsiResult.strengths).map(([k, v]) => [k, (v as number).toFixed(1)])))}`); 
+        // Store in cache for subsequent scan cycles
+        await setCachedFOTSI(supabase, _fotsiResult);
+        console.log(`[scan ${scanCycleId}] FOTSI result cached (TTL: 4h)`);
+      } else {
+        console.warn(`[scan ${scanCycleId}] FOTSI skipped: only ${fetchedCount}/28 pairs fetched (need ≥20)`);
+      }
     }
   } catch (e: any) {
     console.warn(`[scan ${scanCycleId}] FOTSI computation error: ${e?.message}`);
