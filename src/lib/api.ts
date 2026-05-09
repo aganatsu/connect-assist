@@ -539,3 +539,13 @@ export const brokerExecApi = {
   modifyTrade: (connectionId: string, tradeId: string, updates: { stopLoss?: number; takeProfit?: number; symbol?: string }) =>
     invokeFunction("broker-execute", { action: "modify_trade", connectionId, tradeId, ...updates }),
 };
+
+// ── Prop Firm ──
+export const propFirmApi = {
+  status: (botId = "smc") => invokeFunction("prop-firm", { action: "status", botId }),
+  getConfig: (botId = "smc") => invokeFunction("prop-firm", { action: "config.get", botId }),
+  saveConfig: (config: any, botId = "smc") => invokeFunction("prop-firm", { action: "config.save", config, botId }),
+  deleteConfig: (botId = "smc") => invokeFunction("prop-firm", { action: "config.delete", botId }),
+  events: (limit = 50, offset = 0, botId = "smc") => invokeFunction("prop-firm", { action: "events", limit, offset, botId }),
+  dailyHistory: (days = 30, botId = "smc") => invokeFunction("prop-firm", { action: "daily_history", days, botId }),
+};

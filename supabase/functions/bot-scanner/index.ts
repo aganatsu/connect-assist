@@ -54,6 +54,10 @@ import {
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
 import {
+  runPropFirmGate, propFirmEmergencyClose,
+  type PropFirmGateResult,
+} from "../_shared/propFirmGate.ts";
+import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
   normalizeSessionFilter,
@@ -2713,6 +2717,99 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ── PROP FIRM COMPLIANCE GATE (Gate 0) ──
+  // Runs ONCE per scan cycle before any per-pair analysis.
+  // Checks: daily loss limit, max drawdown, profit target.
+  // If blocked: skips entire scan loop (saves API credits).
+  // If shouldCloseAll: emergency-closes all open positions.
+  // If size reduction: stores multiplier for lot sizing later.
+  // ═══════════════════════════════════════════════════════════════════════════
+  let propFirmGateResult: PropFirmGateResult | null = null;
+  let propFirmSizeMultiplier = 1.0;
+  try {
+    // Determine broker equity for live accounts
+    let brokerEquity: number | undefined;
+    if (account.execution_mode === "live" && _scanBrokerConn) {
+      try {
+        const metaAccountId = _scanBrokerConn.account_id;
+        const authToken = _scanBrokerConn.api_key;
+        const metaBase = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
+        const eqRes = await fetch(`${metaBase}/account-information`, {
+          headers: { "auth-token": authToken },
+        });
+        if (eqRes.ok) {
+          const eqData = await eqRes.json();
+          brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
+        }
+      } catch (e: any) {
+        console.warn(`[prop-firm-gate] Broker equity fetch failed (using paper): ${e?.message}`);
+      }
+    }
+
+    propFirmGateResult = await runPropFirmGate(
+      supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
+      { brokerEquity },
+    );
+
+    if (propFirmGateResult.enabled) {
+      propFirmSizeMultiplier = propFirmGateResult.maxPositionSizeMultiplier;
+
+      // Emergency close-all
+      if (propFirmGateResult.shouldCloseAll && openPosArr.length > 0) {
+        console.log(`[prop-firm-gate] 🚨 EMERGENCY CLOSE-ALL triggered: ${propFirmGateResult.reason}`);
+        const closedCount = await propFirmEmergencyClose(
+          supabase, userId, BOT_ID, openPosArr, propFirmGateResult.reason, scanCycleId,
+        );
+        // Notify via Telegram
+        if (telegramChatIds.length > 0) {
+          const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
+          await Promise.all(telegramChatIds.map(async (chatId: string) => {
+            try {
+              await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                body: JSON.stringify({ chat_id: chatId, message: msg }),
+              });
+            } catch {} // Non-fatal
+          }));
+        }
+        // Return early — no new entries after emergency close
+        const summaryPayload: any = {
+          scan_cycle_id: scanCycleId,
+          scanned_at: new Date().toISOString(),
+          mode: "prop_firm_emergency",
+          reason: propFirmGateResult.reason,
+          positions_closed: closedCount,
+        };
+        await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
+        return new Response(JSON.stringify({ ok: true, mode: "prop_firm_emergency", reason: propFirmGateResult.reason, positions_closed: closedCount }), { headers: { "Content-Type": "application/json" } });
+      }
+
+      // Block new entries (soft lock / profit target reached)
+      if (!propFirmGateResult.allowed) {
+        console.log(`[prop-firm-gate] ⛔ New entries BLOCKED: ${propFirmGateResult.reason}`);
+        const summaryPayload: any = {
+          scan_cycle_id: scanCycleId,
+          scanned_at: new Date().toISOString(),
+          mode: "prop_firm_locked",
+          reason: propFirmGateResult.reason,
+          open_positions: openPosArr.length,
+        };
+        await supabase.from("scan_history").insert({ user_id: userId, bot_id: BOT_ID, payload: summaryPayload });
+        return new Response(JSON.stringify({ ok: true, mode: "prop_firm_locked", reason: propFirmGateResult.reason }), { headers: { "Content-Type": "application/json" } });
+      }
+
+      // Size reduction warning
+      if (propFirmSizeMultiplier < 1.0) {
+        console.log(`[prop-firm-gate] ⚠️ Position size reduced to ${(propFirmSizeMultiplier * 100).toFixed(0)}%: ${propFirmGateResult.reason}`);
+      }
+    }
+  } catch (e: any) {
+    // Prop firm gate failure is NON-BLOCKING — we don't want a bug here to stop all trading
+    console.warn(`[prop-firm-gate] Error (non-blocking): ${e?.message}`);
+  }
+
   // ── Dynamic Scan Skip: management-only mode when max positions reached ──
   // Reads maxOpenPositions from live config each cycle — fully dynamic.
   // If positions close or config.maxOpenPositions increases, scanning resumes next cycle.
@@ -3578,12 +3675,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
-        const size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
+        let size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
           positionSizingMethod: (pairConfig as any).positionSizingMethod,
           fixedLotSize: (pairConfig as any).fixedLotSize,
           atrValue: (analysis as any).atrValue,
           atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
         }, rateMap, undefined, avgCommissionPerLot);
+        // Apply prop firm size reduction if near daily/drawdown limits
+        if (propFirmSizeMultiplier < 1.0 && propFirmSizeMultiplier > 0) {
+          const originalSize = size;
+          size = parseFloat((size * propFirmSizeMultiplier).toFixed(2));
+          if (size < 0.01) size = 0.01; // Minimum lot
+          console.log(`[prop-firm-gate] Size reduced: ${originalSize} → ${size} (${(propFirmSizeMultiplier * 100).toFixed(0)}% multiplier)`);
+        }
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();

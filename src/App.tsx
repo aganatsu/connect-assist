@@ -21,6 +21,7 @@ import NotFound from "./pages/NotFound";
 import TradeReplay from "./pages/TradeReplay";
 import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
+import PropFirm from "./pages/PropFirm";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient();
@@ -49,6 +50,7 @@ const App = () => (
                 <Route path="/brokers" element={<ProtectedRoute><BrokersPage /></ProtectedRoute>} />
                 <Route path="/trade-replay" element={<ProtectedRoute><ErrorBoundary><TradeReplay /></ErrorBoundary></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+                <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </ErrorBoundary>
