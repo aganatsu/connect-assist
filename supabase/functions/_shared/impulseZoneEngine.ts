@@ -714,3 +714,164 @@ export function findBestEntryZone(
       : `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/6) — price ${distanceToZone.toFixed(5)} away`,
   };
 }
+
+
+// ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
+/**
+ * Result from the multi-TF zone engine.
+ * Includes the best zone across timeframes and individual TF results for transparency.
+ */
+export interface MultiTFZoneResult {
+  bestZone: BestZone | null;
+  selectedTF: "1H" | "4H" | null;  // Which timeframe produced the winning zone
+  reason: string;
+  h1Result: ZoneEngineResult;
+  h4Result: ZoneEngineResult | null; // null when 4H candles not available
+  allZones: RankedPOI[];            // Combined zones from both TFs
+}
+
+/**
+ * findBestEntryZoneMultiTF — Runs the zone engine on both 1H and 4H candles,
+ * then selects the best zone across both timeframes.
+ *
+ * Selection logic:
+ *   1. If only one TF produces a valid zone, use that one.
+ *   2. If both produce zones, prefer the one with:
+ *      a. Higher totalScore
+ *      b. On tie: deeper fibDepth (more premium zone)
+ *      c. On tie: 4H wins (higher timeframe = more significant)
+ *   3. If neither produces a zone, return null with combined reasons.
+ *
+ * @param h1Candles  - 1H candles (always available)
+ * @param h4Candles  - 4H candles (may be empty if multiTFRegime disabled)
+ * @param entryCandles - Entry TF candles (15m) for LTF refinement
+ * @param direction  - Trade direction
+ * @param currentPrice - Current market price for proximity check
+ */
+export function findBestEntryZoneMultiTF(
+  h1Candles: Candle[],
+  h4Candles: Candle[],
+  entryCandles: Candle[],
+  direction: "bullish" | "bearish",
+  currentPrice: number,
+): MultiTFZoneResult {
+  // Always run 1H
+  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice);
+
+  // Run 4H only if sufficient candles
+  let h4Result: ZoneEngineResult | null = null;
+  if (h4Candles.length >= 20) {
+    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice);
+  }
+
+  // Combine all zones from both TFs for transparency
+  const allZones: RankedPOI[] = [...h1Result.allZones];
+  if (h4Result) {
+    allZones.push(...h4Result.allZones);
+  }
+
+  // Selection logic
+  const h1Zone = h1Result.bestZone;
+  const h4Zone = h4Result?.bestZone ?? null;
+
+  // Case: Neither TF has a zone
+  if (!h1Zone && !h4Zone) {
+    const reasons: string[] = [`1H: ${h1Result.reason}`];
+    if (h4Result) reasons.push(`4H: ${h4Result.reason}`);
+    else reasons.push("4H: Not available (insufficient candles)");
+    return {
+      bestZone: null,
+      selectedTF: null,
+      reason: `No valid zone on any timeframe. ${reasons.join("; ")}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  // Case: Only 1H has a zone
+  if (h1Zone && !h4Zone) {
+    return {
+      bestZone: h1Zone,
+      selectedTF: "1H",
+      reason: `1H zone selected (4H ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  // Case: Only 4H has a zone
+  if (!h1Zone && h4Zone) {
+    return {
+      bestZone: h4Zone,
+      selectedTF: "4H",
+      reason: `4H zone selected (1H found no zone): ${h4Result!.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  // Case: Both have zones — pick the best
+  const h1Score = h1Zone!.zone.totalScore;
+  const h4Score = h4Zone!.zone.totalScore;
+
+  if (h4Score > h1Score) {
+    return {
+      bestZone: h4Zone!,
+      selectedTF: "4H",
+      reason: `4H zone wins (score ${h4Score} > 1H score ${h1Score}): ${h4Result!.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  if (h1Score > h4Score) {
+    return {
+      bestZone: h1Zone!,
+      selectedTF: "1H",
+      reason: `1H zone wins (score ${h1Score} > 4H score ${h4Score}): ${h1Result.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  // Tie on totalScore — use fibDepth as tiebreaker
+  const h1Depth = h1Zone!.zone.fibDepth;
+  const h4Depth = h4Zone!.zone.fibDepth;
+
+  if (h4Depth > h1Depth) {
+    return {
+      bestZone: h4Zone!,
+      selectedTF: "4H",
+      reason: `4H zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  if (h1Depth > h4Depth) {
+    return {
+      bestZone: h1Zone!,
+      selectedTF: "1H",
+      reason: `1H zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
+      h1Result,
+      h4Result,
+      allZones,
+    };
+  }
+
+  // Perfect tie — 4H wins (higher timeframe = more significant structure)
+  return {
+    bestZone: h4Zone!,
+    selectedTF: "4H",
+    reason: `4H zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
+    h1Result,
+    h4Result,
+    allZones,
+  };
+}

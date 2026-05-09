@@ -58,7 +58,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { findBestEntryZone, type ZoneEngineResult } from "../_shared/impulseZoneEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "../_shared/impulseZoneEngine.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -3435,20 +3435,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     };
 
     // ── Impulse Zone Engine (informational — enriches scan detail, does NOT gate trades) ──
-    // Runs on 1H candles to find the best entry zone based on impulse structure.
+    // Runs on 1H + 4H candles to find the best entry zone based on impulse structure.
     if (analysis.direction && hourlyCandles.length >= 20) {
       try {
         const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        const zoneResult: ZoneEngineResult = findBestEntryZone(
-          hourlyCandles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice,
+        const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
+          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice,
         );
         (detail as any).impulseZone = {
           hasZone: !!zoneResult.bestZone,
+          selectedTF: zoneResult.selectedTF,
           reason: zoneResult.reason,
-          impulse: zoneResult.impulse ? {
-            high: zoneResult.impulse.high,
-            low: zoneResult.impulse.low,
-            direction: zoneResult.impulse.direction,
+          impulse: zoneResult.bestZone?.impulse ? {
+            high: zoneResult.bestZone.impulse.high,
+            low: zoneResult.bestZone.impulse.low,
+            direction: zoneResult.bestZone.impulse.direction,
           } : null,
           bestZone: zoneResult.bestZone ? {
             type: zoneResult.bestZone.zone.poi.type,
@@ -3466,14 +3467,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             distanceToZone: zoneResult.bestZone.distanceToZone,
           } : null,
           allZonesCount: zoneResult.allZones.length,
+          h1HasZone: !!zoneResult.h1Result.bestZone,
+          h4HasZone: !!zoneResult.h4Result?.bestZone,
         };
-        console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone: ${zoneResult.reason}`);
+        console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone [${zoneResult.selectedTF || "none"}]: ${zoneResult.reason}`);
       } catch (zoneErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Impulse Zone error (non-fatal): ${zoneErr?.message}`);
-        (detail as any).impulseZone = { hasZone: false, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0 };
+        (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
       }
     } else {
-      (detail as any).impulseZone = { hasZone: false, reason: analysis.direction ? "Insufficient 1H candles" : "No direction determined", impulse: null, bestZone: null, allZonesCount: 0 };
+      (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: analysis.direction ? "Insufficient 1H candles" : "No direction determined", impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
     }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──

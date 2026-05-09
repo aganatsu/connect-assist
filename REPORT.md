@@ -1,82 +1,65 @@
-# Task: Impulse Zone Engine
-## Branch: manus/impulse-zone-engine
+# Task: Impulse Zone Engine — 4H Multi-Timeframe Support
+## Branch: manus/impulse-zone-4h
 ## Behavior changes
-none — pure addition (informational data only, no gate, no trade blocking)
+none — pure enhancement of informational data (no gate, no trade blocking)
 
-The impulse zone engine attaches zone analysis data to the scan detail object under `detail.impulseZone`. This data is available for dashboard display but does NOT influence trade decisions, scoring, or gate evaluation. No existing trades, scores, or gates are affected.
+The impulse zone engine now runs on **both 1H and 4H candles** and selects the best zone across timeframes. The output shape is unchanged (still `detail.impulseZone`) with two new fields: `selectedTF` ("1H" | "4H" | null), `h1HasZone`, and `h4HasZone`. No existing trades, scores, or gates are affected.
 
 ## Files modified
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/impulseZoneEngine.ts` | NEW — Full impulse zone engine module (findImpulseLeg, mapImpulsePOIs, overlayFibOnPOIs, checkHistoricalSR, refineLowerTF, rankAndSelectBestZone, findBestEntryZone) |
-| `supabase/functions/_shared/impulseZoneEngine.test.ts` | NEW — 24 unit tests covering all functions |
-| `supabase/functions/bot-scanner/index.ts` | Added import + ~40 lines of informational zone engine call between detail object construction and staging logic |
+| `supabase/functions/_shared/impulseZoneEngine.ts` | Added `findBestEntryZoneMultiTF()` function and `MultiTFZoneResult` interface (~140 lines appended) |
+| `supabase/functions/_shared/impulseZoneEngine.test.ts` | Added 8 new multi-TF tests (32 total) |
+| `supabase/functions/bot-scanner/index.ts` | Changed import from `findBestEntryZone` to `findBestEntryZoneMultiTF`; updated the zone engine block to pass `h4Candles` and expose `selectedTF`/`h1HasZone`/`h4HasZone` in detail |
 | `REPORT.md` | This file |
 
 ## bot-scanner/index.ts change explanation
-**What changed:** Added an import for `findBestEntryZone` and `ZoneEngineResult` from the new module. After the `detail` object is constructed (line ~3435) and before the staging logic begins, a new block runs the zone engine on 1H candles and attaches results to `detail.impulseZone`. The entire block is wrapped in try/catch — any error is logged and a fallback `{ hasZone: false }` is attached. This is purely informational and does not affect any trade decisions.
+**What changed:** The import was updated to use `findBestEntryZoneMultiTF` instead of `findBestEntryZone`. The zone engine block now passes `h4Candles` (already available in scope from the multi-TF regime fetch) alongside `hourlyCandles`. The detail output gains `selectedTF`, `h1HasZone`, and `h4HasZone` fields for dashboard transparency.
 
-**Why:** This provides the foundation for the user's ICT/SMC top-down zone detection workflow. The data flows to the dashboard for visual validation. Once validated in production, a future task can promote it to a soft/hard gate.
+**Why:** Running on 4H provides higher-timeframe structural context. 4H impulses are more significant and produce zones that align with institutional order flow. The selection logic picks the best zone across both TFs (by score, then depth, then HTF preference on tie).
+
+## Selection logic
+1. If only one TF produces a valid zone → use that one
+2. If both produce zones → prefer higher `totalScore`
+3. On score tie → prefer deeper `fibDepth`
+4. On perfect tie → 4H wins (higher TF = more significant structure)
 
 ## Tests added
 | Test | Assertion |
 |------|-----------|
-| `findImpulseLeg — returns null for insufficient candles` | Returns null for < 20 candles |
-| `findImpulseLeg — detects valid bullish impulse` | Finds impulse with isValid=true, direction=bullish |
-| `findImpulseLeg — detects valid bearish impulse` | Finds impulse with isValid=true, direction=bearish |
-| `findImpulseLeg — rejects impulse with >50% pullback` | Does not return an impulse spanning the invalid pullback |
-| `findImpulseLeg — returns null for wrong direction` | No bullish impulse in bearish data (or vice versa) |
-| `mapImpulsePOIs — returns empty for invalid impulse` | isValid=false → no POIs |
-| `mapImpulsePOIs — finds POIs within valid impulse` | POIs are within impulse price range and index range |
-| `overlayFibOnPOIs — returns empty for empty POIs` | No input → no output |
-| `overlayFibOnPOIs — scores POIs by Fib depth correctly` | Deeper POIs get higher scores, sorted by depth |
-| `overlayFibOnPOIs — filters POIs outside OTE zone` | Shallow POIs (20% retracement) are filtered out |
-| `overlayFibOnPOIs — bearish impulse Fib scoring` | Bearish direction Fib calculation is correct |
-| `checkHistoricalSR — confirms S/R when closes cluster at zone` | srConfirmed=true, totalScore incremented |
-| `checkHistoricalSR — does not confirm when no S/R at zone` | srConfirmed=false when S/R is far from zone |
-| `checkHistoricalSR — handles short lookback gracefully` | No crash with minimal data |
-| `refineLowerTF — returns unchanged zone when not enough LTF candles` | Empty candles → zone unchanged |
-| `refineLowerTF — refines zone when LTF structure exists inside` | ltfRefined=true with entry/SL when structure found |
-| `rankAndSelectBestZone — returns null for empty array` | No zones → null |
-| `rankAndSelectBestZone — selects highest-scoring zone` | Picks zone with totalScore=6 |
-| `rankAndSelectBestZone — rejects zones with fibScore < 1` | Too-shallow zones rejected |
-| `rankAndSelectBestZone — uses fibDepth as tiebreaker` | Equal scores → deeper zone wins |
-| `findBestEntryZone — returns reason when no impulse found` | Flat data → null + explanation |
-| `findBestEntryZone — full pipeline with bullish impulse` | End-to-end bullish pipeline |
-| `findBestEntryZone — full pipeline with bearish impulse` | End-to-end bearish pipeline |
-| `findBestEntryZone — priceAtZone detection` | priceAtZone is boolean, distanceToZone is number |
+| `findBestEntryZoneMultiTF — returns combined reason when neither TF has zone` | Null result with reasons from both TFs |
+| `findBestEntryZoneMultiTF — uses 1H when 4H has insufficient candles` | selectedTF=1H, h4Result=null |
+| `findBestEntryZoneMultiTF — uses 4H when 1H has no zone` | selectedTF=4H when 1H is flat |
+| `findBestEntryZoneMultiTF — prefers higher score across TFs` | Selected score >= both individual scores |
+| `findBestEntryZoneMultiTF — 4H wins on tie (HTF preferred)` | selectedTF=4H on identical inputs |
+| `findBestEntryZoneMultiTF — allZones combines both TFs` | Combined count = h1 + h4 |
+| `findBestEntryZoneMultiTF — empty h4Candles array handled gracefully` | h4Result=null, selectedTF=1H |
+| `findBestEntryZoneMultiTF — bearish direction works on both TFs` | Bearish impulse detected on both |
 
 ## Tests run
 ```
 $ deno test supabase/functions/_shared/ --allow-all --no-check
-ok | 276 passed | 0 failed (7s)
+ok | 284 passed | 0 failed (7s)
 ```
-(Pre-existing type errors in tpNextLevelSkip.test.ts and gamePlan.ts are unrelated — confirmed by running `deno check` on main before our changes. All runtime tests pass.)
 
 ## Regression check
-- Ran full test suite (276 tests) — all pass
-- The zone engine is **informational only** — it does NOT gate trades, does NOT modify scores, does NOT change any existing behavior
-- Wrapped in try/catch with graceful fallback — even if the engine throws, the scan continues unaffected
-- Verified pre-existing type errors exist on main (not introduced by this branch)
+- Full test suite (284 tests) passes
+- The zone engine remains **informational only** — no gate, no scoring impact
+- `h4Candles` was already fetched and available in scope (line 3130) — no new API calls
+- Wrapped in try/catch — errors degrade gracefully to `{ hasZone: false }`
+- When `multiTFRegimeEnabled` is false, `h4Candles` is `[]` → the multi-TF function gracefully skips 4H and uses 1H only (same behavior as before)
 
 ## Open questions
-1. **Promotion to gate:** When ready to use this as a trade filter, should it be a hard gate (blocks trades without a valid zone) or a soft penalty (score reduction when no zone found)?
-2. **Dashboard display:** The `detail.impulseZone` data is ready for frontend consumption. Want me to add a dashboard widget in a follow-up task?
-3. **4H vs 1H:** Currently runs on 1H candles. Should it also run on 4H when available and pick the better result?
+None — ready to merge.
 
 ## Suggested PR title and description
-**Title:** `feat: Impulse Zone Engine — ICT top-down zone detection (informational)`
+**Title:** `feat: Multi-TF impulse zone engine — run on 1H + 4H, pick best zone`
 
 **Description:**
-Adds a new `impulseZoneEngine.ts` module that implements the full ICT/SMC top-down zone detection pipeline:
+Extends the impulse zone engine to run on both 1H and 4H candles, selecting the best zone across timeframes.
 
-1. **findImpulseLeg** — Detects the most recent structure-breaking impulse with 50% pullback validation
-2. **mapImpulsePOIs** — Extracts FVGs and OBs created within the impulse
-3. **overlayFibOnPOIs** — Scores zones by Fibonacci depth (OTE zone prioritized)
-4. **checkHistoricalSR** — Validates zones against close-only historical S/R clusters
-5. **refineLowerTF** — Drops to 15m to find precise OB/FVG inside the best zone
-6. **rankAndSelectBestZone** — Final ranking (max score: 6/6)
+Selection logic: highest score → deepest Fib → 4H preferred on tie.
 
-Integration: Runs after confluence scoring in bot-scanner, attaches results to scan detail as `impulseZone`. Purely informational — does not gate or modify trades. Wrapped in try/catch for safety.
+New output fields: `selectedTF`, `h1HasZone`, `h4HasZone` for dashboard transparency. Still purely informational — does not gate trades.
 
-24 new unit tests. All 276 tests pass.
+8 new tests (32 total for zone engine). All 284 tests pass.
