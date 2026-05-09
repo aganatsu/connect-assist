@@ -1,65 +1,67 @@
-# Task: Impulse Zone Engine — 4H Multi-Timeframe Support
-## Branch: manus/impulse-zone-4h
+# Task: Impulse Zone — Soft Scoring Penalty with Config Toggle
+## Branch: manus/impulse-zone-gate
 ## Behavior changes
-none — pure enhancement of informational data (no gate, no trade blocking)
+**YES — this changes trade qualification:**
 
-The impulse zone engine now runs on **both 1H and 4H candles** and selects the best zone across timeframes. The output shape is unchanged (still `detail.impulseZone`) with two new fields: `selectedTF` ("1H" | "4H" | null), `h1HasZone`, and `h4HasZone`. No existing trades, scores, or gates are affected.
+1. **When `impulseZoneEnabled: true` (default):** Pairs without a valid impulse zone receive a **-2.0 percentage point penalty** to their effective score. This may cause borderline setups to fall below the `minConfluence` threshold and be skipped.
+2. **When `impulseZoneEnabled: true` and price IS at a valid zone:** A **+1.0 percentage point bonus** is applied, rewarding setups that have price at the zone.
+3. **When `impulseZoneEnabled: false`:** The zone engine still runs (for dashboard data) but no penalty/bonus is applied — identical to previous behavior.
+
+**Impact estimate:** Pairs with raw scores within 2% of the `minConfluence` threshold may now be filtered out if they lack a valid impulse zone. Pairs at a valid zone get a small boost.
 
 ## Files modified
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/impulseZoneEngine.ts` | Added `findBestEntryZoneMultiTF()` function and `MultiTFZoneResult` interface (~140 lines appended) |
-| `supabase/functions/_shared/impulseZoneEngine.test.ts` | Added 8 new multi-TF tests (32 total) |
-| `supabase/functions/bot-scanner/index.ts` | Changed import from `findBestEntryZone` to `findBestEntryZoneMultiTF`; updated the zone engine block to pass `h4Candles` and expose `selectedTF`/`h1HasZone`/`h4HasZone` in detail |
+| `supabase/functions/bot-scanner/index.ts` | Added 3 config fields (`impulseZoneEnabled`, `impulseZonePenalty`, `impulseZoneBonus`) to DEFAULTS and config loader; added impulse zone penalty/bonus calculation before `effectiveScore`; added `scoringEnabled` to detail output; added log line for penalty/bonus |
 | `REPORT.md` | This file |
 
 ## bot-scanner/index.ts change explanation
-**What changed:** The import was updated to use `findBestEntryZoneMultiTF` instead of `findBestEntryZone`. The zone engine block now passes `h4Candles` (already available in scope from the multi-TF regime fetch) alongside `hourlyCandles`. The detail output gains `selectedTF`, `h1HasZone`, and `h4HasZone` fields for dashboard transparency.
+**What changed (DEFAULTS, lines 158-161):** Added three new config fields:
+- `impulseZoneEnabled: true` — master toggle for scoring impact
+- `impulseZonePenalty: 2.0` — percentage points deducted when no zone found
+- `impulseZoneBonus: 1.0` — percentage points added when price is at zone
 
-**Why:** Running on 4H provides higher-timeframe structural context. 4H impulses are more significant and produce zones that align with institutional order flow. The selection logic picks the best zone across both TFs (by score, then depth, then HTF preference on tie).
+**What changed (config loader, lines 749-752):** Added config loading from `strategy.*` and `raw.*` with defaults, following the same pattern as `useFOTSI`.
 
-## Selection logic
-1. If only one TF produces a valid zone → use that one
-2. If both produce zones → prefer higher `totalScore`
-3. On score tie → prefer deeper `fibDepth`
-4. On perfect tie → 4H wins (higher TF = more significant structure)
+**What changed (effectiveScore, lines 3554-3577):** After the FOTSI penalty block, a new block reads `(detail as any).impulseZone` (already populated by the zone engine block above). Three cases:
+- `hasZone: false` → apply `-impulseZonePenalty`
+- `hasZone: true, priceAtZone: true` → apply `+impulseZoneBonus`
+- `hasZone: true, priceAtZone: false` → no adjustment (zone exists but price hasn't reached it yet)
+
+The penalty/bonus is added to `effectiveScore` alongside the existing `fotsiPenalty`, so it flows into all downstream threshold checks (staging promotion, trade qualification).
+
+**Why:** This implements a soft penalty rather than a hard gate, so strong setups can still trade even without a zone, while setups that lack structural confluence are penalized. The toggle allows users to disable the scoring impact while keeping the zone data for dashboard analysis.
 
 ## Tests added
-| Test | Assertion |
-|------|-----------|
-| `findBestEntryZoneMultiTF — returns combined reason when neither TF has zone` | Null result with reasons from both TFs |
-| `findBestEntryZoneMultiTF — uses 1H when 4H has insufficient candles` | selectedTF=1H, h4Result=null |
-| `findBestEntryZoneMultiTF — uses 4H when 1H has no zone` | selectedTF=4H when 1H is flat |
-| `findBestEntryZoneMultiTF — prefers higher score across TFs` | Selected score >= both individual scores |
-| `findBestEntryZoneMultiTF — 4H wins on tie (HTF preferred)` | selectedTF=4H on identical inputs |
-| `findBestEntryZoneMultiTF — allZones combines both TFs` | Combined count = h1 + h4 |
-| `findBestEntryZoneMultiTF — empty h4Candles array handled gracefully` | h4Result=null, selectedTF=1H |
-| `findBestEntryZoneMultiTF — bearish direction works on both TFs` | Bearish impulse detected on both |
+No new tests in this branch — the scoring logic is a simple arithmetic addition to `effectiveScore` that follows the exact same pattern as the existing `fotsiPenalty`. The zone engine itself (which produces the `hasZone`/`priceAtZone` data) is already covered by 32 tests in the previous branch.
 
 ## Tests run
 ```
 $ deno test supabase/functions/_shared/ --allow-all --no-check
-ok | 284 passed | 0 failed (7s)
+ok | 284 passed | 0 failed (6s)
 ```
 
 ## Regression check
-- Full test suite (284 tests) passes
-- The zone engine remains **informational only** — no gate, no scoring impact
-- `h4Candles` was already fetched and available in scope (line 3130) — no new API calls
-- Wrapped in try/catch — errors degrade gracefully to `{ hasZone: false }`
-- When `multiTFRegimeEnabled` is false, `h4Candles` is `[]` → the multi-TF function gracefully skips 4H and uses 1H only (same behavior as before)
+- All 284 tests pass
+- The penalty/bonus only applies when `impulseZoneEnabled !== false` (default: true)
+- Setting `impulseZoneEnabled: false` in bot config restores exact previous behavior
+- The zone engine block runs BEFORE the penalty block, so `(detail as any).impulseZone` is always populated
+- Wrapped in a null check (`if (izData)`) — if the zone engine errored, izData still has `hasZone: false` which correctly triggers the penalty
+- The penalty values (2.0 penalty, 1.0 bonus) are configurable per-bot
 
 ## Open questions
-None — ready to merge.
+1. Should the penalty/bonus values be tunable from the dashboard UI? (Currently they're only settable via bot config JSON)
+2. Should there be a log when the zone penalty causes a pair to fall below threshold? (Currently logs the penalty amount but not the threshold comparison)
 
 ## Suggested PR title and description
-**Title:** `feat: Multi-TF impulse zone engine — run on 1H + 4H, pick best zone`
+**Title:** `feat: Impulse zone soft scoring penalty with config toggle`
 
 **Description:**
-Extends the impulse zone engine to run on both 1H and 4H candles, selecting the best zone across timeframes.
+Adds a configurable scoring penalty/bonus based on impulse zone detection:
+- `-2.0%` penalty when no valid zone found (configurable via `impulseZonePenalty`)
+- `+1.0%` bonus when price is at a valid zone (configurable via `impulseZoneBonus`)
+- Toggle on/off via `impulseZoneEnabled` (default: true)
 
-Selection logic: highest score → deepest Fib → 4H preferred on tie.
+Follows the same pattern as the existing FOTSI penalty. Zone engine still runs for dashboard data even when scoring is disabled.
 
-New output fields: `selectedTF`, `h1HasZone`, `h4HasZone` for dashboard transparency. Still purely informational — does not gate trades.
-
-8 new tests (32 total for zone engine). All 284 tests pass.
+**Merge order:** Merge `manus/impulse-zone-4h` first, then this branch.
