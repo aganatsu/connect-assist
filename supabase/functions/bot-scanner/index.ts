@@ -58,6 +58,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
+import { findBestEntryZone, type ZoneEngineResult } from "../_shared/impulseZoneEngine.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -3432,6 +3433,48 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         extensions: analysis.fibLevels.extensions,
       } : null,
     };
+
+    // ── Impulse Zone Engine (informational — enriches scan detail, does NOT gate trades) ──
+    // Runs on 1H candles to find the best entry zone based on impulse structure.
+    if (analysis.direction && hourlyCandles.length >= 20) {
+      try {
+        const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        const zoneResult: ZoneEngineResult = findBestEntryZone(
+          hourlyCandles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice,
+        );
+        (detail as any).impulseZone = {
+          hasZone: !!zoneResult.bestZone,
+          reason: zoneResult.reason,
+          impulse: zoneResult.impulse ? {
+            high: zoneResult.impulse.high,
+            low: zoneResult.impulse.low,
+            direction: zoneResult.impulse.direction,
+          } : null,
+          bestZone: zoneResult.bestZone ? {
+            type: zoneResult.bestZone.zone.poi.type,
+            high: zoneResult.bestZone.zone.poi.high,
+            low: zoneResult.bestZone.zone.poi.low,
+            fibLevel: zoneResult.bestZone.zone.fibLevel,
+            fibDepth: zoneResult.bestZone.zone.fibDepth,
+            totalScore: zoneResult.bestZone.zone.totalScore,
+            srConfirmed: zoneResult.bestZone.zone.srConfirmed,
+            ltfRefined: zoneResult.bestZone.zone.ltfRefined,
+            ltfType: zoneResult.bestZone.zone.ltfType || null,
+            refinedEntry: zoneResult.bestZone.zone.refinedEntry || null,
+            refinedSL: zoneResult.bestZone.zone.refinedSL || null,
+            priceAtZone: zoneResult.bestZone.priceAtZone,
+            distanceToZone: zoneResult.bestZone.distanceToZone,
+          } : null,
+          allZonesCount: zoneResult.allZones.length,
+        };
+        console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone: ${zoneResult.reason}`);
+      } catch (zoneErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} Impulse Zone error (non-fatal): ${zoneErr?.message}`);
+        (detail as any).impulseZone = { hasZone: false, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0 };
+      }
+    } else {
+      (detail as any).impulseZone = { hasZone: false, reason: analysis.direction ? "Insufficient 1H candles" : "No direction determined", impulse: null, bestZone: null, allZonesCount: 0 };
+    }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
