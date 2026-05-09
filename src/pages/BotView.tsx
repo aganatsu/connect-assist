@@ -35,6 +35,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
+import { ImpulseZonePanel } from "@/components/ImpulseZonePanel";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -1790,6 +1791,9 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
 
+          {/* Impulse Zone Panel */}
+          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+
           {/* Summary */}
           {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
         </div>
@@ -2299,6 +2303,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           )}
         </div>
       )}
+
+      {/* Impulse Zone Panel */}
+      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
 
       {/* Summary */}
       {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
