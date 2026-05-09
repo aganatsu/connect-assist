@@ -255,18 +255,29 @@ export function mapImpulsePOIs(
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
 
-  // Extract the impulse sub-range of candles
   const start = Math.max(0, impulse.startIndex);
   const end = Math.min(candles.length, impulse.endIndex + 1);
   const impulseCandles = candles.slice(start, end);
 
   if (impulseCandles.length < 3) return [];
 
-  // Detect FVGs within the impulse
-  const structureBreaks = analyzeMarketStructure(impulseCandles);
-  const breaks = [...structureBreaks.bos, ...structureBreaks.choch];
-  const fvgs = detectFVGs(impulseCandles, breaks);
-  const obs = detectOrderBlocks(impulseCandles, breaks);
+  // ── FVGs: detect on impulse slice (purely geometric, no lifecycle issue) ──
+  const impulseStructure = analyzeMarketStructure(impulseCandles);
+  const impulseBreaks = [...impulseStructure.bos, ...impulseStructure.choch];
+  const fvgs = detectFVGs(impulseCandles, impulseBreaks);
+
+  // ── OBs: detect on FULL candle set to avoid lifecycle false-negatives ──
+  // The OB (last opposing candle) often sits just before the impulse starts.
+  // Running detection on only the impulse slice causes OBs to be marked as
+  // "broken" or "mitigated" by the impulse candles themselves.
+  // We include a lookback window before the impulse so the engulfing pattern
+  // and the institutional candle are both captured.
+  const obLookback = 10; // bars before impulse to include for OB context
+  const obStart = Math.max(0, start - obLookback);
+  const obCandles = candles.slice(obStart, end);
+  const obStructure = analyzeMarketStructure(obCandles);
+  const obBreaks = [...obStructure.bos, ...obStructure.choch];
+  const obs = detectOrderBlocks(obCandles, obBreaks);
 
   const pois: ImpulsePOI[] = [];
 
@@ -283,14 +294,24 @@ export function mapImpulsePOIs(
     }
   }
 
-  // Map OBs — only include those aligned with impulse direction
+  // Map OBs — filter to those within or just before the impulse range,
+  // aligned with direction, and not broken/mitigated.
+  // The OB index is relative to obCandles, so we convert back to full-candle index.
   for (const ob of obs) {
+    const fullIndex = obStart + ob.index;
+    // OB must be within the impulse range or in the lookback zone just before it
+    if (fullIndex < obStart || fullIndex > impulse.endIndex) continue;
+    // OB price must be within the impulse price range
+    const impHigh = Math.max(impulse.high, impulse.low);
+    const impLow = Math.min(impulse.high, impulse.low);
+    if (ob.high < impLow || ob.low > impHigh) continue;
+
     if (ob.type === impulse.direction && ob.state !== "broken" && ob.state !== "mitigated") {
       pois.push({
         type: "ob",
         high: ob.high,
         low: ob.low,
-        candleIndex: start + ob.index,
+        candleIndex: fullIndex,
         direction: ob.type,
       });
     }
@@ -508,13 +529,20 @@ export function refineLowerTF(
 
   if (insideCandles.length < 3) return zone; // Not enough LTF data inside zone
 
-  // Run structure analysis on the inside candles
+  // Run structure analysis on the inside candles (for FVGs)
   const ltfStructure = analyzeMarketStructure(insideCandles);
   const ltfBreaks = [...ltfStructure.bos, ...ltfStructure.choch];
 
-  // Detect LTF FVGs and OBs inside the zone
+  // FVGs: detect on inside candles (purely geometric, no lifecycle issue)
   const ltfFVGs = detectFVGs(insideCandles, ltfBreaks);
-  const ltfOBs = detectOrderBlocks(insideCandles, ltfBreaks);
+
+  // OBs: detect on FULL entryCandles to avoid lifecycle false-negatives.
+  // The OB (last opposing candle) may sit just outside the zone boundary,
+  // and running detection on only inside-zone candles causes OBs to be
+  // falsely marked as "broken" by the zone candles themselves.
+  const fullStructure = analyzeMarketStructure(entryCandles);
+  const fullBreaks = [...fullStructure.bos, ...fullStructure.choch];
+  const ltfOBs = detectOrderBlocks(entryCandles, fullBreaks);
 
   // Find the best LTF POI aligned with the impulse direction
   let bestLTF: { type: "ob" | "fvg"; high: number; low: number } | null = null;
