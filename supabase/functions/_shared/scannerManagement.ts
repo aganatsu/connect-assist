@@ -31,6 +31,7 @@ import {
   SPECS,
   analyzeMarketStructure,
 } from "./smcAnalysis.ts";
+import { computeAdaptiveTrail } from "./exitEngine.ts";
 
 // ─── Setup Classification Types ──────────────────────────────────────
 
@@ -547,9 +548,47 @@ export async function manageOpenPositions(
         // ── Phase B: Trailing tightening — ratchet SL forward ──
         const prevTrailLevel = exitFlags.trailingStopLevel ?? sl;
         const effectiveTrailPips = exitFlags.trailingStopPips ?? posTrailingPips;
-        const newTrailLevel = pos.direction === "long"
-          ? currentPrice - (effectiveTrailPips * spec.pipSize)
-          : currentPrice + (effectiveTrailPips * spec.pipSize);
+
+        // ── Adaptive trailing (momentum-fade) when enabled ──
+        const adaptiveTrailingOn = config.adaptiveTrailingEnabled ?? false;
+        let newTrailLevel: number;
+        let trailReason: string;
+
+        if (adaptiveTrailingOn) {
+          // Fetch recent candles for momentum detection
+          let recentCandles: Array<{ open: number; high: number; low: number; close: number }> = [];
+          try {
+            recentCandles = await fetchCandlesFn(symbol, "15min", "2d").catch(() => []);
+          } catch { /* use empty array — neutral momentum */ }
+
+          const atrVal = signalData.atrValue ?? 0;
+          const regimeInfo = signalData.regimeInfo ?? null;
+
+          const adaptiveResult = computeAdaptiveTrail({
+            entryPrice,
+            currentPrice,
+            currentSL: sl,
+            direction: pos.direction as "long" | "short",
+            rMultiple,
+            regimeInfo,
+            atrValue: atrVal,
+            pipSize: spec.pipSize,
+            recentCandles: recentCandles.slice(-10),
+            baseTrailATRMultiple: config.baseTrailATRMultiple ?? 1.5,
+            momentumFadeThreshold: config.momentumFadeThreshold ?? 0.4,
+            tightenFactor: config.trailTightenFactor ?? 0.6,
+            widenFactor: config.trailWidenFactor ?? 1.3,
+          });
+
+          newTrailLevel = adaptiveResult.newSL;
+          trailReason = `Adaptive trail (${adaptiveResult.momentumState}): ${adaptiveResult.reason} → ${adaptiveResult.trailDistancePips.toFixed(1)} pips`;
+        } else {
+          // Original fixed-pip trailing
+          newTrailLevel = pos.direction === "long"
+            ? currentPrice - (effectiveTrailPips * spec.pipSize)
+            : currentPrice + (effectiveTrailPips * spec.pipSize);
+          trailReason = `Fixed trail: ${effectiveTrailPips} pips behind price`;
+        }
 
         // Only ratchet forward (tighten), never widen
         const shouldTighten = pos.direction === "long"
@@ -562,7 +601,7 @@ export async function manageOpenPositions(
 
           const attribution = makeAttribution(
             "trailing_stop",
-            `Trailing SL tightened at ${rMultiple.toFixed(2)}R — SL moved from ${sl.toFixed(5)} to ${newTrailLevel.toFixed(5)} (${effectiveTrailPips} pips behind price)`,
+            `Trailing SL tightened at ${rMultiple.toFixed(2)}R — SL moved from ${sl.toFixed(5)} to ${roundPrice(newTrailLevel, spec.pipSize).toFixed(5)} | ${trailReason}`,
           );
           const updatedSignal = {
             ...signalData,
@@ -578,7 +617,7 @@ export async function manageOpenPositions(
             positionId: pos.position_id, symbol, action: "sl_tightened",
             reason: attribution.detail, newSL: roundPrice(newTrailLevel, spec.pipSize), attribution,
           });
-          console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${newTrailLevel.toFixed(5)}`);
+          console.log(`[mgmt ${scanCycleId}] TRAIL TIGHTEN ${symbol} | ${rMultiple.toFixed(2)}R | SL ${sl.toFixed(5)}→${roundPrice(newTrailLevel, spec.pipSize).toFixed(5)} | ${trailReason}`);
           continue;
         }
       }
