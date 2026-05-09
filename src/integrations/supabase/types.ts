@@ -274,6 +274,27 @@ export type Database = {
         }
         Relationships: []
       }
+      kv_cache: {
+        Row: {
+          expires_at: string
+          key: string
+          updated_at: string
+          value: string
+        }
+        Insert: {
+          expires_at: string
+          key: string
+          updated_at?: string
+          value: string
+        }
+        Update: {
+          expires_at?: string
+          key?: string
+          updated_at?: string
+          value?: string
+        }
+        Relationships: []
+      }
       paper_accounts: {
         Row: {
           balance: number | null
@@ -636,6 +657,193 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      prop_firm_config: {
+        Row: {
+          account_currency: string
+          account_stage: string
+          best_day_rule_pct: number | null
+          bot_id: string
+          close_on_breach: boolean
+          created_at: string
+          day_reset_hour_utc: number
+          emergency_close_pct: number
+          firm_type: string
+          id: string
+          initial_balance: number
+          is_active: boolean
+          max_daily_loss_pct: number
+          max_overall_loss_pct: number
+          profit_target_pct: number | null
+          reduce_size_near_limit: boolean
+          safety_buffer_pct: number
+          size_reduction_threshold_pct: number
+          trailing_drawdown: boolean
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          account_currency?: string
+          account_stage?: string
+          best_day_rule_pct?: number | null
+          bot_id?: string
+          close_on_breach?: boolean
+          created_at?: string
+          day_reset_hour_utc?: number
+          emergency_close_pct?: number
+          firm_type?: string
+          id?: string
+          initial_balance?: number
+          is_active?: boolean
+          max_daily_loss_pct?: number
+          max_overall_loss_pct?: number
+          profit_target_pct?: number | null
+          reduce_size_near_limit?: boolean
+          safety_buffer_pct?: number
+          size_reduction_threshold_pct?: number
+          trailing_drawdown?: boolean
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          account_currency?: string
+          account_stage?: string
+          best_day_rule_pct?: number | null
+          bot_id?: string
+          close_on_breach?: boolean
+          created_at?: string
+          day_reset_hour_utc?: number
+          emergency_close_pct?: number
+          firm_type?: string
+          id?: string
+          initial_balance?: number
+          is_active?: boolean
+          max_daily_loss_pct?: number
+          max_overall_loss_pct?: number
+          profit_target_pct?: number | null
+          reduce_size_near_limit?: boolean
+          safety_buffer_pct?: number
+          size_reduction_threshold_pct?: number
+          trailing_drawdown?: boolean
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      prop_firm_daily_state: {
+        Row: {
+          config_id: string
+          created_at: string
+          current_equity: number | null
+          day_start_balance: number
+          day_start_equity: number
+          end_of_day_balance: number | null
+          highest_eod_balance_ever: number
+          highest_equity_today: number
+          id: string
+          is_locked: boolean
+          lock_reason: string | null
+          locked_at: string | null
+          lowest_equity_today: number
+          realized_pnl_today: number
+          trade_count_today: number
+          trading_day: string
+        }
+        Insert: {
+          config_id: string
+          created_at?: string
+          current_equity?: number | null
+          day_start_balance: number
+          day_start_equity: number
+          end_of_day_balance?: number | null
+          highest_eod_balance_ever: number
+          highest_equity_today: number
+          id?: string
+          is_locked?: boolean
+          lock_reason?: string | null
+          locked_at?: string | null
+          lowest_equity_today: number
+          realized_pnl_today?: number
+          trade_count_today?: number
+          trading_day: string
+        }
+        Update: {
+          config_id?: string
+          created_at?: string
+          current_equity?: number | null
+          day_start_balance?: number
+          day_start_equity?: number
+          end_of_day_balance?: number | null
+          highest_eod_balance_ever?: number
+          highest_equity_today?: number
+          id?: string
+          is_locked?: boolean
+          lock_reason?: string | null
+          locked_at?: string | null
+          lowest_equity_today?: number
+          realized_pnl_today?: number
+          trade_count_today?: number
+          trading_day?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prop_firm_daily_state_config_id_fkey"
+            columns: ["config_id"]
+            isOneToOne: false
+            referencedRelation: "prop_firm_config"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      prop_firm_events: {
+        Row: {
+          balance_at_event: number | null
+          config_id: string
+          created_at: string
+          daily_loss_at_event: number | null
+          details: Json | null
+          drawdown_at_event: number | null
+          equity_at_event: number | null
+          event_type: string
+          id: string
+          message: string
+          severity: string
+        }
+        Insert: {
+          balance_at_event?: number | null
+          config_id: string
+          created_at?: string
+          daily_loss_at_event?: number | null
+          details?: Json | null
+          drawdown_at_event?: number | null
+          equity_at_event?: number | null
+          event_type: string
+          id?: string
+          message: string
+          severity: string
+        }
+        Update: {
+          balance_at_event?: number | null
+          config_id?: string
+          created_at?: string
+          daily_loss_at_event?: number | null
+          details?: Json | null
+          drawdown_at_event?: number | null
+          equity_at_event?: number | null
+          event_type?: string
+          id?: string
+          message?: string
+          severity?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prop_firm_events_config_id_fkey"
+            columns: ["config_id"]
+            isOneToOne: false
+            referencedRelation: "prop_firm_config"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       scan_history: {
         Row: {
