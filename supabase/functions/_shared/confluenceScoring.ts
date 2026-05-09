@@ -461,12 +461,17 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
 
   // ── Direction Determination (moved before Factors 3-4 so they can use actual direction) ──
   // Depends only on structure.trend and pd.currentZone, both computed before scoring.
+  // When _overrideDirection is set (by directionEngine.ts via bot-scanner), skip the old logic.
   let direction: "long" | "short" | null = null;
+  const _overrideDir = (config as any)?._overrideDirection;
+  const _hasOverride = _overrideDir !== undefined; // undefined = not set, null = explicitly no direction
   const hasRecentBOS = structure.bos.length > 0;
   const hasRecentCHoCH = structure.choch.length > 0;
   const strongTrend = hasRecentBOS && !hasRecentCHoCH; // BOS without CHoCH = strong continuation
 
-  if (structure.trend === "bullish") {
+  if (_hasOverride) {
+    direction = _overrideDir; // "long", "short", or null (no trade)
+  } else if (structure.trend === "bullish") {
     if (pd.currentZone !== "premium") {
       direction = "long"; // Normal: bullish trend + discount/equilibrium
     } else if (strongTrend) {

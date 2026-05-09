@@ -59,6 +59,7 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "../_shared/impulseZoneEngine.ts";
+import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -159,6 +160,10 @@ const DEFAULTS = {
   impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
   impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
   impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
+  // ── Simple Direction Engine ──
+  useSimpleDirection: false,       // When true, use ICT top-down direction (Daily→4H→1H) instead of old P/D logic
+  simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
+  simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
   // ── Setup Staging / Watchlist ──
   stagingEnabled: true,
   watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
@@ -750,6 +755,10 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
+    // Simple Direction Engine
+    useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? false,
+    simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
+    simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
     // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
     useVolumeProfile: strategy.useVolumeProfile ?? true,
     useTrendDirection: strategy.useTrendDirection ?? true,
@@ -3251,6 +3260,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     (pairConfig as any)._htfPD = { h4: htfPD4H, h1: htfPD1H };
     (pairConfig as any)._htfLiquidityPools = { h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
 
+    // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
+    let simpleDirectionResult: DirectionResult | null = null;
+    if (pairConfig.useSimpleDirection) {
+      try {
+        simpleDirectionResult = determineDirection(
+          dailyCandles.length >= 20 ? dailyCandles : null,
+          h4Candles.length >= 20 ? h4Candles : null,
+          hourlyCandles.length >= 20 ? hourlyCandles : null,
+          {
+            h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
+            h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
+          },
+        );
+        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection: ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | 4H-retrace=${simpleDirectionResult.h4Retrace} | 4H-choch-against=${simpleDirectionResult.h4ChochAgainst} | 1H-confirmed=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
+        // Pass override direction to confluenceScoring
+        if (simpleDirectionResult.direction !== null) {
+          (pairConfig as any)._overrideDirection = simpleDirectionResult.direction;
+        } else {
+          // No direction = skip this pair (direction engine says no trade)
+          (pairConfig as any)._overrideDirection = null; // explicit null = force no-direction
+        }
+      } catch (err) {
+        console.warn(`[scan ${scanCycleId}] ${pair} SimpleDirection error (falling back to old logic):`, err);
+        // On error, don't set override — old logic runs as fallback
+      }
+    }
+
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
@@ -3486,6 +3522,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     } else {
       (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: analysis.direction ? "Insufficient 1H candles" : "No direction determined", impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
+    }
+
+    // ── Attach Simple Direction data to detail for dashboard ──
+    if (simpleDirectionResult) {
+      (detail as any).simpleDirection = {
+        direction: simpleDirectionResult.direction,
+        bias: simpleDirectionResult.bias,
+        biasSource: simpleDirectionResult.biasSource,
+        h4Retrace: simpleDirectionResult.h4Retrace,
+        h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+        h1Confirmed: simpleDirectionResult.h1Confirmed,
+        reason: simpleDirectionResult.reason,
+      };
     }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
