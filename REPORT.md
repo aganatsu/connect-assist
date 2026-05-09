@@ -1,105 +1,77 @@
-# Task: exit-engine
-## Branch: manus/exit-engine
+# Task: Fix OB Detection in Impulse Zone Engine
+
+## Branch: manus/fix-ob-detection
+
 ## Behavior changes
-When enabled via config toggles (both default: `false`), the following behavior changes apply:
 
-1. **Regime-adaptive TP (`regimeAdaptiveTPEnabled: true`):** At trade entry, TP is adjusted based on market regime:
-   - Trending/strong_trend → TP extended (R:R × 1.5 by default, capped at maxRR 4.0 and 6×ATR sanity)
-   - Ranging/choppy → TP tightened (R:R × 0.75 by default, floored at minRR 1.0)
-   - Transitional/unknown/low-confidence → no change
-   - This alters the TP level on new trades when the regime is clear.
+1. **`mapImpulsePOIs()` now runs OB detection on the FULL candle set (same as Tier 1).** Previously, OB detection ran on a narrow impulse slice (+ 10-bar lookback). This caused three problems:
+   - The `OB_RECENCY` window (default 50) applied to a smaller array, so `recencyStart` was different from Tier 1's, causing different OBs to be detected
+   - Structure breaks computed on the narrow slice differed from the full-candle structure, changing which engulfing patterns qualified as OBs
+   - Lifecycle tracking falsely marked OBs as broken/mitigated by the impulse candles themselves
+   The fix runs `detectOrderBlocks()` on the full `candles` array with full structure breaks, then filters results to only keep OBs whose price overlaps the impulse range. This guarantees the impulse zone engine sees the exact same OBs that Tier 1 detects.
 
-2. **Adaptive trailing (`adaptiveTrailingEnabled: true`):** During open-trade management, trailing stop distance adapts to:
-   - Momentum state: strong momentum → wider trail (let it run), fading momentum → tighter trail (protect profits)
-   - Regime overlay: trending → +10% width, ranging → -15% width
-   - R-multiple scaling: deeper in profit → progressively tighter
-   - Floor: minimum 0.5×ATR to prevent micro-trails
-   - This replaces the fixed-pip trailing with ATR-based adaptive trailing for positions where the config is enabled.
+2. **`refineLowerTF()` now detects OBs using the full 15m `entryCandles` set.** Same root cause — narrow slice → different detection results. The fix runs on the full array and keeps the existing zone-boundary filter.
 
-**When both toggles are `false` (default), behavior is identical to main — zero change.**
+3. **FVG detection is unchanged in both functions.** FVGs are purely geometric (3-candle gap) and have no lifecycle tracking, so they remain on the original slice.
+
+4. **Net effect on live trading:** More OBs will be detected within impulse zones, leading to more zones qualifying for LTF refinement and potentially higher zone scores. The impulse zone engine will now find OBs that Tier 1 already detects, eliminating the inconsistency where Tier 1 shows "Price inside bullish OB" but the impulse zone shows only FVG. The impulse zone feature is gated by `impulseZoneEnabled` (default `false`), so this only affects accounts that have explicitly enabled it.
 
 ## Files modified
-- `supabase/functions/_shared/exitEngine.ts` — NEW: regime-adaptive TP (`adjustTPForRegime`) and momentum-fade trailing (`computeAdaptiveTrail`)
-- `supabase/functions/_shared/exitEngine.test.ts` — NEW: 22 unit tests covering both functions
-- `supabase/functions/bot-scanner/index.ts` — Added import, config toggles (`regimeAdaptiveTPEnabled`, `adaptiveTrailingEnabled`, plus tuning params), config loading, and regime-adaptive TP call before MIN_TP_PIPS check
-- `supabase/functions/_shared/scannerManagement.ts` — Added import and adaptive trailing logic in Phase B (trailing tightening), with fallback to original fixed-pip trailing when disabled
 
-### Extra caution: scannerManagement.ts changes
-The Phase B trailing block was modified to support adaptive trailing. When `config.adaptiveTrailingEnabled` is `true`, the trailing distance is computed by `computeAdaptiveTrail()` using ATR, momentum state, and regime — instead of the fixed `effectiveTrailPips`. When `false` (default), the original fixed-pip logic runs exactly as before. The ratchet-forward guard (`shouldTighten`) is shared by both paths, ensuring SL only moves in the profitable direction regardless of which trailing mode is active. The adaptive path fetches 15m candles for momentum detection (same `fetchCandlesFn` already injected into the function), wrapped in try/catch to degrade gracefully.
-
-### Extra caution: bot-scanner/index.ts changes
-Added a regime-adaptive TP block between the existing SL/TP finalization and the MIN_TP_PIPS check. When `regimeAdaptiveTPEnabled` is `true`, the TP is adjusted based on regime info already available in the analysis result. The adjustment is logged with full attribution (original TP, adjusted TP, regime, R:R change). When `false` (default), the block is skipped entirely.
+- `supabase/functions/_shared/impulseZoneEngine.ts` — Fixed `mapImpulsePOIs()` to run OB detection on full candle set with full structure breaks instead of narrow impulse slice. Fixed `refineLowerTF()` to run OB detection on full entryCandles set. FVG detection unchanged.
+- `supabase/functions/_shared/impulseZoneEngine.test.ts` — Added 2 regression tests proving OBs are now detected. Updated 1 existing assertion to account for full-candle indexing.
 
 ## Tests added
-1. `adjustTPForRegime — trending regime extends TP` — verifies R:R is multiplied by 1.5 in trending
-2. `adjustTPForRegime — ranging regime tightens TP` — verifies R:R is multiplied by 0.75 in ranging
-3. `adjustTPForRegime — strong_trend uses trending multiplier` — strong_trend treated as trending
-4. `adjustTPForRegime — choppy uses ranging multiplier` — choppy treated as ranging
-5. `adjustTPForRegime — transitional regime leaves TP unchanged` — no adjustment for transitional
-6. `adjustTPForRegime — low confidence leaves TP unchanged` — confidence < 0.5 → no change
-7. `adjustTPForRegime — null regime leaves TP unchanged` — null regime → no change
-8. `adjustTPForRegime — zero SL distance returns unchanged` — edge case: SL = entry
-9. `adjustTPForRegime — R:R capped at maxRR and ATR sanity` — verifies both caps
-10. `adjustTPForRegime — R:R floored at minRR` — verifies floor
-11. `adjustTPForRegime — short direction works correctly` — short TP calculation
-12. `computeAdaptiveTrail — strong momentum widens trail` — big bodies + directional = wider
-13. `computeAdaptiveTrail — fading momentum tightens trail` — small bodies + mixed = tighter
-14. `computeAdaptiveTrail — neutral momentum uses base trail` — moderate bodies = base
-15. `computeAdaptiveTrail — trending regime widens trail by 10%` — regime overlay
-16. `computeAdaptiveTrail — ranging regime tightens trail by 15%` — regime overlay
-17. `computeAdaptiveTrail — shouldTighten is true when new SL is better for long` — ratchet logic
-18. `computeAdaptiveTrail — shouldTighten is false when current SL is already tight` — no widen
-19. `computeAdaptiveTrail — short direction works correctly` — short SL calculation
-20. `computeAdaptiveTrail — no ATR uses pipSize fallback` — fallback to 20 pips
-21. `computeAdaptiveTrail — R-multiple scaling tightens at high R` — progressive tightening
-22. `computeAdaptiveTrail — floor prevents micro-trail` — minimum 0.5×ATR
+
+1. **`mapImpulsePOIs -- regression: detects OB that sits before impulse start`** — Constructs a scenario with a bearish candle at index 5 (the OB), indecision candles at 6-7, and a bullish impulse starting at index 8. Asserts that at least one bullish OB POI is returned. Before the fix, this returned 0 OBs.
+
+2. **`mapImpulsePOIs -- regression: OBs are not falsely broken by impulse candles`** — Constructs a bearish impulse scenario where a bullish candle at index 4 is the OB. Asserts that the OB is not falsely marked as "broken" or "mitigated" by the impulse candles' lifecycle tracking.
 
 ## Tests run
+
 ```
-Main:   414 passed | 12 failed (pre-existing)
-Branch: 414 passed | 12 failed (same pre-existing failures)
-New tests: 22 (all passing)
+$ deno test --allow-all --no-check --ignore=src/
+ok | 459 passed | 0 failed (8s)
 ```
 
-Pre-existing failures (unchanged): example.test.ts, candleSource.test.ts (2), confluenceScoring.test.ts snapshots (3), rangingDirectionFixes.test.ts (3), gate6Heat.test.ts, smtVeto.test.ts, reset.test.ts
+Impulse zone engine tests specifically:
+```
+$ deno test supabase/functions/_shared/impulseZoneEngine.test.ts --allow-all
+ok | 34 passed | 0 failed (23ms)
+```
+
+Type-check:
+```
+$ deno check supabase/functions/_shared/impulseZoneEngine.ts
+Check supabase/functions/_shared/impulseZoneEngine.ts  (no errors)
+```
 
 ## Regression check
-- Both toggles default to `false` — when disabled, code paths are identical to main
-- Verified on main: same 414/12 pass/fail ratio
-- The regime-adaptive TP only fires when `regimeAdaptiveTPEnabled: true` AND regime confidence ≥ 0.5
-- The adaptive trailing only fires when `adaptiveTrailingEnabled: true` AND trailing is already activated (Phase B)
-- Both paths preserve the ratchet-forward guard (SL only moves in profitable direction)
+
+- The two new regression tests directly prove the fix works: they construct scenarios where the OB sits before the impulse start and assert detection succeeds.
+- All 32 pre-existing impulse zone engine tests continue to pass, confirming no regression in FVG detection, Fib scoring, S/R checking, LTF refinement, or zone ranking.
+- All 459 Deno tests pass (same count as before + 2 new).
+- `smcAnalysis.ts` was NOT modified (rule 2 compliance).
 
 ## Open questions
-1. Should `regimeAdaptiveTPEnabled` default to `true` after paper testing, or keep it opt-in permanently?
-2. The `baseTrailATRMultiple` default of 1.5 may need tuning per instrument class (forex vs crypto). Should we add per-instrument overrides?
-3. Should the adaptive trailing also affect the trailing activation threshold (Phase A), or only the tightening distance (Phase B)?
 
-## Config toggles
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `regimeAdaptiveTPEnabled` | `false` | Enable regime-adaptive TP at trade entry |
-| `trendingRRMultiplier` | `1.5` | R:R multiplier in trending/strong_trend regimes |
-| `rangingRRMultiplier` | `0.75` | R:R multiplier in ranging/choppy regimes |
-| `maxRR` | `4.0` | Hard cap on adjusted R:R |
-| `minRR` | `1.0` | Floor on adjusted R:R |
-| `adaptiveTrailingEnabled` | `false` | Enable momentum-fade adaptive trailing |
-| `baseTrailATRMultiple` | `1.5` | Base trail distance as ATR multiple |
-| `momentumFadeThreshold` | `0.4` | Body/range ratio below this = fading momentum |
-| `trailTightenFactor` | `0.6` | Multiply trail distance by this when fading |
-| `trailWidenFactor` | `1.3` | Multiply trail distance by this when strong |
+None.
 
 ## Suggested PR title and description
-**Title:** `[exit-engine] Regime-adaptive TP and momentum-fade trailing stop`
+
+**Title:** `fix: Run OB detection on full candle set so impulse zone finds same OBs as Tier 1`
 
 **Description:**
-Adds two opt-in exit improvements:
+Fixes a bug where the impulse zone engine missed Order Blocks that Tier 1 detected correctly.
 
-1. **Regime-adaptive TP** — extends TP in trending markets (let winners run) and tightens in ranging (take profits quickly). Scales R:R by regime multiplier with maxRR/minRR/ATR caps.
+**Root cause:** `mapImpulsePOIs()` ran `detectOrderBlocks()` on a narrow impulse slice (~20-80 candles) while Tier 1 ran it on the full candle set (~120 candles). This caused three problems:
+1. Different `OB_RECENCY` window → different OBs detected
+2. Different structure breaks on the narrow slice → different engulfing patterns qualified
+3. Lifecycle tracking falsely marked OBs as broken/mitigated by impulse candles
 
-2. **Momentum-fade trailing** — replaces fixed-pip trailing with ATR-based adaptive distance that tightens when momentum fades (small bodies, mixed direction) and widens when momentum is strong. Includes regime overlay and progressive R-multiple scaling.
+**Fix:**
+- `mapImpulsePOIs()`: Run OB detection on the full `candles` array with full structure breaks, then filter results by impulse price range and direction
+- `refineLowerTF()`: Run OB detection on full `entryCandles` array, then filter by zone boundaries
+- FVG detection unchanged (purely geometric, no lifecycle issue)
 
-Both are off by default (`regimeAdaptiveTPEnabled: false`, `adaptiveTrailingEnabled: false`). Enable on paper mode first.
-
-22 new tests, all passing. Zero behavior change when toggles are off.
+**Testing:** 2 new regression tests + all 459 existing tests pass.

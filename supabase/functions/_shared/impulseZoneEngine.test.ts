@@ -234,7 +234,7 @@ Deno.test("mapImpulsePOIs — finds POIs within valid impulse", () => {
     for (const poi of pois) {
       assert(poi.high <= impulse.high + 0.001, `POI high ${poi.high} should be <= impulse high ${impulse.high}`);
       assert(poi.low >= impulse.low - 0.001, `POI low ${poi.low} should be >= impulse low ${impulse.low}`);
-      assert(poi.candleIndex >= impulse.startIndex, "POI should be within impulse range");
+      assert(poi.candleIndex >= 0, "POI candleIndex should be a valid index");
       assert(poi.candleIndex <= impulse.endIndex, "POI should be within impulse range");
       assertEquals(poi.direction, impulse.direction);
     }
@@ -689,5 +689,149 @@ Deno.test("findBestEntryZoneMultiTF — bearish direction works on both TFs", ()
   assert(result.reason.length > 0);
   if (result.bestZone) {
     assertEquals(result.bestZone.impulse.direction, "bearish");
+  }
+});
+
+// ─── Regression: OB detection with pre-impulse opposing candle ────────────────
+// This test proves that an OB sitting 1-3 bars BEFORE the impulse start is now
+// detected. Before the fix, mapImpulsePOIs() only ran detectOrderBlocks() on
+// the impulse slice, so the OB was either outside the slice entirely or got
+// falsely invalidated by the impulse candles' lifecycle tracking.
+
+Deno.test("mapImpulsePOIs — regression: detects OB that sits before impulse start", () => {
+  // Build a controlled scenario:
+  // Candles 0-4: consolidation
+  // Candle 5: a clear bearish candle (the OB for a bullish impulse)
+  // Candles 6-7: small indecision candles
+  // Candles 8-20: strong bullish impulse (engulfs candle 5, breaks structure)
+  // Candles 21-30: retracement
+  const candles: Candle[] = [];
+
+  // Phase 1: Consolidation (candles 0-4)
+  for (let i = 0; i < 5; i++) {
+    const base = 1.0200 + i * 0.0002;
+    candles.push(makeCandle(base, base + 0.0010, base - 0.0010, base + 0.0001, i));
+  }
+
+  // Candle 5: Clear bearish candle — this is the OB (last opposing candle before impulse)
+  candles.push(makeCandle(1.0210, 1.0215, 1.0190, 1.0195, 5));
+
+  // Candles 6-7: Small indecision candles between OB and impulse
+  candles.push(makeCandle(1.0195, 1.0200, 1.0192, 1.0198, 6));
+  candles.push(makeCandle(1.0198, 1.0202, 1.0195, 1.0200, 7));
+
+  // Candles 8-20: Strong bullish impulse — each candle pushes higher
+  let price = 1.0200;
+  const step = 0.0025;
+  for (let i = 8; i <= 20; i++) {
+    const open = price;
+    price += step;
+    // Large bullish candles with displacement
+    candles.push(makeCandle(open, price + 0.0005, open - 0.0003, price, i));
+  }
+
+  // Candles 21-30: Retracement back toward the OB zone
+  const peakPrice = price;
+  let retPrice = peakPrice;
+  for (let i = 21; i <= 30; i++) {
+    retPrice -= 0.0015;
+    candles.push(makeCandle(retPrice + 0.0010, retPrice + 0.0012, retPrice - 0.0003, retPrice, i));
+  }
+
+  // Create a valid impulse leg that starts at candle 8 (after the OB at candle 5)
+  const impulse: ImpulseLeg = {
+    high: peakPrice + 0.0005,
+    low: 1.0200,
+    direction: "bullish",
+    startIndex: 8,
+    endIndex: 20,
+    isValid: true,
+    bosPrice: peakPrice - 0.005,
+  };
+
+  const pois = mapImpulsePOIs(candles, impulse);
+
+  // The key assertion: we should find at least one OB POI.
+  // Before the fix, this returned 0 OBs because:
+  // 1. The OB at candle 5 was outside the impulse slice [8, 20]
+  // 2. Any OBs detected within [8, 20] were immediately invalidated by lifecycle tracking
+  const obPois = pois.filter(p => p.type === "ob");
+  assert(
+    obPois.length > 0,
+    `Expected at least 1 OB POI but got ${obPois.length}. ` +
+    `Total POIs: ${pois.length} (${pois.map(p => p.type).join(", ")}). ` +
+    `This regression test verifies the fix for OBs sitting before the impulse start.`
+  );
+
+  // All OB POIs should be bullish (aligned with impulse direction)
+  for (const ob of obPois) {
+    assertEquals(ob.direction, "bullish", "OB should be aligned with impulse direction");
+  }
+
+  // OB price should be within the impulse price range
+  for (const ob of obPois) {
+    assert(ob.high <= impulse.high + 0.001, `OB high ${ob.high} exceeds impulse high ${impulse.high}`);
+    assert(ob.low >= impulse.low - 0.001, `OB low ${ob.low} below impulse low ${impulse.low}`);
+  }
+});
+
+Deno.test("mapImpulsePOIs — regression: OBs are not falsely broken by impulse candles", () => {
+  // This test verifies that running OB detection on a wider candle set prevents
+  // the impulse candles from falsely marking the OB as "broken" or "mitigated".
+  // The lifecycle tracking in detectOrderBlocks() marks OBs as broken when
+  // subsequent candles close through the OB zone — but in the old code, those
+  // "subsequent candles" were the impulse candles themselves.
+  const candles: Candle[] = [];
+
+  // Candles 0-3: Flat consolidation
+  for (let i = 0; i < 4; i++) {
+    candles.push(makeCandle(1.0500, 1.0510, 1.0490, 1.0505, i));
+  }
+
+  // Candle 4: Clear bullish candle (the OB for a bearish impulse)
+  candles.push(makeCandle(1.0490, 1.0520, 1.0488, 1.0515, 4));
+
+  // Candle 5: Small candle
+  candles.push(makeCandle(1.0515, 1.0518, 1.0510, 1.0512, 5));
+
+  // Candles 6-18: Strong bearish impulse
+  let price = 1.0510;
+  for (let i = 6; i <= 18; i++) {
+    const open = price;
+    price -= 0.0025;
+    candles.push(makeCandle(open, open + 0.0003, price - 0.0005, price, i));
+  }
+
+  // Candles 19-25: Retracement up
+  let retPrice = price;
+  for (let i = 19; i <= 25; i++) {
+    retPrice += 0.0012;
+    candles.push(makeCandle(retPrice - 0.0008, retPrice + 0.0003, retPrice - 0.0010, retPrice, i));
+  }
+
+  const impulse: ImpulseLeg = {
+    high: 1.0510,
+    low: price - 0.0005,
+    direction: "bearish",
+    startIndex: 6,
+    endIndex: 18,
+    isValid: true,
+    bosPrice: 1.0490,
+  };
+
+  const pois = mapImpulsePOIs(candles, impulse);
+  const obPois = pois.filter(p => p.type === "ob");
+
+  // We expect at least one bearish OB (the bullish candle at index 4 should be
+  // detected as the OB for the bearish impulse). Before the fix, the impulse
+  // candles would have falsely broken/mitigated this OB.
+  assert(
+    obPois.length > 0,
+    `Expected at least 1 bearish OB POI but got ${obPois.length}. ` +
+    `This verifies OBs are not falsely invalidated by impulse candle lifecycle tracking.`
+  );
+
+  for (const ob of obPois) {
+    assertEquals(ob.direction, "bearish", "OB should be aligned with bearish impulse");
   }
 });
