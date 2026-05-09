@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { title: "Backtest", url: "/backtest", icon: FlaskConical, shortcut: "7" },
   { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
   { title: "Trade Replay", url: "/trade-replay", icon: Play, shortcut: "0" },
+  { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Settings", url: "/settings", icon: Settings, shortcut: "9" },
 ];
 

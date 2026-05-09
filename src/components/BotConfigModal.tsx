@@ -85,6 +85,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "entry_exit", label: "Break Even", keywords: ["break even", "breakeven", "be", "management"] },
   { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out", "management"] },
   { tab: "entry_exit", label: "Time-Based Exit", keywords: ["time", "exit", "hours", "auto close", "max hold", "management"] },
+  { tab: "entry_exit", label: "Structure Invalidation", keywords: ["structure", "invalidation", "choch", "reversal", "protection", "management"] },
   // Instruments
   { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
@@ -1178,6 +1179,11 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                             </FieldGroup>
                           </div>
                         )}
+                      </div>
+
+                      {/* ── Structure Invalidation ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Structure Invalidation" description="Tighten SL by 50% when market structure breaks against your trade (CHoCH detected). Protects against holding through reversals." checked={config.exit?.structureInvalidationEnabled ?? false} onChange={v => updateField('exit', 'structureInvalidationEnabled', v)} />
                       </div>
                     </div>
                   </div>
