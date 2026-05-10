@@ -65,6 +65,27 @@ function biasToDirction(bias: "bullish" | "bearish"): "long" | "short" {
   return bias === "bullish" ? "long" : "short";
 }
 
+// ── Helper: format swing prices for reason strings ──
+
+function formatSwingPrices(
+  structure: ReturnType<typeof analyzeMarketStructure>,
+): { highsStr: string; lowsStr: string } {
+  const highs = structure.swingPoints.filter(s => s.type === "high").slice(-2);
+  const lows = structure.swingPoints.filter(s => s.type === "low").slice(-2);
+  const highsStr = highs.length >= 2
+    ? `SH: ${highs[0].price.toFixed(5)}→${highs[1].price.toFixed(5)}`
+    : highs.length === 1 ? `SH: ${highs[0].price.toFixed(5)}` : "SH: none";
+  const lowsStr = lows.length >= 2
+    ? `SL: ${lows[0].price.toFixed(5)}→${lows[1].price.toFixed(5)}`
+    : lows.length === 1 ? `SL: ${lows[0].price.toFixed(5)}` : "SL: none";
+  return { highsStr, lowsStr };
+}
+
+function rangingReason(tf: string, structure: ReturnType<typeof analyzeMarketStructure>): string {
+  const { highsStr, lowsStr } = formatSwingPrices(structure);
+  return `${tf} ranging (${highsStr}, ${lowsStr} — no consistent HH/HL or LH/LL)`;
+}
+
 // ── Helper: check if 4H is retracing (pulling back without CHoCH) ──
 
 function is4HRetracing(
@@ -81,49 +102,54 @@ function is4HRetracing(
   const chochAgainst = recentChoch.some(c => c.type === oppositeType);
 
   if (chochAgainst) {
+    const chochPrices = recentChoch.filter(c => c.type === oppositeType).map(c => c.price.toFixed(5)).join(", ");
     return {
       retracing: false,
       chochAgainst: true,
-      reason: `4H CHoCH against ${bias} bias (${recentChoch.filter(c => c.type === oppositeType).length} recent ${oppositeType} CHoCH)`,
+      reason: `4H CHoCH against ${bias} bias (${recentChoch.filter(c => c.type === oppositeType).length} recent ${oppositeType} CHoCH at ${chochPrices})`,
     };
   }
 
   // No CHoCH against bias → check if price is pulling back
-  // In bullish: price below most recent swing high = retrace
-  // In bearish: price above most recent swing low = retrace
   const swings = h4Structure.swingPoints;
   const lastPrice = h4Candles[h4Candles.length - 1].close;
 
   if (bias === "bullish") {
     const recentHighs = swings.filter(s => s.type === "high").slice(-3);
+    const recentLows = swings.filter(s => s.type === "low").slice(-3);
     const highestRecent = recentHighs.length > 0 ? Math.max(...recentHighs.map(s => s.price)) : null;
+    const highPrices = recentHighs.map(s => s.price.toFixed(5)).join(", ");
+    const lowPrices = recentLows.map(s => s.price.toFixed(5)).join(", ");
     if (highestRecent !== null && lastPrice < highestRecent) {
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `4H retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, no CHoCH)`,
+        reason: `4H retracing in bullish structure (price ${lastPrice.toFixed(5)} below swing high ${highestRecent.toFixed(5)}, no CHoCH) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
       };
     }
-    // Price at or above highs — not retracing, but structure is intact
+    // Price at or above highs — not retracing, structure intact
     return {
       retracing: false,
       chochAgainst: false,
-      reason: `4H bullish structure intact, price at highs (not retracing)`,
+      reason: `4H bullish structure intact (price ${lastPrice.toFixed(5)} at/above highs) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
     };
   } else {
     const recentLows = swings.filter(s => s.type === "low").slice(-3);
+    const recentHighs = swings.filter(s => s.type === "high").slice(-3);
     const lowestRecent = recentLows.length > 0 ? Math.min(...recentLows.map(s => s.price)) : null;
+    const lowPrices = recentLows.map(s => s.price.toFixed(5)).join(", ");
+    const highPrices = recentHighs.map(s => s.price.toFixed(5)).join(", ");
     if (lowestRecent !== null && lastPrice > lowestRecent) {
       return {
         retracing: true,
         chochAgainst: false,
-        reason: `4H retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, no CHoCH)`,
+        reason: `4H retracing in bearish structure (price ${lastPrice.toFixed(5)} above swing low ${lowestRecent.toFixed(5)}, no CHoCH) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
       };
     }
     return {
       retracing: false,
       chochAgainst: false,
-      reason: `4H bearish structure intact, price at lows (not retracing)`,
+      reason: `4H bearish structure intact (price ${lastPrice.toFixed(5)} at/below lows) [4H highs: ${highPrices}] [4H lows: ${lowPrices}]`,
     };
   }
 }
@@ -200,6 +226,7 @@ export function determineDirection(
       biasSource = "daily";
     } else {
       // Daily is ranging → Option C: fall back to 4H
+      const dailyRanging = rangingReason("Daily", dailyStructure);
       if (h4Candles && h4Candles.length >= 20) {
         const h4Structure = analyzeMarketStructure(h4Candles);
         const h4Bias = trendToBias(h4Structure.trend);
@@ -215,22 +242,24 @@ export function determineDirection(
             bias = h4Bias;
             biasSource = "4h";
           } else {
+            const { highsStr, lowsStr } = formatSwingPrices(h4Structure);
             return {
               ...noDirection,
-              reason: `Daily ranging, 4H ${h4Bias} but weak structure (${recentH4Bos.length} BOS, ${recentH4ChochAgainst.length} opposing CHoCH) → no trade`,
+              reason: `${dailyRanging} | 4H ${h4Bias} but weak structure (${recentH4Bos.length} BOS, ${recentH4ChochAgainst.length} opposing CHoCH) [${highsStr}, ${lowsStr}] → no trade`,
             };
           }
         } else {
           // Both daily and 4H ranging → no trade
+          const h4Ranging = rangingReason("4H", h4Structure);
           return {
             ...noDirection,
-            reason: "Daily ranging + 4H ranging → no directional edge, no trade",
+            reason: `${dailyRanging} | ${h4Ranging} → no directional edge, no trade`,
           };
         }
       } else {
         return {
           ...noDirection,
-          reason: "Daily ranging, insufficient 4H candles for fallback → no trade",
+          reason: `${dailyRanging} | insufficient 4H candles for fallback → no trade`,
         };
       }
     }
@@ -325,11 +354,12 @@ export function determineDirection(
 
   if (h4Check.retracing && !h1Check.confirmed) {
     if (hasOpposingSignal) {
+      const chochPrices = h1ChochAgainst.map(c => c.price.toFixed(5)).join(", ");
       // 4H retracing + 1H CHoCH against bias → genuine reversal signal, nullify
       return {
         direction: null, bias: bias!, biasSource: biasSource!,
         h4Retrace: true, h4ChochAgainst: false, h1Confirmed: false,
-        reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType}) → direction nullified`,
+        reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType} at ${chochPrices}) → direction nullified`,
       };
     }
     // No opposing CHoCH → direction holds (hysteresis: BOS rolled off but no reversal)
@@ -342,11 +372,12 @@ export function determineDirection(
 
   // 4H not retracing, 1H not confirmed
   if (hasOpposingSignal) {
+    const chochPrices = h1ChochAgainst.map(c => c.price.toFixed(5)).join(", ");
     // 1H CHoCH against bias → genuine reversal signal, nullify
     return {
       direction: null, bias: bias!, biasSource: biasSource!,
       h4Retrace: false, h4ChochAgainst: false, h1Confirmed: false,
-      reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType}) → direction nullified`,
+      reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType} at ${chochPrices}) → direction nullified`,
     };
   }
   // No opposing CHoCH → direction holds (hysteresis: structure intact, no reversal)
