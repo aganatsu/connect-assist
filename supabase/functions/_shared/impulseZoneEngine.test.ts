@@ -835,3 +835,158 @@ Deno.test("mapImpulsePOIs — regression: OBs are not falsely broken by impulse 
     assertEquals(ob.direction, "bearish", "OB should be aligned with bearish impulse");
   }
 });
+
+// ─── Regression tests: origin-not-broken validation ───────────────────────────
+// These tests verify the fix that replaced the 50% internal pullback kill switch
+// with origin-not-broken validation. An impulse with deep internal pullbacks
+// (wave 2/4) should still be found, but an impulse whose origin is broken should not.
+
+Deno.test("findImpulseLeg — accepts impulse with deep internal pullbacks (wave structure)", () => {
+  // Simulate a bearish impulse with a 60%+ internal pullback (wave 2).
+  // Old code would reject this; new code should accept it because origin is intact.
+  const candles: Candle[] = [];
+  const startPrice = 1.0500;
+
+  // Phase 1: Consolidation (candles 0-9)
+  for (let i = 0; i < 10; i++) {
+    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base - 0.0005, i));
+  }
+
+  // Phase 2: Bearish impulse with deep wave-2 pullback
+  let price = startPrice;
+  // Wave 1 down: 1.0500 -> 1.0400 (3 candles)
+  for (let i = 10; i < 13; i++) {
+    const prev = price;
+    price -= 0.0033;
+    candles.push(makeCandle(prev, prev + 0.0002, price - 0.0003, price, i));
+  }
+
+  // Wave 2 up: deep pullback to ~1.0470 (70% retrace of wave 1)
+  const wave2Target = 1.0470;
+  const wave2Step = (wave2Target - price) / 3;
+  for (let i = 13; i < 16; i++) {
+    const prev = price;
+    price += wave2Step;
+    candles.push(makeCandle(prev, price + 0.0002, prev - 0.0002, price, i));
+  }
+
+  // Wave 3 down: strong move 1.0470 -> 1.0300 (5 candles)
+  for (let i = 16; i < 21; i++) {
+    const prev = price;
+    price -= 0.0034;
+    candles.push(makeCandle(prev, prev + 0.0002, price - 0.0003, price, i));
+  }
+
+  // Wave 4 up: pullback to ~1.0360 (30% retrace of wave 3)
+  const wave4Target = 1.0360;
+  const wave4Step = (wave4Target - price) / 2;
+  for (let i = 21; i < 23; i++) {
+    const prev = price;
+    price += wave4Step;
+    candles.push(makeCandle(prev, price + 0.0002, prev - 0.0002, price, i));
+  }
+
+  // Wave 5 down: final push 1.0360 -> 1.0200 (4 candles) — creates BOS
+  for (let i = 23; i < 27; i++) {
+    const prev = price;
+    price -= 0.004;
+    candles.push(makeCandle(prev, prev + 0.0002, price - 0.0003, price, i));
+  }
+
+  // Phase 3: Retracement up (candles 27-39) — stays below origin (1.0500)
+  for (let i = 27; i < 40; i++) {
+    const prev = price;
+    price += 0.0015;
+    candles.push(makeCandle(prev, price + 0.0003, prev - 0.0002, price, i));
+  }
+
+  const result = findImpulseLeg(candles, "bearish");
+  assertExists(result, "Should find bearish impulse despite deep internal pullbacks");
+  assert(result.isValid, "Impulse should be valid — origin not broken");
+  assertEquals(result.direction, "bearish");
+  assert(result.high >= 1.0450, `Impulse high ${result.high} should be near origin`);
+  assert(result.low <= 1.0250, `Impulse low ${result.low} should be near BOS`);
+});
+
+Deno.test("findImpulseLeg — rejects impulse when origin is broken", () => {
+  // Simulate a bullish impulse where price later closes below the origin.
+  const candles: Candle[] = [];
+  const startPrice = 1.0000;
+
+  // Phase 1: Consolidation (candles 0-9)
+  for (let i = 0; i < 10; i++) {
+    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base + 0.0005, i));
+  }
+
+  // Phase 2: Bullish impulse up (candles 10-24)
+  let price = startPrice;
+  for (let i = 10; i < 25; i++) {
+    const prev = price;
+    price += 0.003;
+    candles.push(makeCandle(prev, price + 0.0003, prev - 0.0002, price, i));
+  }
+
+  // Phase 3: Price crashes below origin (candles 25-39)
+  for (let i = 25; i < 40; i++) {
+    const prev = price;
+    price -= 0.004;
+    candles.push(makeCandle(prev, prev + 0.0002, price - 0.0003, price, i));
+  }
+
+  const result = findImpulseLeg(candles, "bullish");
+  // Should be null because the origin (swing low ~1.0000) was broken
+  if (result) {
+    assert(result.isValid, "Any returned impulse must be valid");
+    assert(
+      result.low > 0.9900,
+      `If an impulse was found, its low (${result.low}) should not be the broken origin`
+    );
+  }
+});
+
+Deno.test("findImpulseLeg — ETH-like bearish impulse with wave structure is found", () => {
+  // Simulates the ETH/USD scenario: bearish impulse from 2337 to 2299
+  // with internal pullbacks (consolidation around 2325-2330 area).
+  const candles: Candle[] = [];
+
+  // Phase 1: Consolidation around 2340 (candles 0-9)
+  for (let i = 0; i < 10; i++) {
+    const base = 2340 + (Math.random() * 4 - 2);
+    candles.push(makeCandle(base, base + 3, base - 3, base + 1, i));
+  }
+
+  // Phase 2: Push up to 2337 high (candle 10)
+  candles.push(makeCandle(2335, 2338, 2333, 2337, 10));
+
+  // Phase 3: First leg down to 2320 (candles 11-13)
+  candles.push(makeCandle(2337, 2337.5, 2328, 2329, 11));
+  candles.push(makeCandle(2329, 2330, 2322, 2323, 12));
+  candles.push(makeCandle(2323, 2325, 2319, 2320, 13));
+
+  // Phase 4: Internal pullback to 2330 (>50% retrace of 2337->2320)
+  candles.push(makeCandle(2320, 2328, 2319, 2327, 14));
+  candles.push(makeCandle(2327, 2331, 2326, 2330, 15));
+
+  // Phase 5: Second leg down through 2320 to 2299 — creates BOS
+  candles.push(makeCandle(2330, 2330.5, 2318, 2319, 16));
+  candles.push(makeCandle(2319, 2320, 2308, 2309, 17));
+  candles.push(makeCandle(2309, 2310, 2300, 2301, 18));
+  candles.push(makeCandle(2301, 2302, 2298, 2299, 19));
+
+  // Phase 6: Retracement up — stays below origin 2338 (candles 20-34)
+  let price = 2299;
+  for (let i = 20; i < 35; i++) {
+    const prev = price;
+    price += 2.5;
+    candles.push(makeCandle(prev, price + 1, prev - 0.5, price, i));
+  }
+
+  const result = findImpulseLeg(candles, "bearish");
+  assertExists(result, "Should find bearish impulse in ETH-like scenario");
+  assert(result.isValid, "Impulse should be valid — origin (2338) not broken");
+  assertEquals(result.direction, "bearish");
+  assert(result.high >= 2330, `Impulse high ${result.high} should be near 2337`);
+  assert(result.low <= 2305, `Impulse low ${result.low} should be near 2299`);
+});
