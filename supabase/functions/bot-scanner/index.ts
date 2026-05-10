@@ -161,6 +161,8 @@ const DEFAULTS = {
   impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
   impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
   impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
+  impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
+  impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
   // ── Simple Direction Engine ──
   useSimpleDirection: false,       // When true, use ICT top-down direction (Daily→4H→1H) instead of old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
@@ -765,6 +767,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
+    impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
+    impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? false,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
@@ -3624,21 +3628,105 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
-    // Apply impulse zone penalty/bonus (soft scoring adjustment)
+    // ── Impulse Zone Gate (configurable: hard / soft / off) ──
+    // "hard" mode: no valid zone OR price not at zone → skip pair entirely (sniper approach)
+    // "soft" mode: penalty/bonus scoring adjustment (legacy behavior)
+    // "off" mode: impulse zone is purely informational
     let impulseZonePenaltyVal = 0;
-    if (pairConfig.impulseZoneEnabled !== false) {
-      const izData = (detail as any).impulseZone;
+    const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
+    const izData = (detail as any).impulseZone;
+    if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
+      // HARD GATE: impulse zone is the primary entry framework
+      if (!izData || !izData.hasZone) {
+        // No valid impulse zone found — skip this pair entirely
+        detail.status = "skipped_no_impulse_zone";
+        detail.skipReason = "Impulse Zone Gate (hard): no valid entry zone found — no trade";
+        console.log(`[scan ${scanCycleId}] ⛔ ${pair}: IMPULSE ZONE HARD GATE — no zone found. Skipping.`);
+        scanDetails.push(detail);
+        continue;
+      }
+      if (!izData.bestZone?.priceAtZone) {
+        // Zone exists but price is NOT at the zone — watchlist this pair (ready when price arrives)
+        detail.status = "watching_zone";
+        detail.skipReason = `Impulse Zone Gate (hard): price not at zone yet (distance: ${izData.bestZone?.distanceToZone?.toFixed(5) ?? "?"}). Watchlisted.`;
+        console.log(`[scan ${scanCycleId}] ⏳ ${pair}: IMPULSE ZONE HARD GATE — zone exists, price not there yet. Distance: ${izData.bestZone?.distanceToZone?.toFixed(5)}. Adding to watchlist.`);
+        // Stage this pair so it's ready when price arrives at the zone
+        if (stagingEnabled && analysis.direction && !isPaused) {
+          try {
+            const existingStagedForZone = existingStaged;
+            if (!existingStagedForZone) {
+              const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+              const ts = analysis.tieredScoring;
+              const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                : stagingTTLMinutes;
+              await supabase.from("staged_setups").insert({
+                user_id: userId,
+                bot_id: BOT_ID,
+                symbol: pair,
+                direction: analysis.direction,
+                initial_score: analysis.score,
+                current_score: analysis.score,
+                watch_threshold: watchThreshold,
+                initial_factors: presentFactors,
+                current_factors: presentFactors,
+                missing_factors: missingFactors,
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2),
+                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
+                tp_level: analysis.takeProfit,
+                scan_cycles: 1,
+                min_cycles: 1,
+                ttl_minutes: styleTTL,
+                setup_type: "impulse_zone_watch",
+                tier1_count: ts?.tier1Count ?? 0,
+                tier2_count: ts?.tier2Count ?? 0,
+                tier3_count: ts?.tier3Count ?? 0,
+                analysis_snapshot: {
+                  score: analysis.score,
+                  direction: analysis.direction,
+                  impulseZone: { zoneHigh: izData.bestZone.zoneHigh, zoneLow: izData.bestZone.zoneLow, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
+                },
+              });
+              stagedNew++;
+              console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.zoneLow?.toFixed(5)}-${izData.bestZone.zoneHigh?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
+            } else {
+              // Update existing staged with latest zone data
+              await supabase.from("staged_setups").update({
+                current_score: analysis.score,
+                scan_cycles: existingStagedForZone.scan_cycles + 1,
+                last_eval_at: new Date().toISOString(),
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2),
+                sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
+              }).eq("id", existingStagedForZone.id);
+              console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
+            }
+          } catch (e: any) {
+            if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
+              console.log(`[staging] ${pair} ${analysis.direction} already staged for zone watch`);
+            } else {
+              console.warn(`[staging] Failed to stage zone watch ${pair}: ${e?.message}`);
+            }
+          }
+          detail.staging = { action: "zone_watch", zoneDistance: izData.bestZone?.distanceToZone };
+        }
+        scanDetails.push(detail);
+        continue;
+      }
+      // Price IS at zone — apply bonus and proceed
+      impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
+      console.log(`[scan ${scanCycleId}] ✅ ${pair}: Impulse Zone CONFIRMED — price at zone. Proceeding with entry evaluation.`);
+    } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "soft") {
+      // SOFT MODE: legacy penalty/bonus behavior
       if (izData) {
         if (!izData.hasZone) {
-          // No valid zone found — apply penalty
           impulseZonePenaltyVal = -(pairConfig.impulseZonePenalty ?? 2.0);
         } else if (izData.bestZone?.priceAtZone) {
-          // Price is AT the zone — apply bonus
           impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
         }
-        // Zone exists but price not at it — no adjustment (neutral)
       }
     }
+    // "off" mode: no adjustment at all
     const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
@@ -3807,6 +3895,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           tp = analysis.direction === "long"
             ? analysis.lastPrice + newRisk * config.tpRatio
             : analysis.lastPrice - newRisk * config.tpRatio;
+        }
+        // ── Impulse Zone SL Override (hard gate mode) ──
+        // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
+        // This gives structural protection: SL is below where the impulse started (for longs)
+        // or above where it started (for shorts). The impulse origin is the invalidation level.
+        if (izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone) {
+          const impulseData = izData.impulse;
+          if (impulseData) {
+            const impulseSL = analysis.direction === "long"
+              ? impulseData.low - (adjustedSlBuffer * spec.pipSize)
+              : impulseData.high + (adjustedSlBuffer * spec.pipSize);
+            const impulseSlDistance = Math.abs(analysis.lastPrice - impulseSL);
+            // Only override if impulse SL is wider than current SL (more protective)
+            // and within reasonable bounds (not absurdly wide)
+            const maxImpulseSlPips = (staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4)); // Configurable cap (default 4x)
+            const impulseSlPips = impulseSlDistance / spec.pipSize;
+            if (impulseSlDistance > actualSlDistance && impulseSlPips <= maxImpulseSlPips) {
+              console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
+              sl = impulseSL;
+              // Recalculate TP based on impulse SL for proper R:R
+              const impulseRisk = Math.abs(analysis.lastPrice - sl);
+              tp = analysis.direction === "long"
+                ? analysis.lastPrice + impulseRisk * config.tpRatio
+                : analysis.lastPrice - impulseRisk * config.tpRatio;
+              detail.impulseZoneSLOverride = {
+                originalSL: actualSlDistance / spec.pipSize,
+                impulseSL: impulseSlPips,
+                impulseOrigin: analysis.direction === "long" ? impulseData.low : impulseData.high,
+              };
+            } else if (impulseSlPips > maxImpulseSlPips) {
+              console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
+            }
+          }
         }
 
         // ── Regime-Adaptive TP Adjustment ──
@@ -4003,7 +4124,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
 
         // ── Limit Order: Place pending order instead of market order if enabled and zone found ──
-        const limitEntry = computeLimitEntryPrice(analysis, pair, analysis.direction);
+        let limitEntry = computeLimitEntryPrice(analysis, pair, analysis.direction);
+        // ── Impulse Zone Entry Override ──
+        // When hard gate is active and zone has a refined entry, use the zone's entry level
+        // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
+        // the impulse zone's optimal entry (OTE level with S/R + LTF confirmation).
+        if (izGateMode === "hard" && izData?.bestZone?.refinedEntry) {
+          const zoneEntry = izData.bestZone.refinedEntry;
+          const zoneLow = izData.bestZone.low;
+          const zoneHigh = izData.bestZone.high;
+          const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
+          limitEntry = { price: zoneEntry, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
+          console.log(`[${pair}] Impulse Zone entry override: limit at ${zoneEntry.toFixed(5)} (${zoneType} zone)`);
+        } else if (izGateMode === "hard" && izData?.bestZone && !limitEntry) {
+          // Fallback: use zone midpoint if no refined entry available
+          const zoneMid = (izData.bestZone.high + izData.bestZone.low) / 2;
+          const zoneLow = izData.bestZone.low;
+          const zoneHigh = izData.bestZone.high;
+          const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
+          limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
+          console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
+        }
         if (config.limitOrderEnabled && limitEntry) {
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
@@ -4127,13 +4268,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Place position (market order — fallback when limit orders disabled or no zone found)
+        // When impulse zone hard gate is active, use zone entry for market orders too
+        const marketEntryPrice = (izGateMode === "hard" && izData?.bestZone?.refinedEntry)
+          ? izData.bestZone.refinedEntry
+          : (izGateMode === "hard" && izData?.bestZone)
+            ? (izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2
+            : analysis.lastPrice;
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
           symbol: pair,
           direction: analysis.direction,
           size: size.toString(),
-          entry_price: analysis.lastPrice.toString(),
+          entry_price: marketEntryPrice.toString(),
           current_price: analysis.lastPrice.toString(),
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
@@ -4165,7 +4312,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           detail.staging = { action: "promoted_and_traded", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
         }
         detail.size = size;
-        detail.entryPrice = analysis.lastPrice;
+        detail.entryPrice = marketEntryPrice;
         detail.stopLoss = sl;
         detail.takeProfit = tp;
         detail.positionId = positionId;
