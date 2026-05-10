@@ -58,7 +58,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult } from "../_shared/impulseZoneEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import {
@@ -3507,8 +3507,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (analysis.direction && hourlyCandles.length >= 20) {
       try {
         const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        // Build HTF confluence data from already-computed 4H analysis
+        const htfConfluenceData: HTFConfluenceData = {
+          h4OBs: h4OBs ?? [],
+          h4FVGs: h4FVGs ?? [],
+          h4Breakers: h4Breakers ?? [],
+          htfFibLevels: htfFibLevels4H ?? null,
+          htfPD: htfPD4H ?? null,
+          direction: zoneDirection as "bullish" | "bearish",
+        };
         const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
-          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice,
+          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData,
         );
         (detail as any).impulseZone = {
           hasZone: !!zoneResult.bestZone,
@@ -3531,6 +3540,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ltfType: zoneResult.bestZone.zone.ltfType || null,
             refinedEntry: zoneResult.bestZone.zone.refinedEntry || null,
             refinedSL: zoneResult.bestZone.zone.refinedSL || null,
+            htfConfluenceScore: zoneResult.bestZone.zone.htfConfluenceScore,
+            htfLayers: zoneResult.bestZone.zone.htfLayers,
             priceAtZone: zoneResult.bestZone.priceAtZone,
             distanceToZone: zoneResult.bestZone.distanceToZone,
           } : null,

@@ -321,6 +321,8 @@ Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () =
     fibScore: 2,
     srConfirmed: false,
     ltfRefined: false,
+    htfConfluenceScore: 0,
+    htfLayers: [],
     totalScore: 2,
   }];
 
@@ -352,6 +354,8 @@ Deno.test("checkHistoricalSR — does not confirm when no S/R at zone", () => {
     fibScore: 2,
     srConfirmed: false,
     ltfRefined: false,
+    htfConfluenceScore: 0,
+    htfLayers: [],
     totalScore: 2,
   }];
 
@@ -368,6 +372,8 @@ Deno.test("refineLowerTF — returns unchanged zone when not enough LTF candles"
     fibScore: 2,
     srConfirmed: true,
     ltfRefined: false,
+    htfConfluenceScore: 0,
+    htfLayers: [],
     totalScore: 3,
   };
 
@@ -384,6 +390,8 @@ Deno.test("refineLowerTF — refines zone when LTF structure exists inside", () 
     fibScore: 2,
     srConfirmed: false,
     ltfRefined: false,
+    htfConfluenceScore: 0,
+    htfLayers: [],
     totalScore: 2,
   };
 
@@ -422,17 +430,17 @@ Deno.test("rankAndSelectBestZone — selects highest-scoring zone", () => {
     {
       poi: { type: "fvg", high: 1.02, low: 1.01, candleIndex: 20, direction: "bullish" },
       fibLevel: 0.5, fibDepth: 0.5, fibScore: 1,
-      srConfirmed: false, ltfRefined: false, totalScore: 1,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 1,
     },
     {
       poi: { type: "ob", high: 1.015, low: 1.01, candleIndex: 15, direction: "bullish" },
       fibLevel: 0.786, fibDepth: 0.786, fibScore: 4,
-      srConfirmed: true, ltfRefined: true, totalScore: 6,
+      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 0, htfLayers: [], totalScore: 6,
     },
     {
       poi: { type: "fvg", high: 1.025, low: 1.02, candleIndex: 25, direction: "bullish" },
       fibLevel: 0.618, fibDepth: 0.618, fibScore: 2,
-      srConfirmed: true, ltfRefined: false, totalScore: 3,
+      srConfirmed: true, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 3,
     },
   ];
 
@@ -447,7 +455,7 @@ Deno.test("rankAndSelectBestZone — rejects zones with fibScore < 1", () => {
     {
       poi: { type: "fvg", high: 1.04, low: 1.039, candleIndex: 30, direction: "bullish" },
       fibLevel: 0.382, fibDepth: 0.382, fibScore: 0, // Too shallow
-      srConfirmed: true, ltfRefined: true, totalScore: 2,
+      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
     },
   ];
 
@@ -460,12 +468,12 @@ Deno.test("rankAndSelectBestZone — uses fibDepth as tiebreaker", () => {
     {
       poi: { type: "fvg", high: 1.02, low: 1.019, candleIndex: 20, direction: "bullish" },
       fibLevel: 0.618, fibDepth: 0.62, fibScore: 2,
-      srConfirmed: false, ltfRefined: false, totalScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
     },
     {
       poi: { type: "ob", high: 1.015, low: 1.014, candleIndex: 15, direction: "bullish" },
       fibLevel: 0.71, fibDepth: 0.72, fibScore: 2, // Same fibScore but deeper
-      srConfirmed: false, ltfRefined: false, totalScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
     },
   ];
 
@@ -565,7 +573,7 @@ Deno.test("checkHistoricalSR — handles short lookback gracefully", () => {
   const zones: RankedPOI[] = [{
     poi: { type: "fvg", high: 1.01, low: 0.99, candleIndex: 10, direction: "bullish" },
     fibLevel: 0.618, fibDepth: 0.618, fibScore: 2,
-    srConfirmed: false, ltfRefined: false, totalScore: 2,
+    srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
   }];
 
   // impulseStartIndex = 5 means only 5 candles of lookback — should handle gracefully

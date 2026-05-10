@@ -1,109 +1,110 @@
-# Task: Direction Hysteresis + Prop Firm Safety Fixes
-
-## Branch: manus/direction-hysteresis
+# Task: HTF Confluence Scoring
+## Branch: manus/htf-confluence-scoring
 
 ## Behavior changes
 
-1. **Direction engine hysteresis (paths 3 & 4 in `determineDirection`):** When the 4H is retracing and the 1H has no recent confirming BOS, the engine no longer nullifies direction. Instead it checks for an **opposing 1H CHoCH**. If no opposing CHoCH exists, direction is maintained. If an opposing CHoCH is found, direction is nullified. This prevents flip-flopping when a BOS simply ages out of the lookback window.
+1. **Zone scoring now includes HTF confluence layers.** When `htfData` is passed to `findBestEntryZone` / `findBestEntryZoneMultiTF`, each candidate zone receives additional score points (0–5) based on overlap with 4H Order Blocks (+1), 4H FVGs (+1), 4H Breaker Blocks (+1), HTF Fibonacci levels (+0.5 for 50%, +1.5 for 61.8%/71%/78.6%), and Premium/Discount alignment (+0.5). This means **zones backed by HTF structure will rank higher** than naked zones at the same Fib depth.
 
-2. **`useSimpleDirection` now defaults to `true` for all pairs.** Previously defaulted to `false`, meaning the old `confluenceScoring.ts` P/D logic determined direction. Now all pairs use the ICT top-down direction engine (Daily→4H→1H) with hysteresis, unless explicitly overridden to `false` in the database/strategy config. This means:
-   - Pairs like BTC/USD and ETH/USD that previously showed "No direction determined" will now get a direction from the new engine.
-   - More pairs will proceed to impulse zone detection where they previously were skipped.
-   - Any pair with `useSimpleDirection: false` explicitly set in the database will continue to use the old logic (the DB value takes precedence over the default).
+2. **Maximum possible zone score increased from 6 to 11.** Previously: fibScore(4) + SR(1) + LTF(1) = 6. Now: fibScore(4) + htfConfluence(5) + SR(1) + LTF(1) = 11. The reason string in scan logs now shows `/11` instead of `/6`.
 
-3. **Prop firm gate: live accounts skip check when broker equity unavailable.** Previously, if the MetaApi equity fetch failed, the system fell back to paper_accounts balance (often wrong for live accounts). Now it skips the prop firm check entirely and logs a warning. This prevents false emergency closes caused by comparing a $10K paper balance against a $90K drawdown floor.
+3. **Scan detail output includes `htfConfluenceScore` and `htfLayers`.** The `impulseZone.bestZone` object in scan detail now includes `htfConfluenceScore` (number) and `htfLayers` (string array like `["4H_OB", "HTF_FIB_61.8", "PD_ALIGNED"]`).
 
-4. **Prop firm gate: equity sanity check.** If `currentEquity < 50% of initial_balance`, the check is skipped with a warning. This catches obvious data errors (stale prices, wrong account source) before they trigger emergency actions.
+4. **When `htfData` is not provided (e.g., insufficient 4H candles), behavior is identical to before.** The `htfData` parameter is optional; when omitted, `htfConfluenceScore` stays 0 and `htfLayers` stays empty. This is a backward-compatible addition.
 
-5. **Prop firm emergency close: weekend FX guard.** When FX market is closed (weekends), emergency close only affects crypto positions. FX positions are left untouched since they can't be executed on weekends anyway and stale prices could produce incorrect P&L calculations.
+5. **No gate behavior changes.** The impulse zone engine remains informational (enriches scan detail, does NOT gate trades). The HTF confluence score only affects zone ranking within the engine, not whether a trade is taken.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/directionEngine.ts` | Added hysteresis logic to paths 3 and 4: check for opposing 1H CHoCH before nullifying direction. |
-| `supabase/functions/_shared/directionEngine.test.ts` | Updated existing test for non-deterministic data; added 4 hysteresis regression tests + 2 guard tests for the default config. |
-| `supabase/functions/_shared/propFirmGate.ts` | Added: (1) live account safety skip when broker equity unavailable, (2) equity sanity check (<50% of initial_balance), (3) weekend FX guard in emergency close. |
-| `supabase/functions/_shared/propFirmGate.test.ts` | **New file:** 7 tests covering all three prop firm safety fixes. |
-| `supabase/functions/bot-scanner/index.ts` **(CAUTION FILE)** | (1) `useSimpleDirection` default changed to `true` (line 167 + line 773 fallback). (2) Passed `isLiveAccount` and `fxMarketClosed` to prop firm gate functions. |
+| `supabase/functions/_shared/impulseZoneEngine.ts` | Added `HTFConfluenceData` interface, `checkHTFConfluence()` function, initialized `htfConfluenceScore`/`htfLayers` in `overlayFibOnPOIs`, updated all `totalScore` calculations to include `htfConfluenceScore`, updated `findBestEntryZone` and `findBestEntryZoneMultiTF` signatures to accept optional `htfData`, inserted HTF confluence step in pipeline between S/R check and LTF refinement, updated reason string denominator from `/6` to `/11` |
+| `supabase/functions/bot-scanner/index.ts` | Updated import to include `HTFConfluenceData`, built `htfConfluenceData` object from existing `h4OBs`, `h4FVGs`, `h4Breakers`, `htfFibLevels4H`, `htfPD4H` variables, passed it to `findBestEntryZoneMultiTF`, added `htfConfluenceScore` and `htfLayers` to scan detail output |
+| `supabase/functions/_shared/impulseZoneEngine.test.ts` | Added `htfConfluenceScore: 0, htfLayers: []` to all existing `RankedPOI` object literals to satisfy updated interface |
+| `supabase/functions/_shared/htfConfluence.test.ts` | **New file** — 27 tests for `checkHTFConfluence()` |
 
-## bot-scanner/index.ts changes (caution file — detailed explanation)
+### Extra caution note: bot-scanner/index.ts
 
-**What changed:** Four modifications in `bot-scanner/index.ts`:
-
-- **Line 167 (DEFAULTS object):** `useSimpleDirection: false` → `true`. Default config for all pairs.
-- **Line 773 (config merge):** `?? false` → `?? true`. Per-pair config builder fallback.
-- **Line 2805 (runPropFirmGate call):** Added `isLiveAccount: account.execution_mode === "live"` and `fxMarketClosed` to the options object.
-- **Line 2816 (propFirmEmergencyClose call):** Added `{ fxMarketClosed }` options parameter.
-
-**Why:** 
-- Lines 167/773: Activates the direction engine fleet-wide (see behavior change #2).
-- Lines 2805/2816: Passes context needed for the prop firm safety guards. Without `isLiveAccount`, the gate can't distinguish between a live account with failed equity fetch vs a paper account. Without `fxMarketClosed`, the emergency close can't skip FX positions on weekends.
-
-**No gate definitions, factor weights, or smcAnalysis.ts were modified.**
+The change to `bot-scanner/index.ts` is minimal and safe:
+- **Import line**: Added `type HTFConfluenceData` to the existing import from `impulseZoneEngine.ts`.
+- **Call site**: Built an `htfConfluenceData` object from variables that already exist in scope (`h4OBs`, `h4FVGs`, `h4Breakers`, `htfFibLevels4H`, `htfPD4H`) with `?? []` / `?? null` null-safety. Passed it as the 6th argument to `findBestEntryZoneMultiTF`.
+- **Detail output**: Added two fields (`htfConfluenceScore`, `htfLayers`) to the existing `bestZone` detail object.
+- No control flow changes. No gate changes. The impulse zone engine remains informational-only.
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `HYSTERESIS: direction maintained when 1H BOS rolls off but no opposing CHoCH` | Daily bullish + 4H retracing + 1H flat → direction = "long" (not null) |
-| `HYSTERESIS: direction nullified when 1H CHoCH against bias appears` | Daily bullish + 4H retracing + 1H bearish CHoCH → direction = null |
-| `HYSTERESIS: consecutive scans without 1H confirmation produce stable direction` | Two identical calls produce identical direction (no flip-flop) |
-| `HYSTERESIS: source code contains hysteresis check for opposing CHoCH` | Structural guard verifying key variables/comments exist in source |
-| `GUARD: bot-scanner DEFAULTS has useSimpleDirection = true` | Reads bot-scanner source, verifies DEFAULTS object has `useSimpleDirection: true` |
-| `GUARD: bot-scanner config merge falls back to useSimpleDirection = true` | Reads bot-scanner source, verifies config merge line falls back to `true` |
-| `propFirmGate: live account without broker equity skips check (safety)` | Live account + no broker equity → allowed=true, reason includes "Broker equity unavailable" |
-| `propFirmGate: live account WITH broker equity proceeds normally` | Live account + valid equity → full compliance check runs |
-| `propFirmGate: equity sanity check blocks false emergency (paper mode)` | Equity $10K vs initial $100K → skipped, reason includes "sanity check failed" |
-| `propFirmGate: equity at 60% of initial_balance passes sanity check` | Equity $60K vs initial $100K → proceeds to normal check |
-| `propFirmEmergencyClose: weekend skips FX positions, only closes crypto` | fxMarketClosed=true → only BTCUSD closed, EURUSD/GBPUSD/USDCAD skipped |
-| `propFirmEmergencyClose: weekday closes all positions` | fxMarketClosed=false → all positions closed |
-| `propFirmEmergencyClose: no opts (backward compat) closes all` | No opts → all positions closed (backward compatible) |
+| `empty zones returns empty array` | `checkHTFConfluence([])` returns `[]` |
+| `no overlapping HTF data → score 0` | OBs/FVGs far from zone → score 0, layers empty |
+| `4H OB overlaps zone → +1 score` | Bullish OB overlapping zone adds 1 point and "4H_OB" layer |
+| `4H FVG overlaps zone → +1 score` | Bullish FVG overlapping zone adds 1 point and "4H_FVG" layer |
+| `4H Breaker overlaps zone → +1 score` | Active bullish breaker overlapping zone adds 1 point and "4H_BREAKER" layer |
+| `HTF Fib 61.8% inside zone → +1.5 score` | Premium Fib level inside zone adds 1.5 points |
+| `HTF Fib 71% inside zone → +1.5 score` | Premium Fib level inside zone adds 1.5 points |
+| `HTF Fib 78.6% inside zone → +1.5 score` | Premium Fib level inside zone adds 1.5 points |
+| `HTF Fib 50% inside zone → +0.5 score` | Equilibrium Fib level adds only 0.5 points |
+| `P/D discount for bullish → +0.5 score` | Discount zone for bullish direction adds 0.5 |
+| `P/D premium for bearish → +0.5 score` | Premium zone for bearish direction adds 0.5 |
+| `P/D discount for bearish → NO score` | Wrong P/D alignment adds nothing |
+| `full confluence: all layers → max 5.0 score` | OB+FVG+Breaker+Fib61.8+PD = 1+1+1+1.5+0.5 = 5.0 |
+| `bearish OB ignored for bullish direction` | Direction filtering works |
+| `broken OB excluded` | State filtering works |
+| `mitigated OB excluded` | State filtering works |
+| `filled FVG excluded` | State filtering works |
+| `inactive breaker excluded` | isActive filtering works |
+| `broken breaker excluded` | State filtering works |
+| `best Fib wins: 61.8% beats 50%` | Only best Fib score is used, not cumulative |
+| `totalScore includes htfConfluenceScore` | totalScore = fibScore + htfConfluence + sr |
+| `multiple zones scored independently` | Each zone gets its own score |
+| `OB counts at most once` | Multiple overlapping OBs don't double-count |
+| `Fib outside zone → no score` | Fib must be inside zone range |
+| `bearish direction with correct layers` | Bearish OB+FVG+Breaker+PD all work |
+| `daily Fib levels also checked` | `dailyFibLevels` optional field works |
+| `REGRESSION — 61.8% with HTF beats naked 78.6%` | Core requirement: HTF-backed zone outranks naked deeper zone |
 
 ## Tests run
 
 ```
-$ deno test --no-check --allow-read --allow-net --allow-env --ignore="src/test/example.test.ts"
-ok | 478 passed | 0 failed (8s)
+$ deno test supabase/functions/_shared/impulseZoneEngine.test.ts supabase/functions/_shared/htfConfluence.test.ts --allow-all
+ok | 64 passed | 0 failed (134ms)
+
+$ deno test supabase/functions/ --allow-all --no-check
+ok | 505 passed | 0 failed (7s)
 ```
+
+All 505 tests pass (including 37 existing impulseZoneEngine tests + 27 new htfConfluence tests).
+
+Type-check errors: 32 (down from 43 pre-existing on the parent branch). All 32 are in other test files (`tpNextLevelSkip.test.ts`, `structureAuthority.test.ts`, `confluenceScoring.test.ts`, etc.) and are pre-existing — none introduced by this change.
 
 ## Regression check
 
-1. **Direction engine:** Deterministic fixture tests prove that when 1H has no structure breaks, direction is maintained (new behavior). When opposing CHoCH exists, direction is nullified (same as before). All other paths (daily bias, 4H CHoCH, 1H confirmed) produce identical results.
-2. **Prop firm gate:** Tests verify that live accounts with valid broker equity still proceed through full compliance checks. Paper accounts with realistic equity (>50% of initial) still trigger real drawdown/daily loss checks. The sanity guard only fires on obviously bad data.
-3. **Emergency close:** Tests verify that weekday behavior is unchanged (all positions closed). Only weekend behavior changes (FX positions skipped).
-4. **Full suite:** 478 tests pass. The `impulseZoneEngine.test.ts:949` test is flaky (passes alone, occasionally fails in batch) — confirmed pre-existing on `main`.
+1. **Existing impulseZoneEngine tests**: All 37 pass unchanged (after adding the required `htfConfluenceScore: 0, htfLayers: []` fields to test fixtures).
+2. **Backward compatibility**: When `htfData` is not provided (the parameter is optional), `checkHTFConfluence` is never called, and all zones have `htfConfluenceScore: 0` and `htfLayers: []` — identical to previous behavior.
+3. **Full suite**: All 505 tests across the entire `supabase/functions/` directory pass with `--no-check`.
+4. **Score math verified**: `1+1+1+1.5+0.5 = 5.0` max HTF confluence. Maximum total: `4 + 5 + 1 + 1 = 11`.
 
 ## Open questions
 
-1. **Crypto symbol detection:** The weekend FX guard uses a hardcoded set of crypto symbols (`BTCUSD`, `ETHUSD`, `XRPUSD`, etc.). Should this use `SPECS[symbol].type === "crypto"` instead? (I avoided importing SPECS into propFirmGate.ts to keep it decoupled.)
+1. **Daily Fib levels**: The `HTFConfluenceData` interface includes an optional `dailyFibLevels` field. The bot-scanner currently does not compute daily Fib levels, so this field is not populated. Should we add daily Fib computation in a follow-up task?
 
-2. **Sanity threshold:** The 50% threshold is conservative. A real FTMO account can lose up to 10% (max drawdown). Should this be tightened to 70%? Or configurable per prop firm config?
-
-3. **Per-pair DB overrides:** Any pair that has `useSimpleDirection: false` explicitly in the database will still use the old logic. Should those be cleaned up?
-
-4. **Pre-existing flaky test:** `impulseZoneEngine.test.ts:949` occasionally fails in batch runs. Unrelated but should be investigated separately.
+2. **Score denominator display**: The reason string now shows `/11` as the max. In practice, without HTF data the max is still 6. Should we make the denominator dynamic (show actual max based on whether HTF data was available)?
 
 ## Suggested PR title and description
 
-**Title:** `feat: direction hysteresis + prop firm safety guards`
+**Title:** `[htf-confluence-scoring] Add HTF confluence layer scoring to impulse zone engine`
 
 **Description:**
+Adds a new scoring layer to the impulse zone engine that evaluates overlap between 1H entry zones and 4H market structure (Order Blocks, FVGs, Breaker Blocks, Fibonacci levels, Premium/Discount zones).
 
-Two related fixes for the live trading bot:
+**What it does:**
+- New `checkHTFConfluence()` function scores each candidate zone based on 5 HTF layers (max +5 points)
+- Inserts between S/R check and LTF refinement in the pipeline
+- Bot-scanner passes already-computed 4H analysis data through to the zone engine
+- Scan detail output now includes `htfConfluenceScore` and `htfLayers` for transparency
 
-### 1. Direction Engine Hysteresis
-Fixes direction flip-flopping caused by 1H BOS aging out of the lookback window. Direction is now only nullified when an active opposing 1H CHoCH is detected. Also enables `useSimpleDirection=true` fleet-wide.
+**Why:**
+A zone at 61.8% backed by a 4H OB + FVG + HTF Fib should rank higher than a naked zone at 78.6%. This change implements that ranking logic.
 
-### 2. Prop Firm Safety Guards (Bug Fix)
-On Saturday 05/10, the prop firm gate falsely triggered emergency close on two profitable USD/CAD positions because:
-- MetaApi equity fetch failed → fell back to paper balance ($10K vs real $100K)
-- Compared $10K against $90K drawdown floor → triggered emergency
-- Closed FX positions on a weekend (market closed)
+**Behavior changes:** Zone ranking within the impulse engine changes when HTF data is available. No gate changes. No trade execution changes. The impulse zone engine remains informational-only.
 
-Fixes:
-- Live accounts: skip prop firm check entirely if broker equity unavailable
-- Sanity check: skip if equity < 50% of initial_balance (obvious data error)
-- Weekend guard: emergency close only affects crypto positions when FX is closed
-
-**Testing:** 478 tests pass. 13 new tests covering all changes.
+**Tests:** 27 new tests + 37 existing tests pass. Full suite: 505/505.
