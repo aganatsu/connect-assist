@@ -566,3 +566,83 @@ Deno.test("SNAPSHOT: ranging fixture produces stable output", async () => {
     console.log("📸 Ranging snapshot saved.");
   }
 });
+
+// ─── OB Aligned-Only Scoring Tests ──────────────────────────────────────────
+// These tests verify that counter-directional OBs score 0 points instead of
+// the old ×0.3 penalty. A bearish OB in a long trade should not inflate confluence.
+
+Deno.test("OB aligned-only: bearish OB in long trade scores 0 points (not ×0.3 penalty)", async () => {
+  // Generate a bullish fixture where the OB factor will be detected
+  const candles = generateBullishFixture();
+  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+
+  // Find the OB factor
+  const obFactor = result.factors.find((f: any) => f.name === "Order Block");
+  if (!obFactor) {
+    console.log("  [skip] No OB detected in fixture — test not applicable");
+    return;
+  }
+
+  // If OB is bearish and direction is long, it should have 0 weight
+  if (obFactor.detail.includes("bearish OB") && result.direction === "long") {
+    assertEquals(obFactor.weight, 0, "Counter-directional bearish OB should have 0 weight in long trade");
+    assertEquals(obFactor.present, false, "Counter-directional OB should be marked as not present");
+    assert(
+      obFactor.detail.includes("0pts — counter-directional"),
+      "Detail should explain the OB is counter-directional and scores 0"
+    );
+  } else if (obFactor.detail.includes("bullish OB") && result.direction === "long") {
+    // Aligned OB — should have positive weight and be marked present
+    assert(obFactor.weight > 0, "Aligned bullish OB should have positive weight");
+    assert(obFactor.present, "Aligned OB should be marked as present");
+    assert(
+      obFactor.detail.includes("aligned with long entry"),
+      "Detail should confirm alignment"
+    );
+  }
+});
+
+Deno.test("OB aligned-only: bullish OB in short trade scores 0 points", async () => {
+  // Generate a bearish fixture
+  const candles = generateBearishFixture();
+  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+
+  const obFactor = result.factors.find((f: any) => f.name === "Order Block");
+  if (!obFactor) {
+    console.log("  [skip] No OB detected in fixture — test not applicable");
+    return;
+  }
+
+  // If OB is bullish and direction is short, it should have 0 weight
+  if (obFactor.detail.includes("bullish OB") && result.direction === "short") {
+    assertEquals(obFactor.weight, 0, "Counter-directional bullish OB should have 0 weight in short trade");
+    assertEquals(obFactor.present, false, "Counter-directional OB should be marked as not present");
+    assert(
+      obFactor.detail.includes("0pts — counter-directional"),
+      "Detail should explain the OB is counter-directional and scores 0"
+    );
+  }
+});
+
+Deno.test("OB aligned-only: aligned OB retains full weight", async () => {
+  // Generate a bullish fixture
+  const candles = generateBullishFixture();
+  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+
+  const obFactor = result.factors.find((f: any) => f.name === "Order Block");
+  if (!obFactor || !obFactor.present) {
+    console.log("  [skip] No present OB detected in fixture — test not applicable");
+    return;
+  }
+
+  // If the OB is aligned with direction, weight should be the default OB weight (not reduced)
+  if (result.direction === "long" && obFactor.detail.includes("bullish OB")) {
+    const defaultOBWeight = DEFAULT_FACTOR_WEIGHTS["Order Block"] || 2.0;
+    assertEquals(obFactor.weight, defaultOBWeight, "Aligned OB should retain full default weight");
+    assert(obFactor.detail.includes("aligned"), "Detail should confirm alignment");
+  } else if (result.direction === "short" && obFactor.detail.includes("bearish OB")) {
+    const defaultOBWeight = DEFAULT_FACTOR_WEIGHTS["Order Block"] || 2.0;
+    assertEquals(obFactor.weight, defaultOBWeight, "Aligned OB should retain full default weight");
+    assert(obFactor.detail.includes("aligned"), "Detail should confirm alignment");
+  }
+});

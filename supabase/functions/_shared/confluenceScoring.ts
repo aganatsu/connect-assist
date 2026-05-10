@@ -1158,13 +1158,15 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       const obAligned = (direction === "long" && obTypeBullish)
         || (direction === "short" && obTypeBearish);
       if (!obAligned && (obTypeBullish || obTypeBearish)) {
-        // Counter-directional OB: heavy penalty
+        // Counter-directional OB: zero points — irrelevant to trade direction.
+        // A bearish OB (supply) does not support a long entry; a bullish OB (demand) does not support a short.
+        // Report as informational caution, but do not inflate confluence score.
         const oldWeight = obFactor.weight;
-        obFactor.weight = Math.round(obFactor.weight * 0.3 * 1000) / 1000;
-        const penalty = oldWeight - obFactor.weight;
-        score -= penalty;
+        obFactor.weight = 0;
+        obFactor.present = false;
+        score -= oldWeight;
         const obType = obTypeBullish ? "bullish" : "bearish";
-        obFactor.detail += ` | OB direction mismatch: ${obType} OB vs ${direction} entry (×0.3 penalty)`;
+        obFactor.detail += ` | OB direction mismatch: ${obType} OB vs ${direction} entry (0pts — counter-directional, not scored)`;
       } else if (obAligned) {
         obFactor.detail += ` | OB aligned with ${direction} entry ✓`;
       }
