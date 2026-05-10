@@ -3197,12 +3197,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Run structure detection on HTF candles and inject results for scoring boost.
     console.log(`[scan ${scanCycleId}] ${pair} HTF candles: 4H=${h4Candles.length}, 1H=${hourlyCandles.length}`);
     const htfPOIs: { timeframe: string; type: "fvg" | "ob" | "breaker"; high: number; low: number; direction: "bullish" | "bearish" }[] = [];
+    let h4FVGs: any[] = [];
+    let h4OBs: any[] = [];
+    let h4Breakers: any[] = [];
     if (h4Candles.length >= 20) {
       const h4Structure = analyzeMarketStructure(h4Candles);
       const h4StructureBreaks = [...h4Structure.bos, ...h4Structure.choch];
-      const h4FVGs = detectFVGs(h4Candles, h4StructureBreaks);
-      const h4OBs = detectOrderBlocks(h4Candles, h4StructureBreaks);
-      const h4Breakers = detectBreakerBlocks(h4OBs, h4Candles, h4StructureBreaks);
+      h4FVGs = detectFVGs(h4Candles, h4StructureBreaks);
+      h4OBs = detectOrderBlocks(h4Candles, h4StructureBreaks);
+      h4Breakers = detectBreakerBlocks(h4OBs, h4Candles, h4StructureBreaks);
       for (const fvg of h4FVGs) {
         if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 3) {
           htfPOIs.push({ timeframe: "4H", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
