@@ -779,9 +779,36 @@ Deno.serve(async (req) => {
       }
 
       let { data: positions } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
-      // Keep status read-only by default. Engine processing can still be run by
-      // passing processEngine=true from controlled automation, but dashboard
-      // polling must not perform external data calls or broker mirror actions.
+      // ── Always refresh live prices on status poll ──
+      // Without this, positions show stale entry-time prices ($0 PnL) between scanner cycles.
+      // Uses the lightweight TwelveData /price endpoint (single quote per symbol).
+      if (positions && positions.length > 0) {
+        const symbols = [...new Set(positions.map((p: any) => p.symbol))] as string[];
+        const priceMap: Record<string, number> = {};
+        await Promise.all(symbols.map(async (sym: string) => {
+          const price = await fetchLivePrice(sym);
+          if (price !== null) priceMap[sym] = price;
+        }));
+        let priceUpdated = false;
+        for (const p of positions) {
+          const livePrice = priceMap[p.symbol];
+          if (livePrice !== undefined && livePrice.toString() !== p.current_price) {
+            p.current_price = livePrice.toString();
+            priceUpdated = true;
+          }
+        }
+        // Persist updated prices to DB (fire-and-forget for response speed)
+        if (priceUpdated) {
+          Promise.all(positions.map((p: any) => {
+            const livePrice = priceMap[p.symbol];
+            if (livePrice !== undefined) {
+              return supabase.from("paper_positions").update({ current_price: livePrice.toString() }).eq("id", p.id);
+            }
+          })).catch(() => {});
+        }
+      }
+      // Engine processing (SL/TP/trail/BE logic) only runs when explicitly triggered.
+      // Dashboard polling must not perform broker mirror actions.
       if (payload.processEngine === true && positions && positions.length > 0) {
         await updatePositionPrices(supabase, positions);
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });

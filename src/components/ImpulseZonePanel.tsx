@@ -131,7 +131,7 @@ export function ImpulseZonePanel({ data }: Props) {
               Fib {fibLabel(bestZone.fibLevel)}
             </span>
             <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded ${scoreBadgeColor(bestZone.totalScore)}`}>
-              Score {bestZone.totalScore}/6
+              Score {bestZone.totalScore}/11
             </span>
             {selectedTF && (
               <span className="text-[7px] font-mono text-muted-foreground">
