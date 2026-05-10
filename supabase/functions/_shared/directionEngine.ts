@@ -314,19 +314,45 @@ export function determineDirection(
     };
   }
 
+  // ── Hysteresis: check for 1H CHoCH AGAINST bias ──
+  // If 1H hasn't confirmed (BOS rolled off window), we only nullify direction
+  // when there's an active opposing signal (CHoCH against bias).
+  // Absence of confirmation ≠ invalidation.
+  const oppositeType = bias === "bullish" ? "bearish" : "bullish";
+  const recentH1Choch = recentBreaks(h1Structure.choch, h1Candles.length, h1BosLookback);
+  const h1ChochAgainst = recentH1Choch.filter(c => c.type === oppositeType);
+  const hasOpposingSignal = h1ChochAgainst.length > 0;
+
   if (h4Check.retracing && !h1Check.confirmed) {
-    // 4H retracing but 1H hasn't confirmed yet — wait, don't enter
+    if (hasOpposingSignal) {
+      // 4H retracing + 1H CHoCH against bias → genuine reversal signal, nullify
+      return {
+        direction: null, bias: bias!, biasSource: biasSource!,
+        h4Retrace: true, h4ChochAgainst: false, h1Confirmed: false,
+        reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType}) → direction nullified`,
+      };
+    }
+    // No opposing CHoCH → direction holds (hysteresis: BOS rolled off but no reversal)
     return {
-      direction: null, bias: bias!, biasSource: biasSource!,
+      direction, bias: bias!, biasSource: biasSource!,
       h4Retrace: true, h4ChochAgainst: false, h1Confirmed: false,
-      reason: `${biasSource} ${bias} | ${h4Check.reason} | BUT ${h1Check.reason} → waiting for 1H confirmation`,
+      reason: `${biasSource} ${bias} → ${direction} | ${h4Check.reason} | ${h1Check.reason} → direction maintained (no opposing 1H CHoCH)`,
     };
   }
 
-  // 4H not retracing, 1H not confirmed — structure intact but no entry trigger
+  // 4H not retracing, 1H not confirmed
+  if (hasOpposingSignal) {
+    // 1H CHoCH against bias → genuine reversal signal, nullify
+    return {
+      direction: null, bias: bias!, biasSource: biasSource!,
+      h4Retrace: false, h4ChochAgainst: false, h1Confirmed: false,
+      reason: `${biasSource} ${bias} | ${h4Check.reason} | 1H CHoCH against bias (${h1ChochAgainst.length} ${oppositeType}) → direction nullified`,
+    };
+  }
+  // No opposing CHoCH → direction holds (hysteresis: structure intact, no reversal)
   return {
-    direction: null, bias: bias!, biasSource: biasSource!,
+    direction, bias: bias!, biasSource: biasSource!,
     h4Retrace: false, h4ChochAgainst: false, h1Confirmed: false,
-    reason: `${biasSource} ${bias} | ${h4Check.reason} | ${h1Check.reason} → no entry trigger`,
+    reason: `${biasSource} ${bias} → ${direction} | ${h4Check.reason} | ${h1Check.reason} → direction maintained (no opposing 1H CHoCH)`,
   };
 }
