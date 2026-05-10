@@ -1316,8 +1316,8 @@ async function runSafetyGates(
           fotsi.strengths, fotsi.series,
         );
         if (veto.vetoed) {
-          // Softened: gate passes but penalty was already applied upstream to effectiveScore
-          gates.push({ passed: true, reason: `FOTSI PENALTY (-2.0 applied): ${veto.reason}` });
+          // Softened: gate passes but -2.0 penalty is applied downstream to effectiveScore (line ~3756)
+          gates.push({ passed: true, reason: `FOTSI WARNING (-2.0 penalty applied to effectiveScore): ${veto.reason}` });
         } else {
           gates.push({ passed: true, reason: veto.reason });
         }

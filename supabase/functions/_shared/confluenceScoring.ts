@@ -949,10 +949,21 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // ── Factor 8: Reversal Candle (max 1.5) ──
   // ICT: reversal candles are a PRIMARY entry trigger — the actual "pull the trigger" signal.
   // Bumped from 0.5 to 1.5 to match ICT importance.
+  // FIX (self-contradiction-audit): Added directional alignment check.
+  // A bearish reversal on a long trade (or vice versa) is a counter-signal — score 0.
   {
     let pts = 0;
     let detail = "No reversal pattern";
     if (reversalCandle.detected) {
+      // Directional alignment: bullish reversal supports long, bearish supports short.
+      // If direction is undetermined (null), allow any reversal to score.
+      const reversalAligned = !direction
+        || (reversalCandle.type === "bullish" && direction === "long")
+        || (reversalCandle.type === "bearish" && direction === "short");
+      if (!reversalAligned) {
+        pts = 0;
+        detail = `${reversalCandle.type} reversal detected but OPPOSES ${direction} direction — no score`;
+      } else {
       const lastC = candles[candles.length - 1];
       const lastMid = (lastC.high + lastC.low) / 2;
       // Check if reversal formed at an OB
@@ -988,6 +999,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         pts = 0.25;
         detail = `${reversalCandle.type} reversal candle detected but not at a key level, no displacement`;
       }
+      } // end reversalAligned
     }
     { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
