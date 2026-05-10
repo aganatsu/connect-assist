@@ -1765,6 +1765,9 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       </button>
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
+          {/* Impulse Zone Panel — PRIMARY gate, shown first */}
+          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+
           {/* Tier-Grouped Factors */}
           {d.factors && (
             <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
@@ -1791,9 +1794,6 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
 
-          {/* Impulse Zone Panel */}
-          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
-
           {/* Summary */}
           {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
         </div>
@@ -1815,6 +1815,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
         <span className={`text-[10px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
+
+      {/* Impulse Zone Panel — PRIMARY gate, shown first */}
+      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
 
       {/* Tier score summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
@@ -2303,9 +2306,6 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           )}
         </div>
       )}
-
-      {/* Impulse Zone Panel */}
-      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
 
       {/* Summary */}
       {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
