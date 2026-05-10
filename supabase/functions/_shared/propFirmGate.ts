@@ -58,6 +58,8 @@ export async function runPropFirmGate(
   scanCycleId: string,
   opts?: {
     brokerEquity?: number; // If live mode, pass actual broker equity
+    isLiveAccount?: boolean; // Whether this is a live (broker-connected) account
+    fxMarketClosed?: boolean; // Whether FX market is currently closed (weekends)
   },
 ): Promise<PropFirmGateResult> {
   // ── 1. Load active prop firm config ──
@@ -86,6 +88,20 @@ export async function runPropFirmGate(
   let currentEquity: number;
   if (opts?.brokerEquity && opts.brokerEquity > 0) {
     currentEquity = opts.brokerEquity;
+  } else if (opts?.isLiveAccount) {
+    // SAFETY: Live account but broker equity fetch failed.
+    // Do NOT fall back to paper balance — it's almost certainly wrong.
+    // Skip the prop firm gate entirely rather than act on bad data.
+    console.warn(`[prop-firm-gate] ⚠️ LIVE account but broker equity unavailable. Skipping prop firm check to avoid false emergency on stale/wrong data.`);
+    return {
+      enabled: true,
+      allowed: true,
+      reason: "Broker equity unavailable — prop firm check skipped (safety)",
+      maxPositionSizeMultiplier: 1,
+      shouldCloseAll: false,
+      compliance: null,
+      configId: config.id,
+    };
   } else {
     // Calculate paper equity: balance + floating P&L
     let floatingPnL = 0;
@@ -103,6 +119,23 @@ export async function runPropFirmGate(
       }
     }
     currentEquity = paperBalance + floatingPnL;
+  }
+
+  // ── 2b. Sanity check: equity vs initial_balance ──
+  // If currentEquity is less than 50% of initial_balance, this is almost certainly
+  // a data error (stale price, wrong account, etc.), not a real 50%+ drawdown.
+  // Skip the check rather than triggering a false emergency.
+  if (currentEquity < config.initial_balance * 0.50) {
+    console.warn(`[prop-firm-gate] ⚠️ SANITY CHECK FAILED: equity $${currentEquity.toFixed(2)} is less than 50% of initial_balance $${config.initial_balance}. Likely data error — skipping prop firm check.`);
+    return {
+      enabled: true,
+      allowed: true,
+      reason: `Equity sanity check failed ($${currentEquity.toFixed(2)} < 50% of $${config.initial_balance}) — skipped`,
+      maxPositionSizeMultiplier: 1,
+      shouldCloseAll: false,
+      compliance: null,
+      configId: config.id,
+    };
   }
 
   // ── 3. Load or create today's daily state ──
@@ -242,10 +275,28 @@ export async function propFirmEmergencyClose(
   openPositions: any[],
   reason: string,
   scanCycleId: string,
+  opts?: { fxMarketClosed?: boolean },
 ): Promise<number> {
+  // Weekend guard: when FX market is closed, only close crypto positions.
+  // FX positions can't be executed on weekends anyway, and stale prices
+  // could produce incorrect P&L calculations.
+  let positionsToClose = openPositions;
+  if (opts?.fxMarketClosed) {
+    const cryptoSymbols = new Set(["BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "LTCUSD", "ADAUSD", "DOTUSD", "DOGEUSD", "AVAXUSD", "LINKUSD"]);
+    const cryptoOnly = openPositions.filter((p: any) => {
+      const sym = (p.symbol || "").replace("/", "").toUpperCase();
+      return cryptoSymbols.has(sym) || sym.endsWith("USD") && sym.startsWith("BTC") || sym.startsWith("ETH");
+    });
+    const fxSkipped = openPositions.length - cryptoOnly.length;
+    if (fxSkipped > 0) {
+      console.log(`[prop-firm-emergency] FX market closed — skipping ${fxSkipped} FX position(s), only closing ${cryptoOnly.length} crypto position(s)`);
+    }
+    positionsToClose = cryptoOnly;
+  }
+
   let closedCount = 0;
 
-  for (const pos of openPositions) {
+  for (const pos of positionsToClose) {
     try {
       const entry = parseFloat(pos.entry_price || "0");
       const current = parseFloat(pos.current_price || pos.entry_price || "0");
