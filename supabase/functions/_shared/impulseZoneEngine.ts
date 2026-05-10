@@ -13,7 +13,7 @@
  */
 
 import type {
-  Candle, SwingPoint, OrderBlock, FairValueGap, StructureBreak,
+  Candle, SwingPoint, OrderBlock, FairValueGap, StructureBreak, BreakerBlock, FibLevel, FibLevels,
 } from "./smcAnalysis.ts";
 import {
   analyzeMarketStructure, detectOrderBlocks, detectFVGs, calculateATR,
@@ -49,7 +49,9 @@ export interface RankedPOI {
   refinedEntry?: number;  // Precise entry from LTF refinement
   refinedSL?: number;     // Precise SL from LTF refinement
   ltfType?: "ob" | "fvg";
-  totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1)
+  htfConfluenceScore: number; // Score from HTF confluence layers (4H OB/FVG/Breaker, HTF Fib, P/D)
+  htfLayers: string[];        // Labels of HTF layers that overlap this zone
+  totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1) + htfConfluenceScore
 }
 
 export interface BestZone {
@@ -59,6 +61,15 @@ export interface BestZone {
   distanceToZone: number; // Distance in price units (0 if at zone)
 }
 
+export interface HTFConfluenceData {
+  h4OBs: OrderBlock[];
+  h4FVGs: FairValueGap[];
+  h4Breakers: BreakerBlock[];
+  htfFibLevels: FibLevels | null;
+  dailyFibLevels?: FibLevels | null;
+  htfPD: { currentZone: string; zonePercent: number; oteZone: boolean } | null;
+  direction: "bullish" | "bearish";
+}
 export interface ZoneEngineResult {
   bestZone: BestZone | null;
   impulse: ImpulseLeg | null;
@@ -364,6 +375,8 @@ export function overlayFibOnPOIs(
       fibScore,
       srConfirmed: false,
       ltfRefined: false,
+      htfConfluenceScore: 0,
+      htfLayers: [],
       totalScore: fibScore, // Will be updated by subsequent steps
     });
   }
@@ -424,7 +437,7 @@ export function checkHistoricalSR(
     for (const sr of srLevels) {
       if (sr >= zoneLow && sr <= zoneHigh) {
         zone.srConfirmed = true;
-        zone.totalScore = zone.fibScore + 1; // +1 for S/R confirmation
+        zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
         break;
       }
     }
@@ -466,7 +479,139 @@ function findCloseClusters(
   return clusters.map(c => c.level);
 }
 
-// ─── 5. refineLowerTF ─────────────────────────────────────────────────────────
+// ─── 5. checkHTFConfluence ───────────────────────────────────────────────────
+
+/**
+ * Score each zone by how many higher-timeframe confluence layers overlap it.
+ *
+ * Layers checked:
+ *   - 4H Order Block overlaps zone:        +1
+ *   - 4H FVG overlaps zone:                +1
+ *   - 4H Breaker (active) overlaps zone:   +1
+ *   - HTF Fib 61.8%/71%/78.6% inside zone: +1.5
+ *   - HTF Fib 50% inside zone:             +0.5
+ *   - P/D alignment (discount for longs,
+ *     premium for shorts):                 +0.5
+ *
+ * Maximum HTF confluence score: 5.5
+ *
+ * @param zones - Ranked POIs (after S/R check)
+ * @param htfData - Higher-timeframe analysis data from bot-scanner
+ * @returns Same zones with htfConfluenceScore and htfLayers populated
+ */
+export function checkHTFConfluence(
+  zones: RankedPOI[],
+  htfData: HTFConfluenceData,
+): RankedPOI[] {
+  if (zones.length === 0) return zones;
+
+  for (const zone of zones) {
+    let score = 0;
+    const layers: string[] = [];
+    const zoneHigh = zone.poi.high;
+    const zoneLow = zone.poi.low;
+
+    // ── 4H Order Blocks ──
+    for (const ob of htfData.h4OBs) {
+      // Only consider OBs aligned with trade direction and not broken/mitigated
+      if (ob.state === "broken" || ob.state === "mitigated") continue;
+      if (
+        (htfData.direction === "bullish" && ob.type !== "bullish") ||
+        (htfData.direction === "bearish" && ob.type !== "bearish")
+      ) continue;
+      // Overlap check: max(zone.low, ob.low) <= min(zone.high, ob.high)
+      if (Math.max(zoneLow, ob.low) <= Math.min(zoneHigh, ob.high)) {
+        score += 1;
+        layers.push("4H_OB");
+        break; // Count at most once per layer type
+      }
+    }
+
+    // ── 4H Fair Value Gaps ──
+    for (const fvg of htfData.h4FVGs) {
+      if (fvg.state === "filled") continue;
+      if (
+        (htfData.direction === "bullish" && fvg.type !== "bullish") ||
+        (htfData.direction === "bearish" && fvg.type !== "bearish")
+      ) continue;
+      if (Math.max(zoneLow, fvg.low) <= Math.min(zoneHigh, fvg.high)) {
+        score += 1;
+        layers.push("4H_FVG");
+        break;
+      }
+    }
+
+    // ── 4H Breaker Blocks ──
+    for (const bb of htfData.h4Breakers) {
+      if (!bb.isActive || bb.state === "broken") continue;
+      // Breaker alignment: bullish_breaker for bullish direction, bearish_breaker for bearish
+      if (
+        (htfData.direction === "bullish" && bb.type !== "bullish_breaker") ||
+        (htfData.direction === "bearish" && bb.type !== "bearish_breaker")
+      ) continue;
+      if (Math.max(zoneLow, bb.low) <= Math.min(zoneHigh, bb.high)) {
+        score += 1;
+        layers.push("4H_BREAKER");
+        break;
+      }
+    }
+
+    // ── HTF Fib Levels ──
+    // Check both 4H and daily Fib levels if available
+    const fibSources: { levels: FibLevels; prefix: string }[] = [];
+    if (htfData.htfFibLevels) fibSources.push({ levels: htfData.htfFibLevels, prefix: "HTF" });
+    if (htfData.dailyFibLevels) fibSources.push({ levels: htfData.dailyFibLevels, prefix: "D1" });
+
+    let bestFibScore = 0;
+    let bestFibLabel = "";
+    for (const { levels, prefix } of fibSources) {
+      for (const fib of levels.retracements) {
+        if (fib.price >= zoneLow && fib.price <= zoneHigh) {
+          // Premium Fib levels (61.8%, 71%, 78.6%) get +1.5
+          if (fib.ratio === 0.618 || fib.ratio === 0.71 || fib.ratio === 0.786) {
+            if (1.5 > bestFibScore) {
+              bestFibScore = 1.5;
+              bestFibLabel = `${prefix}_FIB_${(fib.ratio * 100).toFixed(1)}`;
+            }
+          }
+          // 50% Fib gets +0.5
+          else if (fib.ratio === 0.5) {
+            if (0.5 > bestFibScore) {
+              bestFibScore = 0.5;
+              bestFibLabel = `${prefix}_FIB_50.0`;
+            }
+          }
+        }
+      }
+    }
+    if (bestFibScore > 0) {
+      score += bestFibScore;
+      layers.push(bestFibLabel);
+    }
+
+    // ── Premium/Discount Alignment ──
+    if (htfData.htfPD) {
+      const pd = htfData.htfPD;
+      if (
+        (htfData.direction === "bullish" && pd.currentZone === "discount") ||
+        (htfData.direction === "bearish" && pd.currentZone === "premium")
+      ) {
+        score += 0.5;
+        layers.push("PD_ALIGNED");
+      }
+    }
+
+    // Update the zone
+    zone.htfConfluenceScore = score;
+    zone.htfLayers = layers;
+    // Recalculate totalScore to include HTF confluence
+    zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0);
+  }
+
+  return zones;
+}
+
+// ─── 6. refineLowerTF ─────────────────────────────────────────────────────────
 
 /**
  * Drop to 15m (LTF) to find a precise OB or FVG inside the best zone.
@@ -556,7 +701,7 @@ export function refineLowerTF(
   zone.refinedEntry = refinedEntry;
   zone.refinedSL = refinedSL;
   zone.ltfType = bestLTF.type;
-  zone.totalScore = zone.fibScore + (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
+  zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
 
   return zone;
 }
@@ -568,9 +713,10 @@ export function refineLowerTF(
  *
  * Scoring:
  *   - Fib depth: 78.6% = 4, 71% = 3, 61.8% = 2, 50% = 1
+ *   - HTF confluence: up to +5 (4H OB +1, FVG +1, Breaker +1, HTF Fib +1.5, P/D +0.5)
  *   - S/R confirmed: +1
  *   - LTF refined: +1
- *   - Maximum possible score: 6
+ *   - Maximum possible score: 11
  *
  * @param zones - All ranked POIs after S/R check and LTF refinement
  * @returns The highest-scoring zone, or null if none qualify
@@ -582,7 +728,7 @@ export function rankAndSelectBestZone(
 
   // Recalculate total scores
   for (const zone of zones) {
-    zone.totalScore = zone.fibScore + (zone.srConfirmed ? 1 : 0) + (zone.ltfRefined ? 1 : 0);
+    zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0) + (zone.ltfRefined ? 1 : 0);
   }
 
   // Sort by totalScore descending, then by fibDepth descending (tiebreaker)
@@ -599,7 +745,7 @@ export function rankAndSelectBestZone(
 // ─── 7. Main Entry Point: findBestEntryZone ───────────────────────────────────
 
 /**
- * Full pipeline: find impulse → map POIs → Fib overlay → S/R check → LTF refine → rank.
+ * Full pipeline: find impulse → map POIs → Fib overlay → S/R check → HTF confluence → LTF refine → rank.
  *
  * This is the function called by bot-scanner as a prerequisite gate.
  *
@@ -607,6 +753,7 @@ export function rankAndSelectBestZone(
  * @param entryCandles - 15m candles (for LTF refinement)
  * @param direction - The bias direction from confluence analysis
  * @param currentPrice - Current price for "at zone" check
+ * @param htfData - Optional HTF confluence data (4H OBs, FVGs, Breakers, Fib, P/D)
  * @returns ZoneEngineResult with best zone or null + reason
  */
 export function findBestEntryZone(
@@ -614,6 +761,7 @@ export function findBestEntryZone(
   entryCandles: Candle[],
   direction: "bullish" | "bearish",
   currentPrice: number,
+  htfData?: HTFConfluenceData,
 ): ZoneEngineResult {
   // Step 1: Find impulse leg
   const impulse = findImpulseLeg(htfCandles, direction);
@@ -651,7 +799,12 @@ export function findBestEntryZone(
   // Step 4: Check historical S/R
   rankedZones = checkHistoricalSR(htfCandles, rankedZones, impulse.startIndex);
 
-  // Step 5: LTF refinement on top zones (only refine top 3 to save compute)
+  // Step 5: HTF confluence scoring (if data available)
+  if (htfData) {
+    rankedZones = checkHTFConfluence(rankedZones, htfData);
+  }
+
+  // Step 6: LTF refinement on top zones (only refine top 3 to save compute)
   const topZones = rankedZones.slice(0, 3);
   for (let i = 0; i < topZones.length; i++) {
     topZones[i] = refineLowerTF(entryCandles, topZones[i]);
@@ -708,8 +861,8 @@ export function findBestEntryZone(
     impulse,
     allZones: rankedZones,
     reason: priceAtZone
-      ? `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/6) — price AT zone`
-      : `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/6) — price ${distanceToZone.toFixed(5)} away`,
+      ? `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — price AT zone`
+      : `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — price ${distanceToZone.toFixed(5)} away`,
   };
 }
 
@@ -745,6 +898,7 @@ export interface MultiTFZoneResult {
  * @param entryCandles - Entry TF candles (15m) for LTF refinement
  * @param direction  - Trade direction
  * @param currentPrice - Current market price for proximity check
+ * @param htfData - Optional HTF confluence data (4H OBs, FVGs, Breakers, Fib, P/D)
  */
 export function findBestEntryZoneMultiTF(
   h1Candles: Candle[],
@@ -752,14 +906,15 @@ export function findBestEntryZoneMultiTF(
   entryCandles: Candle[],
   direction: "bullish" | "bearish",
   currentPrice: number,
+  htfData?: HTFConfluenceData,
 ): MultiTFZoneResult {
   // Always run 1H
-  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice);
+  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData);
 
   // Run 4H only if sufficient candles
   let h4Result: ZoneEngineResult | null = null;
   if (h4Candles.length >= 20) {
-    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice);
+    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData);
   }
 
   // Combine all zones from both TFs for transparency
