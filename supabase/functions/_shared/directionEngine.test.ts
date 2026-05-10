@@ -488,3 +488,37 @@ Deno.test("HYSTERESIS: source code contains hysteresis check for opposing CHoCH"
   assertEquals(source.includes("Absence of confirmation"), true,
     "directionEngine.ts should contain the hysteresis comment explaining the principle");
 });
+
+// ─── Default Config Guard: useSimpleDirection must be true ──────────────────
+// Ensures the bot-scanner default config has useSimpleDirection enabled fleet-wide.
+// If someone accidentally reverts this to false, this test catches it.
+
+Deno.test("GUARD: bot-scanner DEFAULTS has useSimpleDirection = true", () => {
+  const source = Deno.readTextFileSync(
+    new URL("../bot-scanner/index.ts", import.meta.url).pathname
+  );
+  // Check the DEFAULTS object (line ~167)
+  const defaultsMatch = source.match(/const DEFAULTS\s*=\s*\{[\s\S]*?\n\};/);
+  if (!defaultsMatch) {
+    throw new Error("Could not find DEFAULTS object in bot-scanner/index.ts");
+  }
+  assertEquals(
+    defaultsMatch[0].includes("useSimpleDirection: true"),
+    true,
+    "DEFAULTS.useSimpleDirection must be true (direction engine with hysteresis should be the default)",
+  );
+});
+
+Deno.test("GUARD: bot-scanner config merge falls back to useSimpleDirection = true", () => {
+  const source = Deno.readTextFileSync(
+    new URL("../bot-scanner/index.ts", import.meta.url).pathname
+  );
+  // Check the config merge line (line ~773)
+  // Pattern: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true
+  const mergePattern = /useSimpleDirection:\s*strategy\.useSimpleDirection\s*\?\?\s*raw\.useSimpleDirection\s*\?\?\s*true/;
+  assertEquals(
+    mergePattern.test(source),
+    true,
+    "Config merge must fall back to useSimpleDirection = true (not false)",
+  );
+});

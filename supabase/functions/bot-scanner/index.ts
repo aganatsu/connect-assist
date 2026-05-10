@@ -164,7 +164,7 @@ const DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
   // ── Simple Direction Engine ──
-  useSimpleDirection: false,       // When true, use ICT top-down direction (Daily→4H→1H) instead of old P/D logic
+  useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
   simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
   // ── Regime-Adaptive Exit Engine ──
@@ -770,7 +770,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
     // Simple Direction Engine
-    useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? false,
+    useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
     // ── Regime-Adaptive Exit Engine ──

@@ -1,27 +1,32 @@
-# Task: Direction Engine Hysteresis Fix
+# Task: direction-hysteresis
 
 ## Branch: manus/direction-hysteresis
 
 ## Behavior changes
 
-1. **Path 3 (h4Retrace=true, h1Confirmed=false):** Previously returned `direction: null` unconditionally. Now returns the bias-derived direction (`"long"` or `"short"`) UNLESS there is an active opposing 1H CHoCH signal within the lookback window. If an opposing CHoCH IS present, direction is nullified as before.
+1. **Direction engine hysteresis (paths 3 & 4 in `determineDirection`):** When the 4H is retracing and the 1H has no recent confirming BOS, the engine no longer nullifies direction. Instead it checks for an **opposing 1H CHoCH**. If no opposing CHoCH exists, direction is maintained. If an opposing CHoCH is found, direction is nullified. This prevents flip-flopping when a BOS simply ages out of the lookback window.
 
-2. **Path 4 (h4Retrace=false, h1Confirmed=false):** Same change — direction is maintained via hysteresis unless an opposing 1H CHoCH is detected.
-
-**Net effect:** Pairs that previously flip-flopped between `direction: "long"`/`"short"` (when 1H BOS was in the lookback window) and `direction: null` (when the BOS rolled off the window) will now hold a stable direction. Direction is only nullified by a genuine opposing signal (1H CHoCH against bias), not by the absence of a confirming signal.
+2. **`useSimpleDirection` now defaults to `true` for all pairs.** Previously defaulted to `false`, meaning the old `confluenceScoring.ts` P/D logic determined direction. Now all pairs use the ICT top-down direction engine (Daily→4H→1H) with hysteresis, unless explicitly overridden to `false` in the database/strategy config. This means:
+   - Pairs like BTC/USD and ETH/USD that previously showed "No direction determined" will now get a direction from the new engine.
+   - More pairs will proceed to impulse zone detection where they previously were skipped.
+   - Any pair with `useSimpleDirection: false` explicitly set in the database will continue to use the old logic (the DB value takes precedence over the default).
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
 | `supabase/functions/_shared/directionEngine.ts` | Added hysteresis logic to paths 3 and 4: check for opposing 1H CHoCH before nullifying direction. If no opposing signal exists, direction is maintained. |
-| `supabase/functions/_shared/directionEngine.test.ts` | Updated existing test for non-deterministic data; added 4 new hysteresis regression tests. |
+| `supabase/functions/bot-scanner/index.ts` **(CAUTION FILE)** | Two changes: (1) Line 167: `DEFAULTS.useSimpleDirection` changed from `false` to `true`. (2) Line 773: Config merge fallback changed from `?? false` to `?? true`. Without the line 773 change, the DEFAULTS change would have no effect because the merge function had a hardcoded `false` fallback that didn't reference DEFAULTS. |
+| `supabase/functions/_shared/directionEngine.test.ts` | Updated existing test for non-deterministic data; added 4 hysteresis regression tests + 2 guard tests for the default config. |
 
-## directionEngine.ts changes (caution file — detailed explanation)
+## bot-scanner/index.ts changes (caution file — detailed explanation)
 
-**What changed:** Paths 3 and 4 in `determineDirection()` previously returned `direction: null` unconditionally when `h1Confirmed=false`. The fix adds a hysteresis check: before nullifying, it scans recent 1H CHoCH breaks for an opposing signal (bearish CHoCH when bias is bullish, or vice versa). Only if such a signal exists does direction become null. Otherwise, the bias-derived direction is maintained.
+**What changed:** Two lines in `bot-scanner/index.ts`:
 
-**Why:** The original logic treated "absence of confirming BOS" as equivalent to "invalidation." In practice, the 1H BOS that confirmed direction would roll off the 8-candle lookback window between scans, causing direction to flip-flop between `"long"` and `null` on consecutive 5-minute scan cycles. This is not a genuine market signal — it's a window artifact. The fix distinguishes between "no confirmation" (harmless, direction holds) and "active opposing signal" (genuine reversal, direction nullified).
+- **Line 167 (DEFAULTS object):** `useSimpleDirection: false` → `useSimpleDirection: true`. This is the default config that applies when no DB/strategy override exists.
+- **Line 773 (config merge):** `strategy.useSimpleDirection ?? raw.useSimpleDirection ?? false` → `?? true`. This is the per-pair config builder. It was hardcoding `false` as the final fallback instead of referencing DEFAULTS, so changing DEFAULTS alone would have been a no-op.
+
+**Why:** The direction engine with hysteresis was already written and tested, but it was behind an opt-in flag (`useSimpleDirection: false` by default). Pairs like BTC/USD that didn't have this flag set in the database were still using the old `confluenceScoring.ts` P/D logic, which returned `direction: null` in many valid scenarios (e.g., ranging structure + neutral fractals). Flipping the default to `true` activates the new engine fleet-wide.
 
 **No gate definitions, factor weights, or smcAnalysis.ts were modified.**
 
@@ -33,42 +38,47 @@
 | `HYSTERESIS: direction nullified when 1H CHoCH against bias appears` | Daily bullish + 4H retracing + 1H bearish CHoCH → direction = null |
 | `HYSTERESIS: consecutive scans without 1H confirmation produce stable direction` | Two identical calls produce identical direction (no flip-flop) |
 | `HYSTERESIS: source code contains hysteresis check for opposing CHoCH` | Structural guard verifying key variables/comments exist in source |
+| `GUARD: bot-scanner DEFAULTS has useSimpleDirection = true` | Reads bot-scanner source, verifies DEFAULTS object has `useSimpleDirection: true` |
+| `GUARD: bot-scanner config merge falls back to useSimpleDirection = true` | Reads bot-scanner source, verifies config merge line falls back to `true` (not `false`) |
 
 ## Tests run
 
 ```
 $ deno test --allow-all --no-check --ignore="src/test/example.test.ts"
-ok | 469 passed | 0 failed (8s)
+FAILED | 470 passed | 1 failed (7s)
 ```
 
-Pre-existing failures (confirmed on `main` branch, unrelated to this change):
-- `src/test/example.test.ts`: Vitest import error (not a Deno test)
-- `impulseZoneEngine.test.ts:949`: ETH-like bearish impulse assertion (pre-existing on main)
+The 1 failure is **pre-existing** and unrelated to this change:
+- `impulseZoneEngine.test.ts:949`: ETH-like bearish impulse assertion (confirmed failing on `main` before any changes)
+
+All 20 direction engine tests pass (including the 6 new ones).
 
 ## Regression check
 
 1. Verified that the `impulseZoneEngine.test.ts` failure exists identically on `main` (not introduced by this change).
-2. All 469 passing tests continue to pass.
-3. The hysteresis tests use deterministic candle fixtures that produce verified structure (BOS, CHoCH) via `analyzeMarketStructure`, ensuring the tests are not brittle.
-4. The change is additive: paths that previously returned `direction: null` now check for an opposing signal first. If an opposing signal IS present, behavior is identical to before (null). Only the "no opposing signal" case changes.
+2. All 470 passing tests continue to pass.
+3. Ran `determineDirection` on real BTC/USD candle data (89 daily, 2153 4H, 8614 1H candles from Yahoo Finance as of 2026-05-10). Confirmed: with hysteresis, BTC/USD gets `direction = "long"` (daily bullish, 4H retracing, 1H ranging with no opposing CHoCH). Without hysteresis, same input produces `direction = null`.
+4. The hysteresis tests use deterministic candle fixtures that produce verified structure (BOS, CHoCH) via `analyzeMarketStructure`, ensuring the tests are not brittle.
 
 ## Open questions
 
-1. **Lookback window size:** The opposing CHoCH check uses the same `h1BosLookback` (default 8 candles) as the BOS confirmation check. Should it use a different window?
-2. **4H CHoCH interaction:** When `h4ChochAgainst` is true, the function already returns null at an earlier check. The hysteresis only applies to the 1H confirmation layer. Is this the correct hierarchy?
+1. **Per-pair DB overrides:** Any pair that has `useSimpleDirection: false` explicitly in the database will still use the old logic. Should those be cleaned up, or is the intent that some pairs can opt out?
+2. **Lookback window size:** The opposing CHoCH check uses the same `h1BosLookback` (default 8 candles) as the BOS confirmation check. Should it use a different window?
+3. **Pre-existing test failure:** `impulseZoneEngine.test.ts:949` fails on `main`. Unrelated but should be investigated separately.
 
 ## Suggested PR title and description
 
-**Title:** `[direction-hysteresis] Fix direction flip-flop: maintain direction via hysteresis when 1H BOS rolls off lookback window`
+**Title:** `[direction-hysteresis] Enable direction engine fleet-wide with hysteresis fix`
 
 **Description:**
 
-Fixes the bug where direction oscillates between `"long"`/`"short"` and `null` on consecutive scans because the confirming 1H BOS rolls off the 8-candle lookback window.
+Fixes direction flip-flopping caused by 1H BOS aging out of the lookback window. The direction engine now applies hysteresis: direction is only nullified when an active opposing 1H CHoCH is detected, not when confirming BOS simply rolls off.
 
-**Root cause:** Paths 3 and 4 in `determineDirection()` unconditionally nullified direction when `h1Confirmed=false`, treating absence of confirmation as invalidation.
+Also enables `useSimpleDirection` by default for all pairs (was `false`), so the ICT top-down direction engine replaces the old P/D logic fleet-wide. Pairs like BTC/USD that previously showed "No direction determined" will now get direction from the new engine.
 
-**Fix:** Added hysteresis check — direction is only nullified when there's an active opposing 1H CHoCH within the lookback window. Absence of confirmation (BOS rolled off) now maintains the existing direction.
+**Behavior changes:**
+- More pairs will have non-null direction → more impulse zone evaluations → potentially more trade signals
+- Direction is more stable between scans (no flip-flop on BOS aging)
+- Any pair with explicit `useSimpleDirection: false` in DB is unaffected
 
-**Impact:** Pairs with valid setups will hold direction longer, reducing unnecessary scan-to-scan flip-flops. Direction is still nullified by genuine reversal signals (opposing CHoCH).
-
-4 regression tests added. All 469 existing tests pass.
+6 regression tests added. 470 existing tests pass (1 pre-existing failure unrelated).
