@@ -727,28 +727,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         detail += ` | Price beyond 100% retracement (${retrace.toFixed(1)}%) — thesis invalidated`;
       } else if (swingTradeAlignment === "counter") {
         // ── COUNTER-SWING ENTRY (reversal trade) ──
-        // Trading against the last swing. For this to be a good entry:
-        //   - LOW retrace = price is near the swing extreme = good reversal entry
-        //   - HIGH retrace = price already moved in your direction = you're late
-        // Invert the scoring: low retrace scores high, high retrace scores low.
-        // Also cap the max score lower than aligned entries (reversals are inherently riskier).
-        if (retrace <= 23.6) {
-          // Price near the swing extreme — excellent reversal entry point
-          pts = 1.5;
-          detail += ` | COUNTER-SWING: Near swing extreme (${retrace.toFixed(1)}% retrace) — strong reversal entry`;
-        } else if (retrace <= 38.2) {
-          // Still close to the extreme — decent reversal entry
-          pts = 1.0;
-          detail += ` | COUNTER-SWING: Fib 23.6–38.2% from extreme (${retrace.toFixed(1)}%) — valid reversal`;
-        } else if (retrace <= 50) {
-          // At equilibrium — mediocre reversal entry
-          pts = 0.5;
-          detail += ` | COUNTER-SWING: Near equilibrium (${retrace.toFixed(1)}%) — late reversal entry`;
-        } else {
-          // Price has already moved significantly in your trade direction — you're chasing
-          pts = 0;
-          detail += ` | COUNTER-SWING: Price already moved ${retrace.toFixed(1)}% — chasing, no Fib confluence`;
-        }
+        // The impulse zone gate requires a valid zone at >= 50% Fib depth.
+        // Counter-swing scoring inflates confluence on setups that can't execute
+        // through the impulse zone framework. Score 0 — the impulse zone engine
+        // handles entry validation, not the P/D factor.
+        pts = 0;
+        detail += ` | COUNTER-SWING: ${retrace.toFixed(1)}% retrace — no P/D score (impulse zone gate handles entry)`;
       } else {
         // ── ALIGNED ENTRY (continuation/pullback trade) ──
         // Trading with the swing. Standard retracement scoring:
@@ -766,22 +750,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           // Discount/premium zone (beyond equilibrium but not OTE)
           pts = 1.0;
           detail += ` | ${fibDirection === "long" ? "Discount" : "Premium"} zone (${retrace.toFixed(1)}%)`;
-        } else if (retrace >= 38.2 && retrace <= 50) {
-          // Shallow retracement
-          pts = 0.5;
-          detail += ` | Shallow retracement (${retrace.toFixed(1)}%)`;
-        } else if (retrace >= 23.6 && retrace < 38.2) {
-          // 0.236 level — regime-dependent scoring
-          if (isStrongRegime && isAccelerating) {
-            pts = 0.75;
-            detail += ` | Fib 23.6% continuation (strong trend + accelerating) — valid shallow entry`;
-          } else if (isStrongRegime) {
-            pts = 0.5;
-            detail += ` | Fib 23.6% pullback (strong trend) — moderate entry`;
-          } else {
-            pts = 0.25;
-            detail += ` | Fib 23.6% pullback (weak regime) — minimal confluence`;
-          }
+        } else if (retrace >= 23.6 && retrace <= 50) {
+          // Below 50% — impulse zone gate requires >= 50% depth for entry.
+          // Scoring here would inflate confluence on levels we can't trade.
+          // pts stays 0.
+          detail += ` | Fib ${retrace.toFixed(1)}% — below 50% threshold (no score, impulse zone requires deeper pullback)`;
         } else if (retrace > 78.6) {
           // Deep retracement — risky but still in play
           pts = 0.5;
