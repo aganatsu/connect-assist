@@ -3544,7 +3544,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
       }
     } else {
-      (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: analysis.direction ? "Insufficient 1H candles" : "No direction determined", impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
+      const dirReason = !analysis.direction && simpleDirectionResult?.reason
+        ? `No direction: ${simpleDirectionResult.reason}`
+        : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
+      (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
+        directionDetail: simpleDirectionResult ? {
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+        } : null,
+      };
     }
 
     // ── Attach Simple Direction data to detail for dashboard ──

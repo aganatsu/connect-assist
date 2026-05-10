@@ -3,6 +3,9 @@
  * Shows zone status, selected timeframe, Fib alignment, S/R confirmation, LTF refinement,
  * and scoring impact.
  *
+ * When direction is null (no zone search ran), shows the direction engine's reason
+ * so the user understands what needs to happen for a zone to appear.
+ *
  * Expects `impulseZone` data from the scan detail object (detail.impulseZone).
  */
 
@@ -34,6 +37,13 @@ interface ImpulseZoneData {
   h1HasZone: boolean;
   h4HasZone: boolean;
   scoringEnabled?: boolean;
+  directionDetail?: {
+    bias: "bullish" | "bearish" | null;
+    biasSource: "daily" | "4h" | null;
+    h4Retrace: boolean;
+    h4ChochAgainst: boolean;
+    h1Confirmed: boolean;
+  } | null;
 }
 
 interface Props {
@@ -43,7 +53,7 @@ interface Props {
 export function ImpulseZonePanel({ data }: Props) {
   if (!data) return null;
 
-  const { hasZone, selectedTF, reason, impulse, bestZone, allZonesCount, h1HasZone, h4HasZone, scoringEnabled } = data;
+  const { hasZone, selectedTF, reason, impulse, bestZone, allZonesCount, h1HasZone, h4HasZone, scoringEnabled, directionDetail } = data;
 
   // Color scheme based on zone status
   const borderColor = hasZone
@@ -193,11 +203,47 @@ export function ImpulseZonePanel({ data }: Props) {
         </div>
       )}
 
-      {/* Reason (collapsed for brevity, shown on no-zone) */}
+      {/* No-zone explanation — show direction engine detail when available */}
       {!hasZone && (
-        <p className="text-[7px] text-muted-foreground leading-tight truncate" title={reason}>
-          {reason}
-        </p>
+        <div className="space-y-1">
+          {directionDetail ? (
+            <div className="space-y-0.5">
+              {/* Direction engine status badges */}
+              <div className="flex items-center gap-1 flex-wrap">
+                {directionDetail.bias && (
+                  <span className={`text-[7px] font-mono px-1 py-0.5 rounded ${
+                    directionDetail.bias === "bullish" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"
+                  }`}>
+                    {directionDetail.biasSource?.toUpperCase()} {directionDetail.bias === "bullish" ? "↑ BULL" : "↓ BEAR"}
+                  </span>
+                )}
+                {!directionDetail.bias && (
+                  <span className="text-[7px] font-mono px-1 py-0.5 rounded bg-zinc-500/15 text-zinc-400">
+                    NO BIAS
+                  </span>
+                )}
+                <span className={`text-[7px] font-mono px-1 py-0.5 rounded ${
+                  directionDetail.h4Retrace ? "bg-amber-500/15 text-amber-300" : "bg-zinc-500/10 text-zinc-500"
+                }`}>
+                  4H {directionDetail.h4ChochAgainst ? "✗ CHoCH AGAINST" : directionDetail.h4Retrace ? "↩ RETRACE" : "— intact"}
+                </span>
+                <span className={`text-[7px] font-mono px-1 py-0.5 rounded ${
+                  directionDetail.h1Confirmed ? "bg-emerald-500/15 text-emerald-300" : "bg-zinc-500/10 text-zinc-500"
+                }`}>
+                  1H {directionDetail.h1Confirmed ? "✓ CONFIRMED" : "✗ waiting"}
+                </span>
+              </div>
+              {/* Full reason text */}
+              <p className="text-[7px] text-muted-foreground leading-tight" title={reason}>
+                {reason}
+              </p>
+            </div>
+          ) : (
+            <p className="text-[7px] text-muted-foreground leading-tight truncate" title={reason}>
+              {reason}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
