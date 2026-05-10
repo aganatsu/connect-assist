@@ -27,7 +27,7 @@ export interface ImpulseLeg {
   direction: "bullish" | "bearish";
   startIndex: number;   // Index of the swing that started the move
   endIndex: number;     // Index of the BOS candle
-  isValid: boolean;     // Passes the 50% pullback rule
+  isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
 }
 
@@ -96,9 +96,13 @@ const PRICE_AT_ZONE_ATR_MULT = 1.5;
 
 /**
  * Find the most recent impulse leg that broke structure.
+ * An impulse leg is the entire move from a swing origin to a BOS/CHoCH.
+ * The impulse is valid as long as the origin has not been broken:
+ *   - Bullish: valid while price hasn't closed below the swing low origin
+ *   - Bearish: valid while price hasn't closed above the swing high origin
+ * Internal pullbacks (wave 2/4 in impulsive wave structure) are expected
+ * and do NOT invalidate the impulse.
  *
- * An impulse leg is defined as the entire move from a swing point to a BOS,
- * where NO internal pullback exceeds 50% of the leg at that point.
  *
  * @param candles - 1H or 4H candles (must have structure analysis available)
  * @param direction - The bias direction we're looking for
@@ -127,7 +131,8 @@ export function findImpulseLeg(
 }
 
 /**
- * Given a BOS, trace back to find the swing origin and validate the 50% rule.
+ * Given a BOS, trace back to find the swing origin and validate that the
+ * origin has not been broken by subsequent price action (after the BOS).
  */
 function validateImpulseFromBOS(
   candles: Candle[],
@@ -167,10 +172,23 @@ function validateImpulseFromBOS(
     const impulseRange = impulseHigh - impulseLow;
     if (impulseRange <= 0) continue;
 
-    // Validate: no internal pullback exceeds 50% of the leg at that point
-    const isValid = checkNoPullbackExceeds50(candles, startIdx, endIdx, direction);
+    // Validate: origin not broken — check candles AFTER the BOS to see if
+    // price has retraced past the impulse origin (invalidating the leg).
+    // Internal pullbacks within the impulse are expected (wave structure).
+    const originPrice = direction === "bullish" ? impulseLow : impulseHigh;
+    let originBroken = false;
+    for (let j = endIdx + 1; j < candles.length; j++) {
+      if (direction === "bullish" && candles[j].close < originPrice) {
+        originBroken = true;
+        break;
+      }
+      if (direction === "bearish" && candles[j].close > originPrice) {
+        originBroken = true;
+        break;
+      }
+    }
 
-    if (isValid) {
+    if (!originBroken) {
       return {
         high: impulseHigh,
         low: impulseLow,
@@ -186,59 +204,11 @@ function validateImpulseFromBOS(
   return null;
 }
 
-/**
- * Check that no internal pullback within the impulse exceeds 50% of the leg
- * measured at that point in the move.
- */
-function checkNoPullbackExceeds50(
-  candles: Candle[],
-  startIdx: number,
-  endIdx: number,
-  direction: "bullish" | "bearish",
-): boolean {
-  if (direction === "bullish") {
-    // Bullish impulse: price moves up. Track running high.
-    // A pullback is when price drops from the running high.
-    // If pullback > 50% of (runningHigh - impulseStart.low), it fails.
-    const startLow = candles[startIdx].low;
-    let runningHigh = candles[startIdx].high;
-
-    for (let i = startIdx + 1; i <= Math.min(endIdx, candles.length - 1); i++) {
-      if (candles[i].high > runningHigh) {
-        runningHigh = candles[i].high;
-      }
-      // Check pullback from running high
-      const legAtThisPoint = runningHigh - startLow;
-      if (legAtThisPoint <= 0) continue;
-
-      const pullback = runningHigh - candles[i].low;
-      const pullbackPercent = pullback / legAtThisPoint;
-
-      if (pullbackPercent > 0.5) return false; // Exceeds 50%
-    }
-  } else {
-    // Bearish impulse: price moves down. Track running low.
-    const startHigh = candles[startIdx].high;
-    let runningLow = candles[startIdx].low;
-
-    for (let i = startIdx + 1; i <= Math.min(endIdx, candles.length - 1); i++) {
-      if (candles[i].low < runningLow) {
-        runningLow = candles[i].low;
-      }
-      // Check pullback from running low (price going up = pullback in bearish)
-      const legAtThisPoint = startHigh - runningLow;
-      if (legAtThisPoint <= 0) continue;
-
-      const pullback = candles[i].high - runningLow;
-      const pullbackPercent = pullback / legAtThisPoint;
-
-      if (pullbackPercent > 0.5) return false; // Exceeds 50%
-    }
-  }
-
-  return true;
-}
-
+// NOTE: checkNoPullbackExceeds50 was removed.
+// The 50% internal pullback rule incorrectly rejected valid impulsive waves
+// that have normal wave 2/4 corrections. Replaced with origin-not-broken
+// validation: an impulse is valid as long as price hasn't closed past the
+// swing origin that started the move.
 // ─── 2. mapImpulsePOIs ────────────────────────────────────────────────────────
 
 /**
@@ -652,7 +622,7 @@ export function findBestEntryZone(
       bestZone: null,
       impulse: null,
       allZones: [],
-      reason: `No valid ${direction} impulse leg found (no BOS or all pullbacks >50%)`,
+      reason: `No valid ${direction} impulse leg found (no BOS or origin broken)`,
     };
   }
 
