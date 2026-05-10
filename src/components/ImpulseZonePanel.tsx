@@ -239,7 +239,7 @@ export function ImpulseZonePanel({ data }: Props) {
               </p>
             </div>
           ) : (
-            <p className="text-[7px] text-muted-foreground leading-tight truncate" title={reason}>
+            <p className="text-[7px] text-muted-foreground leading-tight" title={reason}>
               {reason}
             </p>
           )}
