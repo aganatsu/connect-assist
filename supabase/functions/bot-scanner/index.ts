@@ -2781,9 +2781,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let propFirmGateResult: PropFirmGateResult | null = null;
   let propFirmSizeMultiplier = 1.0;
   try {
-    // Determine broker equity for live accounts
+    // Determine broker equity — fetch from MetaAPI whenever a broker connection exists
+    // (even in paper mode) so prop firm compliance tracks the real MT5 account
     let brokerEquity: number | undefined;
-    if (account.execution_mode === "live" && _scanBrokerConn) {
+    if (_scanBrokerConn) {
       try {
         const metaAccountId = _scanBrokerConn.account_id;
         const authToken = _scanBrokerConn.api_key;
@@ -2794,15 +2795,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (eqRes.ok) {
           const eqData = await eqRes.json();
           brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
+          console.log(`[prop-firm-gate] Broker equity fetched: $${brokerEquity.toFixed(2)}`);
+        } else {
+          console.warn(`[prop-firm-gate] Broker equity fetch returned ${eqRes.status}`);
         }
       } catch (e: any) {
-        console.warn(`[prop-firm-gate] Broker equity fetch failed (using paper): ${e?.message}`);
+        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${e?.message}`);
       }
     }
-
     propFirmGateResult = await runPropFirmGate(
       supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
-      { brokerEquity, isLiveAccount: account.execution_mode === "live", fxMarketClosed },
+      { brokerEquity, isLiveAccount: account.execution_mode === "live", hasBrokerConnection: !!_scanBrokerConn, fxMarketClosed },
     );
 
     if (propFirmGateResult.enabled) {

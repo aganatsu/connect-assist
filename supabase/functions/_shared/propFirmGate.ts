@@ -57,8 +57,9 @@ export async function runPropFirmGate(
   openPositions: any[],
   scanCycleId: string,
   opts?: {
-    brokerEquity?: number; // If live mode, pass actual broker equity
+    brokerEquity?: number; // Broker equity from MetaAPI (passed when any broker connection exists)
     isLiveAccount?: boolean; // Whether this is a live (broker-connected) account
+    hasBrokerConnection?: boolean; // Whether a broker connection exists (even in paper mode)
     fxMarketClosed?: boolean; // Whether FX market is currently closed (weekends)
   },
 ): Promise<PropFirmGateResult> {
@@ -83,16 +84,17 @@ export async function runPropFirmGate(
   const config: PropFirmConfig = pfConfig;
 
   // ── 2. Determine current equity ──
-  // For live accounts: use broker equity (includes floating P&L)
-  // For paper accounts: balance + sum of unrealized P&L from open positions
+  // Priority: broker equity (from MetaAPI) > paper balance + floating P&L
+  // Broker equity is fetched whenever a broker connection exists (even in paper mode)
+  // so prop firm compliance tracks the real MT5 account.
   let currentEquity: number;
   if (opts?.brokerEquity && opts.brokerEquity > 0) {
     currentEquity = opts.brokerEquity;
-  } else if (opts?.isLiveAccount) {
-    // SAFETY: Live account but broker equity fetch failed.
-    // Do NOT fall back to paper balance — it's almost certainly wrong.
+  } else if (opts?.isLiveAccount || opts?.hasBrokerConnection) {
+    // SAFETY: Broker connection exists but equity fetch failed.
+    // Do NOT fall back to paper balance — it may not reflect the real MT5 account.
     // Skip the prop firm gate entirely rather than act on bad data.
-    console.warn(`[prop-firm-gate] ⚠️ LIVE account but broker equity unavailable. Skipping prop firm check to avoid false emergency on stale/wrong data.`);
+    console.warn(`[prop-firm-gate] ⚠️ Broker connection exists but equity unavailable. Skipping prop firm check to avoid false emergency on stale/wrong data.`);
     return {
       enabled: true,
       allowed: true,
