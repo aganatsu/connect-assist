@@ -147,6 +147,11 @@ async function buildRateMap(): Promise<Record<string, number>> {
 }
 
 function calcPnl(dir: string, entry: number, current: number, size: number, symbol: string, rateMap?: Record<string, number>) {
+  // NaN guard: if entry or current is invalid, return zero P&L to prevent balance corruption
+  if (!Number.isFinite(entry) || !Number.isFinite(current) || !Number.isFinite(size) || entry <= 0 || current <= 0 || size <= 0) {
+    console.warn(`[calcPnl] Invalid inputs — entry=${entry}, current=${current}, size=${size}, symbol=${symbol}. Returning zero P&L.`);
+    return { pnl: 0, pnlPips: 0 };
+  }
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const diff = dir === "long" ? current - entry : entry - current;
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap || _rateMap);
