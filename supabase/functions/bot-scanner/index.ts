@@ -3698,7 +3698,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 initial_factors: presentFactors,
                 current_factors: presentFactors,
                 missing_factors: missingFactors,
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2),
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
                 sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
                 tp_level: analysis.takeProfit,
                 scan_cycles: 1,
@@ -3711,18 +3711,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 analysis_snapshot: {
                   score: analysis.score,
                   direction: analysis.direction,
-                  impulseZone: { zoneHigh: izData.bestZone.zoneHigh, zoneLow: izData.bestZone.zoneLow, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
+                  impulseZone: { zoneHigh: izData.bestZone.high, zoneLow: izData.bestZone.low, fibDepth: izData.bestZone.fibDepth, zoneScore: izData.bestZone.totalScore, refinedEntry: izData.bestZone.refinedEntry, impulse: izData.impulse },
                 },
               });
               stagedNew++;
-              console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.zoneLow?.toFixed(5)}-${izData.bestZone.zoneHigh?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
+              console.log(`[staging] NEW ZONE WATCH ${pair} ${analysis.direction} — zone at ${izData.bestZone.low?.toFixed(5)}-${izData.bestZone.high?.toFixed(5)}, score ${analysis.score.toFixed(1)}%`);
             } else {
               // Update existing staged with latest zone data
               await supabase.from("staged_setups").update({
                 current_score: analysis.score,
                 scan_cycles: existingStagedForZone.scan_cycles + 1,
                 last_eval_at: new Date().toISOString(),
-                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2),
+                entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
                 sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
               }).eq("id", existingStagedForZone.id);
               console.log(`[staging] Updated ZONE WATCH ${pair} ${analysis.direction} — cycle ${existingStagedForZone.scan_cycles + 1}`);
@@ -4295,11 +4295,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
         // Place position (market order — fallback when limit orders disabled or no zone found)
         // When impulse zone hard gate is active, use zone entry for market orders too
-        const marketEntryPrice = (izGateMode === "hard" && izData?.bestZone?.refinedEntry)
+        const rawMarketEntry = (izGateMode === "hard" && izData?.bestZone?.refinedEntry)
           ? izData.bestZone.refinedEntry
           : (izGateMode === "hard" && izData?.bestZone)
-            ? (izData.bestZone.zoneHigh + izData.bestZone.zoneLow) / 2
+            ? (izData.bestZone.high + izData.bestZone.low) / 2
             : analysis.lastPrice;
+        // Guard: if impulse zone data produced NaN/undefined, fall back to lastPrice
+        const marketEntryPrice = (typeof rawMarketEntry === "number" && !isNaN(rawMarketEntry) && rawMarketEntry > 0)
+          ? rawMarketEntry
+          : analysis.lastPrice;
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,

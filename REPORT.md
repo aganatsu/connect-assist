@@ -1,79 +1,43 @@
-# Task: Fix Impulse Zone Score Display & Live Price on Open Trades
-
-## Branch: manus/impulse-score-and-live-price-fix
-
+# Task: Fix NaN Entry Price on Market Orders
+## Branch: manus/fix-nan-entry-price
 ## Behavior changes
-
-1. **Impulse Zone score denominator changed from /6 to /11.** The UI now correctly reflects the actual maximum possible score (fibScore 4 + htfConfluence 5 + S/R 1 + LTF 1 = 11). Previously, scores above 6 appeared as "7/6" which was confusing and incorrect.
-
-2. **Open positions now show real-time prices on every dashboard poll.** The paper-trading `status` endpoint now calls `fetchLivePrice()` (TwelveData `/price` quote) for each unique symbol in open positions, updating `current_price` in-memory before PnL calculation. This means:
-   - Individual position PnL (`+$X.XX`) updates every poll cycle (~5s) instead of every scanner cycle (~5min)
-   - UNREALIZED total in the header updates accordingly
-   - Prices are also persisted to DB in a fire-and-forget pattern so subsequent polls are fast even if TwelveData is temporarily slow
+1. Market orders placed via the impulse zone hard gate now correctly use `bestZone.high` and `bestZone.low` (the actual property names) instead of the non-existent `bestZone.zoneHigh` / `bestZone.zoneLow`. Previously, all market orders with izGateMode="hard" had `entry_price: "NaN"` in the DB because `undefined + undefined = NaN`.
+2. Staged zone-watch setups now also use the correct property names for `entry_price` and `analysis_snapshot`.
+3. A NaN guard ensures that even if future changes introduce invalid zone data, the entry price will fall back to `analysis.lastPrice` rather than storing NaN.
 
 ## Files modified
+- `supabase/functions/bot-scanner/index.ts` — Fixed `.zoneHigh`/`.zoneLow` → `.high`/`.low` in 4 locations (market order entry, staging insert, staging update, analysis snapshot). Added NaN guard on `marketEntryPrice`.
+- `supabase/functions/bot-scanner/nanEntryPrice.test.ts` — New test file (4 tests).
 
-| File | Change |
-|------|--------|
-| `src/components/ImpulseZonePanel.tsx` | Changed hardcoded `/6` denominator to `/11` in score badge display |
-| `supabase/functions/paper-trading/index.ts` | Added unconditional live price refresh block before `processEngine` check in the `status` action handler |
-| `supabase/functions/paper-trading/livePriceStatus.test.ts` | New test file (6 tests) |
+### Extra caution note: bot-scanner/index.ts
 
-### Extra caution note: paper-trading/index.ts
-
-The change adds a new block (lines 782–809) that runs BEFORE the existing `processEngine` check. It:
-1. Deduplicates symbols from open positions
-2. Calls `fetchLivePrice()` (already existed in this file) for each symbol
-3. Updates `p.current_price` in-memory on the position objects
-4. Persists to DB in fire-and-forget (non-blocking)
-
-The existing `processEngine=true` path (SL/TP/trail/BE logic) is untouched and still runs its own `updatePositionPrices()` call when triggered. No trade execution, no broker mirroring, no gate logic affected.
+The change modifies the `marketEntryPrice` calculation at line 4298-4306 and the staging insert/update paths at lines 3701, 3714, 3718, 3725. The fix corrects property names that were always wrong (`.zoneHigh`/`.zoneLow` never existed on the bestZone object — they were always `undefined`). The NaN guard is a safety fallback that only activates for invalid values.
 
 ## Tests added
-
-| Test | Assertion |
-|------|-----------|
-| `status handler fetches live prices unconditionally for open positions` | Live price refresh block exists BEFORE processEngine check |
-| `live price refresh calls fetchLivePrice for each unique symbol` | Deduplicates symbols, calls fetchLivePrice, updates in-memory, persists to DB |
-| `posArr PnL uses current_price (now live) not entry_price` | calcPnl receives both entry_price and current_price |
-| `unrealizedPnl is sum of posArr.pnl (derived from live prices)` | unrealizedPnl = posArr.reduce(s + p.pnl) |
-| `equity returned as balance + unrealizedPnl` | Response includes equity: balance + unrealizedPnl |
-| `ImpulseZonePanel uses correct max score denominator of 11` | Panel source contains `/11`, not `/6` |
+- `marketEntryPrice: uses .high/.low from bestZone (not .zoneHigh/.zoneLow)` — Confirms the midpoint calculation works with correct property names
+- `marketEntryPrice: OLD bug with .zoneHigh/.zoneLow would produce NaN` — Proves the old code path produced NaN (regression guard)
+- `marketEntryPrice: NaN guard falls back to lastPrice` — Confirms the safety fallback works when zone data is invalid
+- `marketEntryPrice: uses refinedEntry when available` — Confirms refinedEntry takes priority when present
 
 ## Tests run
-
 ```
-$ deno test --no-check --allow-read
-ok | 519 passed | 4 failed (4s)
+With our changes:    488 passed | 15 failed (all pre-existing)
+Without our changes: 487 passed | 16 failed (all pre-existing)
+Net: +1 passing test improvement
 ```
-
-All 4 failures are **pre-existing** (confirmed by running same suite on main):
-- `src/test/example.test.ts` — boilerplate/environment test
-- 2x candleSource failover tests — require API keys not set in sandbox
-- `findImpulseLeg ETH-like` — flaky impulse zone edge case
 
 ## Regression check
-
-1. Stashed changes → ran full suite → 7 failures (4 pre-existing + 3 from our new tests correctly failing without the fix)
-2. Applied changes → ran full suite → 4 failures (all pre-existing)
-3. Net: 6 new tests pass, 0 existing tests broken
-4. The live price refresh is additive — it runs before the existing `processEngine` block and does not alter the engine processing path
+- The property name fix is a pure bug fix — `.zoneHigh`/`.zoneLow` never existed on the bestZone object, so the old code always produced NaN for the midpoint path. The new code produces the correct midpoint. No valid behavior is changed.
+- The NaN guard is a safety net that only activates when the computed value is invalid — it cannot change behavior for valid inputs.
+- Confirmed by running full test suite with and without changes.
 
 ## Open questions
-
-1. **TwelveData rate limits:** The status endpoint is polled every ~5 seconds. With 3 open positions across 2 symbols, that's 2 API calls per poll = ~24 calls/minute. TwelveData free tier allows 8 calls/minute. If you're on a paid plan this is fine; otherwise we may need to add a 30-second TTL cache to avoid hitting rate limits.
-
-2. **Redundant `updatePositionPrices` in processEngine block:** Now that we refresh prices unconditionally, the `updatePositionPrices()` call inside the `processEngine=true` block is redundant. Should I remove it, or leave it as a safety net?
+- The 3 existing open positions in the DB still have `entry_price: "NaN"`. You may want to manually update them with the correct entry prices (zone midpoints at open time). I can provide the SQL if needed.
 
 ## Suggested PR title and description
-
-**Title:** `[impulse-score-live-price] Fix live price display + correct impulse zone score denominator`
+**Title:** fix: NaN entry price on market orders (wrong bestZone property names)
 
 **Description:**
-Fixes two UI bugs:
+Market orders placed via the impulse zone hard gate used `izData.bestZone.zoneHigh` / `.zoneLow` — properties that don't exist on the bestZone object (which has `.high` / `.low`). This caused `undefined + undefined = NaN`, storing "NaN" as the entry_price in paper_positions.
 
-1. **Impulse Zone score showed X/6 when max is actually 11** — the denominator was hardcoded from before HTF confluence scoring was added. Now correctly shows X/11.
-
-2. **Open positions showed $0.00 PnL** — the `status` endpoint was read-only (only fetched DB values). Between scanner cycles (every 5 min), `current_price` stayed at entry price. Now fetches live quotes from TwelveData on every dashboard poll, giving real-time PnL updates.
-
-No changes to gate logic, scoring, or trade execution paths.
+Fixed all 4 references to use the correct property names. Added a NaN guard as a safety net. Staging inserts/updates had the same bug and are also fixed.
