@@ -3799,14 +3799,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors (${allPresent.join(", ")})`
             : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`;
 
+          // Each Tier 1 credit adds ~1.0 pts to tieredScore (conservative default)
+          const creditPts = izTier1Credits.length * 1.0;
+          const newTieredScore = ts.tieredScore + creditPts;
+          const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
+
           // Patch the tieredScoring in-place so Gate 19 sees the updated values
           analysis.tieredScoring = {
             ...ts,
             tier1Count: newTier1Count,
             tier1GatePassed: newPassed,
             tier1GateReason: newReason,
+            tieredScore: newTieredScore,
           };
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Impulse Zone Tier 1 credit: +${izTier1Credits.length} (${izTier1Credits.join(", ")}) → T1 count ${ts.tier1Count}→${newTier1Count}, gate ${newPassed ? "PASSED" : "still failed"}`);
+          analysis.score = newScore;
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Impulse Zone Tier 1 credit: +${izTier1Credits.length} (${izTier1Credits.join(", ")}) → T1 count ${ts.tier1Count}→${newTier1Count}, gate ${newPassed ? "PASSED" : "still failed"}, score ${ts.tieredScore.toFixed(1)}→${newTieredScore.toFixed(1)} (${analysis.score.toFixed(1)}%)`);
         }
       }
       // ── Impulse Zone → P/D & Fib Credit (Tier 1) ────────────────────────
@@ -3827,13 +3834,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           pdFactor.weight = fibDepth >= 0.71 ? 2.0 : fibDepth >= 0.618 ? 1.5 : 1.0;
           (pdFactor as any).tier = 1;
           pdFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI at ${fibPct}% Fib depth (${izFibLabel}) — 1H impulse leg confirms P/D alignment`;
-          // Update tieredScoring if tier1Count needs incrementing
+          // Update tieredScoring: increment tier1Count + add weight to tieredScore + recalc score
           const ts = analysis.tieredScoring;
           if (ts && (ts as any).tier1Count !== undefined) {
             const newCount = ts.tier1Count + 1;
             const newPassed = newCount >= 3;
             const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
             existingFactors.push(`P/D (impulse-zone-fib ${fibPct}%)`);
+            const newTieredScore = ts.tieredScore + pdFactor.weight;
+            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
             analysis.tieredScoring = {
               ...ts,
               tier1Count: newCount,
@@ -3841,8 +3850,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               tier1GateReason: newPassed
                 ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors (${existingFactors.join(", ")})`
                 : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
+              tieredScore: newTieredScore,
             };
-            console.log(`[scan ${scanCycleId}] 🔧 ${pair}: P/D Fib credit from impulse zone (${fibPct}% depth) → T1 count ${ts.tier1Count}→${newCount}, gate ${newPassed ? "PASSED" : "still failed"}`);
+            analysis.score = newScore;
+            console.log(`[scan ${scanCycleId}] 🔧 ${pair}: P/D Fib credit from impulse zone (${fibPct}% depth) → T1 count ${ts.tier1Count}→${newCount}, gate ${newPassed ? "PASSED" : "still failed"}, score +${pdFactor.weight.toFixed(1)} → ${analysis.score.toFixed(1)}%`);
           }
         }
       }
@@ -3865,15 +3876,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stackFactor.present = true;
           stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
           stackFactor.detail += ` | IMPULSE-ZONE CREDIT: zone has ${stackLayers}-layer confluence (${layerLabels.join(" + ")}) — stacking confirmed from impulse leg`;
-          // Update tier2Count in tieredScoring
+          // Update tier2Count + tieredScore + recalc analysis.score
           const ts = analysis.tieredScoring;
           if (ts && (ts as any).tier2Count !== undefined) {
+            const newTieredScore = ts.tieredScore + stackFactor.weight;
+            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
             analysis.tieredScoring = {
               ...ts,
               tier2Count: ts.tier2Count + 1,
+              tieredScore: newTieredScore,
             };
+            analysis.score = newScore;
           }
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Confluence Stack credit from impulse zone (${layerLabels.join("+")}) → T2 count +1`);
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Confluence Stack credit from impulse zone (${layerLabels.join("+")}) → T2 count +1, score +${stackFactor.weight.toFixed(1)} → ${analysis.score.toFixed(1)}%`);
         }
       }
       // ── Impulse Zone → HTF POI Alignment Credit (Tier 2) ────────────────
@@ -3896,15 +3911,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           htfPoiFactor.present = true;
           htfPoiFactor.weight = boost;
           htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")} — price at zone confirms HTF POI alignment`;
-          // Update tier2Count in tieredScoring
+          // Update tier2Count + tieredScore + recalc analysis.score
           const ts = analysis.tieredScoring;
           if (ts && (ts as any).tier2Count !== undefined) {
+            const newTieredScore = ts.tieredScore + boost;
+            const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
             analysis.tieredScoring = {
               ...ts,
               tier2Count: ts.tier2Count + 1,
+              tieredScore: newTieredScore,
             };
+            analysis.score = newScore;
           }
-          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: HTF POI Alignment credit from impulse zone (${htfLayers.join(", ")}) → boost ${boost.toFixed(1)}, T2 count +1`);
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: HTF POI Alignment credit from impulse zone (${htfLayers.join(", ")}) → boost ${boost.toFixed(1)}, T2 count +1, score → ${analysis.score.toFixed(1)}%`);
         }
       }
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "soft") {

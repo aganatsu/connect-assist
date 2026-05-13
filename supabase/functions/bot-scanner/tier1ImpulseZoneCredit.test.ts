@@ -119,11 +119,19 @@ function applyImpulseZoneTier1Credit(
       ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors (${allPresent.join(", ")})`
       : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`;
 
+    const creditPts = izTier1Credits.length * 1.0;
+    const newTieredScore = ts.tieredScore + creditPts;
+    const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : 0;
+
+    // Also update analysis.score for the caller
+    analysis.score = newScore;
+
     return {
       ...ts,
       tier1Count: newTier1Count,
       tier1GatePassed: newPassed,
       tier1GateReason: newReason,
+      tieredScore: newTieredScore,
     };
   }
 
@@ -403,4 +411,49 @@ Deno.test("Tier1Credit: regression — identical inputs produce identical output
   assertEquals(run1!.tier1Count, run2!.tier1Count);
   assertEquals(run1!.tier1GatePassed, run2!.tier1GatePassed);
   assertEquals(run1!.tier1GateReason, run2!.tier1GateReason);
+});
+
+// Score recalculation tests
+Deno.test("Tier1Credit: FVG credit adds 1.0 to tieredScore and recalculates analysis.score", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  assertEquals(analysis.tieredScoring!.tieredScore, 6.5);
+  assertEquals(analysis.score, 55.0);
+  const izData = makeIzData({ type: "fvg" });
+
+  const result = applyImpulseZoneTier1Credit(analysis, izData);
+
+  assert(result !== null);
+  // +1 credit = +1.0 pts: tieredScore = 6.5 + 1.0 = 7.5
+  assertEquals(result!.tieredScore, 7.5);
+  // score = (7.5/13)*100 = 57.7%
+  assertEquals(analysis.score, 57.7);
+});
+
+Deno.test("Tier1Credit: FVG+OB dual credit adds 2.0 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ type: "fvg", htfLayers: ["ob"] });
+
+  const result = applyImpulseZoneTier1Credit(analysis, izData);
+
+  assert(result !== null);
+  // +2 credits = +2.0 pts: tieredScore = 6.5 + 2.0 = 8.5
+  assertEquals(result!.tieredScore, 8.5);
+  // score = (8.5/13)*100 = 65.4%
+  assertEquals(analysis.score, 65.4);
+});
+
+Deno.test("Tier1Credit: no credit applied keeps tieredScore and score unchanged", () => {
+  const analysis = makeAnalysis({
+    tier1Count: 3,
+    tier1GatePassed: true,
+    tier1GateReason: "Tier 1 gate passed: 3 core factors (Market Structure, Premium/Discount & Fib, Fair Value Gap)",
+  });
+  const originalScore = analysis.score;
+  const originalTieredScore = analysis.tieredScoring!.tieredScore;
+  const izData = makeIzData({ type: "fvg" });
+
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  assertEquals(analysis.score, originalScore);
+  assertEquals(analysis.tieredScoring!.tieredScore, originalTieredScore);
 });

@@ -89,6 +89,8 @@ function applyPDFibCredit(analysis: Analysis, izData: IzData | null): void {
       const newPassed = newCount >= 3;
       const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
       existingFactors.push(`P/D (impulse-zone-fib ${fibPct}%)`);
+      const newTieredScore = ts.tieredScore + pdFactor.weight;
+      const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
       analysis.tieredScoring = {
         ...ts,
         tier1Count: newCount,
@@ -96,7 +98,9 @@ function applyPDFibCredit(analysis: Analysis, izData: IzData | null): void {
         tier1GateReason: newPassed
           ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors (${existingFactors.join(", ")})`
           : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
+        tieredScore: newTieredScore,
       };
+      analysis.score = newScore;
     }
   }
 }
@@ -116,13 +120,17 @@ function applyConfluenceStackCredit(analysis: Analysis, izData: IzData | null): 
     stackFactor.present = true;
     stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
     stackFactor.detail += ` | IMPULSE-ZONE CREDIT: zone has ${stackLayers}-layer confluence (${layerLabels.join(" + ")}) — stacking confirmed from impulse leg`;
-    // Update tier2Count
+    // Update tier2Count + tieredScore + score recalc
     const ts = analysis.tieredScoring;
     if (ts && (ts as any).tier2Count !== undefined) {
+      const newTieredScore = ts.tieredScore + stackFactor.weight;
+      const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
       analysis.tieredScoring = {
         ...ts,
         tier2Count: ts.tier2Count + 1,
+        tieredScore: newTieredScore,
       };
+      analysis.score = newScore;
     }
   }
 }
@@ -144,13 +152,17 @@ function applyHTFPOIAlignmentCredit(analysis: Analysis, izData: IzData | null): 
     htfPoiFactor.present = true;
     htfPoiFactor.weight = boost;
     htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")} — price at zone confirms HTF POI alignment`;
-    // Update tier2Count
+    // Update tier2Count + tieredScore + score recalc
     const ts = analysis.tieredScoring;
     if (ts && (ts as any).tier2Count !== undefined) {
+      const newTieredScore = ts.tieredScore + boost;
+      const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
       analysis.tieredScoring = {
         ...ts,
         tier2Count: ts.tier2Count + 1,
+        tieredScore: newTieredScore,
       };
+      analysis.score = newScore;
     }
   }
 }
@@ -630,4 +642,99 @@ Deno.test("Regression: identical inputs produce identical outputs across runs", 
   assertEquals(run1.tieredScoring!.tier2Count, run2.tieredScoring!.tier2Count);
   assertEquals(run1.tieredScoring!.tier1GatePassed, run2.tieredScoring!.tier1GatePassed);
   assertEquals(run1.tieredScoring!.tier1GateReason, run2.tieredScoring!.tier1GateReason);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCORE RECALCULATION TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+Deno.test("ScoreRecalc: P/D credit at 0.618 adds 1.5 to tieredScore and recalculates analysis.score", () => {
+  // Baseline: tieredScore=6.5, tieredMax=13 → score=50.0%
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  assertEquals(analysis.score, 55.0); // initial
+  const izData = makeIzData({ fibDepth: 0.618 });
+  applyPDFibCredit(analysis, izData);
+  // After P/D credit: tieredScore = 6.5 + 1.5 = 8.0, score = (8.0/13)*100 = 61.5%
+  assertEquals(analysis.score, 61.5);
+});
+Deno.test("ScoreRecalc: P/D credit at 0.71 adds 2.0 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ fibDepth: 0.71 });
+  applyPDFibCredit(analysis, izData);
+  // tieredScore = 6.5 + 2.0 = 8.5, score = (8.5/13)*100 = 65.4%
+  assertEquals(analysis.score, 65.4);
+});
+Deno.test("ScoreRecalc: P/D credit at 0.5 adds 1.0 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ fibDepth: 0.5 });
+  applyPDFibCredit(analysis, izData);
+  // tieredScore = 6.5 + 1.0 = 7.5, score = (7.5/13)*100 = 57.7%
+  assertEquals(analysis.score, 57.7);
+});
+Deno.test("ScoreRecalc: Confluence Stack credit (2 layers) adds 1.0 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier2Count: 2 });
+  const izData = makeIzData({ srConfirmed: true, htfLayers: ["4H_OB"] });
+  applyConfluenceStackCredit(analysis, izData);
+  // tieredScore = 6.5 + 1.0 = 7.5, score = 57.7%
+  assertEquals(analysis.score, 57.7);
+});
+Deno.test("ScoreRecalc: Confluence Stack credit (3 layers) adds 1.5 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier2Count: 2 });
+  const izData = makeIzData({ srConfirmed: true, htfLayers: ["4H_OB", "4H_FVG"] });
+  applyConfluenceStackCredit(analysis, izData);
+  // tieredScore = 6.5 + 1.5 = 8.0, score = 61.5%
+  assertEquals(analysis.score, 61.5);
+});
+Deno.test("ScoreRecalc: HTF POI credit (FVG only) adds 0.8 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier2Count: 2 });
+  const izData = makeIzData({ priceAtZone: true, htfLayers: ["4H_FVG"] });
+  applyHTFPOIAlignmentCredit(analysis, izData);
+  // tieredScore = 6.5 + 0.8 = 7.3, score = (7.3/13)*100 = 56.2%
+  assertEquals(analysis.score, 56.2);
+});
+Deno.test("ScoreRecalc: HTF POI credit (OB only) adds 0.7 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier2Count: 2 });
+  const izData = makeIzData({ priceAtZone: true, htfLayers: ["4H_OB"] });
+  applyHTFPOIAlignmentCredit(analysis, izData);
+  // tieredScore = 6.5 + 0.7 = 7.2, score = (7.2/13)*100 = 55.4%
+  assertEquals(analysis.score, 55.4);
+});
+Deno.test("ScoreRecalc: HTF POI credit (FVG+OB) adds 1.5 to tieredScore", () => {
+  const analysis = makeAnalysis({ tier2Count: 2 });
+  const izData = makeIzData({ priceAtZone: true, htfLayers: ["4H_FVG", "4H_OB"] });
+  applyHTFPOIAlignmentCredit(analysis, izData);
+  // tieredScore = 6.5 + 1.5 = 8.0, score = 61.5%
+  assertEquals(analysis.score, 61.5);
+});
+Deno.test("ScoreRecalc: Combined all 3 credits accumulate tieredScore correctly", () => {
+  const analysis = makeAnalysis({ tier1Count: 2, tier2Count: 2 });
+  assertEquals(analysis.score, 55.0); // Note: initial score is set to 55.0 in makeAnalysis
+  const izData = makeIzData({
+    fibDepth: 0.618,
+    srConfirmed: true,
+    htfLayers: ["4H_OB", "4H_FVG"],
+    priceAtZone: true,
+  });
+  applyPDFibCredit(analysis, izData);
+  // After P/D: tieredScore = 6.5 + 1.5 = 8.0
+  assertEquals(analysis.tieredScoring!.tieredScore, 8.0);
+  applyConfluenceStackCredit(analysis, izData);
+  // After Stack: tieredScore = 8.0 + 1.5 = 9.5 (3 layers: sr + 2 HTF)
+  assertEquals(analysis.tieredScoring!.tieredScore, 9.5);
+  applyHTFPOIAlignmentCredit(analysis, izData);
+  // After HTF POI: tieredScore = 9.5 + 1.5 = 11.0 (FVG 0.8 + OB 0.7 = 1.5)
+  assertEquals(analysis.tieredScoring!.tieredScore, 11.0);
+  // Final score: (11.0/13)*100 = 84.6%
+  assertEquals(analysis.score, 84.6);
+});
+Deno.test("ScoreRecalc: no credit applied → score unchanged", () => {
+  const analysis = makeAnalysis({ tier1Count: 2, tier2Count: 2 });
+  const originalScore = analysis.score;
+  const originalTieredScore = analysis.tieredScoring!.tieredScore;
+  // fibDepth below 0.5 → no P/D credit
+  const izData = makeIzData({ fibDepth: 0.3, srConfirmed: false, htfLayers: [], priceAtZone: false });
+  applyPDFibCredit(analysis, izData);
+  applyConfluenceStackCredit(analysis, izData);
+  applyHTFPOIAlignmentCredit(analysis, izData);
+  assertEquals(analysis.score, originalScore);
+  assertEquals(analysis.tieredScoring!.tieredScore, originalTieredScore);
 });
