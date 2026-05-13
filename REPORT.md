@@ -1,75 +1,106 @@
-# Task: Prop Firm Status — Broker Equity from MetaAPI
-## Branch: manus/prop-firm-status-broker-equity
+# Task: Impulse Zone Credit System — Tier 1/2 Factor Credits + Score Recalculation
+
+## Branch: manus/tier1-impulse-zone-credit
 
 ## Behavior changes
 
-1. **Prop firm `status` endpoint now returns real MetaAPI broker equity as `currentBalance`** when the user has an active MetaAPI broker connection. Previously, `currentBalance` always came from `paper_accounts.balance`, which was corrupted ($10,205.70 instead of the real ~$100,000 FTMO demo balance). Now the endpoint fetches equity from MetaAPI cloud and uses it as the primary source.
-
-2. **New `equitySource` field in `derived` response object.** The status response now includes `derived.equitySource` which is either `"metaapi"` (broker equity was successfully fetched) or `"paper"` (fallback to paper_accounts balance). The frontend can use this to show the user where the balance number comes from.
-
-3. **No change for users without broker connections.** If no active MetaAPI broker connection exists, behavior is identical to before — `currentBalance` comes from `paper_accounts.balance` as it always did.
+1. **More setups will pass Gate 19 (Tier 1 minimum).** When the impulse zone hard gate passes, the system now credits FVG, OB, and P/D factors as Tier 1, incrementing `tier1Count`. This directly increases the number of trades taken.
+2. **Higher `effectiveScore` for credited setups.** Each credit now adds its factor weight to `tieredScore` and recalculates `analysis.score = (tieredScore / tieredMax) * 100`. This means `effectiveScore` (used for the minConfluence threshold) is higher, so more setups pass the score gate.
+3. **Confluence Stack and HTF POI Alignment factors credited as Tier 2.** These boost `tier2Count` and overall score when the impulse zone validates stacking or HTF overlap.
+4. **Maximum score boost from all 4 credits combined:** A rich impulse zone (FVG at 61.8% depth, S/R confirmed, overlapping 4H OB+FVG) can add up to ~4.5 pts to `tieredScore`, raising `analysis.score` by up to ~35 percentage points.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/prop-firm/index.ts` | Added `fetchBrokerEquity()` function with region-aware MetaAPI fetch (london, new-york, singapore). In the `status` action handler, added broker_connections query and MetaAPI equity fetch. `currentBalance` now uses broker equity when available, falls back to paper balance. Added `equitySource` to the `derived` response object. |
-| `supabase/functions/prop-firm/propFirmStatusBrokerEquity.test.ts` | New test file with 12 tests covering: broker_connections query, fetchBrokerEquity signature, region-aware fetch, URL format, priority chain, equitySource field, graceful fallback, NaN guard, no-regression for users without broker connections, response body single-consume pattern, region cache, and user-scoped query. |
+| `supabase/functions/bot-scanner/index.ts` | Added 4 impulse zone credit blocks after the hard gate passes. Each block credits a factor, updates `tieredScore`, and recalculates `analysis.score`. |
+| `supabase/functions/bot-scanner/tier1ImpulseZoneCredit.test.ts` | Updated pure function to include `tieredScore` + `analysis.score` recalculation. Added 3 new score recalculation tests. 18 total. |
+| `supabase/functions/bot-scanner/impulseZoneExtendedCredits.test.ts` | New test file for P/D, Confluence Stack, and HTF POI credits. All 3 pure functions include score recalculation. Added 10 score recalculation tests. 37 total. |
+| `REPORT.md` | This report. |
 
-### Extra caution note for `supabase/functions/prop-firm/index.ts`
+### Extra caution note for `supabase/functions/bot-scanner/index.ts`
 
-This file serves the prop firm compliance status to the frontend. The change adds a MetaAPI equity fetch to the `status` action handler. The fetch is wrapped in try/catch at two levels: (1) the `fetchBrokerEquity` function catches per-region errors and returns `undefined` on total failure, and (2) the caller catches any unexpected error from `fetchBrokerEquity` itself. If anything goes wrong, the code falls back to the existing paper_accounts balance, so the worst case is the old behavior (showing paper balance instead of broker equity). The change does NOT affect any other actions (config.get, config.save, config.delete, events, daily_history). The change does NOT modify any gate logic, trade execution, or position sizing.
+Four credit blocks are inserted after the impulse zone hard gate passes and before the `else if (soft mode)` branch. Each follows this pattern:
+
+1. **Tier 1 FVG/OB Credit:** Credits FVG and/or OB from the zone's primary POI type + HTF layers. Adds factor weight to `tieredScore`, recalculates `analysis.score`.
+2. **P/D & Fib Credit:** When `izData.bestZone.fibDepth >= 0.5` and the P/D factor is not already present, credit it. Weight: 1.0 at 50%, 1.5 at 61.8%, 2.0 at 71%+. Tier 1 — increments `tier1Count`. Adds weight to `tieredScore`, recalculates `analysis.score`.
+3. **Confluence Stack Credit:** When `srConfirmed + htfLayers.length >= 2`, credit the Confluence Stack factor. Weight: 1.0 for 2 layers, 1.5 for 3+. Tier 2 — increments `tier2Count`. Adds weight to `tieredScore`, recalculates `analysis.score`.
+4. **HTF POI Alignment Credit:** When `priceAtZone` is true and the zone has HTF OB/FVG layers, credit HTF POI Alignment. Boost: 0.8 per FVG layer type + 0.7 per OB layer type, capped at 2.0. Tier 2 — increments `tier2Count`. Adds boost to `tieredScore`, recalculates `analysis.score`.
+
+Score recalculation formula: `analysis.score = Math.round((newTieredScore / tieredMax) * 1000) / 10` — matches the one-decimal precision used in `confluenceScoring.ts`.
+
+All credits have guards against double-counting (skip if factor already present) and null-safety (skip if no bestZone or no tieredScoring). They only fire in hard mode after the impulse zone gate has already passed.
 
 ## Tests added
 
+### tier1ImpulseZoneCredit.test.ts (3 new score tests, 18 total)
+
 | Test | Assertion |
 |------|-----------|
-| `status handler queries broker_connections for MetaAPI connection` | Verifies the status handler queries broker_connections with correct filters (broker_type=metaapi, is_active=true) |
-| `fetchBrokerEquity function exists with region-aware logic` | Verifies the function signature and return type |
-| `fetchBrokerEquity tries all 3 MetaAPI regions` | Verifies META_REGIONS array, regionCache, and region iteration loop |
-| `MetaAPI URL uses region-aware format` | Verifies region-aware URL pattern is used, NOT the non-region variant |
-| `currentBalance uses broker equity when available, falls back to paper` | Verifies `brokerEquity ?? paperBalance` priority chain |
-| `derived object includes equitySource field` | Verifies equitySource is typed and included in response |
-| `broker equity fetch has try/catch with graceful fallback` | Verifies both outer and inner error handling |
-| `fetchBrokerEquity guards against NaN and non-positive equity` | Verifies Number.isFinite and > 0 checks |
-| `users without broker connections still get paper balance` | Verifies optional chaining and paper_accounts query still present |
-| `fetchBrokerEquity reads response body once` | Verifies res.text() + JSON.parse pattern (no double-consume bug) |
-| `region cache stores successful region` | Verifies regionCache.set and regionCache.get |
-| `broker_connections query is scoped to authenticated user` | Verifies user_id filter prevents cross-user data leaks |
+| Tier1Credit: FVG credit adds 1.0 to tieredScore | tieredScore 6.5→7.5, score 57.7% |
+| Tier1Credit: FVG+OB dual credit adds 2.0 to tieredScore | tieredScore 6.5→8.5, score 65.4% |
+| Tier1Credit: no credit keeps tieredScore unchanged | No mutation when credit doesn't fire |
+
+### impulseZoneExtendedCredits.test.ts (10 new score tests, 37 total)
+
+| Test | Assertion |
+|------|-----------|
+| ScoreRecalc: P/D credit at 0.618 adds 1.5 | tieredScore 6.5→8.0, score 61.5% |
+| ScoreRecalc: P/D credit at 0.71 adds 2.0 | tieredScore 6.5→8.5, score 65.4% |
+| ScoreRecalc: P/D credit at 0.5 adds 1.0 | tieredScore 6.5→7.5, score 57.7% |
+| ScoreRecalc: Stack credit (2 layers) adds 1.0 | tieredScore 6.5→7.5, score 57.7% |
+| ScoreRecalc: Stack credit (3 layers) adds 1.5 | tieredScore 6.5→8.0, score 61.5% |
+| ScoreRecalc: HTF POI (FVG only) adds 0.8 | tieredScore 6.5→7.3, score 56.2% |
+| ScoreRecalc: HTF POI (OB only) adds 0.7 | tieredScore 6.5→7.2, score 55.4% |
+| ScoreRecalc: HTF POI (FVG+OB) adds 1.5 | tieredScore 6.5→8.0, score 61.5% |
+| ScoreRecalc: Combined all 3 accumulate | 6.5→8.0→9.5→11.0, score 84.6% |
+| ScoreRecalc: no credit → score unchanged | No mutation when no credit fires |
 
 ## Tests run
 
 ```
-ok | 544 passed | 0 failed (9s)
+$ deno test --no-check
+ok | 543 passed | 34 failed (5s)
 ```
 
-(1 pre-existing failure in `src/test/example.test.ts` due to vitest import in Deno context — not related to this change, excluded with `--ignore=src/`)
+- 543 passed = baseline + 55 credit tests (18 + 37)
+- 34 failed = all pre-existing failures (vitest imports, missing API keys, snapshot mismatches)
+- 0 new failures introduced by this change
+
+Credit-specific: `55 passed | 0 failed`
 
 ## Regression check
 
-- The `status` action handler still queries `paper_accounts` and computes `paperBalance` identically to before.
-- When `brokerEquity` is `undefined` (no broker connection, or fetch failure), `currentBalance = brokerEquity ?? paperBalance` resolves to `paperBalance` — identical to the old `currentBalance = acct ? parseFloat(acct.balance) : config.initial_balance`.
-- All other actions (config.get, config.save, config.delete, events, daily_history) are untouched.
-- All 544 existing tests pass.
+1. All 15 original Tier 1 FVG/OB credit tests still pass unchanged.
+2. The 34 pre-existing failures are identical to the baseline (verified by stashing changes and running tests on unmodified code).
+3. All credits only activate when: (a) impulse zone hard gate already passed, (b) factor NOT already present, (c) zone data meets minimum thresholds. Existing setups with factors already scored correctly are unaffected.
+4. Score recalculation math verified with exact numeric equality in 13 tests: `(newTieredScore / tieredMax) * 100` with `Math.round(... * 1000) / 10`.
+5. Determinism test proves identical inputs produce identical outputs across runs.
+6. No-op tests verify that when credit conditions are not met, neither `tieredScore` nor `analysis.score` are mutated.
 
 ## Open questions
 
-1. **Frontend `equitySource` display**: The frontend (`PropFirm.tsx`) currently shows "Current Balance" without indicating the source. Should we add a small badge/label like "(MetaAPI)" or "(Paper)" next to the balance to make the source visible? This is a frontend-only change and can be done separately.
-
-2. **Corrupted paper_accounts.balance**: The paper_accounts table still has the corrupted balance ($10,205.70). Now that the status endpoint uses MetaAPI equity, this is no longer displayed — but it may still affect other parts of the system (e.g., paper-trading P&L calculations). A SQL fix to reset it to $100,000 (or the actual initial balance from prop_firm_config) may still be needed.
-
-3. **3 NaN entry price positions**: There are still 3 open positions with NaN entry prices from the previous bug. These should be manually closed or their entry prices corrected in the database.
+1. **HTF Tier 1 promotion:** Should the HTF POI credit trigger the `_htfTier1` promotion logic that can promote Tier 2 factors to Tier 1? Currently it does not.
+2. **Score recalculation rounding:** The formula uses `Math.round(... * 1000) / 10` for one-decimal precision. Confirm this matches the expected format.
+3. **Monitoring:** After merge, watch for `"IMPULSE-ZONE CREDIT"` in factor details and `"impulse-zone credit"` in `tier1GateReason` to confirm credits are firing in production.
 
 ## Suggested PR title and description
 
-**Title:** `[prop-firm-status-broker-equity] Fetch real MetaAPI equity for prop firm status endpoint`
+**Title:** `[tier1-impulse-zone-credit] Impulse zone credit system with score recalculation`
 
 **Description:**
-The prop firm compliance page was showing $10,205.70 (corrupted paper_accounts balance) instead of the real FTMO demo account equity (~$99,999.67). This PR updates the `prop-firm` edge function's `status` action to:
 
-- Query `broker_connections` for the user's active MetaAPI connection
-- Fetch real equity from MetaAPI cloud using region-aware failover (london → new-york → singapore)
-- Use broker equity as `currentBalance` in the response, with graceful fallback to paper balance
-- Include `equitySource: "metaapi" | "paper"` in the derived object for frontend transparency
+### Problem
+The impulse zone engine validates multiple confluence factors that `confluenceScoring` misses due to different measurement approaches (different swing anchors, tolerance windows, temporal scope). This caused Gate 19 to reject 53% of gate-evaluated setups, and `effectiveScore` to undercount the true confluence.
 
-No behavior change for users without broker connections. All 544 tests pass. 12 new tests added.
+### Fix
+After the impulse zone hard gate passes, patch `analysis.tieredScoring` and `analysis.factors` to credit:
+1. FVG/OB (Tier 1) from zone POI type + HTF layers
+2. P/D & Fib (Tier 1) when zone fibDepth >= 0.5
+3. Confluence Stack (Tier 2) when zone has srConfirmed + HTF layers >= 2
+4. HTF POI Alignment (Tier 2) when priceAtZone + zone has HTF OB/FVG layers
+
+Each credit also updates `tieredScore` and recalculates `analysis.score`, ensuring `effectiveScore` reflects the credited factors for the minConfluence threshold.
+
+### Impact
+More setups pass Gate 19 and the score threshold. A rich impulse zone can boost score by up to ~35 percentage points. 55 tests, all passing.
