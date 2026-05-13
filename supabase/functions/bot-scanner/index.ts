@@ -3745,6 +3745,70 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // Price IS at zone — apply bonus and proceed
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] ✅ ${pair}: Impulse Zone CONFIRMED — price at zone. Proceeding with entry evaluation.`);
+
+      // ── Impulse Zone → Tier 1 Credit ──────────────────────────────────
+      // The impulse zone engine validates FVG/OB within the impulse leg at a Fib level,
+      // but confluenceScoring checks FVG/OB independently with stricter criteria
+      // (e.g., "is price literally inside the FVG right now?"). This causes 99% of
+      // Tier 1 failures: the zone engine found the FVG/OB but confluence scoring
+      // doesn't credit it. Since the impulse zone hard gate already passed (zone is
+      // valid AND price is at zone), we credit the zone's POI type as a Tier 1 factor.
+      if (analysis.tieredScoring && izData?.bestZone && !analysis.tieredScoring.tier1GatePassed) {
+        const ts = analysis.tieredScoring;
+        const zonePOIType = izData.bestZone.type; // "fvg" or "ob"
+        const htfLayers = izData.bestZone.htfLayers || [];
+        const izTier1Credits: string[] = [];
+
+        // Credit the primary POI type from the zone
+        if (zonePOIType === "fvg") {
+          const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
+          if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+            izTier1Credits.push("FVG (impulse-zone-confirmed)");
+          }
+        } else if (zonePOIType === "ob") {
+          const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
+          if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+            izTier1Credits.push("OB (impulse-zone-confirmed)");
+          }
+        }
+
+        // Also check HTF layers for additional OB/FVG evidence
+        if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
+          const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
+          if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+            if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) {
+              izTier1Credits.push("OB (HTF-zone-layer)");
+            }
+          }
+        }
+        if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
+          const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
+          if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+            if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) {
+              izTier1Credits.push("FVG (HTF-zone-layer)");
+            }
+          }
+        }
+
+        if (izTier1Credits.length > 0) {
+          const newTier1Count = ts.tier1Count + izTier1Credits.length;
+          const newPassed = newTier1Count >= 3;
+          const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
+          const allPresent = [...existingFactors, ...izTier1Credits];
+          const newReason = newPassed
+            ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors (${allPresent.join(", ")})`
+            : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`;
+
+          // Patch the tieredScoring in-place so Gate 19 sees the updated values
+          analysis.tieredScoring = {
+            ...ts,
+            tier1Count: newTier1Count,
+            tier1GatePassed: newPassed,
+            tier1GateReason: newReason,
+          };
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Impulse Zone Tier 1 credit: +${izTier1Credits.length} (${izTier1Credits.join(", ")}) → T1 count ${ts.tier1Count}→${newTier1Count}, gate ${newPassed ? "PASSED" : "still failed"}`);
+        }
+      }
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "soft") {
       // SOFT MODE: legacy penalty/bonus behavior
       if (izData) {
