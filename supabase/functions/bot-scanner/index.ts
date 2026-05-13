@@ -3809,6 +3809,104 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Impulse Zone Tier 1 credit: +${izTier1Credits.length} (${izTier1Credits.join(", ")}) → T1 count ${ts.tier1Count}→${newTier1Count}, gate ${newPassed ? "PASSED" : "still failed"}`);
         }
       }
+      // ── Impulse Zone → P/D & Fib Credit (Tier 1) ────────────────────────
+      // The P/D factor uses the entry-TF zigzag to measure retracement depth.
+      // The impulse zone engine uses the 1H impulse leg's Fib overlay — a
+      // different (often better) swing anchor. When the impulse zone validates
+      // a POI at fibDepth >= 0.5 (i.e., in OTE or deeper), the P/D factor
+      // should reflect that the entry IS at a premium/discount Fib level.
+      // Only credit when: hard gate passed, P/D factor not already present at Tier 1.
+      if (analysis.tieredScoring && izData?.bestZone) {
+        const pdFactor = analysis.factors?.find((f: any) => f.name === "Premium/Discount & Fib");
+        const fibDepth = izData.bestZone.fibDepth ?? 0;
+        if (pdFactor && (!pdFactor.present || pdFactor.weight <= 0) && fibDepth >= 0.5) {
+          // Credit the P/D factor based on the impulse zone's validated Fib depth
+          const fibPct = (fibDepth * 100).toFixed(1);
+          const izFibLabel = fibDepth >= 0.618 ? "OTE zone" : "discount/premium zone";
+          pdFactor.present = true;
+          pdFactor.weight = fibDepth >= 0.71 ? 2.0 : fibDepth >= 0.618 ? 1.5 : 1.0;
+          (pdFactor as any).tier = 1;
+          pdFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI at ${fibPct}% Fib depth (${izFibLabel}) — 1H impulse leg confirms P/D alignment`;
+          // Update tieredScoring if tier1Count needs incrementing
+          const ts = analysis.tieredScoring;
+          if (ts && (ts as any).tier1Count !== undefined) {
+            const newCount = ts.tier1Count + 1;
+            const newPassed = newCount >= 3;
+            const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
+            existingFactors.push(`P/D (impulse-zone-fib ${fibPct}%)`);
+            analysis.tieredScoring = {
+              ...ts,
+              tier1Count: newCount,
+              tier1GatePassed: newPassed,
+              tier1GateReason: newPassed
+                ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors (${existingFactors.join(", ")})`
+                : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
+            };
+            console.log(`[scan ${scanCycleId}] 🔧 ${pair}: P/D Fib credit from impulse zone (${fibPct}% depth) → T1 count ${ts.tier1Count}→${newCount}, gate ${newPassed ? "PASSED" : "still failed"}`);
+          }
+        }
+      }
+      // ── Impulse Zone → Confluence Stack Credit (Tier 2) ─────────────────
+      // The Confluence Stack factor checks if entry-TF FVGs/OBs overlap with
+      // S/R + Fib levels. The impulse zone engine independently validates:
+      // srConfirmed (S/R overlaps zone) + htfLayers (HTF zones overlap).
+      // When the zone has srConfirmed + at least 1 HTF layer, that IS a
+      // confluence stack — just measured from the impulse leg's perspective.
+      if (analysis.tieredScoring && izData?.bestZone) {
+        const stackFactor = analysis.factors?.find((f: any) => f.name === "Confluence Stack");
+        const srConfirmed = izData.bestZone.srConfirmed ?? false;
+        const htfLayers = izData.bestZone.htfLayers || [];
+        const stackLayers = (srConfirmed ? 1 : 0) + htfLayers.length;
+        if (stackFactor && (!stackFactor.present || stackFactor.weight <= 0) && stackLayers >= 2) {
+          // Credit confluence stacking from impulse zone data
+          const layerLabels = [];
+          if (srConfirmed) layerLabels.push("S/R");
+          layerLabels.push(...htfLayers);
+          stackFactor.present = true;
+          stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
+          stackFactor.detail += ` | IMPULSE-ZONE CREDIT: zone has ${stackLayers}-layer confluence (${layerLabels.join(" + ")}) — stacking confirmed from impulse leg`;
+          // Update tier2Count in tieredScoring
+          const ts = analysis.tieredScoring;
+          if (ts && (ts as any).tier2Count !== undefined) {
+            analysis.tieredScoring = {
+              ...ts,
+              tier2Count: ts.tier2Count + 1,
+            };
+          }
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: Confluence Stack credit from impulse zone (${layerLabels.join("+")}) → T2 count +1`);
+        }
+      }
+      // ── Impulse Zone → HTF POI Alignment Credit (Tier 2) ────────────────
+      // The HTF POI Alignment factor checks if current price is inside a
+      // 4H/1H FVG/OB/Breaker. The impulse zone engine checks if the zone
+      // overlaps with HTF POIs. When priceAtZone is true AND the zone has
+      // HTF layers, price IS effectively inside those HTF POIs (transitive).
+      if (analysis.tieredScoring && izData?.bestZone && izData.bestZone.priceAtZone) {
+        const htfPoiFactor = analysis.factors?.find((f: any) => f.name === "HTF POI Alignment");
+        const htfLayers = izData.bestZone.htfLayers || [];
+        const hasHTFOBorFVG = htfLayers.some((l: string) => l.toLowerCase().includes("ob") || l.toLowerCase().includes("fvg"));
+        if (htfPoiFactor && (!htfPoiFactor.present || htfPoiFactor.weight <= 0) && hasHTFOBorFVG) {
+          // Credit HTF POI alignment from impulse zone's validated overlap
+          const obLayers = htfLayers.filter((l: string) => l.toLowerCase().includes("ob"));
+          const fvgLayers = htfLayers.filter((l: string) => l.toLowerCase().includes("fvg"));
+          let boost = 0;
+          if (fvgLayers.length > 0) boost += 0.8; // 4H FVG equivalent
+          if (obLayers.length > 0) boost += 0.7;  // 4H OB equivalent
+          boost = Math.min(2.0, boost);
+          htfPoiFactor.present = true;
+          htfPoiFactor.weight = boost;
+          htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")} — price at zone confirms HTF POI alignment`;
+          // Update tier2Count in tieredScoring
+          const ts = analysis.tieredScoring;
+          if (ts && (ts as any).tier2Count !== undefined) {
+            analysis.tieredScoring = {
+              ...ts,
+              tier2Count: ts.tier2Count + 1,
+            };
+          }
+          console.log(`[scan ${scanCycleId}] 🔧 ${pair}: HTF POI Alignment credit from impulse zone (${htfLayers.join(", ")}) → boost ${boost.toFixed(1)}, T2 count +1`);
+        }
+      }
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "soft") {
       // SOFT MODE: legacy penalty/bonus behavior
       if (izData) {
