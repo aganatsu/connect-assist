@@ -226,6 +226,8 @@ export interface SLTPInput {
   fvgs?: FairValueGap[];
   /** Optional: Fib extension levels for TP intelligence */
   fibExtensions?: FibLevel[];
+  /** Optional: Draw on Liquidity targets from game plan (Layer 2) */
+  dolTargets?: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; description: string }>;
 }
 
 export interface OpeningRangeResult {
@@ -2272,6 +2274,43 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
         // Extension is slightly beyond TP — extend TP to capture the move
         tp = ext.price;
         break;
+      }
+    }
+  }
+
+  // ── DOL-aware TP Extension (Game Plan Layer 2 → Layer 3) ──
+  // If the game plan identified Draw on Liquidity targets for this pair,
+  // check if a DOL target exists beyond the current TP in the trade direction.
+  // Only EXTENDS TP — never shortens it. Respects the 4× SL hard cap.
+  // Rationale: DOL targets represent session-level institutional magnets
+  // identified during premarket analysis. If the TP from local structure
+  // is conservative but the DOL is further out, we can capture more of the move.
+  const dolTargets = input.dolTargets;
+  if (tp !== null && dolTargets && dolTargets.length > 0 && slDistance > 0) {
+    const maxTPDistance = slDistance * 4; // same hard cap as Fib extension
+    const currentTPDistance = Math.abs(tp - lastPrice);
+
+    // Filter DOL targets: correct direction, beyond current TP, within hard cap
+    let viableDOLs: Array<{ price: number; strength: number; description: string }> = [];
+    if (direction === "long") {
+      viableDOLs = dolTargets
+        .filter(d => d.type === "buy-side" && d.price > tp! && (d.price - lastPrice) <= maxTPDistance)
+        .sort((a, b) => a.price - b.price); // nearest first
+    } else if (direction === "short") {
+      viableDOLs = dolTargets
+        .filter(d => d.type === "sell-side" && d.price < tp! && (lastPrice - d.price) <= maxTPDistance)
+        .sort((a, b) => b.price - a.price); // nearest first
+    }
+
+    if (viableDOLs.length > 0) {
+      const bestDOL = viableDOLs[0];
+      const dolDistance = Math.abs(bestDOL.price - lastPrice);
+      const extensionRatio = dolDistance / currentTPDistance;
+
+      // Only extend if DOL is meaningfully further (at least 10% more distance)
+      // and the DOL has reasonable strength (>= 2 touches)
+      if (extensionRatio > 1.1 && bestDOL.strength >= 2) {
+        tp = bestDOL.price;
       }
     }
   }

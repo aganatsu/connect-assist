@@ -2634,9 +2634,16 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Compute ATR for ATR-based methods (use entry candles)
   const atrValue = calculateATR(candles, config.slATRPeriod || 14);
 
+  // Extract DOL targets from game plan context (Layer 2 → Layer 3)
+  const gpCtxForTP = (config as any)._gamePlanContext;
+  const dolTargetsForTP = gpCtxForTP?.dol
+    ? (Array.isArray(gpCtxForTP.dol) ? gpCtxForTP.dol : [gpCtxForTP.dol])
+    : undefined;
+
   const { stopLoss, takeProfit } = calculateSLTP({
     direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue, fvgs,
     fibExtensions: fibLevels?.extensions,
+    dolTargets: dolTargetsForTP,
   });
 
   const presentFactors = factors.filter(f => f.present);
