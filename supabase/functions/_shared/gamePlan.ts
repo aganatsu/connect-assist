@@ -29,6 +29,7 @@ import {
   toNYTime,
 } from "./smcAnalysis.ts";
 import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
+import { detectWeeklyProfile } from "./weeklyProfile.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,8 @@ export interface InstrumentGamePlan {
   atr: number;
   /** IPDA 20/40/60-day data ranges (institutional reference levels) */
   ipdaRanges?: import("./ipdaRanges.ts").IPDARanges;
+  /** Weekly profile pattern detection (ICT day-of-week tendencies) */
+  weeklyProfile?: import("./weeklyProfile.ts").WeeklyProfile;
   /** Whether to trade this instrument this session */
   tradeable: boolean;
   /** Reason if not tradeable */
@@ -636,6 +639,11 @@ export function generateInstrumentGamePlan(
     ? calculateIPDARanges(dailyCandles, lastPrice)
     : null;
 
+  // ── Weekly Profile Detection (ICT day-of-week tendencies) ──
+  const weeklyProfile = dailyCandles.length >= 5
+    ? detectWeeklyProfile(dailyCandles, spec.pipSize)
+    : undefined;
+
   // ── DOL Identification ──
   const dol = identifyDOL(
     lastPrice,
@@ -720,6 +728,7 @@ export function generateInstrumentGamePlan(
     h4Trend,
     atr,
     ipdaRanges: ipdaRanges ?? undefined,
+    weeklyProfile,
     tradeable,
     skipReason,
     lastPrice,
