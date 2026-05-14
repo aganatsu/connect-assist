@@ -172,7 +172,14 @@ function TierSection({
                   {f.name}
                 </span>
                 {f.detail && (
-                  <span className="text-muted-foreground ml-1">— {f.detail}</span>
+                  f.detail.includes("IMPULSE-ZONE CREDIT") ? (
+                    <span className="ml-1">
+                      <span className="text-muted-foreground">— {f.detail.split(" | ")[0]}</span>
+                      <span className="text-cyan-400 font-medium ml-1">│ {f.detail.split(" | ").slice(1).join(" | ")}</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground ml-1">— {f.detail}</span>
+                  )
                 )}
               </div>
             </div>
@@ -348,7 +355,16 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
               </span>
               <div>
                 <span className="text-muted-foreground">{f.name}</span>
-                {f.detail && <span className="text-muted-foreground/70 ml-1">— {f.detail}</span>}
+                {f.detail && (
+                  f.detail.includes("IMPULSE-ZONE CREDIT") ? (
+                    <span className="ml-1">
+                      <span className="text-muted-foreground/70">— {f.detail.split(" | ")[0]}</span>
+                      <span className="text-cyan-400 font-medium ml-1">│ {f.detail.split(" | ").slice(1).join(" | ")}</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground/70 ml-1">— {f.detail}</span>
+                  )
+                )}
               </div>
             </div>
           ))}
