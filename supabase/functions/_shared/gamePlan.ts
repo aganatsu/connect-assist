@@ -575,7 +575,9 @@ export function generateInstrumentGamePlan(
   entryCandles: Candle[],
   hourlyCandles: Candle[],
   session: SessionName,
+  options?: { ipdaRangesEnabled?: boolean },
 ): InstrumentGamePlan {
+  const ipdaEnabled = options?.ipdaRangesEnabled !== false; // ON by default
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const lastPrice = entryCandles.length > 0
     ? entryCandles[entryCandles.length - 1].close
@@ -635,7 +637,8 @@ export function generateInstrumentGamePlan(
     : 0;
 
   // ── IPDA Data Ranges (20/40/60-day institutional reference levels) ──
-  const ipdaRanges = dailyCandles.length >= 25
+  // Gated by ipdaRangesEnabled toggle (default: ON)
+  const ipdaRanges = ipdaEnabled && dailyCandles.length >= 25
     ? calculateIPDARanges(dailyCandles, lastPrice)
     : null;
 
@@ -675,8 +678,8 @@ export function generateInstrumentGamePlan(
     spec.pipSize,
   );
 
-  // ── Merge IPDA levels into key levels ──
-  if (ipdaRanges) {
+  // ── Merge IPDA levels into key levels (only when IPDA enabled) ──
+  if (ipdaEnabled && ipdaRanges) {
     const ipdaLevels = ipdaRangesToKeyLevels(ipdaRanges, lastPrice, spec.pipSize);
     keyLevels.push(...ipdaLevels);
   }

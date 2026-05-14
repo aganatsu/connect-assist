@@ -2910,6 +2910,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
     const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
+    const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
+    const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
       // Primary approach: use contains filter on JSONB
@@ -2990,7 +2992,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cachedFetch(sym, "1h", "5d"),
             ]);
             if (gpDaily.length < 10 || gpEntry.length < 10) return null;
-            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName);
+            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled });
           } catch (e: any) {
             console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
             return null;
@@ -3353,10 +3355,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         atr: pairPlan.atr,
         isFocusPair: activeGamePlan.focusPairs.includes(pair),
       } : null;
-    } else {
+     } else {
       (pairConfig as any)._gamePlanContext = null;
      }
-
+    // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
+    (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;

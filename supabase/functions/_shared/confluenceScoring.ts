@@ -2720,8 +2720,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   const atrValue = calculateATR(candles, config.slATRPeriod || 14);
 
   // Extract DOL targets from game plan context (Layer 2 → Layer 3)
+  // Gated by dolTPExtensionEnabled toggle (default: ON for backward compat)
   const gpCtxForTP = (config as any)._gamePlanContext;
-  const dolTargetsForTP = gpCtxForTP?.dol
+  const dolTPEnabled = (config as any).dolTPExtensionEnabled !== false;
+  const dolTargetsForTP = dolTPEnabled && gpCtxForTP?.dol
     ? (Array.isArray(gpCtxForTP.dol) ? gpCtxForTP.dol : [gpCtxForTP.dol])
     : undefined;
 
