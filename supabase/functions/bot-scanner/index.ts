@@ -3317,6 +3317,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
+    // ── Game Plan Context Injection ──
+    // Pass the per-instrument game plan data into the confluence engine so it can
+    // use bias, DOL, key levels, and focus-pair status for scoring and TP placement.
+    // The game plan is generated once per session (Layer 2) and consumed here (Layer 3).
+    if (activeGamePlan) {
+      const pairPlan = activeGamePlan.plans.find((p: InstrumentGamePlan) => p.symbol === pair) || null;
+      (pairConfig as any)._gamePlanContext = pairPlan ? {
+        bias: pairPlan.bias,
+        biasConfidence: pairPlan.biasConfidence,
+        dol: pairPlan.dol,
+        keyLevels: pairPlan.keyLevels,
+        regime: pairPlan.regime,
+        htfTrend: pairPlan.htfTrend,
+        h4Trend: pairPlan.h4Trend,
+        tradeable: pairPlan.tradeable,
+        atr: pairPlan.atr,
+        isFocusPair: activeGamePlan.focusPairs.includes(pair),
+      } : null;
+    } else {
+      (pairConfig as any)._gamePlanContext = null;
+     }
+
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;

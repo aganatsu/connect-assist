@@ -2613,5 +2613,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       regimeGatePassed, regimeGateReason,
       spreadGatePassed, spreadGateReason,
     },
+    // Game plan context (Layer 2 → Layer 3 passthrough)
+    gamePlanContext: (config as any)._gamePlanContext || null,
   };
 }
