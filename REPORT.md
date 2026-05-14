@@ -18,6 +18,12 @@
 
 7. **Weekly profile detection added** — The game plan now detects ICT weekly profile patterns (Classic Tuesday Low/High, Consolidation Monday, Expansion Monday, Wednesday Reversal, Seek & Destroy, etc.) and provides day-of-week tendency information. This data flows through the game plan context but does not directly affect scoring in this version — it's informational for the Telegram summary and future integration.
 
+8. **Data cache eliminates duplicate fetches** — All `fetchCandles()` calls in bot-scanner now go through a per-scan-cycle cache. The game plan and main scan loop share the same candle data instead of fetching independently. This eliminates ~60 duplicate API calls per scan cycle for a 10-pair configuration.
+
+9. **Telegram summary enhanced** — The game plan Telegram message now includes IPDA 60d/20d ranges with institutional bias arrows (↑/↓/↔) and position percent, plus weekly profile pattern with entry favorability indicator (✅/⏳) and day aggressiveness.
+
+10. **Dead UI controls removed** — The `gamePlanFilterEnabled` toggle and `gamePlanMinConfidence` slider have been removed from BotConfigModal since the gate always passes. The section description now explains the new integration model.
+
 ## Files modified
 
 | File | Description |
@@ -36,8 +42,9 @@
 | `_shared/confluenceScoring.ts` | Added Factor 25 (GP Key Level Alignment), GP Bias Confidence modifier, game plan context passthrough, DOL wiring to calculateSLTP |
 | `_shared/confluenceScoring.test.ts` | Updated factor count assertion from 21 to 22 |
 | `_shared/smcAnalysis.ts` | Added `dolTargets` field to `SLTPInput`, DOL-aware TP extension logic in `calculateSLTP` |
-| `_shared/gamePlan.ts` | Added imports for IPDA/weekly profile, `ipdaRanges` and `weeklyProfile` fields to `InstrumentGamePlan`, calls to `calculateIPDARanges()`, `ipdaRangesToKeyLevels()`, and `detectWeeklyProfile()` in `generateInstrumentGamePlan()` |
-| `bot-scanner/index.ts` | Injected game plan context into `pairConfig` before `runConfluenceAnalysis()`, added focus pair priority reordering before scan loop, converted legacy GP filter gate to info-only |
+| `_shared/gamePlan.ts` | Added imports for IPDA/weekly profile, `ipdaRanges` and `weeklyProfile` fields to `InstrumentGamePlan`, calls to `calculateIPDARanges()`, `ipdaRangesToKeyLevels()`, and `detectWeeklyProfile()` in `generateInstrumentGamePlan()`, IPDA/weekly profile in Telegram summary |
+| `bot-scanner/index.ts` | Injected game plan context into `pairConfig`, added focus pair priority reordering, converted legacy GP filter gate to info-only, wired data cache into all fetchCandles calls, added cache stats logging |
+| `src/components/BotConfigModal.tsx` | Removed dead `gamePlanFilterEnabled` toggle and `gamePlanMinConfidence` slider, updated section description |
 | `backtest-engine/liveBacktestParity.test.ts` | Updated factor count parity assertion from 21 to 22 |
 | `_shared/__snapshots__/*.json` | Regenerated snapshots to include new Factor 25 |
 
@@ -45,19 +52,25 @@
 
 ### bot-scanner/index.ts (live execution)
 
-Three surgical changes were made to this file:
+Six changes were made to this file:
 
-1. **Game plan context injection (lines ~3335-3345)**: Before `runConfluenceAnalysis()` is called for each pair, the game plan's per-instrument data is now injected into `pairConfig._gamePlanContext`. This follows the exact same pattern already used for `_htfPOIs`, `_impulseZoneResult`, and `_regimeData`. The data is additive — if no game plan exists for a pair, the field is simply absent and all downstream code handles `undefined` gracefully.
+1. **Data cache creation (line ~1623)**: A `ScanCache` instance is created at the start of each scan cycle, wrapping the existing `fetchCandles` function. A `cachedFetch` helper is defined as a simple passthrough to `scanCache.get()`.
 
-2. **Focus pair priority reordering (lines ~3115-3130)**: Before the main `for` loop over instruments, the array is reordered so focus pairs come first. This uses a stable sort (non-focus pairs retain their original order). The reordering only affects scan order, not which pairs are scanned.
+2. **All fetchCandles calls replaced with cachedFetch**: Every `fetchCandles()` call in the scan function — game plan fetches (lines ~2986-2990), rate pair fetches (line ~2202), FOTSI fetches (line ~2413), pending order fetches (line ~2528), management price refresh (line ~1834), and main scan loop fetches (lines ~3181-3188) — now goes through the cache. The `manageOpenPositions` callback also receives `cachedFetch` instead of `fetchCandles`.
 
-3. **Legacy gate soft migration (lines ~3480-3510)**: The `filterTradeByGamePlan` gate was changed from `passed = false` to `passed = true` with an informational log. The gate still evaluates and reports what it would have done, but no longer blocks trades. This is safe because the GP Bias Confidence modifier (Phase 5) now handles the same directional alignment check as a continuous score adjustment rather than a binary veto.
+3. **Game plan context injection (lines ~3335-3345)**: Before `runConfluenceAnalysis()` is called for each pair, the game plan's per-instrument data is injected into `pairConfig._gamePlanContext`.
+
+4. **Focus pair priority reordering (lines ~3115-3130)**: Before the main `for` loop, instruments are reordered so focus pairs come first using a stable sort.
+
+5. **Legacy gate soft migration (lines ~3480-3510)**: The `filterTradeByGamePlan` gate was changed from `passed = false` to `passed = true` with informational logging.
+
+6. **Cache stats and cleanup (lines ~5018-5020, ~5057)**: Cache hit/miss/error stats are logged and the cache is cleared at the end of the scan cycle. The `finally` block also clears the cache for error cases.
 
 ### smcAnalysis.ts (detection functions)
 
 One change was made:
 
-1. **DOL-aware TP extension (after line ~1847)**: Added an optional `dolTargets` field to `SLTPInput` and a new code block at the end of `calculateSLTP()` that extends TP toward DOL targets. This code runs AFTER all existing TP methods (structure, FVG extension, Fib extension) and only extends TP — it never shortens it. The 4× SL hard cap is respected. If no DOL targets are provided, the code block is skipped entirely.
+1. **DOL-aware TP extension (after line ~1847)**: Added an optional `dolTargets` field to `SLTPInput` and a new code block at the end of `calculateSLTP()` that extends TP toward DOL targets. This code runs AFTER all existing TP methods and only extends TP — it never shortens it. The 4× SL hard cap is respected.
 
 ## Tests added
 
@@ -89,25 +102,27 @@ All 57 new tests pass. All pre-existing tests pass (including the ETH impulse te
 
 1. **Factor count parity**: Updated `liveBacktestParity.test.ts` assertion from 21 to 22 factors. The new factor (`gamePlanKeyLevel`) is confirmed present in `DEFAULT_FACTOR_WEIGHTS`.
 
-2. **Snapshot regression**: Regenerated all three confluence scoring snapshots (`confluenceScoring.snapshot.json`, `confluenceScoring.bearish.snapshot.json`, `confluenceScoring.ranging.snapshot.json`). The snapshots now include Factor 25 in the factor breakdown. Existing factor scores are unchanged — verified by running snapshots twice (create + validate).
+2. **Snapshot regression**: Regenerated all three confluence scoring snapshots. The snapshots now include Factor 25 in the factor breakdown. Existing factor scores are unchanged — verified by running snapshots twice (create + validate).
 
-3. **Score stability without game plan**: When no game plan context is provided (the default for all existing tests), Factor 25 scores 0, GP Bias Confidence adjustment is 0, and DOL TP extension is skipped. This means all existing behavior is preserved when the game plan is not available.
+3. **Score stability without game plan**: When no game plan context is provided (the default for all existing tests), Factor 25 scores 0, GP Bias Confidence adjustment is 0, and DOL TP extension is skipped. All existing behavior is preserved.
 
-4. **Gate migration safety**: The legacy GP filter gate now always passes. Verified that the `filterTradeByGamePlan` function still runs and logs correctly, but `passed` is always `true`. The GP Bias Confidence modifier handles the same directional check as a continuous score adjustment.
+4. **Gate migration safety**: The legacy GP filter gate now always passes. Verified that the `filterTradeByGamePlan` function still runs and logs correctly, but `passed` is always `true`.
 
-5. **Pre-existing failures confirmed**: Stashed all changes and ran tests on clean `main` — the ETH impulse test and example.test.ts failures are pre-existing and not caused by our changes.
+5. **Data cache transparency**: The cache is a pure passthrough — same data, same order, same error handling. The only difference is that duplicate requests return cached results instead of making new API calls.
+
+6. **Pre-existing failures confirmed**: Stashed all changes and ran tests on clean `main` — the ETH impulse test and example.test.ts failures are pre-existing.
+
+## Pre-existing issues noted
+
+- **`.toFixed(5)` used for all price formatting in gamePlan.ts** — This produces incorrect formatting for JPY pairs (e.g., `142.00000` instead of `142.000`) and crypto. The new IPDA formatting uses dynamic decimal places based on pip size, but the existing DOL/key level formatting was not changed to avoid scope creep.
 
 ## Open questions
 
-1. **Frontend config UI**: The `gamePlanFilterEnabled` toggle and `gamePlanMinConfidence` slider in BotConfigModal are now non-functional since the gate always passes. Should these be removed, repurposed (e.g., to control the GP Bias Confidence modifier strength), or left as-is?
+1. **Weekly profile → scoring**: Deferred to a future task per user request. The data is available in the game plan context for when this is ready.
 
-2. **Weekly profile → scoring**: The weekly profile data flows through the game plan context but doesn't directly affect scoring yet. A future enhancement could add a "day favorability" modifier that slightly boosts/penalizes scores based on whether the current day is favorable for entries according to the weekly profile. Should this be pursued?
+2. **Backtest engine parity**: Deferred to a future task per user request. The backtest engine will score 0 for game-plan-dependent factors since it doesn't generate game plans.
 
-3. **Data cache integration**: The `dataCache.ts` module is created and tested but not yet wired into `bot-scanner/index.ts` to replace the duplicate fetch calls. This requires modifying the main scan loop's candle fetching logic, which is a larger change. The cache is ready to be integrated when desired.
-
-4. **IPDA ranges in Telegram summary**: The IPDA ranges and weekly profile data are now available in the game plan but the Telegram message formatting hasn't been updated to include them. Should the Telegram summary be updated to show IPDA levels and weekly profile?
-
-5. **Backtest engine parity**: The backtest engine imports `runConfluenceAnalysis` from the shared module, so it will automatically pick up Factor 25 and the GP Bias Confidence modifier. However, the backtest engine doesn't generate game plans, so these features will score 0 in backtests. If game plan context should be simulated in backtests, that would be a separate task.
+3. **GamePlanPanel.tsx (frontend dashboard)**: The frontend game plan viewer reads structured `plans` data, not the Telegram summary. To show IPDA ranges and weekly profiles in the dashboard UI, `GamePlanPanel.tsx` would need to be updated to render the new `ipdaRanges` and `weeklyProfile` fields. This was not part of the current task scope.
 
 ## Suggested PR title and description
 
@@ -126,10 +141,14 @@ Transforms the game plan from a Telegram-only summary into an active participant
 - **Legacy Gate → Info-only**: Binary veto gate disabled, replaced by continuous scoring
 - **IPDA 20/40/60-Day Ranges**: Institutional reference levels added to key level analysis
 - **Weekly Profile Detection**: ICT day-of-week pattern recognition (informational in v1)
+- **Data Cache**: All fetchCandles calls go through per-cycle cache, eliminating ~60 duplicate API calls per scan
+- **Telegram Summary Enhanced**: IPDA ranges and weekly profile now shown in game plan messages
+- **Dead UI Controls Removed**: gamePlanFilterEnabled toggle and gamePlanMinConfidence slider removed from config
 
 ### Stats
 
-- 2,710 lines added, 42 removed across 20 files
+- 2,857 lines added, 134 removed across 22 files
+- 14 clean commits on branch
 - 57 new tests, 668 total passing
 - 3 new shared modules (`dataCache.ts`, `ipdaRanges.ts`, `weeklyProfile.ts`)
 - Zero regressions in existing test suite
