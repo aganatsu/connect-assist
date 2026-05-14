@@ -75,6 +75,8 @@ export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   htfFibPdLiquidity: 2.5,
   confluenceStack: 1.5,
   pullbackHealth: 0.5,
+  // ── Game Plan Integration factors ──
+  gamePlanKeyLevel: 1.0,
 };
 
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
@@ -1927,6 +1929,77 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
+  // ── Factor 25: Game Plan Key Level Alignment (max 1.0) ──────────────────────
+  // Checks if the current entry price is near a key level identified by the session
+  // game plan (Layer 2). Key levels come from daily structure analysis: OBs, FVGs,
+  // PD levels, liquidity pools, and support/resistance identified on the HTF.
+  // Being near a game-plan key level means the entry zone was pre-identified as
+  // significant during the premarket analysis — this adds institutional confluence.
+  {
+    let pts = 0;
+    let detail = "";
+    const gpCtx = (config as any)._gamePlanContext;
+
+    if (gpCtx && gpCtx.keyLevels && gpCtx.keyLevels.length > 0) {
+      const atrForTolerance = calculateATR(candles, 14);
+      // Tolerance: price must be within 0.5× ATR of a key level
+      const tolerance = atrForTolerance * 0.5;
+
+      // Significance-based scoring
+      const SIG_SCORE: Record<string, number> = { high: 0.5, medium: 0.3, low: 0.15 };
+
+      // Directional alignment: support levels boost longs, resistance boosts shorts
+      // pd_level, ob, fvg, liquidity are neutral (boost either direction)
+      const DIRECTIONAL_TYPES = new Set(["support", "resistance"]);
+
+      let bestScore = 0;
+      let bestLabel = "";
+      let matchCount = 0;
+
+      for (const kl of gpCtx.keyLevels) {
+        const dist = Math.abs(lastPrice - kl.price);
+        if (dist > tolerance) continue;
+
+        let levelScore = SIG_SCORE[kl.significance] ?? 0.15;
+
+        // Directional check for support/resistance
+        if (DIRECTIONAL_TYPES.has(kl.type)) {
+          const aligned = (direction === "long" && kl.type === "support")
+            || (direction === "short" && kl.type === "resistance");
+          const counter = (direction === "long" && kl.type === "resistance")
+            || (direction === "short" && kl.type === "support");
+          if (aligned) {
+            levelScore *= 1.2; // 20% bonus for directional alignment
+          } else if (counter) {
+            levelScore *= 0.5; // 50% reduction for counter-directional
+          }
+        }
+
+        matchCount++;
+        if (levelScore > bestScore) {
+          bestScore = levelScore;
+          bestLabel = `${kl.label} (${kl.significance} ${kl.type} @ ${kl.price.toFixed(5)})`;
+        }
+      }
+
+      if (matchCount > 0) {
+        // Use best match + small bonus for multiple matches (0.1 per extra, max 0.3)
+        const multiBonus = Math.min(0.3, (matchCount - 1) * 0.1);
+        pts = Math.min(1.0, Math.round((bestScore + multiBonus) * 100) / 100);
+        detail = `Near GP key level: ${bestLabel}${matchCount > 1 ? ` (+${matchCount - 1} more within tolerance)` : ""} → +${pts.toFixed(2)}`;
+      } else {
+        detail = `${gpCtx.keyLevels.length} GP key levels exist but none within ${(tolerance * 10000).toFixed(0)}p tolerance`;
+      }
+    } else if (gpCtx) {
+      detail = "Game plan active but no key levels for this pair";
+    } else {
+      detail = "No game plan context available";
+    }
+
+    { const s = applyWeightScale(pts, "gamePlanKeyLevel", 1.0, config); pts = s.pts; score += pts;
+    factors.push({ name: "GP Key Level Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -2055,7 +2128,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Tier 2 (Confirmation ×1): Adds confidence to the setup
   // Tier 3 (Bonus ×0.5): Nice to have, never required
   const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity", "GP Key Level Alignment"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
   // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
   // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)

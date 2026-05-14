@@ -1,19 +1,19 @@
 {
-  "score": 30.2,
+  "score": 28.9,
   "rawScore": 6.8,
   "direction": "long",
   "bias": "bullish",
   "strongFactorCount": 5,
-  "enabledMax": 22.5,
+  "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 2,
     "tier1Max": 4,
     "tier2Count": 3,
-    "tier2Max": 9,
+    "tier2Max": 10,
     "tier3Count": 2,
     "tier3Max": 9,
     "tieredScore": 6.8,
-    "tieredMax": 22.5,
+    "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": true,
@@ -144,6 +144,12 @@
     },
     {
       "name": "HTF Fib + PD + Liquidity",
+      "present": false,
+      "weight": 0,
+      "tier": 2
+    },
+    {
+      "name": "GP Key Level Alignment",
       "present": false,
       "weight": 0,
       "tier": 2
