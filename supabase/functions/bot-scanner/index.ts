@@ -4057,30 +4057,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap,
       );
-      // ── Game Plan Filter Gate ──
-      // Check if the signal direction aligns with the session game plan bias.
-      // Respects config: gamePlanFilterEnabled (bool), gamePlanMinConfidence (number).
-      const gpFilterEnabled = (config as any).gamePlanFilterEnabled !== false; // ON by default
-      const gpMinConfidence = Number((config as any).gamePlanMinConfidence) || 50;
+      // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
+      // Previously a binary veto that blocked trades opposing the game plan bias.
+      // Now converted to info-only: the scoring impact is handled by the GP Bias
+      // Confidence factor (Phase 5) which applies a continuous penalty/bonus.
+      // The gate always passes but logs what the legacy behavior would have done.
       const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
-      if (gpFilterEnabled && !gpFilter.allowed) {
-        // Check if the bias confidence exceeds the minimum threshold
-        const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
-        const biasConf = pairPlan?.biasConfidence ?? 0;
-        if (biasConf >= gpMinConfidence) {
-          gates.push({ passed: false, reason: gpFilter.reason });
-          console.log(`[scan ${scanCycleId}] ❌ ${pair}: ${gpFilter.reason} (confidence ${biasConf}% >= ${gpMinConfidence}% threshold)`);
+      if (activeGamePlan) {
+        if (!gpFilter.allowed) {
+          const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+          const biasConf = pairPlan?.biasConfidence ?? 0;
+          // Info-only: log what the old gate would have done
+          gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (legacy gate would have blocked at ${biasConf}% conf)`);
         } else {
-          // Confidence too low to enforce the filter — allow the trade
-          gates.push({ passed: true, reason: `Game plan: bias confidence ${biasConf}% below ${gpMinConfidence}% threshold — filter skipped` });
-          console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: Game plan bias confidence ${biasConf}% < ${gpMinConfidence}% threshold — allowing trade`);
+          gates.push({ passed: true, reason: gpFilter.reason });
         }
-      } else if (!gpFilterEnabled && !gpFilter.allowed) {
-        // Filter disabled — log but don't block
-        gates.push({ passed: true, reason: `Game plan filter disabled — would have rejected: ${gpFilter.reason}` });
-        console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Game plan filter OFF (would reject: ${gpFilter.reason})`);
-      } else if (activeGamePlan) {
-        gates.push({ passed: true, reason: gpFilter.reason });
       }
       // ── News Impact Alignment Gate ──
       // If we have analyzed news impacts, check if the trade direction aligns with news bias.
