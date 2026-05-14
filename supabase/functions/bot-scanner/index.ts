@@ -61,6 +61,7 @@ import {
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { createScanCache } from "../_shared/dataCache.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -1619,6 +1620,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const scanCycleId = crypto.randomUUID();
 
+  // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
+  const scanCache = createScanCache(fetchCandles);
+  const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
+
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
@@ -1826,7 +1831,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
       try {
-        const candles = await fetchCandles(sym, "15m", "5d");
+        const candles = await cachedFetch(sym, "15m", "5d");
         if (candles.length > 0) {
           livePriceMap[sym] = candles[candles.length - 1].close;
         }
@@ -1860,7 +1865,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let managementActions: ManagementAction[] = [];
   if (positionsToManage.length > 0) {
     try {
-      managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, fetchCandles, detectSession);
+      managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, cachedFetch, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
@@ -2194,7 +2199,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const rateMap: Record<string, number> = {};
   try {
     const rateFetches = await Promise.all(
-      RATE_PAIRS.map(p => fetchCandles(p, "1d", "5d").catch(() => [] as Candle[]))
+      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
     );
     for (let i = 0; i < RATE_PAIRS.length; i++) {
       const candles = rateFetches[i];
@@ -2405,7 +2410,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
         const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
         const batchResults = await Promise.all(
-          batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
+          batch.map(p => cachedFetch(p, "1d", "6mo"))
         );
         for (let j = 0; j < batch.length; j++) {
           if (batchResults[j] && batchResults[j].length >= 30) {
@@ -2520,7 +2525,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Fetch current price to check if limit order should fill
-        const pendingCandles = await fetchCandles(pending.symbol, config.entryTimeframe || "15min", "5d").catch(() => [] as Candle[]);
+        const pendingCandles = await cachedFetch(pending.symbol, config.entryTimeframe || "15min", "5d");
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
         const lastCandle = pendingCandles[pendingCandles.length - 1];
@@ -2979,10 +2984,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           try {
             // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
             const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
-              fetchCandles(sym, "1d", "1y").catch(() => [] as Candle[]),
-              fetchCandles(sym, "4h", "1mo").catch(() => [] as Candle[]),
-              fetchCandles(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)).catch(() => [] as Candle[]),
-              fetchCandles(sym, "1h", "5d").catch(() => [] as Candle[]),
+              cachedFetch(sym, "1d", "1y"),
+              cachedFetch(sym, "4h", "1mo"),
+              cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
+              cachedFetch(sym, "1h", "5d"),
             ]);
             if (gpDaily.length < 10 || gpEntry.length < 10) return null;
             return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName);
@@ -3173,14 +3178,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const smtFlag = smtPair && SUPPORTED_SYMBOLS[smtPair] ? 1 : 0;
     const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
     const fetchPromises: Promise<Candle[]>[] = [
-      fetchCandles(pair, entryInterval, entryRange),
-      fetchCandles(pair, "1d", "1y"),
+      cachedFetch(pair, entryInterval, entryRange),
+      cachedFetch(pair, "1d", "1y"),
     ];
     // Always fetch 4H for multi-TF regime + HTF POI detection
-    if (multiTFRegimeEnabled) fetchPromises.push(fetchCandles(pair, "4h", "1mo").catch(() => [] as Candle[]));
+    if (multiTFRegimeEnabled) fetchPromises.push(cachedFetch(pair, "4h", "1mo"));
     // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
-    fetchPromises.push(fetchCandles(pair, "1h", "5d").catch(() => [] as Candle[]));
-    if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
+    fetchPromises.push(cachedFetch(pair, "1h", "5d"));
+    if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -5010,6 +5015,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // which feed served this scan cycle.
   const sourceTally = endScanSourceTally();
   const throttleStats = resetThrottleStats();
+  const cacheStats = scanCache.stats();
+  console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors (${scanCache.size()} unique keys)`);
+  scanCache.clear();
   const detailsWithMeta = [
     {
       __meta: true,
@@ -5024,6 +5032,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
+      dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
     },
@@ -5045,6 +5054,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
+    try { scanCache.clear(); } catch { /* ignore */ }
     // Only release lock if we acquired one (management-only skips locking)
     if (!opts?.isManagementOnly) {
       try {
