@@ -3759,15 +3759,23 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const htfLayers = izData.bestZone.htfLayers || [];
         const izTier1Credits: string[] = [];
 
-        // Credit the primary POI type from the zone
+        // Credit the primary POI type from the zone AND mutate the factor object
         if (zonePOIType === "fvg") {
           const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
           if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+            fvgFactor.present = true;
+            fvgFactor.weight = 1.0;
+            (fvgFactor as any).tier = 1;
+            fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is FVG — confirmed within impulse leg at Fib level`;
             izTier1Credits.push("FVG (impulse-zone-confirmed)");
           }
         } else if (zonePOIType === "ob") {
           const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
           if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+            obFactor.present = true;
+            obFactor.weight = 1.0;
+            (obFactor as any).tier = 1;
+            obFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is OB — confirmed within impulse leg at Fib level`;
             izTier1Credits.push("OB (impulse-zone-confirmed)");
           }
         }
@@ -3776,6 +3784,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
           const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
           if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+            obFactor.present = true;
+            obFactor.weight = 1.0;
+            (obFactor as any).tier = 1;
+            obFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains OB — zone overlaps HTF order block`;
             if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) {
               izTier1Credits.push("OB (HTF-zone-layer)");
             }
@@ -3784,6 +3796,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
           const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
           if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+            fvgFactor.present = true;
+            fvgFactor.weight = 1.0;
+            (fvgFactor as any).tier = 1;
+            fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains FVG — zone overlaps HTF fair value gap`;
             if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) {
               izTier1Credits.push("FVG (HTF-zone-layer)");
             }

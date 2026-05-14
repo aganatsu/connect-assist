@@ -36,6 +36,7 @@ interface Factor {
   present: boolean;
   weight: number;
   tier?: number;
+  detail?: string;
 }
 
 interface BestZone {
@@ -79,15 +80,23 @@ function applyImpulseZoneTier1Credit(
   const htfLayers = izData.bestZone.htfLayers || [];
   const izTier1Credits: string[] = [];
 
-  // Credit the primary POI type from the zone
+  // Credit the primary POI type from the zone AND mutate the factor object
   if (zonePOIType === "fvg") {
     const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
     if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+      fvgFactor.present = true;
+      fvgFactor.weight = 1.0;
+      (fvgFactor as any).tier = 1;
+      fvgFactor.detail = (fvgFactor.detail || "") + " | IMPULSE-ZONE CREDIT: zone POI type is FVG \u2014 confirmed within impulse leg at Fib level";
       izTier1Credits.push("FVG (impulse-zone-confirmed)");
     }
   } else if (zonePOIType === "ob") {
     const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
     if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+      obFactor.present = true;
+      obFactor.weight = 1.0;
+      (obFactor as any).tier = 1;
+      obFactor.detail = (obFactor.detail || "") + " | IMPULSE-ZONE CREDIT: zone POI type is OB \u2014 confirmed within impulse leg at Fib level";
       izTier1Credits.push("OB (impulse-zone-confirmed)");
     }
   }
@@ -96,6 +105,10 @@ function applyImpulseZoneTier1Credit(
   if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
     const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
     if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+      obFactor.present = true;
+      obFactor.weight = 1.0;
+      (obFactor as any).tier = 1;
+      obFactor.detail = (obFactor.detail || "") + " | IMPULSE-ZONE CREDIT: HTF layer contains OB \u2014 zone overlaps HTF order block";
       if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) {
         izTier1Credits.push("OB (HTF-zone-layer)");
       }
@@ -104,6 +117,10 @@ function applyImpulseZoneTier1Credit(
   if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
     const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
     if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+      fvgFactor.present = true;
+      fvgFactor.weight = 1.0;
+      (fvgFactor as any).tier = 1;
+      fvgFactor.detail = (fvgFactor.detail || "") + " | IMPULSE-ZONE CREDIT: HTF layer contains FVG \u2014 zone overlaps HTF fair value gap";
       if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) {
         izTier1Credits.push("FVG (HTF-zone-layer)");
       }
@@ -167,11 +184,11 @@ function makeAnalysis(overrides: {
       spreadGateReason: "Spread OK",
     },
     factors: overrides.factors ?? [
-      { name: "Market Structure", present: true, weight: 1.5, tier: 1 },
-      { name: "Premium/Discount & Fib", present: true, weight: 1.0, tier: 1 },
-      { name: "Fair Value Gap", present: false, weight: 1.0, tier: 1 },
-      { name: "Order Block", present: false, weight: 1.0, tier: 1 },
-      { name: "Unicorn Model", present: false, weight: 0.5, tier: 2 },
+      { name: "Market Structure", present: true, weight: 1.5, tier: 1, detail: "BOS confirmed on 15m" },
+      { name: "Premium/Discount & Fib", present: true, weight: 1.0, tier: 1, detail: "Retrace at 55%" },
+      { name: "Fair Value Gap", present: false, weight: 0, tier: 1, detail: "No active FVGs" },
+      { name: "Order Block", present: false, weight: 0, tier: 1, detail: "OB not at level" },
+      { name: "Unicorn Model", present: false, weight: 0, tier: 2, detail: "Not detected" },
     ],
     score: 55.0,
     direction: "long",
@@ -456,4 +473,98 @@ Deno.test("Tier1Credit: no credit applied keeps tieredScore and score unchanged"
 
   assertEquals(analysis.score, originalScore);
   assertEquals(analysis.tieredScoring!.tieredScore, originalTieredScore);
+});
+
+// ─── Factor mutation tests ──────────────────────────────────────────
+
+Deno.test("Tier1Credit: FVG credit mutates factor object — present=true, weight=1.0, tier=1, detail appended", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const fvgBefore = analysis.factors.find(f => f.name === "Fair Value Gap")!;
+  assertEquals(fvgBefore.present, false);
+  assertEquals(fvgBefore.weight, 0);
+
+  const izData = makeIzData({ type: "fvg" });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const fvgAfter = analysis.factors.find(f => f.name === "Fair Value Gap")!;
+  assertEquals(fvgAfter.present, true);
+  assertEquals(fvgAfter.weight, 1.0);
+  assertEquals((fvgAfter as any).tier, 1);
+  assert(fvgAfter.detail!.includes("IMPULSE-ZONE CREDIT"));
+  assert(fvgAfter.detail!.includes("zone POI type is FVG"));
+});
+
+Deno.test("Tier1Credit: OB credit mutates factor object — present=true, weight=1.0, tier=1, detail appended", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const obBefore = analysis.factors.find(f => f.name === "Order Block")!;
+  assertEquals(obBefore.present, false);
+  assertEquals(obBefore.weight, 0);
+
+  const izData = makeIzData({ type: "ob" });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const obAfter = analysis.factors.find(f => f.name === "Order Block")!;
+  assertEquals(obAfter.present, true);
+  assertEquals(obAfter.weight, 1.0);
+  assertEquals((obAfter as any).tier, 1);
+  assert(obAfter.detail!.includes("IMPULSE-ZONE CREDIT"));
+  assert(obAfter.detail!.includes("zone POI type is OB"));
+});
+
+Deno.test("Tier1Credit: HTF OB layer mutates OB factor object", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ type: "fvg", htfLayers: ["4H OB"] });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const obAfter = analysis.factors.find(f => f.name === "Order Block")!;
+  assertEquals(obAfter.present, true);
+  assertEquals(obAfter.weight, 1.0);
+  assertEquals((obAfter as any).tier, 1);
+  assert(obAfter.detail!.includes("HTF layer contains OB"));
+});
+
+Deno.test("Tier1Credit: HTF FVG layer mutates FVG factor object", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ type: "ob", htfLayers: ["4H FVG"] });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const fvgAfter = analysis.factors.find(f => f.name === "Fair Value Gap")!;
+  assertEquals(fvgAfter.present, true);
+  assertEquals(fvgAfter.weight, 1.0);
+  assertEquals((fvgAfter as any).tier, 1);
+  assert(fvgAfter.detail!.includes("HTF layer contains FVG"));
+});
+
+Deno.test("Tier1Credit: factor already present at tier 1 → detail NOT appended", () => {
+  const analysis = makeAnalysis({
+    tier1Count: 2,
+    factors: [
+      { name: "Market Structure", present: true, weight: 1.5, tier: 1, detail: "BOS confirmed" },
+      { name: "Premium/Discount & Fib", present: true, weight: 1.0, tier: 1, detail: "Retrace at 55%" },
+      { name: "Fair Value Gap", present: true, weight: 1.0, tier: 1, detail: "FVG at price" },
+      { name: "Order Block", present: false, weight: 0, tier: 1, detail: "OB not at level" },
+    ],
+  });
+  const izData = makeIzData({ type: "fvg" });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const fvgAfter = analysis.factors.find(f => f.name === "Fair Value Gap")!;
+  // Factor was already present at tier 1 — should NOT be modified
+  assertEquals(fvgAfter.detail, "FVG at price");
+  assert(!fvgAfter.detail!.includes("IMPULSE-ZONE CREDIT"));
+});
+
+Deno.test("Tier1Credit: FVG primary + HTF OB → both factors mutated with credit detail", () => {
+  const analysis = makeAnalysis({ tier1Count: 2 });
+  const izData = makeIzData({ type: "fvg", htfLayers: ["4H OB"] });
+  applyImpulseZoneTier1Credit(analysis, izData);
+
+  const fvgAfter = analysis.factors.find(f => f.name === "Fair Value Gap")!;
+  const obAfter = analysis.factors.find(f => f.name === "Order Block")!;
+
+  // Both should be mutated
+  assertEquals(fvgAfter.present, true);
+  assertEquals(obAfter.present, true);
+  assert(fvgAfter.detail!.includes("zone POI type is FVG"));
+  assert(obAfter.detail!.includes("HTF layer contains OB"));
 });
