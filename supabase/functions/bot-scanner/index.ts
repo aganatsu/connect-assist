@@ -3113,7 +3113,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
   }
 
-  for (const pair of config.instruments) {
+  // ── Phase 6: Focus Pair Priority ──
+  // Reorder instruments so game-plan focus pairs are scanned first.
+  // When max positions are limited, this gives focus pairs first shot at available slots.
+  // Non-focus pairs are still scanned if capacity remains.
+  let scanOrder = [...config.instruments];
+  if (activeGamePlan && activeGamePlan.focusPairs && activeGamePlan.focusPairs.length > 0) {
+    const focusSet = new Set(activeGamePlan.focusPairs);
+    const focusPairs = scanOrder.filter(p => focusSet.has(p));
+    const nonFocusPairs = scanOrder.filter(p => !focusSet.has(p));
+    scanOrder = [...focusPairs, ...nonFocusPairs];
+    console.log(`[scan ${scanCycleId}] Focus pair priority: ${focusPairs.length} focus pairs scanned first: [${focusPairs.join(", ")}]`);
+  }
+
+  for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
