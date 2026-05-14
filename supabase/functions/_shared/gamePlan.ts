@@ -776,6 +776,27 @@ export function buildSessionGamePlan(
     if (plan.skipReason) {
       summaryLines.push(`   Skip: ${plan.skipReason}`);
     }
+    // IPDA ranges — show institutional reference levels
+    if (plan.ipdaRanges) {
+      const ipda = plan.ipdaRanges;
+      const pip = SPECS[plan.symbol]?.pipSize ?? 0.0001;
+      const dec = pip < 0.01 ? 5 : pip < 1 ? 3 : 1;
+      if (ipda.range60) {
+        const posStr = ipda.positionPercent60 !== null ? ` (${ipda.positionPercent60.toFixed(0)}%)` : "";
+        const biasEmoji = ipda.institutionalBias === "bullish" ? "↑" : ipda.institutionalBias === "bearish" ? "↓" : "↔";
+        summaryLines.push(`   IPDA 60d: ${ipda.range60.low.toFixed(dec)}–${ipda.range60.high.toFixed(dec)} ${biasEmoji}${posStr}`);
+      }
+      if (ipda.range20) {
+        summaryLines.push(`   IPDA 20d: ${ipda.range20.low.toFixed(dec)}–${ipda.range20.high.toFixed(dec)}`);
+      }
+    }
+    // Weekly profile — show pattern and day tendency
+    if (plan.weeklyProfile) {
+      const wp = plan.weeklyProfile;
+      const profileLabel = wp.profile.replace(/_/g, " ");
+      const entryEmoji = wp.favorableForEntry ? "✅" : "⏳";
+      summaryLines.push(`   Week: ${profileLabel} (${wp.confidence}%) ${entryEmoji} ${wp.dayTendency.aggressiveness}`);
+    }
   }
 
   return {
