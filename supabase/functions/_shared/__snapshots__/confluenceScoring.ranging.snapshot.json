@@ -169,6 +169,11 @@
       "name": "Spread Quality",
       "present": false,
       "weight": 0
+    },
+    {
+      "name": "GP Bias Confidence",
+      "present": false,
+      "weight": 0
     }
   ]
 }

@@ -218,6 +218,51 @@ function regimeAlignmentAdjustment(
   return { adjustment: 0, detail: `Transitional regime — no adjustment` };
 }
 
+// ─── Helper: Game Plan Bias Confidence Adjustment ─────────────────────────
+// Applies a soft score modifier based on the game plan's premarket bias analysis.
+// Unlike the legacy game plan filter gate (binary veto), this is a continuous
+// adjustment that rewards alignment and penalizes opposition, scaled by confidence.
+// This is additive to the existing Regime Alignment — they measure different things:
+//   - Regime Alignment: daily candle structure + ATR trend (mechanical)
+//   - GP Bias Confidence: premarket analysis combining structure + DOL + news + zone (analytical)
+function gamePlanBiasAdjustment(
+  gpBias: string | null | undefined,
+  gpConfidence: number | null | undefined,
+  direction: string | null,
+): { adjustment: number; detail: string } {
+  if (!direction || !gpBias || gpBias === "neutral") {
+    return { adjustment: 0, detail: "No GP bias or neutral — no adjustment" };
+  }
+  const conf = gpConfidence ?? 0; // 0-100 scale
+  if (conf < 50) {
+    return { adjustment: 0, detail: `GP bias ${gpBias} but low confidence (${conf}%) — no adjustment` };
+  }
+
+  const aligned = (direction === "long" && gpBias === "bullish")
+    || (direction === "short" && gpBias === "bearish");
+  const confScale = Math.min(1.0, conf / 100); // 0.5 to 1.0
+
+  if (conf >= 70) {
+    // High confidence: stronger adjustment
+    if (aligned) {
+      const bonus = +(0.5 * confScale).toFixed(2);
+      return { adjustment: bonus, detail: `GP bias ${gpBias} ALIGNS with ${direction} (${conf}% conf) → +${bonus} bonus` };
+    } else {
+      const penalty = +(-0.75 * confScale).toFixed(2);
+      return { adjustment: penalty, detail: `GP bias ${gpBias} OPPOSES ${direction} (${conf}% conf) → ${penalty} penalty` };
+    }
+  } else {
+    // Medium confidence (50-69%): mild adjustment
+    if (aligned) {
+      const bonus = +(0.25 * confScale).toFixed(2);
+      return { adjustment: bonus, detail: `GP bias ${gpBias} aligns with ${direction} (${conf}% conf, mild) → +${bonus} bonus` };
+    } else {
+      const penalty = +(-0.35 * confScale).toFixed(2);
+      return { adjustment: penalty, detail: `GP bias ${gpBias} opposes ${direction} (${conf}% conf, mild) → ${penalty} penalty` };
+    }
+  }
+}
+
 export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[], atMs?: number) {
   // P1: structure lookback — limit candles fed into structure analysis (config-driven, default 50)
   const structureLookback = (typeof config.structureLookback === "number" && config.structureLookback > 0)
@@ -2295,6 +2340,36 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     });
   }
 
+  // ─── GP Bias Confidence Adjustment (Game Plan Layer 2 → Layer 3) ─────────────
+  // Applies a soft score modifier based on the game plan's premarket bias analysis.
+  // This is separate from the Regime Alignment gate — it captures the game plan's
+  // analytical bias (structure + DOL + news + zone) as a continuous adjustment.
+  {
+    const gpCtx = (config as any)._gamePlanContext;
+    if (gpCtx && gpCtx.bias && direction) {
+      const { adjustment, detail } = gamePlanBiasAdjustment(
+        gpCtx.bias, gpCtx.biasConfidence, direction
+      );
+      // Apply adjustment directly to the tiered score (after factors, before normalization)
+      // We track it as a factor for transparency but it doesn't count toward tiered max
+      factors.push({
+        name: "GP Bias Confidence",
+        present: adjustment !== 0,
+        weight: adjustment, // positive = bonus, negative = penalty
+        detail: `${detail} [Layer 2 → Layer 3 integration]`,
+        group: "Macro Confirmation",
+      });
+    } else {
+      factors.push({
+        name: "GP Bias Confidence",
+        present: false,
+        weight: 0,
+        detail: "No game plan context available — no adjustment",
+        group: "Macro Confirmation",
+      });
+    }
+  }
+
   // ─── Tiered Scoring Model ─────────────────────────────────────────────────
   // Replaces the old percentage-of-weighted-max system with a clear tiered model:
   //   Tier 1 (Core Setup): Market Structure, Order Block, FVG, Premium/Discount
@@ -2442,6 +2517,16 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Add Opening Range bonus if present
   const orFactor = factors.find(f => f.name && f.name.includes("Opening Range") && f.present);
   if (orFactor) tieredScore += Math.min(2.0, orFactor.weight);
+
+  // Apply GP Bias Confidence adjustment (Layer 2 → Layer 3)
+  // This is a soft modifier — it adjusts tieredScore but NOT tieredMax,
+  // so it shifts the percentage up/down without changing the denominator.
+  const gpBiasFactor = factors.find(f => f.name === "GP Bias Confidence" && f.present);
+  if (gpBiasFactor && gpBiasFactor.weight !== 0) {
+    tieredScore += gpBiasFactor.weight;
+    // Floor at 0 — the penalty can reduce score but never make it negative
+    if (tieredScore < 0) tieredScore = 0;
+  }
 
   // Calculate max possible from enabled tiers + bonuses
   let tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
