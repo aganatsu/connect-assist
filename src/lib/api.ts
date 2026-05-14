@@ -390,7 +390,7 @@ export const scannerApi = {
       .from("scan_logs")
       .select("*")
       .order("scanned_at", { ascending: false })
-      .limit(20);
+      .limit(100);
     if (error) throw new Error(error.message);
     return data || [];
   },
