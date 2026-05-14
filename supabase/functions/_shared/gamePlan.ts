@@ -28,6 +28,7 @@ import {
   detectSwingPoints,
   toNYTime,
 } from "./smcAnalysis.ts";
+import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -87,6 +88,8 @@ export interface InstrumentGamePlan {
   h4Trend: string;
   /** ATR for volatility context */
   atr: number;
+  /** IPDA 20/40/60-day data ranges (institutional reference levels) */
+  ipdaRanges?: import("./ipdaRanges.ts").IPDARanges;
   /** Whether to trade this instrument this session */
   tradeable: boolean;
   /** Reason if not tradeable */
@@ -628,6 +631,11 @@ export function generateInstrumentGamePlan(
     ? calculateATR(dailyCandles, 14)
     : 0;
 
+  // ── IPDA Data Ranges (20/40/60-day institutional reference levels) ──
+  const ipdaRanges = dailyCandles.length >= 25
+    ? calculateIPDARanges(dailyCandles, lastPrice)
+    : null;
+
   // ── DOL Identification ──
   const dol = identifyDOL(
     lastPrice,
@@ -658,6 +666,12 @@ export function generateInstrumentGamePlan(
     liquidityPools,
     spec.pipSize,
   );
+
+  // ── Merge IPDA levels into key levels ──
+  if (ipdaRanges) {
+    const ipdaLevels = ipdaRangesToKeyLevels(ipdaRanges, lastPrice, spec.pipSize);
+    keyLevels.push(...ipdaLevels);
+  }
 
   // ── Scenarios ──
   const scenarios = generateScenarios(
@@ -705,6 +719,7 @@ export function generateInstrumentGamePlan(
     htfTrend,
     h4Trend,
     atr,
+    ipdaRanges: ipdaRanges ?? undefined,
     tradeable,
     skipReason,
     lastPrice,
