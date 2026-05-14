@@ -1297,7 +1297,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
@@ -1323,6 +1323,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {hasRichData ? (
                         <>
+                          {/* ── Impulse Zone ── */}
+                          {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
