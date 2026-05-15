@@ -819,6 +819,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
+    // Conflict counter thresholds (bidirectional scoring)
+    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? 4,
+    conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? 6,
 
     // ── Entry mappings ──
     scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes,
@@ -2916,6 +2919,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
+    // Conflict counter thresholds (configurable via bot config)
+    const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
+    const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
       // Primary approach: use contains filter on JSONB
@@ -4063,18 +4069,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // When many factors actively oppose the trade, raise the bar or block entirely.
     const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
     let conflictAdjustedMinConfluence = adjustedMinConfluence;
-    if (opposingCount >= 6) {
-      // 6+ opposing factors = hard block — too much disagreement to trade
+    if (opposingCount >= conflictBlockAt) {
+      // N+ opposing factors = hard block — too much disagreement to trade
       detail.status = "rejected";
-      detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals`];
+      detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
       detail.reason = `Conflict block: ${opposingCount} opposing factors`;
       rejectedCount++;
       scanDetails.push(detail);
       continue;
-    } else if (opposingCount >= 4) {
-      // 4-5 opposing factors = raise threshold by 10 percentage points
+    } else if (opposingCount >= conflictThresholdRaise) {
+      // N+ opposing factors = raise threshold by 10 percentage points
       conflictAdjustedMinConfluence = adjustedMinConfluence + 10;
-      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
+      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
     }
 
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)

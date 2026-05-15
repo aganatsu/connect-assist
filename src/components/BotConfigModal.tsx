@@ -63,6 +63,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Same-Direction Stacking", keywords: ["stacking", "duplicate", "same direction", "pyramid", "double"] },
   { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
   { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
+  { tab: "risk", label: "Conflict Threshold Raise", keywords: ["conflict", "opposing", "threshold", "raise", "counter", "bidirectional"] },
+  { tab: "risk", label: "Conflict Hard Block", keywords: ["conflict", "block", "opposing", "veto", "counter", "bidirectional"] },
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
@@ -140,6 +142,7 @@ const BASE_CONFIG = {
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
     fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
+    conflictThresholdRaise: 4, conflictBlockAt: 6,
   },
   entry: {
     defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
@@ -929,6 +932,24 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                           }
                         </p>
                       </FieldGroup>
+
+                      {/* ── Conflict Counter Thresholds ── */}
+                      <div className="border-t border-border pt-4 space-y-3">
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Conflict Counter</p>
+                        <p className="text-[10px] text-muted-foreground italic">When multiple factors actively oppose the trade direction, the bot raises the bar or blocks entirely.</p>
+                        <FieldGroup label="Threshold Raise At" description="When this many factors oppose the trade, the minimum confluence threshold is raised by 10 percentage points.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.risk?.conflictThresholdRaise ?? 4]} onValueChange={v => updateField('risk', 'conflictThresholdRaise', v[0])} min={2} max={8} step={1} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-10 text-right">{config.risk?.conflictThresholdRaise ?? 4}</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Hard Block At" description="When this many factors oppose the trade, the trade is blocked entirely regardless of score.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.risk?.conflictBlockAt ?? 6]} onValueChange={v => updateField('risk', 'conflictBlockAt', v[0])} min={3} max={12} step={1} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-10 text-right">{config.risk?.conflictBlockAt ?? 6}</span>
+                          </div>
+                        </FieldGroup>
+                      </div>
                     </div>
                   </div>
                 )}

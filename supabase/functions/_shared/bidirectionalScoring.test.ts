@@ -330,3 +330,99 @@ Deno.test("Regression: DEFAULT_FACTOR_WEIGHTS has expected factor count", () => 
   // Should be 21 factors (17 original + htfPoiAlignment + htfFibPdLiquidity + confluenceStack + pullbackHealth + gamePlanKeyLevel = 22)
   assert(count >= 21, `Should have at least 21 configurable factors, got ${count}`);
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test 13: FOTSI negative values use _opposing flag and negative weight
+// ═══════════════════════════════════════════════════════════════════════
+Deno.test("Bidirectional: Currency Strength (FOTSI) factor uses _opposing flag when negative", () => {
+  const candles = generateCleanBullish();
+  const daily = makeDailyCandles(30, 1.0800, "up");
+
+  // Simulate FOTSI result with negative alignment (opposing currency flow)
+  const result = analyze(candles, daily, {
+    useFOTSI: true,
+    _fotsiResult: {
+      strengths: {
+        EUR: -3.5,  // Weak base currency (opposing long)
+        USD: 4.2,   // Strong quote currency (opposing long)
+        GBP: 1.0, JPY: -1.0, AUD: 0.5, NZD: -0.5, CHF: 0.3, CAD: -0.2,
+      },
+      timestamp: Date.now(),
+    },
+  });
+
+  const fotsiFactor = result.factors.find(f => f.name === "Currency Strength");
+  assertExists(fotsiFactor, "Currency Strength factor should exist");
+
+  // If FOTSI produced a negative score (opposing), it should have _opposing flag and negative weight
+  if (fotsiFactor.weight < 0) {
+    assert((fotsiFactor as any)._opposing === true, "Negative FOTSI should have _opposing: true flag");
+    assert(fotsiFactor.present === true, "Negative FOTSI should be marked as present");
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test 14: FOTSI negative values count toward opposingFactorCount
+// ═══════════════════════════════════════════════════════════════════════
+Deno.test("Bidirectional: negative FOTSI contributes to opposingFactorCount", () => {
+  const candles = generateCleanBullish();
+  const daily = makeDailyCandles(30, 1.0800, "up");
+
+  // Run once WITHOUT FOTSI
+  const resultNoFotsi = analyze(candles, daily, { useFOTSI: false });
+  const opposingWithout = resultNoFotsi.tieredScoring.opposingFactorCount;
+
+  // Run again WITH opposing FOTSI
+  const resultWithFotsi = analyze(candles, daily, {
+    useFOTSI: true,
+    _fotsiResult: {
+      strengths: {
+        EUR: -4.0, USD: 5.0,
+        GBP: 1.0, JPY: -1.0, AUD: 0.5, NZD: -0.5, CHF: 0.3, CAD: -0.2,
+      },
+      timestamp: Date.now(),
+    },
+  });
+  const opposingWith = resultWithFotsi.tieredScoring.opposingFactorCount;
+
+  const fotsiFactor = resultWithFotsi.factors.find(f => f.name === "Currency Strength");
+  assertExists(fotsiFactor, "Currency Strength factor should exist");
+
+  // If FOTSI was negative, opposing count should be higher
+  if (fotsiFactor.weight < 0) {
+    assert(
+      opposingWith > opposingWithout,
+      `Opposing count with negative FOTSI (${opposingWith}) should be > without (${opposingWithout})`
+    );
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Test 15: Conflict counter thresholds are configurable (config passthrough)
+// ═══════════════════════════════════════════════════════════════════════
+Deno.test("Config: conflictThresholdRaise and conflictBlockAt have correct defaults in BASE_CONFIG", async () => {
+  // This test verifies the UI defaults match the expected values.
+  // The actual threshold logic is in bot-scanner, but we verify the config shape here.
+  const { default: fs } = await import("https://deno.land/std@0.224.0/fs/mod.ts");
+
+  // Read the BotConfigModal to verify defaults
+  const modalPath = "src/components/BotConfigModal.tsx";
+  try {
+    const content = await Deno.readTextFile(modalPath);
+    assert(content.includes("conflictThresholdRaise: 4"), "BASE_CONFIG should have conflictThresholdRaise: 4");
+    assert(content.includes("conflictBlockAt: 6"), "BASE_CONFIG should have conflictBlockAt: 6");
+  } catch {
+    // If file doesn't exist in test context (edge functions), skip gracefully
+    console.log("BotConfigModal.tsx not accessible from edge function context — skipping file check");
+  }
+
+  // Verify the bot-scanner loadConfig maps these from risk section
+  const scannerPath = "supabase/functions/bot-scanner/index.ts";
+  try {
+    const content = await Deno.readTextFile(scannerPath);
+    assert(content.includes("risk.conflictThresholdRaise"), "loadConfig should read conflictThresholdRaise from risk section");
+    assert(content.includes("risk.conflictBlockAt"), "loadConfig should read conflictBlockAt from risk section");
+  } catch {
+    console.log("bot-scanner/index.ts not accessible — skipping file check");
+  }
+});

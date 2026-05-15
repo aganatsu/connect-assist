@@ -1493,7 +1493,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No direction — currency strength check skipped";
     }
     { const s = applyWeightScale(pts, "currencyStrength", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Currency Strength", present: pts !== 0, weight: s.displayWeight, detail, group: "Macro Confirmation" }); }
+    factors.push({ name: "Currency Strength", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Macro Confirmation", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Cached Daily Structure (computed once, reused by Factor 22 + gates) ──
