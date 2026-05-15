@@ -1,25 +1,26 @@
 {
-  "score": 28.9,
-  "rawScore": 6.8,
+  "score": 25.7,
+  "rawScore": 6.05,
   "direction": "long",
   "bias": "bullish",
-  "strongFactorCount": 5,
+  "strongFactorCount": 4,
   "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 2,
     "tier1Max": 4,
-    "tier2Count": 3,
+    "tier2Count": 2,
     "tier2Max": 10,
     "tier3Count": 2,
     "tier3Max": 9,
-    "tieredScore": 6.8,
+    "tieredScore": 6.05,
     "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": true,
     "regimeGateReason": "",
     "spreadGatePassed": true,
-    "spreadGateReason": "Spread OK: 10.1% of ATR"
+    "spreadGateReason": "Spread OK: 10.1% of ATR",
+    "opposingFactorCount": 2
   },
   "factorSummary": [
     {
@@ -55,7 +56,7 @@
     {
       "name": "Judas Swing",
       "present": true,
-      "weight": 0.75,
+      "weight": 0,
       "tier": 3
     },
     {
@@ -108,8 +109,8 @@
     },
     {
       "name": "AMD Phase",
-      "present": false,
-      "weight": 1.5,
+      "present": true,
+      "weight": -1.5,
       "tier": 3
     },
     {
@@ -127,7 +128,7 @@
     {
       "name": "Confluence Stack",
       "present": true,
-      "weight": 1.5,
+      "weight": -1.5,
       "tier": 2
     },
     {
@@ -156,8 +157,8 @@
     },
     {
       "name": "Power of 3 Combo",
-      "present": false,
-      "weight": 0,
+      "present": true,
+      "weight": 1,
       "tier": 3
     },
     {

@@ -819,6 +819,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
     portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
+    // Conflict counter thresholds (bidirectional scoring)
+    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? 4,
+    conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? 6,
 
     // ── Entry mappings ──
     scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes,
@@ -1017,6 +1020,10 @@ async function runSafetyGates(
     } else if (directionRate === 0 && oppositeRate > 0.3) {
       // Softer block: 0% in direction + strong opposite (>30%) even if S2F is higher
       gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+    } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
+      // Bidirectional enhancement: block when opposing fractals are 2.5× or more than supporting.
+      // E.g. Bull 20% / Bear 50% = 2.5× — structure is actively breaking against the trade.
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
     } else {
       gates.push({ passed: true, reason: `Structural Conviction: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
     }
@@ -2912,6 +2919,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
+    // Conflict counter thresholds (configurable via bot config)
+    const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
+    const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
       // Primary approach: use contains filter on JSONB
@@ -4003,7 +4013,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // Determine if this is a staged setup being promoted
     let isPromotedFromStaging = false;
-    if (existingStaged && effectiveScore >= adjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
+    if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
       const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
@@ -4055,8 +4065,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
+    // ── Bidirectional Conflict Counter Gate ──
+    // When many factors actively oppose the trade, raise the bar or block entirely.
+    const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+    let conflictAdjustedMinConfluence = adjustedMinConfluence;
+    if (opposingCount >= conflictBlockAt) {
+      // N+ opposing factors = hard block — too much disagreement to trade
+      detail.status = "rejected";
+      detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
+      detail.reason = `Conflict block: ${opposingCount} opposing factors`;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    } else if (opposingCount >= conflictThresholdRaise) {
+      // N+ opposing factors = raise threshold by 10 percentage points
+      conflictAdjustedMinConfluence = adjustedMinConfluence + 10;
+      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
+    }
+
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-    if (effectiveScore >= adjustedMinConfluence && analysis.direction && !isPaused) {
+    if (effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused) {
       signalsFound++;
 
       // Run safety gates

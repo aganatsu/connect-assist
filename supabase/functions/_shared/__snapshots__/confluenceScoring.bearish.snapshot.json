@@ -1,25 +1,26 @@
 {
-  "score": 21.3,
-  "rawScore": 5,
+  "score": 14.9,
+  "rawScore": 3.5,
   "direction": "long",
   "bias": "bullish",
-  "strongFactorCount": 4,
+  "strongFactorCount": 3,
   "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 0,
     "tier1Max": 4,
-    "tier2Count": 4,
+    "tier2Count": 3,
     "tier2Max": 10,
     "tier3Count": 2,
     "tier3Max": 9,
-    "tieredScore": 5,
+    "tieredScore": 3.5,
     "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": false,
     "regimeGateReason": "Regime mismatch: strong trend — long entry opposes strong trend (neutral) → -1.1 penalty (conf: 75%)",
     "spreadGatePassed": true,
-    "spreadGateReason": "Spread OK: 14.3% of ATR"
+    "spreadGateReason": "Spread OK: 14.3% of ATR",
+    "opposingFactorCount": 1
   },
   "factorSummary": [
     {
@@ -127,7 +128,7 @@
     {
       "name": "Confluence Stack",
       "present": true,
-      "weight": 1.5,
+      "weight": -1.5,
       "tier": 2
     },
     {
