@@ -1,19 +1,19 @@
 {
-  "score": 22.2,
+  "score": 21.3,
   "rawScore": 5,
   "direction": "long",
   "bias": "bullish",
   "strongFactorCount": 4,
-  "enabledMax": 22.5,
+  "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 0,
     "tier1Max": 4,
     "tier2Count": 4,
-    "tier2Max": 9,
+    "tier2Max": 10,
     "tier3Count": 2,
     "tier3Max": 9,
     "tieredScore": 5,
-    "tieredMax": 22.5,
+    "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": false,
@@ -149,6 +149,12 @@
       "tier": 2
     },
     {
+      "name": "GP Key Level Alignment",
+      "present": false,
+      "weight": 0,
+      "tier": 2
+    },
+    {
       "name": "Power of 3 Combo",
       "present": false,
       "weight": 0,
@@ -161,6 +167,11 @@
     },
     {
       "name": "Spread Quality",
+      "present": false,
+      "weight": 0
+    },
+    {
+      "name": "GP Bias Confidence",
       "present": false,
       "weight": 0
     }

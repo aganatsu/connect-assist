@@ -28,6 +28,8 @@ import {
   detectSwingPoints,
   toNYTime,
 } from "./smcAnalysis.ts";
+import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
+import { detectWeeklyProfile } from "./weeklyProfile.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -87,6 +89,10 @@ export interface InstrumentGamePlan {
   h4Trend: string;
   /** ATR for volatility context */
   atr: number;
+  /** IPDA 20/40/60-day data ranges (institutional reference levels) */
+  ipdaRanges?: import("./ipdaRanges.ts").IPDARanges;
+  /** Weekly profile pattern detection (ICT day-of-week tendencies) */
+  weeklyProfile?: import("./weeklyProfile.ts").WeeklyProfile;
   /** Whether to trade this instrument this session */
   tradeable: boolean;
   /** Reason if not tradeable */
@@ -569,7 +575,9 @@ export function generateInstrumentGamePlan(
   entryCandles: Candle[],
   hourlyCandles: Candle[],
   session: SessionName,
+  options?: { ipdaRangesEnabled?: boolean },
 ): InstrumentGamePlan {
+  const ipdaEnabled = options?.ipdaRangesEnabled !== false; // ON by default
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const lastPrice = entryCandles.length > 0
     ? entryCandles[entryCandles.length - 1].close
@@ -628,6 +636,17 @@ export function generateInstrumentGamePlan(
     ? calculateATR(dailyCandles, 14)
     : 0;
 
+  // ── IPDA Data Ranges (20/40/60-day institutional reference levels) ──
+  // Gated by ipdaRangesEnabled toggle (default: ON)
+  const ipdaRanges = ipdaEnabled && dailyCandles.length >= 25
+    ? calculateIPDARanges(dailyCandles, lastPrice)
+    : null;
+
+  // ── Weekly Profile Detection (ICT day-of-week tendencies) ──
+  const weeklyProfile = dailyCandles.length >= 5
+    ? detectWeeklyProfile(dailyCandles, spec.pipSize)
+    : undefined;
+
   // ── DOL Identification ──
   const dol = identifyDOL(
     lastPrice,
@@ -658,6 +677,12 @@ export function generateInstrumentGamePlan(
     liquidityPools,
     spec.pipSize,
   );
+
+  // ── Merge IPDA levels into key levels (only when IPDA enabled) ──
+  if (ipdaEnabled && ipdaRanges) {
+    const ipdaLevels = ipdaRangesToKeyLevels(ipdaRanges, lastPrice, spec.pipSize);
+    keyLevels.push(...ipdaLevels);
+  }
 
   // ── Scenarios ──
   const scenarios = generateScenarios(
@@ -705,6 +730,8 @@ export function generateInstrumentGamePlan(
     htfTrend,
     h4Trend,
     atr,
+    ipdaRanges: ipdaRanges ?? undefined,
+    weeklyProfile,
     tradeable,
     skipReason,
     lastPrice,
@@ -751,6 +778,27 @@ export function buildSessionGamePlan(
     }
     if (plan.skipReason) {
       summaryLines.push(`   Skip: ${plan.skipReason}`);
+    }
+    // IPDA ranges — show institutional reference levels
+    if (plan.ipdaRanges) {
+      const ipda = plan.ipdaRanges;
+      const pip = SPECS[plan.symbol]?.pipSize ?? 0.0001;
+      const dec = pip < 0.01 ? 5 : pip < 1 ? 3 : 1;
+      if (ipda.range60) {
+        const posStr = ipda.positionPercent60 !== null ? ` (${ipda.positionPercent60.toFixed(0)}%)` : "";
+        const biasEmoji = ipda.institutionalBias === "bullish" ? "↑" : ipda.institutionalBias === "bearish" ? "↓" : "↔";
+        summaryLines.push(`   IPDA 60d: ${ipda.range60.low.toFixed(dec)}–${ipda.range60.high.toFixed(dec)} ${biasEmoji}${posStr}`);
+      }
+      if (ipda.range20) {
+        summaryLines.push(`   IPDA 20d: ${ipda.range20.low.toFixed(dec)}–${ipda.range20.high.toFixed(dec)}`);
+      }
+    }
+    // Weekly profile — show pattern and day tendency
+    if (plan.weeklyProfile) {
+      const wp = plan.weeklyProfile;
+      const profileLabel = wp.profile.replace(/_/g, " ");
+      const entryEmoji = wp.favorableForEntry ? "✅" : "⏳";
+      summaryLines.push(`   Week: ${profileLabel} (${wp.confidence}%) ${entryEmoji} ${wp.dayTendency.aggressiveness}`);
     }
   }
 

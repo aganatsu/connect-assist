@@ -105,6 +105,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   // Factor Weights
   { tab: "factorWeights", label: "Factor Weights", keywords: ["factor", "weight", "weights", "importance", "scoring", "tune", "ai", "advisor"] },
   { tab: "factorWeights", label: "Spread Quality", keywords: ["spread", "quality", "penalty", "atr", "execution"] },
+  { tab: "factorWeights", label: "GP Key Level", keywords: ["game plan", "key level", "gp", "institutional", "dol"] },
   // Opening Range
   { tab: "openingRange", label: "Enable Opening Range", keywords: ["opening range", "or", "master"] },
   { tab: "openingRange", label: "Candle Count", keywords: ["candle", "count", "or", "range"] },
@@ -118,6 +119,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "gamePlan", label: "Game Plan Notifications", keywords: ["game plan", "telegram", "notify", "notification", "alert"] },
   { tab: "gamePlan", label: "Game Plan Refresh Interval", keywords: ["game plan", "refresh", "hours", "regenerate", "frequency"] },
   { tab: "gamePlan", label: "Game Plan Trade Filter", keywords: ["game plan", "filter", "gate", "bias", "reject", "alignment"] },
+  { tab: "gamePlan", label: "DOL TP Extension", keywords: ["dol", "draw on liquidity", "tp", "take profit", "extension", "target"] },
+  { tab: "gamePlan", label: "IPDA Ranges", keywords: ["ipda", "institutional", "data ranges", "20 day", "40 day", "60 day", "equilibrium"] },
 ];
 
 const HighlightContext = createContext<Set<string>>(new Set());
@@ -141,7 +144,7 @@ const BASE_CONFIG = {
   entry: {
     defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
     trailingEntry: false, trailingEntryPips: 5, maxSlippagePips: 2,
-    pyramidingEnabled: false, maxPyramidAdds: 1, closeOnReverse: true, cooldownMinutes: 15,
+    closeOnReverse: true, cooldownMinutes: 15,
   },
   exit: {
     stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
@@ -149,7 +152,7 @@ const BASE_CONFIG = {
     trailingStopEnabled: false, trailingStopPips: 15, trailingStopActivation: "after_1r",
     partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
     breakEvenEnabled: true, breakEvenTriggerPips: 20,
-    timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 24, endOfSessionClose: false,
+    timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 24,
   },
   instruments: {
     allowedInstruments: {
@@ -165,13 +168,9 @@ const BASE_CONFIG = {
     activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
     newsFilterEnabled: true, newsFilterPauseMinutes: 30,
   },
-  notifications: {
-    notifyOnTrade: true, notifyOnSignal: true, notifyOnError: true,
-    notifyDailySummary: true, notifyChannel: "in_app",
-  },
+  // notifications: removed — not consumed by bot-scanner, no UI controls
   protection: {
-    dailyProfitTarget: 0, dailyLossLimit: 0, cumulativeProfitTarget: 0,
-    cumulativeLossLimit: 0, haltOnDailyTarget: false, haltOnDailyLoss: true,
+    maxDailyLoss: 500, maxConsecutiveLosses: 3, circuitBreakerPct: 20,
   },
   account: { startingBalance: 10000, leverage: 100, mode: "paper" },
   openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
@@ -802,7 +801,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       )}
 
                       {/* ── Max Daily Drawdown: dual %/$ input ── */}
-                      <FieldGroup label="Max Daily Drawdown" description="Halt trading if daily loss exceeds this. Toggle between % and $ input.">
+                      <FieldGroup label="Max Daily Drawdown" description="Percentage of account balance — halts new trades for the day if intraday loss exceeds this. (Protection tab has a separate dollar-based daily loss limit.)">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 relative">
                             <Input
@@ -861,7 +860,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         <FieldGroup label="Max Concurrent Trades" description="Maximum open positions at once">
                           <Input type="number" value={config.risk?.maxConcurrentTrades ?? 5} onChange={e => updateField('risk', 'maxConcurrentTrades', parseFloat(e.target.value) || 0)} min={1} max={20} className="h-9 text-sm" />
                         </FieldGroup>
-                        <FieldGroup label="Min R:R Ratio" description="Minimum risk-to-reward ratio">
+                        <FieldGroup label="Min R:R Ratio" description="Gate: rejects trades below this R:R. (Exit tab's R:R Ratio sets the TP target; this is the minimum to pass the gate.)">
                           <Input type="number" value={config.risk?.minRR ?? 1.5} onChange={e => updateField('risk', 'minRR', parseFloat(e.target.value) || 0)} step={0.5} className="h-9 text-sm" />
                         </FieldGroup>
                       </div>
@@ -876,7 +875,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="Allow Same-Direction Stacking" description="When enabled, the bot can open multiple positions in the same direction on the same pair (e.g. two longs on GBP/USD). Still limited by Max Per Symbol." checked={config.risk?.allowSameDirectionStacking ?? false} onChange={v => updateField('risk', 'allowSameDirectionStacking', v)} />
 
                       {/* ── Max Total Drawdown: dual %/$ input ── */}
-                      <FieldGroup label="Max Total Drawdown" description="Kill switch — stops all trading if total drawdown exceeds this. Toggle between % and $.">
+                      <FieldGroup label="Max Total Drawdown" description="Kill switch — stops all trading if drawdown from peak balance exceeds this. Combined with Protection tab's Circuit Breaker: the lower of the two wins.">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 relative">
                             <Input
@@ -1044,7 +1043,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                         </FieldGroup>
                       )}
                       {(config.exit?.takeProfitMethod === "rr_ratio" || !config.exit?.takeProfitMethod) && (
-                        <FieldGroup label="R:R Ratio" description="TP = SL distance × this ratio">
+                        <FieldGroup label="R:R Ratio (TP Target)" description="Sets the Take Profit distance: TP = SL × this ratio. (Risk tab's Min R:R is the gate that rejects trades below a threshold.)">
                           <Input type="number" value={config.exit?.tpRRRatio ?? 2.0} onChange={e => updateField('exit', 'tpRRRatio', parseFloat(e.target.value) || 0)} step={0.5} min={1} max={10} className="h-9 text-sm" />
                         </FieldGroup>
                       )}
@@ -1382,14 +1381,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                   <div className="space-y-5">
                     <SectionHeader title="Protection" description="Safety limits and circuit breakers" />
                     <div className="grid grid-cols-2 gap-4">
-                      <FieldGroup label="Max Daily Loss ($)" description="Hard dollar limit — triggers kill switch">
+                      <FieldGroup label="Max Daily Loss ($)" description="Hard dollar limit on closed-trade P&L — halts trading for the day. (Risk tab's Daily Drawdown uses % of balance instead.)">
                         <Input type="number" value={config.protection?.maxDailyLoss ?? 500} onChange={e => updateField('protection', 'maxDailyLoss', parseFloat(e.target.value) || 0)} className="h-9 text-sm" />
                       </FieldGroup>
                       <FieldGroup label="Max Consecutive Losses" description="Pause after N consecutive losing trades">
                         <Input type="number" value={config.protection?.maxConsecutiveLosses ?? 3} onChange={e => updateField('protection', 'maxConsecutiveLosses', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
                       </FieldGroup>
                     </div>
-                    <FieldGroup label="Equity Circuit Breaker (%)" description="Emergency stop if equity drops below this percentage of peak">
+                    <FieldGroup label="Equity Circuit Breaker (%)" description="Emergency override — combined with Risk tab's Max Total Drawdown via Math.min (the lower value wins). Set this higher than Max Total Drawdown to let that control take priority.">
                       <div className="flex items-center gap-4">
                         <Slider value={[config.protection?.circuitBreakerPct ?? 20]} onValueChange={v => updateField('protection', 'circuitBreakerPct', v[0])} min={5} max={50} step={1} className="flex-1" />
                         <span className="text-sm font-mono font-bold text-destructive w-10 text-right">{config.protection?.circuitBreakerPct ?? 20}%</span>
@@ -1423,26 +1422,28 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                 )}
                 {effectiveActiveTab === "gamePlan" && (
                   <div className="space-y-5">
-                    <SectionHeader title="Pre-Session Game Plan" description="Automatically generates session bias, Draw on Liquidity targets, and trade scenarios before each session. Only trades aligned with the game plan bias are taken." />
-                    <ToggleField label="Enable Game Plan" description="Master toggle — when enabled, the bot generates a game plan once per session and uses it to filter trades" checked={config.gamePlanEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanEnabled: v }))} />
+                    <SectionHeader title="Pre-Session Game Plan" description="Automatically generates session bias, Draw on Liquidity targets, IPDA ranges, and weekly profiles before each session. Analysis is integrated into the scoring engine to boost aligned trades and penalize opposing ones." />
+                    <ToggleField label="Enable Game Plan" description="Master toggle — when enabled, the bot generates a game plan once per session and integrates it into scoring, TP placement, and scan priority" checked={config.gamePlanEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanEnabled: v }))} />
                     <ToggleField label="Telegram Notifications" description="Send the game plan summary to Telegram when a new plan is generated (once per session, not every scan)" checked={config.gamePlanNotify !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanNotify: v }))} />
-                    <ToggleField label="Trade Filter Gate" description="Reject trades that contradict the game plan bias (e.g., block longs when bias is bearish). Disable to use game plan for information only without filtering." checked={config.gamePlanFilterEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, gamePlanFilterEnabled: v }))} />
+
                     <FieldGroup label="Refresh Interval (hours)" description="How often to regenerate the game plan within the same session. Default is 4 hours — the plan stays fresh for this long before a new one is generated.">
                       <Input type="number" value={config.gamePlanRefreshHours ?? 4} onChange={e => setConfig((prev: any) => ({ ...prev, gamePlanRefreshHours: Math.max(1, Math.min(12, parseInt(e.target.value) || 4)) }))} min={1} max={12} step={1} className="h-9 text-sm" disabled={!config.gamePlanEnabled} />
                     </FieldGroup>
-                    <FieldGroup label="Minimum Bias Confidence (%)" description="Only use the game plan bias as a trade filter when confidence exceeds this threshold. Below this, the filter is skipped (trades allowed regardless of bias).">
-                      <div className="flex items-center gap-3">
-                        <Slider value={[config.gamePlanMinConfidence ?? 50]} onValueChange={([v]) => setConfig((prev: any) => ({ ...prev, gamePlanMinConfidence: v }))} min={20} max={90} step={5} className="flex-1" disabled={!config.gamePlanEnabled} />
-                        <span className="text-sm font-mono w-10 text-right">{config.gamePlanMinConfidence ?? 50}%</span>
+
+                    {config.gamePlanEnabled && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <ToggleField label="DOL TP Extension" description="Extend Take Profit to Draw on Liquidity targets when they are beyond the current TP. Only extends, never shortens. Respects 4× SL cap." checked={config.dolTPExtensionEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, dolTPExtensionEnabled: v }))} />
+                        <ToggleField label="IPDA Ranges" description="Compute 20/40/60-day institutional data ranges and merge them as key levels into the game plan. Adds high/low/equilibrium reference points." checked={config.ipdaRangesEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, ipdaRangesEnabled: v }))} />
                       </div>
-                    </FieldGroup>
+                    )}
+
                     {!config.gamePlanEnabled && (
                       <p className="text-[10px] text-muted-foreground italic">Enable the master toggle above to activate game plan features.</p>
                     )}
                     {config.gamePlanEnabled && (
                       <div className="border border-border rounded p-3 bg-secondary/30">
                         <p className="text-[11px] text-muted-foreground">
-                          <strong className="text-foreground">How it works:</strong> The game plan runs once per session (London, NY, Asian). It analyzes D1/4H structure, identifies Draw on Liquidity targets, and generates conditional trade scenarios. The plan is cached for {config.gamePlanRefreshHours ?? 4} hours — subsequent scans reuse it without regenerating. Trades that contradict the bias are rejected with a clear reason in the scan log.
+                          <strong className="text-foreground">How it works:</strong> The game plan runs once per session (London, NY, Asian). It analyzes D1/4H structure, identifies Draw on Liquidity targets, and generates conditional trade scenarios. The plan is cached for {config.gamePlanRefreshHours ?? 4} hours — subsequent scans reuse it without regenerating. Game plan bias, key levels, and DOL targets are integrated into the scoring engine — aligned trades score higher, opposing trades score lower. IPDA ranges and weekly profiles provide additional institutional context.
                         </p>
                       </div>
                     )}
@@ -1496,6 +1497,7 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; ti
   { key: "amdPhase", name: "AMD Phase", defaultWeight: 1.0, tier: 3, tierPts: 0.5, description: "Accumulation→Manipulation→Distribution" },
   { key: "judasSwing", name: "Judas Swing", defaultWeight: 0.75, tier: 3, tierPts: 0.5, description: "NY midnight-anchored fake breakout + liquidity sweep" },
   { key: "pullbackHealth", name: "Pullback Health", defaultWeight: 0.5, tier: 3, tierPts: 0.5, description: "Pullback decay analysis — healthy retracement vs exhaustion" },
+  { key: "gamePlanKeyLevel", name: "GP Key Level", defaultWeight: 1.0, tier: 2, tierPts: 1, description: "Boosts score when entry is near a game plan key level (OBs, FVGs, PD levels, liquidity). Requires Game Plan enabled." },
 ];
 
 const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [

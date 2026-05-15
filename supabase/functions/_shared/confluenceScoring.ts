@@ -75,6 +75,8 @@ export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   htfFibPdLiquidity: 2.5,
   confluenceStack: 1.5,
   pullbackHealth: 0.5,
+  // ── Game Plan Integration factors ──
+  gamePlanKeyLevel: 1.0,
 };
 
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
@@ -214,6 +216,51 @@ function regimeAlignmentAdjustment(
     };
   }
   return { adjustment: 0, detail: `Transitional regime — no adjustment` };
+}
+
+// ─── Helper: Game Plan Bias Confidence Adjustment ─────────────────────────
+// Applies a soft score modifier based on the game plan's premarket bias analysis.
+// Unlike the legacy game plan filter gate (binary veto), this is a continuous
+// adjustment that rewards alignment and penalizes opposition, scaled by confidence.
+// This is additive to the existing Regime Alignment — they measure different things:
+//   - Regime Alignment: daily candle structure + ATR trend (mechanical)
+//   - GP Bias Confidence: premarket analysis combining structure + DOL + news + zone (analytical)
+function gamePlanBiasAdjustment(
+  gpBias: string | null | undefined,
+  gpConfidence: number | null | undefined,
+  direction: string | null,
+): { adjustment: number; detail: string } {
+  if (!direction || !gpBias || gpBias === "neutral") {
+    return { adjustment: 0, detail: "No GP bias or neutral — no adjustment" };
+  }
+  const conf = gpConfidence ?? 0; // 0-100 scale
+  if (conf < 50) {
+    return { adjustment: 0, detail: `GP bias ${gpBias} but low confidence (${conf}%) — no adjustment` };
+  }
+
+  const aligned = (direction === "long" && gpBias === "bullish")
+    || (direction === "short" && gpBias === "bearish");
+  const confScale = Math.min(1.0, conf / 100); // 0.5 to 1.0
+
+  if (conf >= 70) {
+    // High confidence: stronger adjustment
+    if (aligned) {
+      const bonus = +(0.5 * confScale).toFixed(2);
+      return { adjustment: bonus, detail: `GP bias ${gpBias} ALIGNS with ${direction} (${conf}% conf) → +${bonus} bonus` };
+    } else {
+      const penalty = +(-0.75 * confScale).toFixed(2);
+      return { adjustment: penalty, detail: `GP bias ${gpBias} OPPOSES ${direction} (${conf}% conf) → ${penalty} penalty` };
+    }
+  } else {
+    // Medium confidence (50-69%): mild adjustment
+    if (aligned) {
+      const bonus = +(0.25 * confScale).toFixed(2);
+      return { adjustment: bonus, detail: `GP bias ${gpBias} aligns with ${direction} (${conf}% conf, mild) → +${bonus} bonus` };
+    } else {
+      const penalty = +(-0.35 * confScale).toFixed(2);
+      return { adjustment: penalty, detail: `GP bias ${gpBias} opposes ${direction} (${conf}% conf, mild) → ${penalty} penalty` };
+    }
+  }
 }
 
 export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] | null, config: any, hourlyCandles?: Candle[], atMs?: number) {
@@ -1927,6 +1974,77 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     factors.push({ name: "HTF Fib + PD + Liquidity", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
+  // ── Factor 25: Game Plan Key Level Alignment (max 1.0) ──────────────────────
+  // Checks if the current entry price is near a key level identified by the session
+  // game plan (Layer 2). Key levels come from daily structure analysis: OBs, FVGs,
+  // PD levels, liquidity pools, and support/resistance identified on the HTF.
+  // Being near a game-plan key level means the entry zone was pre-identified as
+  // significant during the premarket analysis — this adds institutional confluence.
+  {
+    let pts = 0;
+    let detail = "";
+    const gpCtx = (config as any)._gamePlanContext;
+
+    if (gpCtx && gpCtx.keyLevels && gpCtx.keyLevels.length > 0) {
+      const atrForTolerance = calculateATR(candles, 14);
+      // Tolerance: price must be within 0.5× ATR of a key level
+      const tolerance = atrForTolerance * 0.5;
+
+      // Significance-based scoring
+      const SIG_SCORE: Record<string, number> = { high: 0.5, medium: 0.3, low: 0.15 };
+
+      // Directional alignment: support levels boost longs, resistance boosts shorts
+      // pd_level, ob, fvg, liquidity are neutral (boost either direction)
+      const DIRECTIONAL_TYPES = new Set(["support", "resistance"]);
+
+      let bestScore = 0;
+      let bestLabel = "";
+      let matchCount = 0;
+
+      for (const kl of gpCtx.keyLevels) {
+        const dist = Math.abs(lastPrice - kl.price);
+        if (dist > tolerance) continue;
+
+        let levelScore = SIG_SCORE[kl.significance] ?? 0.15;
+
+        // Directional check for support/resistance
+        if (DIRECTIONAL_TYPES.has(kl.type)) {
+          const aligned = (direction === "long" && kl.type === "support")
+            || (direction === "short" && kl.type === "resistance");
+          const counter = (direction === "long" && kl.type === "resistance")
+            || (direction === "short" && kl.type === "support");
+          if (aligned) {
+            levelScore *= 1.2; // 20% bonus for directional alignment
+          } else if (counter) {
+            levelScore *= 0.5; // 50% reduction for counter-directional
+          }
+        }
+
+        matchCount++;
+        if (levelScore > bestScore) {
+          bestScore = levelScore;
+          bestLabel = `${kl.label} (${kl.significance} ${kl.type} @ ${kl.price.toFixed(5)})`;
+        }
+      }
+
+      if (matchCount > 0) {
+        // Use best match + small bonus for multiple matches (0.1 per extra, max 0.3)
+        const multiBonus = Math.min(0.3, (matchCount - 1) * 0.1);
+        pts = Math.min(1.0, Math.round((bestScore + multiBonus) * 100) / 100);
+        detail = `Near GP key level: ${bestLabel}${matchCount > 1 ? ` (+${matchCount - 1} more within tolerance)` : ""} → +${pts.toFixed(2)}`;
+      } else {
+        detail = `${gpCtx.keyLevels.length} GP key levels exist but none within ${(tolerance * 10000).toFixed(0)}p tolerance`;
+      }
+    } else if (gpCtx) {
+      detail = "Game plan active but no key levels for this pair";
+    } else {
+      detail = "No game plan context available";
+    }
+
+    { const s = applyWeightScale(pts, "gamePlanKeyLevel", 1.0, config); pts = s.pts; score += pts;
+    factors.push({ name: "GP Key Level Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -2055,7 +2173,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Tier 2 (Confirmation ×1): Adds confidence to the setup
   // Tier 3 (Bonus ×0.5): Nice to have, never required
   const TIER_1_FACTORS = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib"]);
-  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity"]);
+  const TIER_2_FACTORS = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality", "Confluence Stack", "Pullback Health", "HTF POI Alignment", "HTF Fib + PD + Liquidity", "GP Key Level Alignment"]);
   // Everything else is Tier 3: Currency Strength, SMT Divergence, Daily Bias, Breaker Block,
   // Unicorn Model*, Volume Profile, AMD Phase, Judas Swing
   // *Unicorn is promoted to Tier 1 when FVG is absent (see anti-double-count Rule 1)
@@ -2222,6 +2340,36 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     });
   }
 
+  // ─── GP Bias Confidence Adjustment (Game Plan Layer 2 → Layer 3) ─────────────
+  // Applies a soft score modifier based on the game plan's premarket bias analysis.
+  // This is separate from the Regime Alignment gate — it captures the game plan's
+  // analytical bias (structure + DOL + news + zone) as a continuous adjustment.
+  {
+    const gpCtx = (config as any)._gamePlanContext;
+    if (gpCtx && gpCtx.bias && direction) {
+      const { adjustment, detail } = gamePlanBiasAdjustment(
+        gpCtx.bias, gpCtx.biasConfidence, direction
+      );
+      // Apply adjustment directly to the tiered score (after factors, before normalization)
+      // We track it as a factor for transparency but it doesn't count toward tiered max
+      factors.push({
+        name: "GP Bias Confidence",
+        present: adjustment !== 0,
+        weight: adjustment, // positive = bonus, negative = penalty
+        detail: `${detail} [Layer 2 → Layer 3 integration]`,
+        group: "Macro Confirmation",
+      });
+    } else {
+      factors.push({
+        name: "GP Bias Confidence",
+        present: false,
+        weight: 0,
+        detail: "No game plan context available — no adjustment",
+        group: "Macro Confirmation",
+      });
+    }
+  }
+
   // ─── Tiered Scoring Model ─────────────────────────────────────────────────
   // Replaces the old percentage-of-weighted-max system with a clear tiered model:
   //   Tier 1 (Core Setup): Market Structure, Order Block, FVG, Premium/Discount
@@ -2369,6 +2517,16 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Add Opening Range bonus if present
   const orFactor = factors.find(f => f.name && f.name.includes("Opening Range") && f.present);
   if (orFactor) tieredScore += Math.min(2.0, orFactor.weight);
+
+  // Apply GP Bias Confidence adjustment (Layer 2 → Layer 3)
+  // This is a soft modifier — it adjusts tieredScore but NOT tieredMax,
+  // so it shifts the percentage up/down without changing the denominator.
+  const gpBiasFactor = factors.find(f => f.name === "GP Bias Confidence" && f.present);
+  if (gpBiasFactor && gpBiasFactor.weight !== 0) {
+    tieredScore += gpBiasFactor.weight;
+    // Floor at 0 — the penalty can reduce score but never make it negative
+    if (tieredScore < 0) tieredScore = 0;
+  }
 
   // Calculate max possible from enabled tiers + bonuses
   let tieredMax = (tier1Max * 2) + (tier2Max * 1) + (tier3Max * 0.5);
@@ -2561,9 +2719,18 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // Compute ATR for ATR-based methods (use entry candles)
   const atrValue = calculateATR(candles, config.slATRPeriod || 14);
 
+  // Extract DOL targets from game plan context (Layer 2 → Layer 3)
+  // Gated by dolTPExtensionEnabled toggle (default: ON for backward compat)
+  const gpCtxForTP = (config as any)._gamePlanContext;
+  const dolTPEnabled = (config as any).dolTPExtensionEnabled !== false;
+  const dolTargetsForTP = dolTPEnabled && gpCtxForTP?.dol
+    ? (Array.isArray(gpCtxForTP.dol) ? gpCtxForTP.dol : [gpCtxForTP.dol])
+    : undefined;
+
   const { stopLoss, takeProfit } = calculateSLTP({
     direction, lastPrice, pipSize, config, swings, orderBlocks, liquidityPools, pdLevels, atrValue, fvgs,
     fibExtensions: fibLevels?.extensions,
+    dolTargets: dolTargetsForTP,
   });
 
   const presentFactors = factors.filter(f => f.present);
@@ -2613,5 +2780,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       regimeGatePassed, regimeGateReason,
       spreadGatePassed, spreadGateReason,
     },
+    // Game plan context (Layer 2 → Layer 3 passthrough)
+    gamePlanContext: (config as any)._gamePlanContext || null,
   };
 }

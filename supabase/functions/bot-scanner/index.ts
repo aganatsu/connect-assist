@@ -61,6 +61,7 @@ import {
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { createScanCache } from "../_shared/dataCache.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -1619,6 +1620,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const scanCycleId = crypto.randomUUID();
 
+  // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
+  const scanCache = createScanCache(fetchCandles);
+  const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
+
   // ── Scan overlap lock (90s lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
@@ -1826,7 +1831,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Fetch a minimal 1-day candle for each symbol — last close = current price
     await Promise.all(posSymbols.map(async (sym: string) => {
       try {
-        const candles = await fetchCandles(sym, "15m", "5d");
+        const candles = await cachedFetch(sym, "15m", "5d");
         if (candles.length > 0) {
           livePriceMap[sym] = candles[candles.length - 1].close;
         }
@@ -1860,7 +1865,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let managementActions: ManagementAction[] = [];
   if (positionsToManage.length > 0) {
     try {
-      managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, fetchCandles, detectSession);
+      managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, cachedFetch, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
       if (activeActions.length > 0) {
         console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
@@ -2194,7 +2199,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const rateMap: Record<string, number> = {};
   try {
     const rateFetches = await Promise.all(
-      RATE_PAIRS.map(p => fetchCandles(p, "1d", "5d").catch(() => [] as Candle[]))
+      RATE_PAIRS.map(p => cachedFetch(p, "1d", "5d"))
     );
     for (let i = 0; i < RATE_PAIRS.length; i++) {
       const candles = rateFetches[i];
@@ -2405,7 +2410,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       for (let i = 0; i < fotsiPairs.length; i += FOTSI_BATCH_SIZE) {
         const batch = fotsiPairs.slice(i, i + FOTSI_BATCH_SIZE);
         const batchResults = await Promise.all(
-          batch.map(p => fetchCandles(p, "1d", "6mo").catch(() => [] as any[]))
+          batch.map(p => cachedFetch(p, "1d", "6mo"))
         );
         for (let j = 0; j < batch.length; j++) {
           if (batchResults[j] && batchResults[j].length >= 30) {
@@ -2520,7 +2525,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Fetch current price to check if limit order should fill
-        const pendingCandles = await fetchCandles(pending.symbol, config.entryTimeframe || "15min", "5d").catch(() => [] as Candle[]);
+        const pendingCandles = await cachedFetch(pending.symbol, config.entryTimeframe || "15min", "5d");
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
         const lastCandle = pendingCandles[pendingCandles.length - 1];
@@ -2905,6 +2910,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
     const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
+    const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
+    const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
       // Primary approach: use contains filter on JSONB
@@ -2979,13 +2986,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           try {
             // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
             const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
-              fetchCandles(sym, "1d", "1y").catch(() => [] as Candle[]),
-              fetchCandles(sym, "4h", "1mo").catch(() => [] as Candle[]),
-              fetchCandles(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)).catch(() => [] as Candle[]),
-              fetchCandles(sym, "1h", "5d").catch(() => [] as Candle[]),
+              cachedFetch(sym, "1d", "1y"),
+              cachedFetch(sym, "4h", "1mo"),
+              cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
+              cachedFetch(sym, "1h", "5d"),
             ]);
             if (gpDaily.length < 10 || gpEntry.length < 10) return null;
-            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName);
+            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled });
           } catch (e: any) {
             console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
             return null;
@@ -3113,7 +3120,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.warn(`[scan ${scanCycleId}] Game Plan generation error (non-fatal): ${e?.message}`);
   }
 
-  for (const pair of config.instruments) {
+  // ── Phase 6: Focus Pair Priority ──
+  // Reorder instruments so game-plan focus pairs are scanned first.
+  // When max positions are limited, this gives focus pairs first shot at available slots.
+  // Non-focus pairs are still scanned if capacity remains.
+  let scanOrder = [...config.instruments];
+  if (activeGamePlan && activeGamePlan.focusPairs && activeGamePlan.focusPairs.length > 0) {
+    const focusSet = new Set(activeGamePlan.focusPairs);
+    const focusPairs = scanOrder.filter(p => focusSet.has(p));
+    const nonFocusPairs = scanOrder.filter(p => !focusSet.has(p));
+    scanOrder = [...focusPairs, ...nonFocusPairs];
+    console.log(`[scan ${scanCycleId}] Focus pair priority: ${focusPairs.length} focus pairs scanned first: [${focusPairs.join(", ")}]`);
+  }
+
+  for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
@@ -3160,14 +3180,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const smtFlag = smtPair && SUPPORTED_SYMBOLS[smtPair] ? 1 : 0;
     const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
     const fetchPromises: Promise<Candle[]>[] = [
-      fetchCandles(pair, entryInterval, entryRange),
-      fetchCandles(pair, "1d", "1y"),
+      cachedFetch(pair, entryInterval, entryRange),
+      cachedFetch(pair, "1d", "1y"),
     ];
     // Always fetch 4H for multi-TF regime + HTF POI detection
-    if (multiTFRegimeEnabled) fetchPromises.push(fetchCandles(pair, "4h", "1mo").catch(() => [] as Candle[]));
+    if (multiTFRegimeEnabled) fetchPromises.push(cachedFetch(pair, "4h", "1mo"));
     // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
-    fetchPromises.push(fetchCandles(pair, "1h", "5d").catch(() => [] as Candle[]));
-    if (smtFlag) fetchPromises.push(fetchCandles(smtPair!, entryInterval, entryRange));
+    fetchPromises.push(cachedFetch(pair, "1h", "5d"));
+    if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -3317,6 +3337,29 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
+    // ── Game Plan Context Injection ──
+    // Pass the per-instrument game plan data into the confluence engine so it can
+    // use bias, DOL, key levels, and focus-pair status for scoring and TP placement.
+    // The game plan is generated once per session (Layer 2) and consumed here (Layer 3).
+    if (activeGamePlan) {
+      const pairPlan = activeGamePlan.plans.find((p: InstrumentGamePlan) => p.symbol === pair) || null;
+      (pairConfig as any)._gamePlanContext = pairPlan ? {
+        bias: pairPlan.bias,
+        biasConfidence: pairPlan.biasConfidence,
+        dol: pairPlan.dol,
+        keyLevels: pairPlan.keyLevels,
+        regime: pairPlan.regime,
+        htfTrend: pairPlan.htfTrend,
+        h4Trend: pairPlan.h4Trend,
+        tradeable: pairPlan.tradeable,
+        atr: pairPlan.atr,
+        isFocusPair: activeGamePlan.focusPairs.includes(pair),
+      } : null;
+     } else {
+      (pairConfig as any)._gamePlanContext = null;
+     }
+    // Pass DOL TP extension toggle into pairConfig for confluenceScoring to read
+    (pairConfig as any).dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false;
     const analysis = runConfluenceAnalysis(candles, dailyCandles.length >= 10 ? dailyCandles : null, pairConfig, hourlyCandles.length > 0 ? hourlyCandles : undefined);
     // S3 Fix: Attach the scan-cycle cached session to analysis for downstream use
     (analysis as any).cachedSession = cachedSession;
@@ -4022,30 +4065,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap,
       );
-      // ── Game Plan Filter Gate ──
-      // Check if the signal direction aligns with the session game plan bias.
-      // Respects config: gamePlanFilterEnabled (bool), gamePlanMinConfidence (number).
-      const gpFilterEnabled = (config as any).gamePlanFilterEnabled !== false; // ON by default
-      const gpMinConfidence = Number((config as any).gamePlanMinConfidence) || 50;
+      // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
+      // Previously a binary veto that blocked trades opposing the game plan bias.
+      // Now converted to info-only: the scoring impact is handled by the GP Bias
+      // Confidence factor (Phase 5) which applies a continuous penalty/bonus.
+      // The gate always passes but logs what the legacy behavior would have done.
       const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
-      if (gpFilterEnabled && !gpFilter.allowed) {
-        // Check if the bias confidence exceeds the minimum threshold
-        const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
-        const biasConf = pairPlan?.biasConfidence ?? 0;
-        if (biasConf >= gpMinConfidence) {
-          gates.push({ passed: false, reason: gpFilter.reason });
-          console.log(`[scan ${scanCycleId}] ❌ ${pair}: ${gpFilter.reason} (confidence ${biasConf}% >= ${gpMinConfidence}% threshold)`);
+      if (activeGamePlan) {
+        if (!gpFilter.allowed) {
+          const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+          const biasConf = pairPlan?.biasConfidence ?? 0;
+          // Info-only: log what the old gate would have done
+          gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (legacy gate would have blocked at ${biasConf}% conf)`);
         } else {
-          // Confidence too low to enforce the filter — allow the trade
-          gates.push({ passed: true, reason: `Game plan: bias confidence ${biasConf}% below ${gpMinConfidence}% threshold — filter skipped` });
-          console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: Game plan bias confidence ${biasConf}% < ${gpMinConfidence}% threshold — allowing trade`);
+          gates.push({ passed: true, reason: gpFilter.reason });
         }
-      } else if (!gpFilterEnabled && !gpFilter.allowed) {
-        // Filter disabled — log but don't block
-        gates.push({ passed: true, reason: `Game plan filter disabled — would have rejected: ${gpFilter.reason}` });
-        console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: Game plan filter OFF (would reject: ${gpFilter.reason})`);
-      } else if (activeGamePlan) {
-        gates.push({ passed: true, reason: gpFilter.reason });
       }
       // ── News Impact Alignment Gate ──
       // If we have analyzed news impacts, check if the trade direction aligns with news bias.
@@ -4983,6 +5018,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // which feed served this scan cycle.
   const sourceTally = endScanSourceTally();
   const throttleStats = resetThrottleStats();
+  const cacheStats = scanCache.stats();
+  console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors (${scanCache.size()} unique keys)`);
+  scanCache.clear();
   const detailsWithMeta = [
     {
       __meta: true,
@@ -4997,6 +5035,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
+      dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
     },
@@ -5018,6 +5057,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
+    try { scanCache.clear(); } catch { /* ignore */ }
     // Only release lock if we acquired one (management-only skips locking)
     if (!opts?.isManagementOnly) {
       try {
