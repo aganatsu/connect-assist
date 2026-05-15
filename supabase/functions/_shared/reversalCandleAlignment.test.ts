@@ -163,10 +163,10 @@ const baseConfig = {
 };
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
-Deno.test("Reversal Candle: bearish reversal on LONG trade scores 0 (directional mismatch)", () => {
+Deno.test("Reversal Candle: bearish reversal on LONG trade produces negative penalty (bidirectional)", () => {
   // This fixture produces an uptrend (direction = long) with a bearish pin bar at the end.
-  // Before the fix, the bearish reversal would score > 0 on a long trade.
-  // After the fix, it should score 0 because bearish opposes long.
+  // Before bidirectional scoring: opposing reversal scored 0.
+  // After bidirectional scoring: opposing reversal produces a NEGATIVE weight (penalty).
   const candles = generateBearishReversalFixture();
   const result = runConfluenceAnalysis(candles, null, baseConfig);
 
@@ -174,10 +174,12 @@ Deno.test("Reversal Candle: bearish reversal on LONG trade scores 0 (directional
   const rcFactor = result.factors.find((f: any) => f.name === "Reversal Candle");
   assert(rcFactor, "Reversal Candle factor should exist in results");
 
-  // If direction is long and reversal is bearish, it should NOT be present (score 0)
+  // If direction is long and reversal is bearish, it should be present with NEGATIVE weight
   if (result.direction === "long") {
-    assertEquals(rcFactor.present, false,
-      `Bearish reversal should NOT score on a long trade. Detail: ${rcFactor.detail}`);
+    assertEquals(rcFactor.present, true,
+      `Opposing reversal should be present (with negative weight). Detail: ${rcFactor.detail}`);
+    assert(rcFactor.weight < 0,
+      `Opposing reversal should have negative weight, got ${rcFactor.weight}. Detail: ${rcFactor.detail}`);
     assert(rcFactor.detail.includes("OPPOSES"),
       `Detail should mention opposition. Got: ${rcFactor.detail}`);
   }

@@ -997,7 +997,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   // ICT: reversal candles are a PRIMARY entry trigger — the actual "pull the trigger" signal.
   // Bumped from 0.5 to 1.5 to match ICT importance.
   // FIX (self-contradiction-audit): Added directional alignment check.
-  // A bearish reversal on a long trade (or vice versa) is a counter-signal — score 0.
+  // BIDIRECTIONAL: opposing reversal candle penalizes at 50% of what aligned would score.
   {
     let pts = 0;
     let detail = "No reversal pattern";
@@ -1008,8 +1008,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         || (reversalCandle.type === "bullish" && direction === "long")
         || (reversalCandle.type === "bearish" && direction === "short");
       if (!reversalAligned) {
-        pts = 0;
-        detail = `${reversalCandle.type} reversal detected but OPPOSES ${direction} direction — no score`;
+        // Bidirectional: opposing reversal penalizes at 50% of max (1.5 * 0.5 = -0.75 with disp, -0.375 without)
+        const hasDisp_opp = displacement.isDisplacement;
+        pts = hasDisp_opp ? -0.75 : -0.375;
+        detail = `${reversalCandle.type} reversal OPPOSES ${direction} — penalty ${pts.toFixed(3)} (bidirectional)`;
       } else {
       const lastC = candles[candles.length - 1];
       const lastMid = (lastC.high + lastC.low) / 2;
@@ -1049,7 +1051,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       } // end reversalAligned
     }
     { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Reversal Candle", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    factors.push({ name: "Reversal Candle", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 9: Liquidity Sweep (max 1.5) ──
@@ -1226,7 +1228,9 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
             detail = `Displacement aligned but no FVG created (${last.rangeMultiple.toFixed(1)}× avg range, body ${(last.bodyRatio * 100).toFixed(0)}%)`;
           }
         } else {
-          detail = `Displacement detected but opposite to signal direction (${displacement.lastDirection})`;
+          // Bidirectional: opposing displacement penalizes at 50% of max (1.0 * 0.5 = -0.5)
+          pts = -0.5;
+          detail = `Displacement OPPOSES ${direction} direction (${displacement.lastDirection}) — penalty -0.500 (bidirectional)`;
         }
       } else if (displacement.isDisplacement) {
         detail = `Displacement detected (${displacement.lastDirection}) but no signal direction`;
@@ -1235,7 +1239,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "Displacement scoring disabled";
     }
     { const s = applyWeightScale(pts, "displacement", 1.0, config); pts = s.pts; score += pts;
-    factors.push({ name: "Displacement", present: pts > 0, weight: s.displayWeight, detail, group: "Price Action" }); }
+    factors.push({ name: "Displacement", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 11: Breaker Block (max 1.0) ──
@@ -1430,7 +1434,10 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
           detail = `AMD ${amd.phase} + ${amd.bias} bias aligned (Asian sweep ${amd.sweptSide})`;
         }
       } else {
-        detail = `AMD ${amd.bias} bias opposite to signal direction (phase: ${amd.phase})`;
+        // Bidirectional: opposing AMD penalizes at 50% of max.
+        // Distribution phase opposing = stronger penalty (-0.75), other phases = -0.5
+        pts = amd.phase === "distribution" ? -0.75 : -0.5;
+        detail = `AMD ${amd.bias} bias OPPOSES ${direction} (phase: ${amd.phase}) — penalty ${pts.toFixed(3)} (bidirectional)`;
       }
     }
     // ── Asian range as key levels (FIX #7) ──
@@ -1455,7 +1462,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       }
     }
     { const s = applyWeightScale(pts, "amdPhase", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "AMD Phase", present: pts > 0, weight: s.displayWeight, detail, group: "AMD / Power of 3" }); }
+    factors.push({ name: "AMD Phase", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "AMD / Power of 3", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 18: Currency Strength / FOTSI (max 1.5, min -0.5) ──
@@ -1587,7 +1594,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No direction determined — HTF bias skipped";
     }
     { const s = applyWeightScale(pts, "dailyBias", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Daily Bias", present: pts > 0, weight: s.displayWeight, detail, group: "Daily Bias" }); }
+    factors.push({ name: "Daily Bias", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Daily Bias", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   } else {
     factors.push({ name: "Daily Bias", present: false, weight: 0, detail: "Daily Bias disabled", group: "Daily Bias" });
   }
@@ -1611,16 +1618,27 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         pts = 1.5;
         detail = `TRIPLE CONFLUENCE at price: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}]`;
         if (best.directionalAlignment === "aligned") detail += " — directionally aligned";
-        else if (best.directionalAlignment === "counter") { pts *= 0.5; detail += " — counter-directional (reduced)"; }
+        else if (best.directionalAlignment === "counter") {
+          // Bidirectional: counter-directional triple confluence at price = penalty
+          pts = -0.75; // 50% of max, negative
+          detail += " — COUNTER-DIRECTIONAL (bidirectional penalty)";
+        }
       } else if (best.layerCount >= 3) {
         // Triple confluence but price not yet at the zone
         pts = 0.75;
         detail = `Triple confluence nearby: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}] — price not at level`;
+        if (best.directionalAlignment === "counter") {
+          pts = -0.375; // 50% of 0.75, negative
+          detail += " — COUNTER-DIRECTIONAL (bidirectional penalty)";
+        }
       } else if (best.layerCount === 2 && priceInZone) {
         // Double confluence at price
         pts = 1.0;
         detail = `Double confluence at price: ${best.label} [${best.overlapZone[0].toFixed(5)}-${best.overlapZone[1].toFixed(5)}]`;
-        if (best.directionalAlignment === "counter") { pts *= 0.5; detail += " — counter-directional (reduced)"; }
+        if (best.directionalAlignment === "counter") {
+          pts = -0.5; // 50% of 1.0, negative
+          detail += " — COUNTER-DIRECTIONAL (bidirectional penalty)";
+        }
       } else if (best.layerCount === 2) {
         // Double confluence nearby
         pts = 0.5;
@@ -1635,7 +1653,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       detail = "No confluence stacking detected (FVG/OB zones don't overlap with S/R + Fib)";
     }
     { const s = applyWeightScale(pts, "confluenceStack", 1.5, config); pts = s.pts; score += pts;
-    factors.push({ name: "Confluence Stack", present: pts > 0, weight: s.displayWeight, detail, group: "Order Flow Zones" }); }
+    factors.push({ name: "Confluence Stack", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Order Flow Zones", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
   }
 
   // ── Factor 20: Sweep Reclaim Enhancement ──
@@ -2463,6 +2481,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     "Pullback Health": "pullbackHealth",
   };
 
+  // ── Bidirectional Conflict Counter ──
+  // Track how many factors actively oppose the trade direction.
+  // Used downstream to raise threshold or block when too many signals disagree.
+  let opposingFactorCount = 0;
+
   for (const f of factors) {
     const tier = (f as any).tier as number | undefined;
     if (!tier) continue; // Skip Regime, Spread, Po3, OR — they're not tiered
@@ -2475,6 +2498,22 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     }
 
     const pts = TIER_POINTS[tier as keyof typeof TIER_POINTS] || 0.5;
+    const isOpposing = (f as any)._opposing === true;
+
+    // ── Bidirectional: handle negative weights (opposing factors) ──
+    if (isOpposing && f.weight < 0) {
+      opposingFactorCount++;
+      // Penalty: subtract 50% of the tier points for this opposing factor
+      const penaltyRatio = Math.min(1.0, Math.abs(f.weight) / (FACTOR_MAX_WEIGHT[f.name] || 1.0));
+      const penalty = Math.round(pts * 0.5 * penaltyRatio * 100) / 100;
+      tieredScore -= penalty;
+      f.detail += ` [Tier ${tier}: -${penalty}pts (opposing)]`;
+      // Opposing factors count toward their tier's max but NOT toward present count
+      if (tier === 1) tier1Max++;
+      else if (tier === 2) tier2Max++;
+      else tier3Max++;
+      continue;
+    }
 
     // Quality scaling: scale tier points by how good this factor's weight is
     // relative to its maximum possible weight. A pristine OB (2.0/2.0 = 1.0)
@@ -2754,9 +2793,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   ].filter(Boolean);
   const gatesStr = gatesSummary.length > 0 ? ` | Gates: ${gatesSummary.join(", ")}` : "";
 
+  // Conflict counter annotation for summary
+  const conflictStr = opposingFactorCount > 0 ? ` | ⚠ ${opposingFactorCount} opposing` : "";
+
   const summary = direction
-    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus, ${strongFactorCount} strong). ${groupSummaryParts.join(" | ")}${fotsiSummary}${gatesStr}`
-    : `No signal: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus)${fotsiSummary}${gatesStr}`;
+    ? `${direction === "long" ? "BUY" : "SELL"}: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus, ${strongFactorCount} strong). ${groupSummaryParts.join(" | ")}${fotsiSummary}${conflictStr}${gatesStr}`
+    : `No signal: ${score}% confluence (T1:${tier1Count}/4, T2:${tier2Count}/5, T3:${tier3Count} bonus)${fotsiSummary}${conflictStr}${gatesStr}`;
 
   return {
     score, rawScore, normalizedScoring: true, enabledMax,
@@ -2779,6 +2821,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
       tier1GatePassed, tier1GateReason,
       regimeGatePassed, regimeGateReason,
       spreadGatePassed, spreadGateReason,
+      opposingFactorCount,
     },
     // Game plan context (Layer 2 → Layer 3 passthrough)
     gamePlanContext: (config as any)._gamePlanContext || null,
