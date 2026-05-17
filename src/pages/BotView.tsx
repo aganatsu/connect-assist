@@ -2079,9 +2079,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Header */}
       <div className="flex items-center gap-2">
         {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
-        <span className="text-[11px] font-bold">{d.pair}</span>
-        <span className={`text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
-        <span className={`text-[10px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
+        <span className="text-[12px] font-bold">{d.pair}</span>
+        <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
+        <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
       {/* Impulse Zone Panel — PRIMARY gate, shown first */}
@@ -2092,7 +2092,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Narrative sentence — plain-English thesis */}
       {d.direction && d.direction !== "none" && (
-        <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
+        <p className="text-[11px] text-muted-foreground/80 italic leading-tight">
           {generateDetailNarrative({
             pair: d.pair,
             direction: d.direction,
@@ -2112,7 +2112,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Trade Entry Thesis — shown for placed trades */}
       {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
         <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
-          <p className="text-[9px] text-success/90 leading-tight">
+          <p className="text-[11px] text-success/90 leading-tight">
             {generateTradeEntryNarrative({
               pair: d.pair,
               direction: d.direction,
@@ -2130,8 +2130,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Watchlist Origin Banner */}
       {d.staging?.action === "promoted_and_traded" && (
         <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
-          <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
-          <p className="mt-1 text-[10px] text-cyan-300">
+          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
+          <p className="mt-1 text-[12px] text-cyan-300">
             Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
           </p>
         </div>
@@ -2140,11 +2140,11 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Limit Order Info Banner */}
       {d.limitOrder && (
         <div className="rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5">
-          <p className="text-[8px] text-blue-400 uppercase tracking-wider font-bold">🎯 Limit Order Placed</p>
-          <p className="mt-1 text-[10px] text-blue-300">
+          <p className="text-[11px] text-blue-400 uppercase tracking-wider font-bold">🎯 Limit Order Placed</p>
+          <p className="mt-1 text-[12px] text-blue-300">
             Entry: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
           </p>
-          <p className="text-[10px] text-blue-300/70">
+          <p className="text-[12px] text-blue-300/70">
             Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </p>
         </div>
@@ -2153,23 +2153,23 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Regime Detection Panel — shows Daily + 4H regime, transition state, multi-TF alignment */}
       {d.regimeData && (
         <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[8px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
+          <p className="text-[11px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             {/* Daily Regime */}
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">Daily:</span>
-              <span className={`text-[9px] font-bold ${
+              <span className="text-[11px] text-muted-foreground">Daily:</span>
+              <span className={`text-[11px] font-bold ${
                 d.regimeData.daily?.regime?.includes("trend") ? "text-emerald-400"
                 : d.regimeData.daily?.regime?.includes("range") ? "text-orange-400"
                 : "text-yellow-400"
               }`}>
                 {(d.regimeData.daily?.regime || "—").replace(/_/g, " ")}
               </span>
-              <span className="text-[8px] text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 ({Math.round((d.regimeData.daily?.confidence || 0) * 100)}%)
               </span>
               {d.regimeData.daily?.bias && d.regimeData.daily.bias !== "neutral" && (
-                <span className={`text-[8px] ${d.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                <span className={`text-[11px] ${d.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
                   {d.regimeData.daily.bias === "bullish" ? "↑" : "↓"}
                 </span>
               )}
@@ -2177,19 +2177,19 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             {/* 4H Regime */}
             {d.regimeData.h4 && (
               <div className="flex items-center gap-1">
-                <span className="text-[8px] text-muted-foreground">4H:</span>
-                <span className={`text-[9px] font-bold ${
+                <span className="text-[11px] text-muted-foreground">4H:</span>
+                <span className={`text-[11px] font-bold ${
                   d.regimeData.h4.regime?.includes("trend") ? "text-emerald-400"
                   : d.regimeData.h4.regime?.includes("range") ? "text-orange-400"
                   : "text-yellow-400"
                 }`}>
                   {(d.regimeData.h4.regime || "—").replace(/_/g, " ")}
                 </span>
-                <span className="text-[8px] text-muted-foreground">
+                <span className="text-[11px] text-muted-foreground">
                   ({Math.round((d.regimeData.h4.confidence || 0) * 100)}%)
                 </span>
                 {d.regimeData.h4.bias && d.regimeData.h4.bias !== "neutral" && (
-                  <span className={`text-[8px] ${d.regimeData.h4.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                  <span className={`text-[11px] ${d.regimeData.h4.bias === "bullish" ? "text-success" : "text-destructive"}`}>
                     {d.regimeData.h4.bias === "bullish" ? "↑" : "↓"}
                   </span>
                 )}
@@ -2198,7 +2198,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             {/* Multi-TF Alignment */}
             {d.regimeData.multiTFAlignment && (
               <div className="flex items-center gap-1">
-                <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+                <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
                   d.regimeData.multiTFAlignment === "agree" ? "bg-emerald-500/20 text-emerald-400"
                   : d.regimeData.multiTFAlignment === "disagree" ? "bg-red-500/20 text-red-400"
                   : "bg-yellow-500/20 text-yellow-400"
@@ -2213,7 +2213,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {/* Transition State */}
           {d.regimeData.daily?.transition && d.regimeData.daily.transition.state !== "stable" && (
             <div className="flex items-center gap-1 mt-0.5">
-              <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+              <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
                 d.regimeData.daily.transition.state === "range_to_trending" ? "bg-emerald-500/20 text-emerald-400"
                 : d.regimeData.daily.transition.state === "accelerating" ? "bg-blue-500/20 text-blue-400"
                 : d.regimeData.daily.transition.state === "trending_to_range" ? "bg-orange-500/20 text-orange-400"
@@ -2226,7 +2226,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                   : d.regimeData.daily.transition.state === "decelerating" ? "📉 DECELERATING"
                   : d.regimeData.daily.transition.state.replace(/_/g, " ").toUpperCase()}
               </span>
-              <span className="text-[8px] text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 ({Math.round(d.regimeData.daily.transition.confidence * 100)}% conf, momentum {d.regimeData.daily.transition.momentum > 0 ? "+" : ""}{d.regimeData.daily.transition.momentum.toFixed(3)}/candle)
               </span>
             </div>
@@ -2234,14 +2234,14 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {/* 4H Transition */}
           {d.regimeData.h4?.transition && d.regimeData.h4.transition.state !== "stable" && (
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">4H:</span>
-              <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+              <span className="text-[11px] text-muted-foreground">4H:</span>
+              <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
                 d.regimeData.h4.transition.state.includes("trending") || d.regimeData.h4.transition.state === "accelerating" ? "bg-emerald-500/15 text-emerald-400"
                 : "bg-orange-500/15 text-orange-400"
               }`}>
                 {d.regimeData.h4.transition.state.replace(/_/g, " ")}
               </span>
-              <span className="text-[8px] text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 (mom: {d.regimeData.h4.transition.momentum > 0 ? "+" : ""}{d.regimeData.h4.transition.momentum.toFixed(3)})
               </span>
             </div>
@@ -2257,9 +2257,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
       {d.gates && (
         <div className="space-y-0.5">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
+          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
           {d.gates.map((g: any, gi: number) => (
-            <div key={gi} className={`flex items-center gap-1 text-[9px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+            <div key={gi} className={`flex items-center gap-1 text-[11px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
               <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
               <span>{g.reason}</span>
             </div>
@@ -2270,9 +2270,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Rejection Reasons */}
       {d.rejectionReasons && d.rejectionReasons.length > 0 && (
         <div className="space-y-0.5">
-          <p className="text-[8px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
+          <p className="text-[11px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
           {d.rejectionReasons.map((r: string, ri: number) => (
-            <p key={ri} className="text-[9px] text-destructive">⚠ {r}</p>
+            <p key={ri} className="text-[11px] text-destructive">⚠ {r}</p>
           ))}
         </div>
       )}
@@ -2280,21 +2280,21 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Confluence Stacking Panel — shows FVG/OB + S/R + Fib overlap zones */}
       {d.confluenceStacking && (
         <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
+          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
           {d.confluenceStacking.bestStack && (
             <div className="flex flex-wrap items-center gap-1">
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
                 d.confluenceStacking.bestStack.layerCount >= 3
                   ? "bg-cyan-500/25 text-cyan-300 border border-cyan-400/40"
                   : "bg-cyan-500/15 text-cyan-400"
               }`}>
                 {d.confluenceStacking.bestStack.layerCount >= 3 ? "⚡ TRIPLE" : "◆ DOUBLE"} CONFLUENCE
               </span>
-              <span className="text-[9px] text-foreground font-medium">
+              <span className="text-[11px] text-foreground font-medium">
                 {d.confluenceStacking.bestStack.label}
               </span>
               {d.confluenceStacking.bestStack.alignment && (
-                <span className={`text-[8px] px-1 py-0.5 rounded ${
+                <span className={`text-[11px] px-1 py-0.5 rounded ${
                   d.confluenceStacking.bestStack.alignment === "aligned" ? "bg-emerald-500/20 text-emerald-400"
                   : d.confluenceStacking.bestStack.alignment === "counter" ? "bg-red-500/20 text-red-400"
                   : "bg-muted text-muted-foreground"
@@ -2305,7 +2305,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             </div>
           )}
           {d.confluenceStacking.bestStack?.overlapZone && (
-            <p className="text-[8px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground">
               Zone: {d.confluenceStacking.bestStack.overlapZone[0]?.toFixed(5)} — {d.confluenceStacking.bestStack.overlapZone[1]?.toFixed(5)}
               {d.confluenceStacking.bestStack.fibLevels?.length > 0 && (
                 <span className="text-cyan-400"> | Fib: {d.confluenceStacking.bestStack.fibLevels.map((f: number) => `${f}%`).join(", ")}</span>
@@ -2313,7 +2313,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             </p>
           )}
           {d.confluenceStacking.totalStacks > 1 && (
-            <p className="text-[8px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground">
               {d.confluenceStacking.totalStacks} total confluence zones found
             </p>
           )}
@@ -2321,7 +2321,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {d.confluenceStacking.stacks?.length > 1 && (
             <div className="mt-1 space-y-0.5">
               {d.confluenceStacking.stacks.slice(1, 4).map((s: any, i: number) => (
-                <p key={i} className="text-[8px] text-muted-foreground">
+                <p key={i} className="text-[11px] text-muted-foreground">
                   #{i + 2}: {s.label} ({s.layerCount} layers{s.fibLevels?.length > 0 ? `, Fib ${s.fibLevels.join("/")}%` : ""})
                 </p>
               ))}
@@ -2333,10 +2333,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Sweep Reclaim Panel — shows liquidity sweep + reclaim confirmation */}
       {d.sweepReclaim && d.sweepReclaim.reclaimedCount > 0 && (
         <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+          <p className="text-[11px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
           {d.sweepReclaim.sweeps?.filter((sr: any) => sr.reclaimed).slice(0, 3).map((sr: any, i: number) => (
             <div key={i} className="flex flex-wrap items-center gap-1">
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
                 sr.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
                 : sr.createdDisplacement ? "bg-amber-500/20 text-amber-400"
                 : "bg-amber-500/15 text-amber-400"
@@ -2344,16 +2344,16 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                 {sr.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM
                 {sr.createdFVG ? " + FVG" : sr.createdDisplacement ? " + DISP" : ""}
               </span>
-              <span className="text-[8px] text-foreground">
+              <span className="text-[11px] text-foreground">
                 at {sr.sweptLevel?.toFixed(5)}
               </span>
-              <span className="text-[8px] text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 (strength: {Math.round((sr.reclaimStrength || 0) * 100)}%)
               </span>
             </div>
           ))}
           {d.sweepReclaim.totalSweeps > d.sweepReclaim.reclaimedCount && (
-            <p className="text-[8px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground">
               {d.sweepReclaim.totalSweeps - d.sweepReclaim.reclaimedCount} additional sweep(s) without reclaim
             </p>
           )}
@@ -2367,28 +2367,28 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-red-500/5"
           : "border-slate-500/30 bg-slate-500/5"
         }`}>
-          <p className={`text-[8px] uppercase tracking-wider font-bold ${
+          <p className={`text-[11px] uppercase tracking-wider font-bold ${
             d.pullbackHealth.trend === "healthy" ? "text-emerald-400"
             : d.pullbackHealth.trend === "exhausting" ? "text-red-400"
             : "text-slate-400"
           }`}>Pullback Health</p>
           <div className="flex items-center gap-1">
-            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+            <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
               d.pullbackHealth.trend === "healthy" ? "bg-emerald-500/20 text-emerald-400"
               : d.pullbackHealth.trend === "exhausting" ? "bg-red-500/20 text-red-400"
               : "bg-slate-500/20 text-slate-400"
             }`}>
               {d.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : d.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
             </span>
-            <span className="text-[8px] text-muted-foreground">
+            <span className="text-[11px] text-muted-foreground">
               (decay rate: {d.pullbackHealth.decayRate > 0 ? "+" : ""}{d.pullbackHealth.decayRate?.toFixed(1)}%/swing)
             </span>
           </div>
           {d.pullbackHealth.measurements?.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
-              <span className="text-[8px] text-muted-foreground">Depths:</span>
+              <span className="text-[11px] text-muted-foreground">Depths:</span>
               {d.pullbackHealth.measurements.map((m: any, i: number) => (
-                <span key={i} className="text-[8px] text-foreground">
+                <span key={i} className="text-[11px] text-foreground">
                   {m.depthPercent?.toFixed(1)}%
                   <span className="text-muted-foreground"> (~{m.nearestFibLevel}%)</span>
                   {i < d.pullbackHealth.measurements.length - 1 && <span className="text-muted-foreground"> →</span>}
@@ -2402,38 +2402,38 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Structure Intelligence Panel — Internal/External BOS, S2F rate, derived S/R */}
       {d.structureIntel && (
         <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[8px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
+          <p className="text-[11px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
           {/* BOS / CHoCH counts by significance */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">Internal BOS:</span>
-              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.internalBOS ?? 0}</span>
+              <span className="text-[11px] text-muted-foreground">Internal BOS:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.internalBOS ?? 0}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">External BOS:</span>
-              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.externalBOS ?? 0}</span>
+              <span className="text-[11px] text-muted-foreground">External BOS:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.externalBOS ?? 0}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">Internal CHoCH:</span>
-              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.internalCHoCH ?? 0}</span>
+              <span className="text-[11px] text-muted-foreground">Internal CHoCH:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.internalCHoCH ?? 0}</span>
             </div>
             <div className="flex items-center gap-1">
-              <span className="text-[8px] text-muted-foreground">External CHoCH:</span>
-              <span className="text-[9px] font-mono text-foreground">{d.structureIntel.counts?.externalCHoCH ?? 0}</span>
+              <span className="text-[11px] text-muted-foreground">External CHoCH:</span>
+              <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.externalCHoCH ?? 0}</span>
             </div>
           </div>
           {/* Structure-to-Fractal conversion rate */}
           {d.structureIntel.s2f && (
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-[8px] text-muted-foreground">S2F Rate:</span>
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              <span className="text-[11px] text-muted-foreground">S2F Rate:</span>
+              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
                 d.structureIntel.s2f.overallRate > 0.4 ? "bg-emerald-500/20 text-emerald-400"
                 : d.structureIntel.s2f.overallRate > 0.2 ? "bg-amber-500/20 text-amber-400"
                 : "bg-red-500/20 text-red-400"
               }`}>
                 {(d.structureIntel.s2f.overallRate * 100).toFixed(0)}%
               </span>
-              <span className="text-[8px] text-muted-foreground">
+              <span className="text-[11px] text-muted-foreground">
                 ({d.structureIntel.s2f.totalFractals} fractals | Bull {(d.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(d.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
               </span>
             </div>
@@ -2443,9 +2443,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             <div className="space-y-0.5 mt-0.5">
               {d.structureIntel.derivedSR.active?.length > 0 && (
                 <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[8px] text-emerald-400 font-semibold">Active S/R:</span>
+                  <span className="text-[11px] text-emerald-400 font-semibold">Active S/R:</span>
                   {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
-                    <span key={i} className={`text-[8px] font-mono px-1 py-0.5 rounded ${
+                    <span key={i} className={`text-[11px] font-mono px-1 py-0.5 rounded ${
                       sr.type === "support" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
                     }`}>
                       {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
@@ -2455,9 +2455,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               )}
               {d.structureIntel.derivedSR.broken?.length > 0 && (
                 <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[8px] text-muted-foreground">Broken:</span>
+                  <span className="text-[11px] text-muted-foreground">Broken:</span>
                   {d.structureIntel.derivedSR.broken.map((sr: any, i: number) => (
-                    <span key={i} className="text-[8px] font-mono text-muted-foreground line-through px-1 py-0.5">
+                    <span key={i} className="text-[11px] font-mono text-muted-foreground line-through px-1 py-0.5">
                       {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
                     </span>
                   ))}
@@ -2481,7 +2481,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         const renderStates = (byState: Record<string, number>) => (
           <div className="flex flex-wrap gap-1">
             {Object.entries(byState).filter(([_, v]) => v > 0).map(([state, count]) => (
-              <span key={state} className={`text-[8px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
+              <span key={state} className={`text-[11px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
                 {count} {state.replace("_", " ")}
               </span>
             ))}
@@ -2489,49 +2489,49 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         );
         return (
           <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1.5">
-            <p className="text-[8px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
+            <p className="text-[11px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
             {/* Order Blocks */}
             {lc.orderBlocks?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>
                 {renderStates(lc.orderBlocks.byState)}
               </div>
             )}
             {/* FVGs */}
             {lc.fvgs?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>
                 {renderStates(lc.fvgs.byState)}
               </div>
             )}
             {/* Swing Points */}
             {lc.swingPoints?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>
                 {renderStates(lc.swingPoints.byState)}
               </div>
             )}
             {/* Liquidity Pools */}
             {lc.liquidityPools?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>
                 {renderStates(lc.liquidityPools.byState)}
               </div>
             )}
             {/* Breaker Blocks */}
             {lc.breakerBlocks?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>
                 {renderStates(lc.breakerBlocks.byState)}
               </div>
             )}
             {/* Unicorn Setups */}
             {lc.unicornSetups?.total > 0 && (
               <div className="space-y-0.5">
-                <p className="text-[8px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>
+                <p className="text-[11px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>
                 {renderStates(lc.unicornSetups.byState)}
                 {lc.unicornSetups.invalidationReasons?.length > 0 && (
-                  <p className="text-[7px] text-red-400/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
+                  <p className="text-[10px] text-red-400/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
                 )}
               </div>
             )}
@@ -2541,8 +2541,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {d.reason && (
         <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
-          <p className="text-[8px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
-          <p className="mt-1 text-[10px] text-foreground">{d.reason}</p>
+          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
+          <p className="mt-1 text-[12px] text-foreground">{d.reason}</p>
         </div>
       )}
 
@@ -2550,13 +2550,13 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {d.fibLevels && (
         <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
           <div className="flex items-center gap-2">
-            <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
-            <span className="text-[7px] font-mono text-muted-foreground">({d.fibLevels.direction === "up" ? "↑" : "↓"} {d.fibLevels.swingLow?.toFixed(d.fibLevels.swingLow > 10 ? 3 : 5)} – {d.fibLevels.swingHigh?.toFixed(d.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
+            <p className="text-[11px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
+            <span className="text-[10px] font-mono text-muted-foreground">({d.fibLevels.direction === "up" ? "↑" : "↓"} {d.fibLevels.swingLow?.toFixed(d.fibLevels.swingLow > 10 ? 3 : 5)} – {d.fibLevels.swingHigh?.toFixed(d.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
           </div>
           {/* Retracement levels */}
           <div className="flex flex-wrap gap-1">
             {(d.fibLevels.retracements || []).map((r: any, i: number) => (
-              <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
+              <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
                 {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
               </span>
             ))}
@@ -2564,9 +2564,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {/* Extension levels */}
           {d.fibLevels.extensions?.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-0.5">
-              <span className="text-[7px] text-muted-foreground">Ext:</span>
+              <span className="text-[10px] text-muted-foreground">Ext:</span>
               {d.fibLevels.extensions.map((e: any, i: number) => (
-                <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
                   {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
                 </span>
               ))}
@@ -2576,7 +2576,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* Summary */}
-      {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+      {d.summary && <p className="text-[11px] text-muted-foreground italic mt-1">{d.summary}</p>}
     </div>
   );
 }
