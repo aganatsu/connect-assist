@@ -1807,6 +1807,97 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
   );
 }
 
+function RejectionSummaryPanel({ summary }: { summary: any }) {
+  if (!summary || !summary.buckets || Object.keys(summary.buckets).length === 0) return null;
+  const { buckets, impulseZoneBreakdown = {}, directionBreakdown = {}, samplePairs = {}, totalScanned = 0 } = summary;
+
+  const STATUS_META: Record<string, { label: string; color: string; icon: string }> = {
+    skipped_no_impulse_zone: { label: "No impulse zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
+    watching_zone: { label: "Watching zone", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⏳" },
+    no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },
+    trade_placed: { label: "Trade placed", color: "text-success border-success/30 bg-success/5", icon: "✅" },
+    trade_placed_from_watchlist: { label: "Traded from watchlist", color: "text-cyan-400 border-cyan-500/30 bg-cyan-500/5", icon: "📋" },
+    limit_order_placed: { label: "Limit order placed", color: "text-blue-400 border-blue-500/30 bg-blue-500/5", icon: "🎯" },
+    limit_order_from_watchlist: { label: "Limit + watchlist", color: "text-purple-400 border-purple-500/30 bg-purple-500/5", icon: "🎯📋" },
+    rejected: { label: "Rejected (post-gate)", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "✗" },
+    below_threshold: { label: "Below confluence", color: "text-muted-foreground border-border bg-muted/20", icon: "↓" },
+    staged_new: { label: "Newly staged", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⭐" },
+    staged_watching: { label: "Staged watching", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "👁" },
+    staged_confirming: { label: "Staged confirming", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⏳" },
+    staged_invalidated: { label: "Staged invalidated", color: "text-muted-foreground border-border bg-muted/20", icon: "❌" },
+    skipped: { label: "Skipped (session/data)", color: "text-muted-foreground border-border bg-muted/20", icon: "–" },
+    paused: { label: "Paused", color: "text-muted-foreground border-border bg-muted/20", icon: "⏸" },
+  };
+
+  const SUB_LABELS: Record<string, string> = {
+    no_impulse_leg: "No valid impulse leg (no BOS / origin broken)",
+    no_pois_in_impulse: "No FVG/OB inside impulse leg",
+    no_fib_alignment: "POIs not at key Fib (50–78.6%)",
+    not_deep_enough: "Zone exists but not deep enough on Fib",
+    no_zone_either_tf: "No zone on 1H or 4H",
+    price_not_at_zone: "Price not at zone (watchlisted)",
+    engine_error: "Engine error",
+    daily_and_4h_ranging: "Daily AND 4H ranging",
+    daily_ranging_4h_weak: "Daily ranging, 4H structure weak",
+    daily_ranging_no_4h: "Daily ranging, no 4H data",
+    daily_ranging: "Daily ranging",
+    "4h_choch_against": "4H CHoCH against bias",
+    "1h_choch_against": "1H CHoCH against bias",
+    "1h_unconfirmed": "1H not confirmed",
+    insufficient_daily_candles: "Insufficient daily candles",
+    unknown: "Unknown",
+    other: "Other",
+  };
+
+  // Sort buckets by count desc, then put status entries with no meta last
+  const sortedBuckets = Object.entries(buckets as Record<string, number>)
+    .sort(([, a], [, b]) => (b as number) - (a as number));
+
+  return (
+    <div className="border border-border bg-card/40 p-2 mb-1">
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Rejection Summary</p>
+        <span className="text-[9px] text-muted-foreground font-mono">{totalScanned} pairs scanned</span>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+        {sortedBuckets.map(([key, count]) => {
+          const meta = STATUS_META[key] || { label: key, color: "text-muted-foreground border-border bg-muted/20", icon: "•" };
+          const samples: string[] = samplePairs[key] || [];
+          // Pick the breakdown that applies to this bucket
+          const sub = key === "skipped_no_impulse_zone" ? impulseZoneBreakdown
+            : key === "watching_zone" ? { price_not_at_zone: (impulseZoneBreakdown.price_not_at_zone ?? count) }
+            : key === "no_direction" ? directionBreakdown
+            : null;
+          const subEntries = sub ? Object.entries(sub).sort(([, a], [, b]) => (b as number) - (a as number)) : [];
+          return (
+            <div key={key} className={`border px-1.5 py-1 ${meta.color}`}>
+              <div className="flex items-center justify-between text-[10px] font-medium">
+                <span className="truncate">{meta.icon} {meta.label}</span>
+                <span className="font-mono font-bold ml-1">{count}</span>
+              </div>
+              {subEntries.length > 0 && (
+                <div className="mt-0.5 space-y-0.5">
+                  {subEntries.map(([sk, sv]) => (
+                    <div key={sk} className="flex items-center justify-between text-[9px] text-muted-foreground">
+                      <span className="truncate">└ {SUB_LABELS[sk] || sk}</span>
+                      <span className="font-mono ml-1">{sv as number}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {samples.length > 0 && (
+                <div className="mt-0.5 text-[9px] text-muted-foreground/80 truncate font-mono">
+                  {samples.join(", ")}{(count as number) > samples.length ? ` +${(count as number) - samples.length}` : ""}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ScanDetailInline({ signal: d }: { signal: any }) {
   const statusLabel = d.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : d.status === "limit_order_placed" ? "🎯 LIMIT" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" ? "text-purple-400" : d.status === "limit_order_placed" ? "text-blue-400" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
