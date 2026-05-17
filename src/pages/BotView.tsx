@@ -1041,9 +1041,9 @@ export default function BotView() {
         </div>
 
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border-t border-border mt-2 pt-1 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
+        <div className={`border border-border bg-card mt-2 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex items-center justify-between mb-1 gap-2">
+          <div className="flex items-center justify-between gap-2 bg-card/60 border-b border-border px-2 py-1">
             <div className="flex items-center gap-1.5">
               <button
                 onClick={toggleScanPanel}
@@ -1053,7 +1053,7 @@ export default function BotView() {
                 {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
               </button>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5 font-semibold">
                 {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
                 {currentScan?.scanned_at && (
                   <span className="ml-1 text-foreground font-mono">
@@ -1125,17 +1125,19 @@ export default function BotView() {
           {/* Scan content — conditionally rendered */}
           {showScanPanel && (
           <>
-          <RejectionSummaryPanel summary={latestMeta?.rejectionSummary} />
-          <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 pt-1">
+          <div className="px-2 pt-1">
+            <RejectionSummaryPanel summary={latestMeta?.rejectionSummary} />
+          </div>
+          <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
-            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
+            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-48 md:max-h-none">
               <div className="flex-1 overflow-y-auto">
                 {(() => {
                     if (latestDetailsClean.length === 0) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
                     }
                     return (
-                      <div className="space-y-0">
+                      <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
                           const statusLabel = sig.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : sig.status === "limit_order_placed" ? "🎯 LIMIT" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
                           const statusColor = sig.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
@@ -1144,17 +1146,17 @@ export default function BotView() {
                             <button
                               key={i}
                               onClick={() => { setSelectedPairIdx(i); if (isMobile) setMobileScanDetailSheet(true); }}
-                              className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                              className={`w-full flex items-center justify-between text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                             >
                               <div className="min-w-0 flex items-center gap-1.5 flex-1">
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
-                                <span className="font-medium shrink-0">{sig.pair}</span>
+                                <span className="font-bold shrink-0 text-foreground">{sig.pair}</span>
 
-                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
+                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
                               <div className="flex items-center gap-1.5">
-                                <span className={`font-mono font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+                                <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
+                                <span className={`text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
                           );
@@ -1166,9 +1168,11 @@ export default function BotView() {
             </div>
 
             {/* Right: Detail Breakdown (40%) — hidden on mobile, shown in sheet instead */}
-            <div className={`w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
-              <div className="flex-1 overflow-y-auto">
+            <div className={`w-full md:w-[40%] flex flex-col min-h-0 border-t md:border-t-0 border-border max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
+              <div className="bg-card/60 px-2 py-1 border-b border-border">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Detail Breakdown</span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 py-1">
                 {(() => {
                     const selected = latestDetailsClean[selectedPairIdx];
                     if (!selected) {
