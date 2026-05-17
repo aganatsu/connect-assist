@@ -5049,6 +5049,70 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const cacheStats = scanCache.stats();
   console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors (${scanCache.size()} unique keys)`);
   scanCache.clear();
+  // ── Rejection telemetry: classify each scanDetail so we can see why pairs died ──
+  const rejectionSummary = (() => {
+    const izSubReason = (r?: string): string => {
+      if (!r) return "unknown";
+      const s = r.toLowerCase();
+      if (s.includes("no valid") && s.includes("impulse leg")) return "no_impulse_leg";
+      if (s.includes("no pois") || s.includes("no fvgs/obs")) return "no_pois_in_impulse";
+      if (s.includes("none align with key fib")) return "no_fib_alignment";
+      if (s.includes("scored high enough") || s.includes("fibscore")) return "not_deep_enough";
+      if (s.includes("no valid zone on any timeframe")) return "no_zone_either_tf";
+      if (s.startsWith("no direction")) return "no_direction";
+      if (s.startsWith("error")) return "engine_error";
+      return "other";
+    };
+    const dirSubReason = (r?: string): string => {
+      if (!r) return "unknown";
+      const s = r.toLowerCase();
+      if (s.includes("both") && s.includes("ranging")) return "daily_and_4h_ranging";
+      if (s.includes("daily ranging") && s.includes("insufficient 4h")) return "daily_ranging_no_4h";
+      if (s.includes("daily ranging") && s.includes("weak structure")) return "daily_ranging_4h_weak";
+      if (s.includes("daily ranging")) return "daily_ranging";
+      if (s.includes("4h choch against")) return "4h_choch_against";
+      if (s.includes("1h choch against")) return "1h_choch_against";
+      if (s.includes("insufficient daily")) return "insufficient_daily_candles";
+      if (s.includes("1h not confirmed") || s.includes("no recent")) return "1h_unconfirmed";
+      return "other";
+    };
+    const buckets: Record<string, number> = {};
+    const izBreakdown: Record<string, number> = {};
+    const dirBreakdown: Record<string, number> = {};
+    const samples: Record<string, string[]> = {};
+    const bump = (k: string, pair?: string) => {
+      buckets[k] = (buckets[k] ?? 0) + 1;
+      if (pair) {
+        samples[k] = samples[k] ?? [];
+        if (samples[k].length < 5) samples[k].push(pair);
+      }
+    };
+    for (const d of scanDetails) {
+      const status = (d as any)?.status as string | undefined;
+      const pair = (d as any)?.pair as string | undefined;
+      const iz = (d as any)?.impulseZone;
+      const sd = (d as any)?.simpleDirection;
+      if (!status) continue;
+      bump(status, pair);
+      if (status === "skipped_no_impulse_zone") {
+        const sub = izSubReason(iz?.reason);
+        izBreakdown[sub] = (izBreakdown[sub] ?? 0) + 1;
+      } else if (status === "watching_zone") {
+        izBreakdown["price_not_at_zone"] = (izBreakdown["price_not_at_zone"] ?? 0) + 1;
+      } else if (status === "no_direction") {
+        const sub = dirSubReason(sd?.reason);
+        dirBreakdown[sub] = (dirBreakdown[sub] ?? 0) + 1;
+      }
+    }
+    return {
+      buckets,
+      impulseZoneBreakdown: izBreakdown,
+      directionBreakdown: dirBreakdown,
+      samplePairs: samples,
+      totalScanned: scanDetails.length,
+    };
+  })();
+  console.log(`[scan ${scanCycleId}] rejection summary: ${JSON.stringify(rejectionSummary.buckets)} | IZ: ${JSON.stringify(rejectionSummary.impulseZoneBreakdown)} | Dir: ${JSON.stringify(rejectionSummary.directionBreakdown)}`);
   const detailsWithMeta = [
     {
       __meta: true,
@@ -5066,6 +5130,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
+      rejectionSummary,
     },
     ...scanDetails,
   ];
