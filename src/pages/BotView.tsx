@@ -1040,6 +1040,105 @@ export default function BotView() {
           )}
         </div>
 
+        {/* Secondary footer band: equity curve + recent closed trades */}
+        {botTradeHistory.length > 0 && (() => {
+          const sorted = [...botTradeHistory]
+            .filter((t: any) => t.closedAt)
+            .sort((a: any, b: any) => new Date(a.closedAt).getTime() - new Date(b.closedAt).getTime());
+          if (sorted.length === 0) return null;
+          const startBal = parseFloat(d.balance) - sorted.reduce((s, t: any) => s + (parseFloat(t.pnl) || 0), 0);
+          let running = startBal;
+          const points = sorted.map((t: any) => {
+            running += parseFloat(t.pnl) || 0;
+            return running;
+          });
+          const peak = points.reduce((mx, v) => Math.max(mx, v), startBal);
+          const trough = points.reduce((mn, v) => Math.min(mn, v), startBal);
+          const lo = Math.min(startBal, trough);
+          const hi = Math.max(startBal, peak);
+          const range = hi - lo || 1;
+          const W = 600;
+          const H = 56;
+          const stepX = points.length > 1 ? W / (points.length - 1) : W;
+          const path = points.map((v, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${(H - ((v - lo) / range) * H).toFixed(1)}`).join(" ");
+          const area = `${path} L${((points.length - 1) * stepX).toFixed(1)},${H} L0,${H} Z`;
+          const last = points[points.length - 1];
+          const totalPnl = last - startBal;
+          const recent = [...botTradeHistory]
+            .filter((t: any) => t.closedAt)
+            .sort((a: any, b: any) => new Date(b.closedAt).getTime() - new Date(a.closedAt).getTime())
+            .slice(0, 10);
+          return (
+            <div className="border border-border bg-card mt-2 shrink-0 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] divide-y md:divide-y-0 md:divide-x divide-border">
+              {/* Equity curve */}
+              <div className="flex flex-col">
+                <div className="flex items-center justify-between bg-card/60 border-b border-border px-2 py-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Equity Curve</span>
+                  <div className="flex items-center gap-3 font-mono text-[10px] tabular-nums">
+                    <span className="text-muted-foreground">START <span className="text-foreground">{formatMoney(startBal)}</span></span>
+                    <span className="text-muted-foreground">NOW <span className="text-foreground font-bold">{formatMoney(last)}</span></span>
+                    <span className={totalPnl >= 0 ? "text-success" : "text-destructive"}>
+                      {totalPnl >= 0 ? "+" : ""}{formatMoney(totalPnl)} ({((totalPnl / startBal) * 100).toFixed(2)}%)
+                    </span>
+                  </div>
+                </div>
+                <div className="px-2 py-1.5 flex-1">
+                  <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-14">
+                    <defs>
+                      <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.35" />
+                        <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    {/* baseline (starting balance) */}
+                    <line
+                      x1="0" x2={W}
+                      y1={H - ((startBal - lo) / range) * H}
+                      y2={H - ((startBal - lo) / range) * H}
+                      stroke="hsl(var(--border))" strokeDasharray="3 3" strokeWidth="1"
+                    />
+                    <path d={area} fill="url(#eqFill)" />
+                    <path d={path} fill="none" stroke="hsl(var(--primary))" strokeWidth="1.5" />
+                  </svg>
+                </div>
+              </div>
+              {/* Recent closed trades strip */}
+              <div className="flex flex-col min-w-0">
+                <div className="flex items-center justify-between bg-card/60 border-b border-border px-2 py-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Recent Closes</span>
+                  <span className="text-[10px] font-mono text-muted-foreground tabular-nums">{botTradeHistory.length} TOTAL</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px] font-mono tabular-nums">
+                    <thead className="bg-card/40">
+                      <tr className="text-muted-foreground text-[9px] uppercase tracking-wider font-semibold font-sans border-b border-border/40">
+                        <th className="text-left py-1 px-2">Closed</th>
+                        <th className="text-left py-1 px-2">Sym</th>
+                        <th className="text-center py-1 px-1">Dir</th>
+                        <th className="text-right py-1 px-2">Pips</th>
+                        <th className="text-right py-1 px-2">P&amp;L</th>
+                        <th className="text-left py-1 px-2">Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/30">
+                      {recent.map((t: any, i: number) => (
+                        <tr key={t.orderId || t.positionId || i} className="hover:bg-secondary/30">
+                          <td className="py-0.5 px-2 text-muted-foreground whitespace-nowrap">{formatTimeOnly(t.closedAt)}</td>
+                          <td className="py-0.5 px-2 text-foreground">{t.symbol}</td>
+                          <td className={`py-0.5 px-1 text-center ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
+                          <td className={`py-0.5 px-2 text-right ${(t.pnlPips ?? 0) >= 0 ? "text-success" : "text-destructive"}`}>{(t.pnlPips ?? 0) >= 0 ? "+" : ""}{(t.pnlPips ?? 0).toFixed(1)}</td>
+                          <td className={`py-0.5 px-2 text-right font-bold ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</td>
+                          <td className="py-0.5 px-2 text-muted-foreground uppercase tracking-wide">{t.closeReason || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className={`border border-border bg-card mt-2 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
           {/* Scan panel header — always visible for toggle */}
