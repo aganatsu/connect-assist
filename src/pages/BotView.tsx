@@ -651,17 +651,25 @@ export default function BotView() {
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
           <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
             <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
-              <TabsList className="h-7 shrink-0 overflow-x-auto">
-                <TabsTrigger value="open" className="text-[11px] h-6">Open ({botPositions.length})</TabsTrigger>
-                <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
-                <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
-                <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
-                <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
-                <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
-                <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
-                <TabsTrigger value="watchlist" className="text-[11px] h-6">Watchlist</TabsTrigger>
-                <TabsTrigger value="pending-orders" className="text-[11px] h-6">Pending Orders</TabsTrigger>
-                <TabsTrigger value="game-plan" className="text-[11px] h-6">Game Plan</TabsTrigger>
+              <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
+                {[
+                  ["open", `Open (${botPositions.length})`],
+                  ["today", `Closed Today (${closedToday.length})`],
+                  ["history", "All History"],
+                  ["audit", "Close Audit"],
+                  ["broker-log", "Broker Log"],
+                  ["ai-advisor", "AI Advisor"],
+                  ["broker-live", "MT4/MT5 Live"],
+                  ["watchlist", "Watchlist"],
+                  ["pending-orders", "Pending Orders"],
+                  ["game-plan", "Game Plan"],
+                ].map(([val, label]) => (
+                  <TabsTrigger
+                    key={val}
+                    value={val}
+                    className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
+                  >{label}</TabsTrigger>
+                ))}
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -688,20 +696,20 @@ export default function BotView() {
                     ))}
                   </div>
                 ) : (
-                  <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[800px]">
-                    <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
-                      <th className="text-center py-1 px-1 w-6">#</th>
-                      <th className="text-left py-1 px-1">Opened</th>
-                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
-                      <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
-                      <th className="text-right py-1 px-1">Pips</th>
-                      <th className="text-right py-1 px-1">P&L</th>
-                      <th className="text-right py-1 px-1">R</th>
-                      <th className="text-center py-1 px-1">BE</th>
-                      <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
-                      <th className="text-center py-1 px-1">Trail</th>
-                      <th className="text-center py-1 px-1">Hold</th>
-                      <th className="py-1 px-1"></th>
+                  <div className="overflow-x-auto border border-border border-t-0 bg-card"><table className="w-full text-[11px] font-mono min-w-[800px]">
+                    <thead className="bg-card/60"><tr className="border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider font-semibold font-sans">
+                      <th className="text-center py-1.5 px-1 w-6">#</th>
+                      <th className="text-left py-1.5 px-1">Opened</th>
+                      <th className="text-left py-1.5 px-1">Symbol</th><th className="text-left py-1.5 px-1">Dir</th>
+                      <th className="text-right py-1.5 px-1">Entry</th><th className="text-right py-1.5 px-1">Current</th>
+                      <th className="text-right py-1.5 px-1">Pips</th>
+                      <th className="text-right py-1.5 px-1">P&amp;L</th>
+                      <th className="text-right py-1.5 px-1">R</th>
+                      <th className="text-center py-1.5 px-1">BE</th>
+                      <th className="text-right py-1.5 px-1">SL</th><th className="text-right py-1.5 px-1">TP</th>
+                      <th className="text-center py-1.5 px-1">Trail</th>
+                      <th className="text-center py-1.5 px-1">Hold</th>
+                      <th className="py-1.5 px-1"></th>
                     </tr></thead>
                     <tbody>
                       {botPositions.map((p: any, idx: number) => {
