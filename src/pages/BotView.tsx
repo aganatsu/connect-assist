@@ -349,39 +349,100 @@ export default function BotView() {
     return t.closedAt?.startsWith(today);
   });
 
+  // ── Header strip metrics ─────────────────────────────────────────────────
+  const unrealizedPnl = (d.equity ?? 0) - (d.balance ?? 0);
+  const todayPnl = d.dailyPnl ?? 0;
+  const todayPnlPct = (d.balance && d.balance !== 0) ? (todayPnl / d.balance) * 100 : 0;
+
+  // Next-scan countdown
+  const intervalMin = botConfig?.entry?.scanIntervalMinutes ?? 15;
+  const lastScanAt = logs[0]?.scanned_at ? new Date(logs[0].scanned_at).getTime() : null;
+  const nextScanAt = lastScanAt ? lastScanAt + intervalMin * 60_000 : null;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const nextScanLabel = (() => {
+    if (!d.isRunning) return "Engine off";
+    if (scanPolling || scanMut.isPending) return "Scanning…";
+    if (!nextScanAt) return "—";
+    const diff = Math.max(0, nextScanAt - now);
+    const m = Math.floor(diff / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  })();
+
+  const engineLabel = d.killSwitchActive
+    ? "KILL SWITCH"
+    : d.isRunning
+      ? (d.isPaused ? "Paused" : "Bot Active")
+      : "Bot Stopped";
+  const engineDotClass = d.killSwitchActive
+    ? "bg-destructive shadow-[0_0_8px_hsl(var(--destructive)/0.6)]"
+    : d.isRunning && !d.isPaused
+      ? "bg-success shadow-[0_0_8px_hsl(var(--success)/0.5)]"
+      : d.isRunning && d.isPaused
+        ? "bg-warning shadow-[0_0_8px_hsl(var(--warning)/0.5)]"
+        : "bg-muted-foreground";
+
   return (
     <AppShell>
       <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
-        {/* Live Mode Banner */}
+        {/* ─── Bloomberg-style command strip ────────────────────────────── */}
+        {!isMobile && (
+          <div className="grid grid-cols-6 border border-border bg-card divide-x divide-border mb-1">
+            <div className="p-2 flex flex-col gap-0.5 min-w-0">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">System Status</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${engineDotClass}`} />
+                <span className="text-foreground font-bold uppercase tracking-tight text-[11px] truncate">
+                  {engineLabel} <span className="text-muted-foreground font-normal">[SMC]</span>
+                </span>
+              </div>
+            </div>
+            <div className="p-2 flex flex-col gap-0.5">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Next Scan In</span>
+              <span className="text-primary font-mono font-medium text-[12px]">{nextScanLabel}</span>
+            </div>
+            <div className="p-2 flex flex-col gap-0.5 min-w-0">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Balance / Equity</span>
+              <span className="text-foreground font-mono font-medium text-[12px] truncate">
+                {formatMoney(d.balance || 0)} <span className="text-muted-foreground text-[10px]">/ {formatMoney(d.equity || 0)}</span>
+              </span>
+            </div>
+            <div className="p-2 flex flex-col gap-0.5">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Today P&amp;L</span>
+              <span className={`font-mono font-bold text-[12px] ${todayPnl >= 0 ? "text-success" : "text-destructive"}`}>
+                {todayPnl >= 0 ? "+" : ""}{formatMoney(todayPnl)} <span className="text-[10px] font-medium">({todayPnl >= 0 ? "+" : ""}{todayPnlPct.toFixed(2)}%)</span>
+              </span>
+            </div>
+            <div className="p-2 flex flex-col gap-0.5">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Open Positions</span>
+              <span className="text-foreground font-mono font-medium text-[12px]">
+                {botPositions.length} <span className="text-muted-foreground text-[10px]">({(d.drawdown || 0).toFixed(2)}% DD)</span>
+              </span>
+            </div>
+            <div className="p-2 flex flex-col gap-0.5">
+              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Win Rate</span>
+              <span className="text-foreground font-mono font-medium text-[12px]">
+                {(d.winRate || 0).toFixed(1)}% <span className="text-muted-foreground text-[10px]">{d.wins ?? 0}W / {d.losses ?? 0}L</span>
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Live mode alert (compact, only when live) */}
         {d.executionMode === "live" && (
-          <div className="bg-destructive/20 border border-destructive text-destructive px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
-            <span>⚠ LIVE TRADING ACTIVE — Real Money at Risk</span>
-            <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive text-destructive" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
+          <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between mb-1">
+            <span>⚠ LIVE TRADING — Real Money at Risk</span>
+            <button className="underline hover:no-underline" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
               Switch to Paper
-            </Button>
-          </div>
-        )}
-        {d.executionMode !== "live" && (
-          <div className="bg-muted border border-border px-3 py-1.5 text-xs font-medium flex items-center justify-between mb-2">
-            <span>📝 Paper Mode — trades are simulated, broker mirroring is OFF</span>
-            <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => {
-              if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected broker account(s).")) {
-                paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
-              }
-            }}>
-              Switch to Live
-            </Button>
+            </button>
           </div>
         )}
 
-        {/* Bot Selector Tabs */}
-        <div className="flex items-center gap-0 border-b border-border mb-1 overflow-x-auto">
-          <span className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b-2 border-primary text-primary bg-primary/5">
-            SMC Confluence Bot
-          </span>
-        </div>
-
-        {/* Top Control Bar — responsive: compact on mobile, full on desktop */}
+        {/* ─── Action / Control Row ─────────────────────────────────────── */}
         {isMobile ? (
           <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
@@ -440,7 +501,7 @@ export default function BotView() {
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-2 pb-2 border-b border-border flex-wrap text-[11px]">
+          <div className="flex items-center gap-2 px-2 py-1.5 border border-border bg-card/40 flex-wrap text-[11px]">
             <div className="flex items-center gap-1">
               <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 text-[11px]" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused}>
                 <Play className="h-3 w-3 mr-1" /> Start
@@ -464,15 +525,16 @@ export default function BotView() {
 
             <div className="w-px h-5 bg-border" />
 
-            {/* Engine status */}
-            <span className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
-              <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-              {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Stopped"}
-            </span>
-
-            <span className={`text-[10px] font-medium px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
+            <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
               {d.executionMode === "live" ? "LIVE" : "PAPER"}
             </span>
+            {d.executionMode !== "live" && (
+              <button className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline" onClick={() => {
+                if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected broker account(s).")) {
+                  paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
+                }
+              }}>→ Live</button>
+            )}
 
             {activeConnections.length > 0 ? (
               activeConnections.map((conn: any) => (
@@ -511,12 +573,11 @@ export default function BotView() {
                 <AlertTriangle className="h-3 w-3 mr-1" /> Kill
               </Button>
 
-              <div className="flex gap-3 text-[10px] text-muted-foreground">
+              <div className="flex gap-3 text-[10px] text-muted-foreground font-mono">
                 <span>Interval: <strong className="text-foreground">{`${botConfig?.entry?.scanIntervalMinutes ?? 15}m`}</strong></span>
                 <span>Scans: <strong className="text-foreground">{d.scanCount}</strong></span>
                 <span>Signals: <strong className="text-foreground">{d.signalCount}</strong></span>
                 <span>Trades: <strong className="text-foreground">{d.totalTrades}</strong></span>
-                <span>WR: <strong className={`${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(0)}%</strong></span>
               </div>
             </div>
           </div>
