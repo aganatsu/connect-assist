@@ -651,17 +651,25 @@ export default function BotView() {
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
           <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
             <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
-              <TabsList className="h-7 shrink-0 overflow-x-auto">
-                <TabsTrigger value="open" className="text-[11px] h-6">Open ({botPositions.length})</TabsTrigger>
-                <TabsTrigger value="today" className="text-[11px] h-6">Closed Today ({closedToday.length})</TabsTrigger>
-                <TabsTrigger value="history" className="text-[11px] h-6">All History</TabsTrigger>
-                <TabsTrigger value="audit" className="text-[11px] h-6">Close Audit</TabsTrigger>
-                <TabsTrigger value="broker-log" className="text-[11px] h-6">Broker Log</TabsTrigger>
-                <TabsTrigger value="ai-advisor" className="text-[11px] h-6">AI Advisor</TabsTrigger>
-                <TabsTrigger value="broker-live" className="text-[11px] h-6">MT4/MT5 Live</TabsTrigger>
-                <TabsTrigger value="watchlist" className="text-[11px] h-6">Watchlist</TabsTrigger>
-                <TabsTrigger value="pending-orders" className="text-[11px] h-6">Pending Orders</TabsTrigger>
-                <TabsTrigger value="game-plan" className="text-[11px] h-6">Game Plan</TabsTrigger>
+              <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
+                {[
+                  ["open", `Open (${botPositions.length})`],
+                  ["today", `Closed Today (${closedToday.length})`],
+                  ["history", "All History"],
+                  ["audit", "Close Audit"],
+                  ["broker-log", "Broker Log"],
+                  ["ai-advisor", "AI Advisor"],
+                  ["broker-live", "MT4/MT5 Live"],
+                  ["watchlist", "Watchlist"],
+                  ["pending-orders", "Pending Orders"],
+                  ["game-plan", "Game Plan"],
+                ].map(([val, label]) => (
+                  <TabsTrigger
+                    key={val}
+                    value={val}
+                    className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
+                  >{label}</TabsTrigger>
+                ))}
               </TabsList>
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
@@ -688,20 +696,20 @@ export default function BotView() {
                     ))}
                   </div>
                 ) : (
-                  <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[800px]">
-                    <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
-                      <th className="text-center py-1 px-1 w-6">#</th>
-                      <th className="text-left py-1 px-1">Opened</th>
-                      <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
-                      <th className="text-right py-1 px-1">Entry</th><th className="text-right py-1 px-1">Current</th>
-                      <th className="text-right py-1 px-1">Pips</th>
-                      <th className="text-right py-1 px-1">P&L</th>
-                      <th className="text-right py-1 px-1">R</th>
-                      <th className="text-center py-1 px-1">BE</th>
-                      <th className="text-right py-1 px-1">SL</th><th className="text-right py-1 px-1">TP</th>
-                      <th className="text-center py-1 px-1">Trail</th>
-                      <th className="text-center py-1 px-1">Hold</th>
-                      <th className="py-1 px-1"></th>
+                  <div className="overflow-x-auto border border-border border-t-0 bg-card"><table className="w-full text-[11px] font-mono min-w-[800px]">
+                    <thead className="bg-card/60"><tr className="border-b border-border text-muted-foreground text-[9px] uppercase tracking-wider font-semibold font-sans">
+                      <th className="text-center py-1.5 px-1 w-6">#</th>
+                      <th className="text-left py-1.5 px-1">Opened</th>
+                      <th className="text-left py-1.5 px-1">Symbol</th><th className="text-left py-1.5 px-1">Dir</th>
+                      <th className="text-right py-1.5 px-1">Entry</th><th className="text-right py-1.5 px-1">Current</th>
+                      <th className="text-right py-1.5 px-1">Pips</th>
+                      <th className="text-right py-1.5 px-1">P&amp;L</th>
+                      <th className="text-right py-1.5 px-1">R</th>
+                      <th className="text-center py-1.5 px-1">BE</th>
+                      <th className="text-right py-1.5 px-1">SL</th><th className="text-right py-1.5 px-1">TP</th>
+                      <th className="text-center py-1.5 px-1">Trail</th>
+                      <th className="text-center py-1.5 px-1">Hold</th>
+                      <th className="py-1.5 px-1"></th>
                     </tr></thead>
                     <tbody>
                       {botPositions.map((p: any, idx: number) => {
@@ -858,53 +866,53 @@ export default function BotView() {
               const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;
               const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
 
+              const Panel = ({ title, children }: { title: string; children: React.ReactNode }) => (
+                <div className="border border-border bg-card">
+                  <div className="bg-card/60 px-2 py-1 border-b border-border">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</span>
+                  </div>
+                  <div className="divide-y divide-border/40 font-mono text-[11px]">{children}</div>
+                </div>
+              );
+              const Row = ({ label, value, valueClass = "" }: { label: string; value: React.ReactNode; valueClass?: string }) => (
+                <div className="flex justify-between items-center px-2 py-1">
+                  <span className="text-muted-foreground text-[10px] uppercase tracking-wide font-sans">{label}</span>
+                  <span className={`tabular-nums ${valueClass}`}>{value}</span>
+                </div>
+              );
               return (
                 <>
-                  <Card>
-                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Account</p>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{formatMoney(d.balance)}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Equity</span><span className="font-mono">{formatMoney(equity)}</span></div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Unrealized P&L</span>
-                        <span className={`font-mono font-bold ${unrealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(unrealizedPnl, true)}</span>
-                      </div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Daily P&L</span><span className={`font-mono font-medium ${d.dailyPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(d.dailyPnl, true)}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Total Return</span><span className={`font-mono font-medium ${profitPct >= 0 ? "text-success" : "text-destructive"}`}>{profitPct >= 0 ? "+" : ""}{profitPct.toFixed(2)}%</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Drawdown</span><span className={`font-mono ${(d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : ""}`}>{(d.drawdown || 0).toFixed(1)}%</span></div>
-                    </CardContent>
-                  </Card>
+                  <Panel title="Account">
+                    <Row label="Balance" value={formatMoney(d.balance)} valueClass="font-bold text-foreground" />
+                    <Row label="Equity" value={formatMoney(equity)} valueClass="text-foreground" />
+                    <Row label="Unrealized P&L" value={formatMoney(unrealizedPnl, true)} valueClass={`font-bold ${unrealizedPnl >= 0 ? "text-success" : "text-destructive"}`} />
+                    <Row label="Daily P&L" value={formatMoney(d.dailyPnl, true)} valueClass={d.dailyPnl >= 0 ? "text-success" : "text-destructive"} />
+                    <Row label="Total Return" value={`${profitPct >= 0 ? "+" : ""}${profitPct.toFixed(2)}%`} valueClass={profitPct >= 0 ? "text-success" : "text-destructive"} />
+                    <Row label="Drawdown" value={`${(d.drawdown || 0).toFixed(1)}%`} valueClass={(d.drawdown || 0) > 10 ? "text-destructive" : (d.drawdown || 0) > 5 ? "text-warning" : "text-foreground"} />
+                  </Panel>
 
-                  {/* Exposure */}
-                  <Card>
-                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Exposure</p>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Open Positions</span><span className="font-mono font-bold">{positions.length}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Long / Short</span><span className="font-mono"><span className="text-success">{longCount}L</span> / <span className="text-destructive">{shortCount}S</span></span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Total Lots</span><span className="font-mono">{totalExposure.toFixed(2)}</span></div>
-                      {bestPos && bestPos.pnl !== 0 && (
-                        <div className="flex justify-between"><span className="text-muted-foreground">Best Open</span><span className="font-mono text-success text-[10px]">{bestPos.symbol} {formatMoney(bestPos.pnl, true)}</span></div>
-                      )}
-                      {worstPos && worstPos.pnl !== 0 && (
-                        <div className="flex justify-between"><span className="text-muted-foreground">Worst Open</span><span className="font-mono text-destructive text-[10px]">{worstPos.symbol} {formatMoney(worstPos.pnl, true)}</span></div>
-                      )}
-                    </CardContent>
-                  </Card>
+                  <Panel title="Exposure">
+                    <Row label="Open Positions" value={positions.length} valueClass="font-bold text-foreground" />
+                    <Row label="Long / Short" value={<><span className="text-success">{longCount}L</span> / <span className="text-destructive">{shortCount}S</span></>} />
+                    <Row label="Total Lots" value={totalExposure.toFixed(2)} valueClass="text-foreground" />
+                    {bestPos && bestPos.pnl !== 0 && (
+                      <Row label="Best Open" value={<span className="text-[10px]">{bestPos.symbol} {formatMoney(bestPos.pnl, true)}</span>} valueClass="text-success" />
+                    )}
+                    {worstPos && worstPos.pnl !== 0 && (
+                      <Row label="Worst Open" value={<span className="text-[10px]">{worstPos.symbol} {formatMoney(worstPos.pnl, true)}</span>} valueClass="text-destructive" />
+                    )}
+                  </Panel>
 
-                  {/* Performance Metrics */}
-                  <Card>
-                    <CardContent className="pt-3 pb-2 space-y-1.5 text-[11px]">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Performance</p>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Win Rate</span><span className={`font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>{(d.winRate || 0).toFixed(1)}%</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Win / Loss</span><span className="font-mono">{d.wins}W / {d.losses}L</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Total Trades</span><span className="font-mono">{d.totalTrades}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Realized P&L</span><span className={`font-mono ${totalRealizedPnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(totalRealizedPnl, true)}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Win</span><span className="font-mono text-success">{formatMoney(avgWin, true)}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Avg Loss</span><span className="font-mono text-destructive">{formatMoney(avgLoss, true)}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Profit Factor</span><span className="font-mono">{profitFactor > 0 ? profitFactor.toFixed(2) : "—"}</span></div>
-                      <div className="flex justify-between"><span className="text-muted-foreground">Rejected</span><span className="font-mono text-warning">{d.rejectedCount}</span></div>
-                    </CardContent>
-                  </Card>
+                  <Panel title="Performance">
+                    <Row label="Win Rate" value={`${(d.winRate || 0).toFixed(1)}%`} valueClass={`font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`} />
+                    <Row label="Win / Loss" value={<><span className="text-success">{d.wins}W</span> / <span className="text-destructive">{d.losses}L</span></>} />
+                    <Row label="Total Trades" value={d.totalTrades} valueClass="text-foreground" />
+                    <Row label="Realized P&L" value={formatMoney(totalRealizedPnl, true)} valueClass={totalRealizedPnl >= 0 ? "text-success" : "text-destructive"} />
+                    <Row label="Avg Win" value={formatMoney(avgWin, true)} valueClass="text-success" />
+                    <Row label="Avg Loss" value={formatMoney(avgLoss, true)} valueClass="text-destructive" />
+                    <Row label="Profit Factor" value={profitFactor > 0 ? profitFactor.toFixed(2) : "—"} valueClass="text-foreground" />
+                    <Row label="Rejected" value={d.rejectedCount} valueClass="text-warning" />
+                  </Panel>
                 </>
               );
             })()}
@@ -1033,9 +1041,9 @@ export default function BotView() {
         </div>
 
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border-t border-border mt-2 pt-1 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
+        <div className={`border border-border bg-card mt-2 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex items-center justify-between mb-1 gap-2">
+          <div className="flex items-center justify-between gap-2 bg-card/60 border-b border-border px-2 py-1">
             <div className="flex items-center gap-1.5">
               <button
                 onClick={toggleScanPanel}
@@ -1045,7 +1053,7 @@ export default function BotView() {
                 {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
               </button>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5 font-semibold">
                 {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
                 {currentScan?.scanned_at && (
                   <span className="ml-1 text-foreground font-mono">
@@ -1117,17 +1125,19 @@ export default function BotView() {
           {/* Scan content — conditionally rendered */}
           {showScanPanel && (
           <>
-          <RejectionSummaryPanel summary={latestMeta?.rejectionSummary} />
-          <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 pt-1">
+          <div className="px-2 pt-1">
+            <RejectionSummaryPanel summary={latestMeta?.rejectionSummary} />
+          </div>
+          <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
-            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
+            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-48 md:max-h-none">
               <div className="flex-1 overflow-y-auto">
                 {(() => {
                     if (latestDetailsClean.length === 0) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
                     }
                     return (
-                      <div className="space-y-0">
+                      <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
                           const statusLabel = sig.status === "limit_order_from_watchlist" ? "🎯📋 LIMIT+WL" : sig.status === "limit_order_placed" ? "🎯 LIMIT" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
                           const statusColor = sig.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
@@ -1136,17 +1146,17 @@ export default function BotView() {
                             <button
                               key={i}
                               onClick={() => { setSelectedPairIdx(i); if (isMobile) setMobileScanDetailSheet(true); }}
-                              className={`w-full flex items-center justify-between text-[10px] py-1.5 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                              className={`w-full flex items-center justify-between text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                             >
                               <div className="min-w-0 flex items-center gap-1.5 flex-1">
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
-                                <span className="font-medium shrink-0">{sig.pair}</span>
+                                <span className="font-bold shrink-0 text-foreground">{sig.pair}</span>
 
-                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0">— {sig.reason}</span>}
+                                {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
                               <div className="flex items-center gap-1.5">
-                                <span className={`font-mono font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span className={`text-[8px] font-bold uppercase px-1 py-0.5 border ${statusColor}`}>{statusLabel}</span>
+                                <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
+                                <span className={`text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
                           );
@@ -1158,9 +1168,11 @@ export default function BotView() {
             </div>
 
             {/* Right: Detail Breakdown (40%) — hidden on mobile, shown in sheet instead */}
-            <div className={`w-full md:w-[40%] flex flex-col min-h-0 md:pl-2 border-t md:border-t-0 border-border pt-2 md:pt-0 max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Detail Breakdown</p>
-              <div className="flex-1 overflow-y-auto">
+            <div className={`w-full md:w-[40%] flex flex-col min-h-0 border-t md:border-t-0 border-border max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
+              <div className="bg-card/60 px-2 py-1 border-b border-border">
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Detail Breakdown</span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 py-1">
                 {(() => {
                     const selected = latestDetailsClean[selectedPairIdx];
                     if (!selected) {
