@@ -1056,6 +1056,7 @@ export default function BotView() {
           {/* Scan content — conditionally rendered */}
           {showScanPanel && (
           <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 pt-1">
+            {/* Rejection Summary moved into header row below — see RejectionSummaryPanel render */}
             {/* Left: Latest Scan Pairs (60%) */}
             <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border md:pr-2 max-h-48 md:max-h-none">
               <div className="flex-1 overflow-y-auto">
