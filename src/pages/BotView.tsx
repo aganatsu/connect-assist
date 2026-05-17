@@ -1140,7 +1140,7 @@ export default function BotView() {
         })()}
 
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border border-border bg-card mt-2 shrink-0 flex flex-col min-h-0 ${showScanPanel ? "md:h-56" : ""}`}>
+        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? "flex-1 md:min-h-[28rem]" : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
           <div className="flex items-center justify-between gap-2 bg-card/60 border-b border-border px-2 py-1">
             <div className="flex items-center gap-1.5">
@@ -1229,7 +1229,7 @@ export default function BotView() {
           </div>
           <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
-            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-48 md:max-h-none">
+            <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-64 md:max-h-none">
               <div className="flex-1 overflow-y-auto">
                 {(() => {
                     if (latestDetailsClean.length === 0) {
@@ -1267,7 +1267,7 @@ export default function BotView() {
             </div>
 
             {/* Right: Detail Breakdown (40%) — hidden on mobile, shown in sheet instead */}
-            <div className={`w-full md:w-[40%] flex flex-col min-h-0 border-t md:border-t-0 border-border max-h-64 md:max-h-none ${isMobile ? "hidden" : ""}`}>
+            <div className={`w-full md:w-[40%] flex flex-col min-h-0 border-t md:border-t-0 border-border max-h-96 md:max-h-none ${isMobile ? "hidden" : ""}`}>
               <div className="bg-card/60 px-2 py-1 border-b border-border">
                 <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Detail Breakdown</span>
               </div>
