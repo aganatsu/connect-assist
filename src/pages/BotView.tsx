@@ -1110,6 +1110,7 @@ export default function BotView() {
               </div>
             </div>
           </div>
+          </>
           )}
         </div>
 
