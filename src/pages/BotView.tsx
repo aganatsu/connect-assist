@@ -1068,8 +1068,8 @@ export default function BotView() {
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? "flex-1 min-h-[32rem] md:min-h-[28rem]" : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex items-center justify-between gap-2 bg-card/60 border-b border-border px-2 py-1">
-            <div className="flex items-center gap-1.5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
               <button
                 onClick={toggleScanPanel}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
@@ -1111,7 +1111,7 @@ export default function BotView() {
 
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 md:shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
               {botConfig?.strategy && (() => {
                 const activeStyle = getActiveStyle(botConfig);
@@ -1139,9 +1139,12 @@ export default function BotView() {
                 );
               })()}
               {currentScan && (
-                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground truncate">
                   <DataSourceBadge source={latestSource} />
-                  {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
+                  <span className="hidden md:inline">
+                    {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
+                  </span>
+                  <span className="md:hidden">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
                 </span>
               )}
             </div>
