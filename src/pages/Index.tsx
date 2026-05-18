@@ -149,8 +149,8 @@ export default function Dashboard() {
 
   return (
     <AppShell>
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="space-y-3 md:space-y-4">
+        <div className="hidden md:flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold">SMC Trading Dashboard</h1>
             <p className="text-muted-foreground text-xs flex items-center gap-2">
@@ -164,6 +164,12 @@ export default function Dashboard() {
             <span className={`${botStatus?.isRunning ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"}`} />
             {botStatus?.isRunning ? "Bot Running" : "Bot Stopped"}
           </span>
+        </div>
+
+        {/* Mobile session strip */}
+        <div className="md:hidden flex items-center justify-between text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5"><Clock className="h-3 w-3" /> {session}</span>
+          {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
         </div>
 
         {/* KPI Cards */}
