@@ -700,7 +700,7 @@ export default function BotView() {
                   </>
                 );
               })()}
-              <TabsContent value="open" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="open" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
@@ -825,10 +825,10 @@ export default function BotView() {
                   </table></div>
                 )}
               </TabsContent>
-              <TabsContent value="today" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <TradeHistoryTable trades={closedToday} />
               </TabsContent>
-              <TabsContent value="history" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <TradeHistoryTable trades={botTradeHistory} />
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
@@ -837,13 +837,13 @@ export default function BotView() {
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
               </TabsContent>
-              <TabsContent value="ai-advisor" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="ai-advisor" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <RecommendationsDashboard botId="smc" />
               </TabsContent>
-              <TabsContent value="broker-live" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="broker-live" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <BrokerTradesTab />
               </TabsContent>
-              <TabsContent value="watchlist" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <WatchlistPanel confluenceGate={(() => {
                   if (!botConfig?.strategy) return 55;
                   const DEFAULT_CONFLUENCE = 55;
@@ -854,10 +854,10 @@ export default function BotView() {
                   return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
                 })()} />
               </TabsContent>
-              <TabsContent value="pending-orders" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <PendingOrdersPanel />
               </TabsContent>
-              <TabsContent value="game-plan" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="game-plan" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <GamePlanPanel />
               </TabsContent>
             </Tabs>
