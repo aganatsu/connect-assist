@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { IconRail } from "@/components/IconRail";
 import { MobileNav } from "@/components/MobileNav";
+import { MobileTopBar } from "@/components/MobileTopBar";
 import { InstrumentSearch } from "@/components/InstrumentSearch";
 import { StatusBar } from "@/components/StatusBar";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -21,7 +22,8 @@ export function AppShell({ children }: AppShellProps) {
       <div className="h-screen flex flex-col">
         {/* Mobile search overlay */}
         {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} mobile />}
-        <main className="flex-1 px-3 py-2 overflow-auto pb-16">
+        <MobileTopBar />
+        <main className="flex-1 px-3 py-3 overflow-auto pb-20">
           {children}
         </main>
         <MobileNav onSearchToggle={toggleSearch} />
