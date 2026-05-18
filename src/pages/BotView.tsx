@@ -56,6 +56,7 @@ export default function BotView() {
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
   const [selectedScanIdx, setSelectedScanIdx] = useState(0);
+  const [botTab, setBotTab] = useState("open");
 
   const [customBalanceInput, setCustomBalanceInput] = useState("");
   const [showSetBalance, setShowSetBalance] = useState(false);
