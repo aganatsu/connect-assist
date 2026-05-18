@@ -1066,7 +1066,7 @@ export default function BotView() {
 
         {/* Secondary footer band: equity curve + recent closed trades */}
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? "flex-1 min-h-[32rem] md:min-h-[28rem]" : "shrink-0"}`}>
+        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap min-w-0">
