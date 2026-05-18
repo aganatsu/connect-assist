@@ -624,29 +624,29 @@ export default function BotView() {
         {isMobile && (
           <button
             onClick={() => setMobileAccountSheet(true)}
-            className="w-full flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
+            className="w-full max-w-full min-w-0 overflow-hidden flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
           >
-            <div className="flex-1 min-w-[60px] text-center">
-              <div className="text-[9px] text-muted-foreground uppercase">Balance</div>
-              <div className="text-[12px] font-mono font-bold">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+            <div className="flex-1 min-w-0 text-center">
+              <div className="text-[9px] text-muted-foreground uppercase truncate">Balance</div>
+              <div className="text-[12px] font-mono font-bold truncate">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
-              <div className="text-[9px] text-muted-foreground uppercase">Unrealized</div>
+            <div className="flex-1 min-w-0 text-center">
+              <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
               <div className={`text-[12px] font-mono font-bold ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
                 {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
               </div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">WR</div>
               <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
                 {(d.winRate || 0).toFixed(0)}%
               </div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
               <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">DD</div>
               <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
             </div>
