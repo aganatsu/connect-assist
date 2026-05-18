@@ -1600,16 +1600,19 @@ Deno.serve(async (req) => {
       // Filter to SMC bot accounts only (or legacy accounts without bot_id)
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", scanned: 0 });
-      const results = [];
-      for (const account of accounts) {
-        try {
-          const result = await runScanForUser(adminClient, account.user_id);
-          results.push({ userId: account.user_id, ...result });
-        } catch (e: any) {
-          results.push({ userId: account.user_id, error: e.message });
+      // Run scans in the background via waitUntil so the HTTP request can return
+      // immediately. Without this, the cron caller's request timeout (~150s) was
+      // killing the function mid-scan, leaving no scan_logs row written.
+      EdgeRuntime.waitUntil((async () => {
+        for (const account of accounts) {
+          try {
+            await runScanForUser(adminClient, account.user_id);
+          } catch (e: any) {
+            console.error(`[scan] background error for ${account.user_id}:`, e?.message || e);
+          }
         }
-      }
-      return respond({ scanned: results.length, results });
+      })());
+      return respond({ started: true, accounts: accounts.length, message: "Scan started in background" });
     }
 
     console.warn("[bot-scanner] Unknown action received:", JSON.stringify(body));
