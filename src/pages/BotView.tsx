@@ -1222,9 +1222,9 @@ export default function BotView() {
 
         {/* Kill Switch Banner */}
         {d.killSwitchActive && (
-          <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between z-50">
-            <span className="text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
-            <div className="flex gap-2">
+          <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
+            <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
+            <div className="flex gap-2 shrink-0">
               <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
           </div>
