@@ -195,6 +195,7 @@
 html, body, #root {
   max-width: 100vw;
   overflow-x: hidden;
+  overscroll-behavior-x: none;
 }
 
 /* Reusable horizontally-scrollable container for tables/wide content */
@@ -205,6 +206,13 @@ html, body, #root {
 
 /* Mobile touch optimizations */
 @media (max-width: 767px) {
+  html, body, #root {
+    width: 100%;
+    touch-action: pan-y;
+  }
+  body {
+    position: relative;
+  }
   /* Prevent tap highlight on interactive elements */
   button, a, [role="button"] {
     -webkit-tap-highlight-color: transparent;

@@ -37,24 +37,24 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
   const holdHours = (Date.now() - openMs) / 3600000;
 
   return (
-    <div className="border-b border-border/40 last:border-0">
+    <div className="border-b border-border/40 last:border-0 max-w-full overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full px-3 py-2.5 flex items-center gap-3 active:bg-secondary/30 transition-colors"
+        className="w-full min-w-0 px-3 py-2.5 flex items-center gap-2 active:bg-secondary/30 transition-colors"
       >
         {/* Direction indicator */}
         <div className={`w-1 h-8 rounded-full shrink-0 ${p.direction === "long" ? "bg-success" : "bg-destructive"}`} />
 
         {/* Main info */}
         <div className="flex-1 min-w-0 text-left">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-mono font-medium">{p.symbol}</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-xs font-mono font-medium truncate">{p.symbol}</span>
             <span className={`text-[9px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
               {p.direction === "long" ? "LONG" : "SHORT"}
             </span>
             <OverrideBadge position={p} />
           </div>
-          <div className="flex items-center gap-2 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5 min-w-0 overflow-hidden">
             {/* Management badges — compact, no emojis */}
             {beEnabled && (
               <span className={`text-[8px] font-medium px-1 py-0 border ${beFired ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>
@@ -67,7 +67,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               </span>
             )}
             {holdEnabled && (
-              <span className="text-[8px] text-muted-foreground font-mono">
+              <span className="text-[8px] text-muted-foreground font-mono truncate">
                 {holdHours.toFixed(1)}h/{ef.maxHoldHours}h
               </span>
             )}

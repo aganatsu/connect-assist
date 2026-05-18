@@ -395,7 +395,7 @@ export default function BotView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
         {/* ─── Bloomberg-style command strip ────────────────────────────── */}
         {!isMobile && (
           <div className="grid grid-cols-6 border border-border bg-card divide-x divide-border mb-1">
@@ -441,8 +441,8 @@ export default function BotView() {
 
         {/* Live mode alert (compact, only when live) */}
         {d.executionMode === "live" && (
-          <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between mb-1">
-            <span>⚠ LIVE TRADING — Real Money at Risk</span>
+          <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
+            <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
             <button className="underline hover:no-underline" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
               Switch to Paper
             </button>
@@ -451,9 +451,9 @@ export default function BotView() {
 
         {/* ─── Action / Control Row ─────────────────────────────────────── */}
         {isMobile ? (
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
+          <div className="flex items-center justify-between gap-1.5 pb-2 border-b border-border min-w-0 overflow-hidden">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 min-w-0">
               <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
@@ -464,9 +464,9 @@ export default function BotView() {
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}
+                <span className="truncate">{d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
               <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
                 {d.executionMode === "live" ? "LIVE" : "PAPER"}
@@ -474,7 +474,7 @@ export default function BotView() {
             </div>
 
             {/* Right: Scan + Overflow menu */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
               </Button>
@@ -624,29 +624,29 @@ export default function BotView() {
         {isMobile && (
           <button
             onClick={() => setMobileAccountSheet(true)}
-            className="w-full flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
+            className="w-full max-w-full min-w-0 overflow-hidden flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
           >
-            <div className="flex-1 min-w-[60px] text-center">
-              <div className="text-[9px] text-muted-foreground uppercase">Balance</div>
-              <div className="text-[12px] font-mono font-bold">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+            <div className="flex-1 min-w-0 text-center">
+              <div className="text-[9px] text-muted-foreground uppercase truncate">Balance</div>
+              <div className="text-[12px] font-mono font-bold truncate">${(d.balance || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
-              <div className="text-[9px] text-muted-foreground uppercase">Unrealized</div>
-              <div className={`text-[12px] font-mono font-bold ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
+            <div className="flex-1 min-w-0 text-center">
+              <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
+              <div className={`text-[12px] font-mono font-bold truncate ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
                 {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
               </div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">WR</div>
               <div className={`text-[12px] font-mono font-bold ${(d.winRate || 0) >= 50 ? "text-success" : "text-destructive"}`}>
                 {(d.winRate || 0).toFixed(0)}%
               </div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Trades</div>
               <div className="text-[12px] font-mono font-bold">{d.totalTrades}</div>
             </div>
-            <div className="flex-1 min-w-[60px] text-center">
+            <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase">DD</div>
               <div className="text-[12px] font-mono font-bold">{(d.drawdown || 0).toFixed(1)}%</div>
             </div>
@@ -654,10 +654,10 @@ export default function BotView() {
         )}
 
         {/* Main workspace: 65/35 split */}
-        <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0 min-w-0 max-w-full overflow-x-hidden">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
-          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
-            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0">
+          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 min-h-[300px] md:min-h-0`}>
+            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full overflow-x-hidden">
               {(() => {
                 const tabs: [string, string][] = [
                   ["open", `Open (${botPositions.length})`],
@@ -700,7 +700,7 @@ export default function BotView() {
                   </>
                 );
               })()}
-              <TabsContent value="open" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="open" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
                     <Plus className="h-8 w-8 text-muted-foreground/20 mb-2" />
@@ -825,10 +825,10 @@ export default function BotView() {
                   </table></div>
                 )}
               </TabsContent>
-              <TabsContent value="today" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="today" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <TradeHistoryTable trades={closedToday} />
               </TabsContent>
-              <TabsContent value="history" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="history" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <TradeHistoryTable trades={botTradeHistory} />
               </TabsContent>
               <TabsContent value="audit" className="flex-1 overflow-hidden mt-1">
@@ -837,13 +837,13 @@ export default function BotView() {
               <TabsContent value="broker-log" className="flex-1 overflow-hidden mt-1">
                 <BrokerLog />
               </TabsContent>
-              <TabsContent value="ai-advisor" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="ai-advisor" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <RecommendationsDashboard botId="smc" />
               </TabsContent>
-              <TabsContent value="broker-live" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="broker-live" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <BrokerTradesTab />
               </TabsContent>
-              <TabsContent value="watchlist" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <WatchlistPanel confluenceGate={(() => {
                   if (!botConfig?.strategy) return 55;
                   const DEFAULT_CONFLUENCE = 55;
@@ -854,10 +854,10 @@ export default function BotView() {
                   return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
                 })()} />
               </TabsContent>
-              <TabsContent value="pending-orders" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <PendingOrdersPanel />
               </TabsContent>
-              <TabsContent value="game-plan" className="flex-1 overflow-auto mt-1">
+              <TabsContent value="game-plan" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <GamePlanPanel />
               </TabsContent>
             </Tabs>
@@ -1071,39 +1071,39 @@ export default function BotView() {
 
         {/* Secondary footer band: equity curve + recent closed trades */}
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
+        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 min-w-0 max-w-full overflow-hidden ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0 max-w-full overflow-hidden">
+            <div className="flex items-center gap-1.5 min-w-0 max-w-full">
               <button
                 onClick={toggleScanPanel}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
+                className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
                 title={showScanPanel ? "Hide scan results" : "Show scan results"}
               >
                 {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
               </button>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5 font-semibold">
-                {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
+                <span className="truncate">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
                 {currentScan?.scanned_at && (
-                  <span className="ml-1 text-foreground font-mono">
+                  <span className="shrink-0 text-foreground font-mono normal-case">
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
                 {logs.length > 1 && (
-                  <span className="inline-flex items-center gap-0.5 ml-1">
+                  <span className="inline-flex items-center gap-0.5 ml-auto shrink-0">
                     <button
                       onClick={() => { setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx >= logs.length - 1}
                       className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Older scan"
-                    >‹ older</button>
+                    ><span className="md:hidden">‹</span><span className="hidden md:inline">‹ older</span></button>
                     <button
                       onClick={() => { setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx <= 0}
                       className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Newer scan"
-                    >newer ›</button>
+                    ><span className="md:hidden">›</span><span className="hidden md:inline">newer ›</span></button>
                     {safeScanIdx > 0 && (
                       <button
                         onClick={() => { setSelectedScanIdx(0); setSelectedPairIdx(0); }}
@@ -1114,10 +1114,10 @@ export default function BotView() {
                   </span>
                 )}
 
-              </p>
+              </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap min-w-0 md:shrink-0">
-              <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
+            <div className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden md:flex-wrap md:shrink-0">
+              <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} className="min-w-0 max-w-full truncate" />
               {botConfig?.strategy && (() => {
                 const activeStyle = getActiveStyle(botConfig);
                 const styleParams = STYLE_PARAMS[activeStyle];
@@ -1132,9 +1132,9 @@ export default function BotView() {
                 const styleLabel = styleMeta?.label || activeStyle;
                 const isStyleOverride = resolvedGate !== rawThreshold;
                 return (
-                  <Badge
+                    <Badge
                     variant="outline"
-                    className={`text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
+                      className={`hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
                       isStyleOverride ? 'border-warning/40 text-warning' : ''
                     }`}
                     title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
@@ -1144,12 +1144,12 @@ export default function BotView() {
                 );
               })()}
               {currentScan && (
-                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground truncate">
+                <span className="flex items-center gap-1 text-[9px] text-muted-foreground min-w-0 shrink-0 overflow-hidden">
                   <DataSourceBadge source={latestSource} />
                   <span className="hidden md:inline">
                     {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
                   </span>
-                  <span className="md:hidden">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
+                  <span className="md:hidden shrink-0">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
                 </span>
               )}
             </div>
@@ -1164,7 +1164,7 @@ export default function BotView() {
           <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
             <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-64 md:max-h-none">
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden max-w-full">
                 {(() => {
                     if (latestDetailsClean.length === 0) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
@@ -1179,7 +1179,7 @@ export default function BotView() {
                             <button
                               key={i}
                               onClick={() => { setSelectedPairIdx(i); if (isMobile) setMobileScanDetailSheet(true); }}
-                              className={`w-full flex items-center justify-between text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                              className={`w-full max-w-full min-w-0 flex items-center justify-between gap-2 text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                             >
                               <div className="min-w-0 flex items-center gap-1.5 flex-1">
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
@@ -1187,9 +1187,9 @@ export default function BotView() {
 
                                 {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 shrink-0">
                                 <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span className={`text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
+                                <span className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
                           );
@@ -1222,9 +1222,9 @@ export default function BotView() {
 
         {/* Kill Switch Banner */}
         {d.killSwitchActive && (
-          <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between z-50">
-            <span className="text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
-            <div className="flex gap-2">
+          <div className="fixed bottom-16 md:bottom-6 left-0 md:left-12 right-0 max-w-full bg-destructive/95 text-destructive-foreground px-4 py-2 flex items-center justify-between gap-2 z-50 overflow-hidden">
+            <span className="min-w-0 truncate text-xs font-bold">⚠ KILL SWITCH ACTIVE — All Trading Halted</span>
+            <div className="flex gap-2 shrink-0">
               <Button size="sm" variant="outline" className="h-6 text-[10px] border-destructive-foreground text-destructive-foreground" onClick={() => deactivateKill.mutate()}>Deactivate</Button>
             </div>
           </div>
