@@ -292,7 +292,8 @@ export function BrokerLog() {
             {statusFilter === "all" ? "No broker execution events recorded" : `No ${statusFilter} events`}
           </p>
         ) : (
-          <table className="w-full text-[11px] font-mono">
+          <div className="h-scroll">
+          <table className="w-full text-[11px] font-mono min-w-[700px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground text-[10px]">
                 <th className="text-left py-1 px-1">Time</th>
@@ -336,6 +337,7 @@ export function BrokerLog() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>

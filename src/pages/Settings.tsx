@@ -34,23 +34,25 @@ export default function SettingsPage() {
   return (
     <AppShell>
       <div className="flex flex-col md:flex-row gap-4 md:gap-6 min-h-[calc(100vh-7rem)]">
-        <div className="w-full md:w-56 shrink-0 space-y-1 flex md:flex-col flex-wrap gap-1">
-          <h1 className="text-lg font-bold mb-4 flex items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
+        <div className="w-full md:w-56 shrink-0">
+          <h1 className="hidden md:flex text-lg font-bold mb-4 items-center gap-2"><Settings className="h-5 w-5" /> Settings</h1>
+          <div className="md:space-y-1 flex md:flex-col gap-1 overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 md:overflow-visible pb-2 md:pb-0">
           {TABS.map(tab => {
             const Icon = tab.icon;
             return (
               <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors ${
+                className={`shrink-0 md:w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors whitespace-nowrap ${
                   activeTab === tab.id ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
                 }`}><Icon className="h-4 w-4" />{tab.label}</button>
             );
           })}
-          <a href="/brokers" className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-muted-foreground hover:text-foreground hover:bg-secondary/50">
+          <a href="/brokers" className="shrink-0 md:w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-muted-foreground hover:text-foreground hover:bg-secondary/50 whitespace-nowrap">
             <Link2 className="h-4 w-4" />Broker Connections →
           </a>
-          <button onClick={() => signOut()} className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-destructive hover:bg-destructive/10 mt-4">Sign out</button>
+          <button onClick={() => signOut()} className="shrink-0 md:w-full flex items-center gap-2 px-3 py-2 text-sm rounded text-destructive hover:bg-destructive/10 md:mt-4 whitespace-nowrap">Sign out</button>
+          </div>
         </div>
-        <div className="flex-1 max-w-2xl min-w-0">
+        <div className="flex-1 md:max-w-2xl min-w-0">
           {activeTab === "risk" && <RiskSettings />}
           {activeTab === "bot" && <BotConfigSettings />}
           {activeTab === "preferences" && <PreferencesSettings />}

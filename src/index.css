@@ -187,6 +187,21 @@
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Prevent accidental horizontal scroll across the app */
+html, body, #root {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+/* Reusable horizontally-scrollable container for tables/wide content */
+.h-scroll {
+  @apply w-full overflow-x-auto;
+  -webkit-overflow-scrolling: touch;
+}
 
 /* Mobile touch optimizations */
 @media (max-width: 767px) {
@@ -198,5 +213,17 @@
   ::-webkit-scrollbar {
     width: 0px;
     height: 0px;
+  }
+  /* Inputs at >=16px to prevent iOS zoom on focus */
+  input, select, textarea {
+    font-size: 16px;
+  }
+  /* Min tap targets */
+  button, a[role="button"], [role="tab"] {
+    min-height: 36px;
+  }
+  /* Recharts often render wider than viewport — clip */
+  .recharts-wrapper, .recharts-surface {
+    max-width: 100%;
   }
 }
