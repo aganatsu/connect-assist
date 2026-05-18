@@ -150,6 +150,7 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
