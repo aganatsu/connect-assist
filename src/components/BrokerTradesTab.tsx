@@ -237,8 +237,8 @@ function OpenPositionsContent({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-[10px]">
+    <div className="w-full max-w-full overflow-hidden md:overflow-x-auto">
+      <table className="w-full text-[10px] table-fixed md:table-auto">
         <thead>
           <tr className="border-b border-border/30 bg-muted/20">
             <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">Symbol</th>
@@ -501,8 +501,8 @@ function TradeHistoryContent({
           WR: {winRate.toFixed(0)}%
         </span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[10px]">
+      <div className="w-full max-w-full overflow-hidden md:overflow-x-auto">
+        <table className="w-full text-[10px] table-fixed md:table-auto">
           <thead>
             <tr className="border-b border-border/30 bg-muted/20">
               <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">Symbol</th>
