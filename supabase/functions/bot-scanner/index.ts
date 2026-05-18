@@ -4014,6 +4014,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
     }
 
+    // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
+    // When many factors actively oppose the trade, raise the bar or block entirely.
+    const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+    let conflictAdjustedMinConfluence = adjustedMinConfluence;
+    let conflictHardBlock = false;
+    if (opposingCount >= conflictBlockAt) {
+      conflictHardBlock = true;
+    } else if (opposingCount >= conflictThresholdRaise) {
+      conflictAdjustedMinConfluence = adjustedMinConfluence + 10;
+      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
+    }
+
     // Determine if this is a staged setup being promoted
     let isPromotedFromStaging = false;
     if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
@@ -4068,11 +4080,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
 
-    // ── Bidirectional Conflict Counter Gate ──
-    // When many factors actively oppose the trade, raise the bar or block entirely.
-    const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
-    let conflictAdjustedMinConfluence = adjustedMinConfluence;
-    if (opposingCount >= conflictBlockAt) {
+    // Apply the conflict hard-block decision computed above
+    if (conflictHardBlock) {
       // N+ opposing factors = hard block — too much disagreement to trade
       detail.status = "rejected";
       detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
@@ -4080,10 +4089,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       rejectedCount++;
       scanDetails.push(detail);
       continue;
-    } else if (opposingCount >= conflictThresholdRaise) {
-      // N+ opposing factors = raise threshold by 10 percentage points
-      conflictAdjustedMinConfluence = adjustedMinConfluence + 10;
-      console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
     }
 
     // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
