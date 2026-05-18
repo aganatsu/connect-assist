@@ -101,7 +101,8 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
         ) : filtered.length === 0 ? (
           <p className="text-[10px] text-muted-foreground text-center py-8">No close events recorded</p>
         ) : (
-          <table className="w-full text-[11px] font-mono">
+          <div className="h-scroll">
+          <table className="w-full text-[11px] font-mono min-w-[700px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground text-[10px]">
                 <th className="text-left py-1 px-1">Time</th>
