@@ -23,7 +23,7 @@ export function AppShell({ children }: AppShellProps) {
         {/* Mobile search overlay */}
         {searchOpen && <InstrumentSearch open={searchOpen} onClose={closeSearch} mobile />}
         <MobileTopBar />
-        <main className="flex-1 px-3 py-3 overflow-auto pb-20">
+        <main className="flex-1 px-3 py-3 overflow-y-auto overflow-x-hidden pb-20">
           {children}
         </main>
         <MobileNav onSearchToggle={toggleSearch} />

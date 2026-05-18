@@ -1,87 +1,59 @@
-# Full Mobile-Compatible Rework
+## What's wrong
 
-Goal: every page works beautifully on a 360–414px phone while polishing desktop density. Frontend only — no bot/backend logic changes.
+Two related issues on the Bot page at 390px:
 
-## Foundation (shared)
+1. **Bleeding to the side** — three rows are wider than the viewport and force horizontal scroll:
+   - **Tabs strip** (`Open / Closed Today / All History / Close Audit / Broker Log / AI Advisor / MT4-MT5 Live / Watchlist / Pending Orders / Game Plan`) — 10 tabs in one row with `overflow-x-auto`.
+   - **Scan panel header** (bottom band) — "Latest Scan · 01:35:16 PM · ‹older / newer› · Scanning · New York · 10/10 pairs · Gate: ≥55% · TWELVE" all on one nowrap flex row with no shrink/wrap.
+   - **Account KPI strip** (Balance / Unrealized / WR / Trades / DD) — already has `overflow-x-auto` which advertises itself as scrollable even when it shouldn't.
 
-- **Responsive tokens in `index.css`**: clamp-based type scale, tighter mobile spacing, larger min tap targets (44px) on touch devices.
-- **`AppShell`**: keep mobile bottom tab bar + desktop icon rail. Add a slim mobile top bar (page title + status dot + quick actions) so users always see context.
-- **Reusable primitives**:
-  - `ResponsiveTable` — auto-switches a `<table>` to a stacked card list under `md`.
-  - `BottomSheet` — wraps existing Dialog; slides from bottom on mobile, centers on desktop.
-  - `SwipeTabs` — horizontal-scroll tab strip for mobile tabbed pages.
-  - `StatChip` / `KPIGrid` — 2-col on mobile, 4-col on desktop.
-- **Mobile More menu**: expand to include Game Plan + Fundamentals + Prop Firm (already there), and add quick "Run Scan" shortcut.
-- **Global**: replace remaining `min-w` rigid grids, fix horizontal overflow, ensure all modals are `max-h-[90vh]` scrollable on mobile.
+2. **"Whole workspace moves weirdly"** — because the inner content above is wider than the viewport, `<main>` in `AppShell` (which is `overflow-auto`) ends up scrolling horizontally too. The sticky top bar stays put while the entire content area pans left/right, which feels like the whole app is sliding.
 
-## Per-page work
+## Fix
 
-### Dashboard (`Index.tsx`)
-- KPI cards 2×2 on mobile (already partly there) — tighten spacing.
-- Live Prices: 2-col compact card grid on mobile.
-- Equity Curve: reduced height (200px), simplified axis ticks, range pills wrap.
-- Currency Strength: keep vertical bar chart, shrink height.
-- Active Positions: render as `MobilePositionCard` list on mobile (already exists, reuse).
-- Activity Log: full-width below.
+**Frontend / layout only. No bot logic touched.**
 
-### Chart (`Chart.tsx`)
-- Compact TradingView container at ~55vh.
-- Toolbar (symbol, timeframe, indicators) collapses into a bottom sheet trigger.
-- Side panels (SMC overlays, watchlist) become bottom sheets.
+### 1. Lock the mobile shell to vertical scroll only
+`src/components/AppShell.tsx` — change the mobile `<main>` to `overflow-y-auto overflow-x-hidden` so nothing can ever pan the page sideways. Desktop stays as-is.
 
-### Bot (`BotView.tsx`) — biggest file
-- Convert top KPIs to swipeable horizontal card row.
-- Tabs (Status / Config / Recommendations / Logs / Trades) → `SwipeTabs`.
-- Long forms in `BotConfigModal` → full-screen sheet on mobile, sectioned with sticky save bar.
-- Trade tables → card list via `ResponsiveTable`.
+### 2. Bot tabs strip (`src/pages/BotView.tsx`)
+On mobile, replace the 10-tab horizontal `TabsList` with a compact picker:
+- Show the active tab as a full-width `Select` (or button that opens a bottom sheet) listing all 10 tabs.
+- Keep the existing `TabsList` for `md:` and up.
 
-### ICT Analysis, Fundamentals, Game Plan
-- Stack panels vertically on mobile, collapse heavy sub-sections behind accordions.
-- `GamePlanPanel`, `ImpulseZonePanel`, `FOTSIStrengthMeter`: full-width cards, simpler legends.
+This eliminates the horizontal tab strip entirely on phones.
 
-### Journal
-- Filter bar collapses to a bottom-sheet filter; trade list as cards (symbol, P&L, date, tap → detail sheet).
+### 3. Scan panel header (`src/pages/BotView.tsx` ~line 1047)
+On mobile, restructure the header so nothing exceeds viewport width:
+- Stack into two rows: row 1 = eye toggle + "Latest Scan · time"; row 2 = older / newer / latest buttons + `SessionStatusPill` + `Gate` badge + pair counts.
+- Add `flex-wrap` + `min-w-0` on both groups and `truncate` on long text (e.g. `Scanning · New York · 10/10 pairs` shortens to a smaller pill on mobile).
+- Hide the verbose `pairs · signals · trades` summary on mobile (keep just `N pairs`).
 
-### Backtest
-- Setup form full-width single column; run button sticky-bottom.
-- Results: KPIs 2×2, equity chart compact, trades list as cards.
+### 4. Account KPI strip (`src/pages/BotView.tsx` ~line 617)
+Remove `overflow-x-auto`; the 5 chips already fit at 360px with `flex-1`. This stops the strip from feeling draggable.
 
-### Brokers
-- Connection cards stack; `BrokerTradesTab` table → `ResponsiveTable`.
-- `BrokerLog` virtualized list with smaller rows.
+### 5. Sweep for other `min-w-[Npx]` offenders inside mobile branches
+Quick audit of `BotView.tsx`:
+- `min-w-[800px]` open-positions table — already gated behind `!isMobile`, fine.
+- `min-w-[700px]` table at line 1341 — wrap its parent in `overflow-x-auto` (already there) but also confirm the parent has `max-w-full`. If on mobile we render this table, swap for a card list; if it's desktop-only, leave it.
 
-### Trade Replay
-- Compact chart (50vh), playback controls fixed at bottom, details in a collapsible sheet, sidebar list as a drawer.
+I'll verify each remaining overflow path with `rg "min-w-\["` and patch any that render on mobile.
 
-### Prop Firm
-- KPI grid 2-col, rules/limits as accordions, equity meter full-width.
+## Files to edit
 
-### Settings
-- Sectioned accordions on mobile; each section full-width form with sticky save.
-
-### Auth (Login / Signup / Reset)
-- Already simple; verify safe-area padding, larger inputs, and proper viewport height on iOS Safari.
-
-## Desktop polish (light)
-- Slightly tighter padding scale, consistent card shadows, unified table density, fix a few `min-w` overflows that affect 1280px screens.
+- `src/components/AppShell.tsx` — mobile `<main>` overflow rules.
+- `src/pages/BotView.tsx` — mobile tabs picker, scan header restructure, KPI strip overflow removal, any leftover min-w fixes.
 
 ## Out of scope
-- No PWA / install / service worker.
-- No changes to edge functions, scanner, or bot logic.
-- No new features — purely layout, density, and interaction polish.
 
-## Technical notes
-- Use Tailwind responsive prefixes (`md:`, `lg:`) — mobile-first.
-- Reuse existing `useIsMobile()` hook for conditional render where CSS alone isn't enough (tables → cards, dialogs → sheets).
-- All colors via semantic tokens (no hardcoded hex in components).
-- Shadcn `Sheet` component for bottom sheets; `Accordion` for collapsibles.
-- Validate visually at 360, 390, 414, 768, 1280, 1536px.
+- No bot/scanner/edge-function changes.
+- No desktop layout changes beyond what's needed to keep desktop working.
+- No new pages or features.
 
-## Rollout order
-1. Foundation primitives + AppShell top bar.
-2. Dashboard, Auth (quick wins).
-3. Bot + BotConfigModal (highest complexity).
-4. Chart + Trade Replay (chart-heavy).
-5. Journal, Backtest, Brokers (table-heavy).
-6. ICT, Fundamentals, Game Plan, Prop Firm, Settings.
-7. Desktop density pass + cross-viewport QA.
+## Verify
+
+Open `/bot` at 360 / 390 / 414px and confirm:
+- No horizontal scroll anywhere.
+- Tabs reachable via the compact picker.
+- Scan footer wraps cleanly.
+- Swiping left/right does nothing at the page level (only the tabbed content area scrolls vertically).
