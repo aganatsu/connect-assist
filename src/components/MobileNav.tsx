@@ -73,41 +73,41 @@ export function MobileNav({ onSearchToggle }: MobileNavProps) {
       )}
 
       {/* Bottom tab bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-card border-t border-border safe-area-bottom">
-        <div className="flex items-center justify-around h-14">
+      <div className="fixed bottom-0 left-0 right-0 z-30 max-w-full overflow-hidden bg-card border-t border-border safe-area-bottom">
+        <div className="grid grid-cols-5 h-14 w-full">
           {PRIMARY_ITEMS.map((item) => (
             <button
               key={item.url}
               onClick={() => navigate(item.url)}
-              className={`flex flex-col items-center gap-0.5 px-3 py-1.5 transition-colors ${
+              className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 transition-colors ${
                 isActive(item.url)
                   ? "text-primary"
                   : "text-muted-foreground"
               }`}
             >
               <item.icon className="h-5 w-5" />
-              <span className="text-[10px] font-medium">{item.title}</span>
+              <span className="max-w-full truncate text-[10px] font-medium">{item.title}</span>
             </button>
           ))}
 
           {/* Search */}
           <button
             onClick={onSearchToggle}
-            className="flex flex-col items-center gap-0.5 px-3 py-1.5 text-muted-foreground"
+            className="min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-muted-foreground"
           >
             <Search className="h-5 w-5" />
-            <span className="text-[10px] font-medium">Search</span>
+            <span className="max-w-full truncate text-[10px] font-medium">Search</span>
           </button>
 
           {/* More */}
           <button
             onClick={() => setMoreOpen((v) => !v)}
-            className={`flex flex-col items-center gap-0.5 px-3 py-1.5 transition-colors ${
+            className={`min-w-0 flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 transition-colors ${
               moreOpen ? "text-primary" : "text-muted-foreground"
             }`}
           >
             <MoreHorizontal className="h-5 w-5" />
-            <span className="text-[10px] font-medium">More</span>
+            <span className="max-w-full truncate text-[10px] font-medium">More</span>
           </button>
         </div>
       </div>
