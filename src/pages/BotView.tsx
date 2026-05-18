@@ -651,9 +651,9 @@ export default function BotView() {
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
           <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
-            <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
-              <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
-                {[
+            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0">
+              {(() => {
+                const tabs: [string, string][] = [
                   ["open", `Open (${botPositions.length})`],
                   ["today", `Closed Today (${closedToday.length})`],
                   ["history", "All History"],
@@ -664,14 +664,36 @@ export default function BotView() {
                   ["watchlist", "Watchlist"],
                   ["pending-orders", "Pending Orders"],
                   ["game-plan", "Game Plan"],
-                ].map(([val, label]) => (
-                  <TabsTrigger
-                    key={val}
-                    value={val}
-                    className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
-                  >{label}</TabsTrigger>
-                ))}
-              </TabsList>
+                ];
+                return (
+                  <>
+                    {isMobile ? (
+                      <Select value={botTab} onValueChange={setBotTab}>
+                        <SelectTrigger className="h-8 w-full text-[11px] uppercase tracking-wider font-semibold rounded-none bg-card border border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tabs.map(([val, label]) => (
+                            <SelectItem key={val} value={val} className="text-[12px] uppercase tracking-wider">
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
+                        {tabs.map(([val, label]) => (
+                          <TabsTrigger
+                            key={val}
+                            value={val}
+                            className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
+                          >{label}</TabsTrigger>
+                        ))}
+                      </TabsList>
+                    )}
+                  </>
+                );
+              })()}
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
