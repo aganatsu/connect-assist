@@ -376,8 +376,8 @@ function determineBias(
 function extractKeyLevels(
   lastPrice: number,
   pdLevels: ReturnType<typeof calculatePDLevels>,
-  orderBlocks: Array<{ type: string; high: number; low: number; isActive: boolean }>,
-  fvgs: Array<{ type: string; high: number; low: number; filled: boolean }>,
+  orderBlocks: Array<{ type: string; high: number; low: number; state?: string; mitigated?: boolean }>,
+  fvgs: Array<{ type: string; high: number; low: number; state?: string; mitigated?: boolean }>,
   liquidityPools: Array<{ price: number; type: string; swept: boolean; state: string; strength: number }>,
   pipSize: number,
 ): KeyLevel[] {
@@ -408,7 +408,7 @@ function extractKeyLevels(
   }
 
   // Active Order Blocks (nearest 3 above + 3 below)
-  const activeOBs = orderBlocks.filter(ob => ob.isActive);
+  const activeOBs = orderBlocks.filter(ob => ob.state === "fresh" || ob.state === "tested" || (!ob.state && !ob.mitigated));
   const obAbove = activeOBs.filter(ob => ob.low > lastPrice).sort((a, b) => a.low - b.low).slice(0, 3);
   const obBelow = activeOBs.filter(ob => ob.high < lastPrice).sort((a, b) => b.high - a.high).slice(0, 3);
   for (const ob of [...obAbove, ...obBelow]) {
@@ -424,7 +424,7 @@ function extractKeyLevels(
   }
 
   // Unfilled FVGs (nearest 2 above + 2 below)
-  const activeFVGs = fvgs.filter(f => !f.filled);
+  const activeFVGs = fvgs.filter(f => f.state !== "filled" && !f.mitigated);
   const fvgAbove = activeFVGs.filter(f => f.low > lastPrice).sort((a, b) => a.low - b.low).slice(0, 2);
   const fvgBelow = activeFVGs.filter(f => f.high < lastPrice).sort((a, b) => b.high - a.high).slice(0, 2);
   for (const f of [...fvgAbove, ...fvgBelow]) {
