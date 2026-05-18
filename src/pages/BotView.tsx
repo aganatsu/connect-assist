@@ -395,7 +395,7 @@ export default function BotView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
         {/* ─── Bloomberg-style command strip ────────────────────────────── */}
         {!isMobile && (
           <div className="grid grid-cols-6 border border-border bg-card divide-x divide-border mb-1">
@@ -441,8 +441,8 @@ export default function BotView() {
 
         {/* Live mode alert (compact, only when live) */}
         {d.executionMode === "live" && (
-          <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between mb-1">
-            <span>⚠ LIVE TRADING — Real Money at Risk</span>
+          <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
+            <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
             <button className="underline hover:no-underline" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
               Switch to Paper
             </button>
@@ -451,9 +451,9 @@ export default function BotView() {
 
         {/* ─── Action / Control Row ─────────────────────────────────────── */}
         {isMobile ? (
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-border">
+          <div className="flex items-center justify-between gap-1.5 pb-2 border-b border-border min-w-0 overflow-hidden">
             {/* Left: Start/Pause/Stop (icon-only) + status */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 min-w-0">
               <Button size="sm" variant={d.isRunning ? "secondary" : "default"} className="h-7 w-7 p-0" onClick={() => startMut.mutate()} disabled={d.isRunning && !d.isPaused} title="Start">
                 <Play className="h-3 w-3" />
               </Button>
@@ -464,9 +464,9 @@ export default function BotView() {
                 <Square className="h-3 w-3" />
               </Button>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-medium min-w-0 ${d.isRunning ? (d.isPaused ? "text-warning" : "text-success") : "text-muted-foreground"}`}>
                 <span className={d.isRunning && !d.isPaused ? "status-dot-active" : "w-1.5 h-1.5 rounded-full bg-muted-foreground"} />
-                {d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}
+                <span className="truncate">{d.isRunning ? (d.isPaused ? "Paused" : "Running") : "Off"}</span>
               </span>
               <span className={`text-[9px] font-medium px-1 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
                 {d.executionMode === "live" ? "LIVE" : "PAPER"}
@@ -474,7 +474,7 @@ export default function BotView() {
             </div>
 
             {/* Right: Scan + Overflow menu */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => scanMut.mutate()} disabled={scanMut.isPending || scanPolling} title="Scan Now">
                 {(scanMut.isPending || scanPolling) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Scan className="h-3 w-3" />}
               </Button>
