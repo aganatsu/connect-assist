@@ -78,7 +78,12 @@ export default function BotView() {
     try { return localStorage.getItem("botview-show-sidebar") !== "false"; } catch { return true; }
   });
   const [showScanPanel, setShowScanPanel] = useState(() => {
-    try { return localStorage.getItem("botview-show-scan") !== "false"; } catch { return true; }
+    try {
+      const stored = localStorage.getItem("botview-show-scan");
+      if (stored !== null) return stored !== "false";
+      // Default: collapsed on mobile, expanded on desktop
+      return typeof window !== "undefined" ? window.innerWidth >= 768 : true;
+    } catch { return true; }
   });
   const toggleSidebar = useCallback(() => {
     setShowSidebar(prev => { const next = !prev; try { localStorage.setItem("botview-show-sidebar", String(next)); } catch {} return next; });
@@ -1066,7 +1071,7 @@ export default function BotView() {
 
         {/* Secondary footer band: equity curve + recent closed trades */}
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? "flex-1 min-h-[32rem] md:min-h-[28rem]" : "shrink-0"}`}>
+        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap min-w-0">
