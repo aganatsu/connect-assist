@@ -2910,6 +2910,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   console.log(`[scan ${scanCycleId}] Positions: ${currentOpenCount}/${maxOpen} — room for ${maxOpen - currentOpenCount} new entries, proceeding with full scan`);
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // ── Conflict counter thresholds (configurable via bot config) ──
+  // Declared here (function scope) so they're accessible in both game plan and scoring sections.
+  const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
+  const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
+
   // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
   // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
   // Config: gamePlanEnabled (bool), gamePlanNotify (bool), gamePlanRefreshHours (number)
@@ -2922,9 +2927,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
-    // Conflict counter thresholds (configurable via bot config)
-    const conflictThresholdRaise = Number((config as any).conflictThresholdRaise) || 4; // raise threshold when N+ factors oppose
-    const conflictBlockAt = Number((config as any).conflictBlockAt) || 6; // hard block when N+ factors oppose
     if (gamePlanEnabled) {
       // ── Session dedup: check if a game plan already exists for this session ──
       // Primary approach: use contains filter on JSONB
