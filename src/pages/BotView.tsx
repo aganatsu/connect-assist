@@ -78,7 +78,12 @@ export default function BotView() {
     try { return localStorage.getItem("botview-show-sidebar") !== "false"; } catch { return true; }
   });
   const [showScanPanel, setShowScanPanel] = useState(() => {
-    try { return localStorage.getItem("botview-show-scan") !== "false"; } catch { return true; }
+    try {
+      const stored = localStorage.getItem("botview-show-scan");
+      if (stored !== null) return stored !== "false";
+      // Default: collapsed on mobile, expanded on desktop
+      return typeof window !== "undefined" ? window.innerWidth >= 768 : true;
+    } catch { return true; }
   });
   const toggleSidebar = useCallback(() => {
     setShowSidebar(prev => { const next = !prev; try { localStorage.setItem("botview-show-sidebar", String(next)); } catch {} return next; });
