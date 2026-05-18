@@ -1132,9 +1132,9 @@ export default function BotView() {
                 const styleLabel = styleMeta?.label || activeStyle;
                 const isStyleOverride = resolvedGate !== rawThreshold;
                 return (
-                  <Badge
+                    <Badge
                     variant="outline"
-                    className={`text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
+                      className={`hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
                       isStyleOverride ? 'border-warning/40 text-warning' : ''
                     }`}
                     title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
@@ -1144,12 +1144,12 @@ export default function BotView() {
                 );
               })()}
               {currentScan && (
-                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground truncate">
+                <span className="flex items-center gap-1 text-[9px] text-muted-foreground min-w-0 shrink-0 overflow-hidden">
                   <DataSourceBadge source={latestSource} />
                   <span className="hidden md:inline">
                     {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
                   </span>
-                  <span className="md:hidden">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
+                  <span className="md:hidden shrink-0">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
                 </span>
               )}
             </div>
