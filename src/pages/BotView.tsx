@@ -1164,7 +1164,7 @@ export default function BotView() {
           <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
             <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-64 md:max-h-none">
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto overflow-x-hidden max-w-full">
                 {(() => {
                     if (latestDetailsClean.length === 0) {
                       return <p className="text-[10px] text-muted-foreground text-center py-8">No scans yet — click "Scan Now"</p>;
@@ -1179,7 +1179,7 @@ export default function BotView() {
                             <button
                               key={i}
                               onClick={() => { setSelectedPairIdx(i); if (isMobile) setMobileScanDetailSheet(true); }}
-                              className={`w-full flex items-center justify-between text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
+                              className={`w-full max-w-full min-w-0 flex items-center justify-between gap-2 text-[10px] font-mono py-1 px-2 transition-colors ${isSelected ? "bg-primary/10 border-l-2 border-primary" : "border-l-2 border-transparent hover:bg-secondary/30"}`}
                             >
                               <div className="min-w-0 flex items-center gap-1.5 flex-1">
                                 {sig.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 shrink-0 text-success" /> : sig.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 shrink-0 text-destructive" /> : <Minus className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />}
@@ -1187,9 +1187,9 @@ export default function BotView() {
 
                                 {sig.reason && <span className="truncate text-[9px] text-muted-foreground min-w-0 font-sans">— {sig.reason}</span>}
                               </div>
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 shrink-0">
                                 <span className={`tabular-nums font-bold ${sig.score >= 60 ? "text-success" : sig.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>{typeof sig.score === "number" ? `${sig.score.toFixed(1)}%` : "—"}</span>
-                                <span className={`text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
+                                <span className={`max-w-[5.5rem] truncate text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 border font-sans ${statusColor}`}>{statusLabel}</span>
                               </div>
                             </button>
                           );
