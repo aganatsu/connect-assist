@@ -127,7 +127,7 @@ const DAY_TENDENCIES: Record<DayOfWeek, DayTendency> = {
  * JS Date.getDay() returns 0=Sunday, so we convert to 0=Mon, 4=Fri.
  */
 function getCandleDayIndex(candle: Candle): number {
-  const { nyDay } = toNYTimeAt(candle.time * 1000);
+  const { nyDay } = toNYTimeAt(new Date(candle.datetime).getTime());
   // nyDay: 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
   // Convert to 0=Mon, 1=Tue, ..., 4=Fri
   return nyDay === 0 ? 6 : nyDay - 1; // Sunday becomes 6 (weekend)
@@ -141,7 +141,7 @@ function getCurrentWeekCandles(dailyCandles: Candle[]): Map<number, Candle> {
   if (dailyCandles.length === 0) return new Map();
 
   const lastCandle = dailyCandles[dailyCandles.length - 1];
-  const lastDate = new Date(lastCandle.time * 1000);
+  const lastDate = new Date(lastCandle.datetime);
 
   // Find the Monday of the current week (using NY-local day index)
   const lastDayIndex = getCandleDayIndex(lastCandle);
@@ -153,7 +153,7 @@ function getCurrentWeekCandles(dailyCandles: Candle[]): Map<number, Candle> {
   const weekCandles = new Map<number, Candle>();
 
   for (const candle of dailyCandles) {
-    const candleDate = new Date(candle.time * 1000);
+    const candleDate = new Date(candle.datetime);
     const dayIndex = getCandleDayIndex(candle);
 
     // Check if this candle is in the current week (on or after Monday)

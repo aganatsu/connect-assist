@@ -36,7 +36,7 @@ function makeDayCandle(
   const baseDate = new Date("2026-01-05T12:00:00Z");
   baseDate.setUTCDate(baseDate.getUTCDate() + dayOffset);
   return {
-    time: baseDate.getTime() / 1000,
+    datetime: baseDate.toISOString(),
     open,
     high,
     low,
@@ -61,7 +61,7 @@ function makeHistoryCandles(count: number, basePrice: number, avgRange: number):
     if (dow === 0 || dow === 6) continue;
 
     candles.push({
-      time: date.getTime() / 1000,
+      datetime: date.toISOString(),
       open: basePrice,
       high: basePrice + avgRange / 2,
       low: basePrice - avgRange / 2,
