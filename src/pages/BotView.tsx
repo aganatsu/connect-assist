@@ -632,7 +632,7 @@ export default function BotView() {
             </div>
             <div className="flex-1 min-w-0 text-center">
               <div className="text-[9px] text-muted-foreground uppercase truncate">Unrealized</div>
-              <div className={`text-[12px] font-mono font-bold ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
+              <div className={`text-[12px] font-mono font-bold truncate ${(d.equity - d.balance) >= 0 ? "text-success" : "text-destructive"}`}>
                 {(d.equity - d.balance) >= 0 ? "+" : ""}{formatMoney(d.equity - d.balance)}
               </div>
             </div>
@@ -654,10 +654,10 @@ export default function BotView() {
         )}
 
         {/* Main workspace: 65/35 split */}
-        <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
+        <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0 min-w-0 max-w-full overflow-x-hidden">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
-          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
-            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0">
+          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 min-h-[300px] md:min-h-0`}>
+            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full overflow-x-hidden">
               {(() => {
                 const tabs: [string, string][] = [
                   ["open", `Open (${botPositions.length})`],
