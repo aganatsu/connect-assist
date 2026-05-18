@@ -42,6 +42,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { MobilePositionCard } from "@/components/MobilePositionCard";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -617,7 +618,7 @@ export default function BotView() {
         {isMobile && (
           <button
             onClick={() => setMobileAccountSheet(true)}
-            className="flex items-center gap-0 py-2 px-1 border-b border-border overflow-x-auto active:bg-secondary/20 transition-colors"
+            className="w-full flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
           >
             <div className="flex-1 min-w-[60px] text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Balance</div>
