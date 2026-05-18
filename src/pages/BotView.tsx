@@ -42,6 +42,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { MobilePositionCard } from "@/components/MobilePositionCard";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function BotView() {
   const queryClient = useQueryClient();
@@ -55,6 +56,7 @@ export default function BotView() {
   const [expandedPosition, setExpandedPosition] = useState<string | null>(null);
   const [selectedPairIdx, setSelectedPairIdx] = useState(0);
   const [selectedScanIdx, setSelectedScanIdx] = useState(0);
+  const [botTab, setBotTab] = useState("open");
 
   const [customBalanceInput, setCustomBalanceInput] = useState("");
   const [showSetBalance, setShowSetBalance] = useState(false);
@@ -617,7 +619,7 @@ export default function BotView() {
         {isMobile && (
           <button
             onClick={() => setMobileAccountSheet(true)}
-            className="flex items-center gap-0 py-2 px-1 border-b border-border overflow-x-auto active:bg-secondary/20 transition-colors"
+            className="w-full flex items-center gap-0 py-2 px-1 border-b border-border active:bg-secondary/20 transition-colors"
           >
             <div className="flex-1 min-w-[60px] text-center">
               <div className="text-[9px] text-muted-foreground uppercase">Balance</div>
@@ -650,9 +652,9 @@ export default function BotView() {
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
           <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-h-[300px] md:min-h-0`}>
-            <Tabs defaultValue="open" className="flex-1 flex flex-col min-h-0">
-              <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
-                {[
+            <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0">
+              {(() => {
+                const tabs: [string, string][] = [
                   ["open", `Open (${botPositions.length})`],
                   ["today", `Closed Today (${closedToday.length})`],
                   ["history", "All History"],
@@ -663,14 +665,36 @@ export default function BotView() {
                   ["watchlist", "Watchlist"],
                   ["pending-orders", "Pending Orders"],
                   ["game-plan", "Game Plan"],
-                ].map(([val, label]) => (
-                  <TabsTrigger
-                    key={val}
-                    value={val}
-                    className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
-                  >{label}</TabsTrigger>
-                ))}
-              </TabsList>
+                ];
+                return (
+                  <>
+                    {isMobile ? (
+                      <Select value={botTab} onValueChange={setBotTab}>
+                        <SelectTrigger className="h-8 w-full text-[11px] uppercase tracking-wider font-semibold rounded-none bg-card border border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {tabs.map(([val, label]) => (
+                            <SelectItem key={val} value={val} className="text-[12px] uppercase tracking-wider">
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <TabsList className="h-7 shrink-0 overflow-x-auto bg-card border border-border rounded-none p-0 gap-0 justify-start">
+                        {tabs.map(([val, label]) => (
+                          <TabsTrigger
+                            key={val}
+                            value={val}
+                            className="text-[10px] h-7 px-3 rounded-none uppercase tracking-wider font-semibold text-muted-foreground border-r border-border data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-b-primary"
+                          >{label}</TabsTrigger>
+                        ))}
+                      </TabsList>
+                    )}
+                  </>
+                );
+              })()}
               <TabsContent value="open" className="flex-1 overflow-auto mt-1">
                 {(botPositions.length === 0) ? (
                   <div className="flex flex-col items-center justify-center py-12 border border-dashed border-border">
@@ -1044,8 +1068,8 @@ export default function BotView() {
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? "flex-1 min-h-[32rem] md:min-h-[28rem]" : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex items-center justify-between gap-2 bg-card/60 border-b border-border px-2 py-1">
-            <div className="flex items-center gap-1.5">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
               <button
                 onClick={toggleScanPanel}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
@@ -1087,7 +1111,7 @@ export default function BotView() {
 
               </p>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 md:shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
               {botConfig?.strategy && (() => {
                 const activeStyle = getActiveStyle(botConfig);
@@ -1115,9 +1139,12 @@ export default function BotView() {
                 );
               })()}
               {currentScan && (
-                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-[9px] text-muted-foreground truncate">
                   <DataSourceBadge source={latestSource} />
-                  {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
+                  <span className="hidden md:inline">
+                    {currentScan?.pairs_scanned || 0} pairs · {currentScan?.signals_found || 0} signals · {currentScan?.trades_placed || 0} trades
+                  </span>
+                  <span className="md:hidden">{currentScan?.pairs_scanned || 0}p · {currentScan?.signals_found || 0}s · {currentScan?.trades_placed || 0}t</span>
                 </span>
               )}
             </div>
