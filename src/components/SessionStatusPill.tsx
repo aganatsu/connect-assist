@@ -53,11 +53,11 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
   if (enabled || (counts && counts.scanned > 0)) {
     return (
       <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-success/10 text-success border border-success/30 ${className}`}
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-success/10 text-success border border-success/30 overflow-hidden whitespace-nowrap ${className}`}
         title={`Bot is scanning during ${current.name} session`}
       >
         <Activity className="h-2.5 w-2.5" />
-        Scanning · {current.name}
+        <span className="min-w-0 truncate">Scanning · {current.name}</span>
         {counts && (
           <span className="text-success/80">
             · {counts.scanned}/{counts.total} pairs
@@ -81,11 +81,11 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
   if (!next) {
     return (
       <span
-        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border ${className}`}
+        className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-muted text-muted-foreground border border-border overflow-hidden whitespace-nowrap ${className}`}
         title="No sessions enabled in bot config"
       >
         <Clock className="h-2.5 w-2.5" />
-        Paused · No sessions enabled
+        <span className="min-w-0 truncate">Paused · No sessions enabled</span>
       </span>
     );
   }
@@ -93,11 +93,11 @@ export default function SessionStatusPill({ sessions, scanDetails, className = "
   // CASE 3: paused, countdown to next enabled session
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-warning/10 text-warning border border-warning/30 ${className}`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 h-5 rounded text-[10px] font-medium bg-warning/10 text-warning border border-warning/30 overflow-hidden whitespace-nowrap ${className}`}
       title={`Currently ${current.name}. Next enabled session: ${next.name} at ${formatNYTime(next.startsAt)} NY`}
     >
       <Clock className="h-2.5 w-2.5" />
-      Paused · {current.name} · resumes in {formatCountdown(next.msUntil)} ({next.name} @ {formatNYTime(next.startsAt)} NY)
+      <span className="min-w-0 truncate">Paused · {current.name} · resumes in {formatCountdown(next.msUntil)} ({next.name} @ {formatNYTime(next.startsAt)} NY)</span>
     </span>
   );
 }
