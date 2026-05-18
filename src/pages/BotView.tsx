@@ -1071,39 +1071,39 @@ export default function BotView() {
 
         {/* Secondary footer band: equity curve + recent closed trades */}
         {/* Bottom: Scan Master-Detail 60/40 */}
-        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
+        <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 min-w-0 max-w-full overflow-hidden ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0 max-w-full overflow-hidden">
+            <div className="flex items-center gap-1.5 min-w-0 max-w-full">
               <button
                 onClick={toggleScanPanel}
-                className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
+                className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
                 title={showScanPanel ? "Hide scan results" : "Show scan results"}
               >
                 {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
               </button>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider truncate flex items-center gap-1.5 font-semibold">
-                {safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
+                <span className="truncate">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
                 {currentScan?.scanned_at && (
-                  <span className="ml-1 text-foreground font-mono">
+                  <span className="shrink-0 text-foreground font-mono normal-case">
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
                 {logs.length > 1 && (
-                  <span className="inline-flex items-center gap-0.5 ml-1">
+                  <span className="inline-flex items-center gap-0.5 ml-auto shrink-0">
                     <button
                       onClick={() => { setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx >= logs.length - 1}
                       className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Older scan"
-                    >‹ older</button>
+                    ><span className="md:hidden">‹</span><span className="hidden md:inline">‹ older</span></button>
                     <button
                       onClick={() => { setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx <= 0}
                       className="px-1 py-0 h-4 text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
                       title="Newer scan"
-                    >newer ›</button>
+                    ><span className="md:hidden">›</span><span className="hidden md:inline">newer ›</span></button>
                     {safeScanIdx > 0 && (
                       <button
                         onClick={() => { setSelectedScanIdx(0); setSelectedPairIdx(0); }}
@@ -1114,10 +1114,10 @@ export default function BotView() {
                   </span>
                 )}
 
-              </p>
+              </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap min-w-0 md:shrink-0">
-              <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} />
+            <div className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden md:flex-wrap md:shrink-0">
+              <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} className="min-w-0 max-w-full truncate" />
               {botConfig?.strategy && (() => {
                 const activeStyle = getActiveStyle(botConfig);
                 const styleParams = STYLE_PARAMS[activeStyle];
