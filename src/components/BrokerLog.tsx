@@ -292,7 +292,30 @@ export function BrokerLog() {
             {statusFilter === "all" ? "No broker execution events recorded" : `No ${statusFilter} events`}
           </p>
         ) : (
-          <div className="h-scroll">
+          {/* Mobile: Stacked cards */}
+          <div className="md:hidden space-y-1.5">
+            {filtered.map((r) => (
+              <div key={r.id} className="border border-border bg-card/50 p-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-[11px]">{r.symbol}</span>
+                  <div className="flex items-center gap-1.5">
+                    <StatusIcon status={r.status} />
+                    <span className={`text-[10px] flex items-center gap-0.5 ${r.direction === "long" ? "text-success" : r.direction === "short" ? "text-destructive" : "text-muted-foreground"}`}>
+                      {r.direction === "long" ? <ArrowUpRight className="h-2.5 w-2.5" /> : r.direction === "short" ? <ArrowDownRight className="h-2.5 w-2.5" /> : null}
+                      {r.direction === "long" ? "BUY" : r.direction === "short" ? "SELL" : "—"}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-muted-foreground">{formatBrokerTime(r.time)}</span>
+                  <span>Size: {r.size != null ? r.size.toFixed(2) : "—"} @ {r.entryPrice != null ? r.entryPrice.toFixed(5) : "—"}</span>
+                </div>
+                <div className={`text-[10px] ${statusTextColor(r.status)} break-all`}>{r.displayResult}</div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop: Table */}
+          <div className="hidden md:block h-scroll">
           <table className="w-full text-[11px] font-mono min-w-[700px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground text-[10px]">

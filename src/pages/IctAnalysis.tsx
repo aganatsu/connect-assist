@@ -282,10 +282,10 @@ export default function IctAnalysis() {
               <AccordionContent>
                 <div className="bg-secondary/30 border border-border p-3">
                   {correlationMatrix ? (
-                    <div className="overflow-x-auto">
-                      <table className="text-[11px] font-mono">
+                    <div className="overflow-x-auto max-w-full">
+                      <table className="text-[9px] md:text-[11px] font-mono">
                         <thead>
-                          <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map(p => <th key={p} className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
+                          <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map(p => <th key={p} className="px-1 md:px-2 py-1 md:py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
                         </thead>
                         <tbody>
                           {correlationMatrix.pairs.map(p1 => (

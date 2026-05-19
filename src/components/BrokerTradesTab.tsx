@@ -237,8 +237,44 @@ function OpenPositionsContent({
   }
 
   return (
-    <div className="w-full max-w-full overflow-hidden md:overflow-x-auto">
-      <table className="w-full text-[10px] table-fixed md:table-auto">
+    {/* Mobile: Stacked cards */}
+    <div className="md:hidden space-y-1.5 p-2">
+      {positions.map((pos: any) => {
+        const isLong = pos.type?.includes("BUY") || pos.type === "POSITION_TYPE_BUY";
+        const pnl = parseFloat(pos.profit ?? pos.unrealizedPL ?? 0);
+        const swap = parseFloat(pos.swap ?? 0);
+        const commission = parseFloat(pos.commission ?? 0);
+        const totalPnl = pnl + swap + commission;
+        const digits = getDigits(pos.symbol);
+        const isBotManaged = /paper:/i.test(pos.comment || pos.clientExtensions?.comment || "");
+        return (
+          <div key={pos.id} className="border border-border bg-card/50 p-2 space-y-1">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="font-mono font-bold text-[11px]">{pos.symbol}</span>
+                <span className={`text-[10px] font-bold ${isLong ? "text-success" : "text-destructive"}`}>{isLong ? "BUY" : "SELL"}</span>
+                {isBotManaged && <span className="text-[8px] text-primary bg-primary/10 px-1 rounded">BOT</span>}
+              </div>
+              <span className={`font-mono font-bold text-[11px] ${totalPnl >= 0 ? "text-success" : "text-destructive"}`}>
+                {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>Entry: {formatPrice(pos.openPrice ?? pos.price, digits)}</span>
+              <span>Now: {formatPrice(pos.currentPrice, digits)}</span>
+              <span>Lots: {parseFloat(pos.volume ?? pos.currentUnits ?? 0).toFixed(2)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, digits)}</span>
+              <span className="text-success/80">TP: {formatPrice(pos.takeProfit, digits)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+    {/* Desktop: Table */}
+    <div className="hidden md:block w-full max-w-full overflow-x-auto">
+      <table className="w-full text-[10px] table-auto">
         <thead>
           <tr className="border-b border-border/30 bg-muted/20">
             <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">Symbol</th>
@@ -501,8 +537,42 @@ function TradeHistoryContent({
           WR: {winRate.toFixed(0)}%
         </span>
       </div>
-      <div className="w-full max-w-full overflow-hidden md:overflow-x-auto">
-        <table className="w-full text-[10px] table-fixed md:table-auto">
+      {/* Mobile: Stacked cards */}
+      <div className="md:hidden space-y-1.5 p-2">
+        {displayed.map((trade: any, i: number) => {
+          const isLong = trade.direction === "long" || trade.type?.includes("BUY");
+          const grossPnl = trade.pnl ?? parseFloat(trade.realizedPL ?? 0);
+          const netPnl = trade.netPnl ?? grossPnl;
+          const digits = getDigits(trade.symbol);
+          const isBotManaged = trade.botManaged || /paper:/i.test(trade.comment || "");
+          const closeTime = trade.closeTime;
+          return (
+            <div key={trade.positionId || i} className="border border-border bg-card/50 p-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-mono font-bold text-[11px]">{trade.symbol}</span>
+                  <span className={`text-[10px] font-bold ${isLong ? "text-success" : "text-destructive"}`}>{isLong ? "BUY" : "SELL"}</span>
+                  {isBotManaged && <span className="text-[8px] text-primary bg-primary/10 px-1 rounded">BOT</span>}
+                </div>
+                <span className={`font-mono font-bold text-[11px] ${netPnl >= 0 ? "text-success" : "text-destructive"}`}>
+                  {netPnl >= 0 ? "+" : ""}{netPnl.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                <span>Entry: {formatPrice(trade.entryPrice ?? trade.price, digits)}</span>
+                <span>Exit: {formatPrice(trade.exitPrice ?? trade.averageClosePrice, digits)}</span>
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                <span>{closeTime ? new Date(closeTime).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</span>
+                <span>Lots: {parseFloat(trade.volume ?? trade.initialUnits ?? 0).toFixed(2)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Desktop: Table */}
+      <div className="hidden md:block w-full max-w-full overflow-x-auto">
+        <table className="w-full text-[10px] table-auto">
           <thead>
             <tr className="border-b border-border/30 bg-muted/20">
               <th className="text-left px-2 py-1.5 font-medium text-muted-foreground">Symbol</th>
