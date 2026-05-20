@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
-import { Card, CardContent } from "@/components/ui/card";
+import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
+import { ChartContextPanel } from "@/components/ChartContextPanel";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
 import { marketApi, smcApi, paperApi, type CandleSource } from "@/lib/api";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
@@ -10,16 +11,32 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
-import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Radio, ChevronRight } from "lucide-react";
+import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Radio, ChevronRight, PanelRightOpen, PanelRightClose, ChevronDown, ChevronUp } from "lucide-react";
 import { unifyConfluence } from "@/lib/confluenceUnify";
 
 const fx = (n: unknown, digits = 5) =>
   typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
 
+// Timeframe-aware refresh intervals
+function getRefreshInterval(tf: Timeframe): number {
+  switch (tf) {
+    case '5min': case '15min': return 30_000;
+    case '1h': case '4h': return 300_000;
+    default: return 600_000;
+  }
+}
+
 export default function Chart() {
   const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<Timeframe>('4h');
   const [panelOpen, setPanelOpen] = useState(true);
+  const [panelMode, setPanelMode] = useState<'context' | 'detail'>('context');
+  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [overlayVisibility, setOverlayVisibility] = useState<OverlayVisibility>(DEFAULT_VISIBILITY);
+
+  const toggleOverlay = useCallback((layer: OverlayLayer) => {
+    setOverlayVisibility(prev => ({ ...prev, [layer]: !prev[layer] }));
+  }, []);
 
   // Listen for global symbol change
   useEffect(() => {
@@ -36,17 +53,19 @@ export default function Chart() {
     [selectedSymbol]
   );
 
+  const refreshInterval = getRefreshInterval(selectedTimeframe);
+
   const { data: quote } = useQuery({
     queryKey: ['quote', selectedSymbol],
     queryFn: () => marketApi.quote(selectedSymbol),
     refetchInterval: 10000,
   });
 
-  // Fetch candles WITH the data-source header (so we can show a badge).
   const { data: candleData } = useQuery({
     queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
     queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 200),
-    staleTime: 60000,
+    staleTime: refreshInterval / 2,
+    refetchInterval: refreshInterval,
   });
   const candles = candleData?.candles;
   const candleSource: CandleSource = candleData?.source ?? "unknown";
@@ -61,7 +80,8 @@ export default function Chart() {
     queryKey: ['chart-smc', selectedSymbol, candles?.length],
     queryFn: () => smcApi.fullAnalysis(candles!, dailyCandles),
     enabled: !!candles && candles.length > 0,
-    staleTime: 60000,
+    staleTime: refreshInterval / 2,
+    refetchInterval: refreshInterval,
   });
 
   const { data: paperStatus } = useQuery({
@@ -102,9 +122,7 @@ export default function Chart() {
   const activeOBs = orderBlocks.filter((ob: any) => !ob.mitigated);
   const activeFVGs = fvgs.filter((f: any) => !f.mitigated);
   const pdLevels = analysis?.pdLevels;
-  const confluenceScore = analysis?.confluenceScore ?? 0;
-  const extScore = analysis?.extendedConfluenceScore ?? 0;
-  const ext = analysis?.extendedFactors;
+
   const unified = useMemo(
     () => unifyConfluence({ ...analysis, killZone: kz }),
     [analysis, kz]
@@ -120,21 +138,12 @@ export default function Chart() {
     if (sig?.impulseZone?.hasZone && sig.impulseZone.impulse) {
       const iz = sig.impulseZone;
       impulseZone = {
-        impulse: {
-          high: iz.impulse.high,
-          low: iz.impulse.low,
-          direction: iz.impulse.direction,
-        },
+        impulse: { high: iz.impulse.high, low: iz.impulse.low, direction: iz.impulse.direction },
         bestZone: iz.bestZone ? {
-          type: iz.bestZone.type,
-          high: iz.bestZone.high,
-          low: iz.bestZone.low,
-          fibLevel: iz.bestZone.fibLevel ?? 0,
-          fibDepth: iz.bestZone.fibDepth ?? 0,
-          totalScore: iz.bestZone.totalScore ?? 0,
-          refinedEntry: iz.bestZone.refinedEntry ?? null,
-          refinedSL: iz.bestZone.refinedSL ?? null,
-          priceAtZone: iz.bestZone.priceAtZone ?? false,
+          type: iz.bestZone.type, high: iz.bestZone.high, low: iz.bestZone.low,
+          fibLevel: iz.bestZone.fibLevel ?? 0, fibDepth: iz.bestZone.fibDepth ?? 0,
+          totalScore: iz.bestZone.totalScore ?? 0, refinedEntry: iz.bestZone.refinedEntry ?? null,
+          refinedSL: iz.bestZone.refinedSL ?? null, priceAtZone: iz.bestZone.priceAtZone ?? false,
           distanceToZone: iz.bestZone.distanceToZone ?? 0,
         } : null,
         selectedTF: iz.selectedTF ?? null,
@@ -142,64 +151,60 @@ export default function Chart() {
       };
     }
 
-    // Build HTF POIs from scan signal if available
-    const htfPOIs = sig?.htfPOIs?.map((p: any) => ({
+    const htfPOIs = botScanSignal?.signal?.htfPOIs?.map((p: any) => ({
       timeframe: p.timeframe, type: p.type, high: p.high, low: p.low, direction: p.direction,
     })) ?? [];
 
     return {
-      orderBlocks: (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
+      orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
         high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
-      })),
-      fvgs: (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
+      })) : [],
+      fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
         high: f.high, low: f.low, datetime: f.datetime, direction: f.type,
-      })),
-      swingPoints: (analysis.structure?.swingPoints || []).map((sp: any) => ({
+      })) : [],
+      swingPoints: overlayVisibility.sp ? (analysis.structure?.swingPoints || []).map((sp: any) => ({
         price: sp.price, index: sp.index, type: sp.type, datetime: sp.datetime,
-      })),
-      liquidityPools: (analysis.liquidityPools || []).map((lp: any) => ({
+      })) : [],
+      liquidityPools: overlayVisibility.liq ? (analysis.liquidityPools || []).map((lp: any) => ({
         price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept,
-      })),
-      fibLevels: analysis.fibLevels,
+      })) : [],
+      fibLevels: overlayVisibility.fib ? analysis.fibLevels : undefined,
       fiftyPercentLevel: analysis.fiftyPercentLevel,
-      keySupport: analysis.keySupport,
-      keyResistance: analysis.keyResistance,
-      impulseZone,
+      keySupport: overlayVisibility.sr ? analysis.keySupport : undefined,
+      keyResistance: overlayVisibility.sr ? analysis.keyResistance : undefined,
+      impulseZone: overlayVisibility.iz ? impulseZone : undefined,
       htfPOIs: htfPOIs.length > 0 ? htfPOIs : undefined,
     };
-  }, [analysis, botScanSignal]);
+  }, [analysis, botScanSignal, overlayVisibility]);
 
-  // Entry checklist
-  const checklist = useMemo(() => {
-    const items = [
-      { name: "HTF Bias Confirmed", pass: bias !== 'neutral' },
-      { name: "Structure Break (BOS/CHoCH)", pass: (structure.bos?.length || 0) + (structure.choch?.length || 0) > 0 },
-      { name: "Order Block Present", pass: activeOBs.length > 0 },
-      { name: "FVG Alignment", pass: activeFVGs.length > 0 },
-      { name: "Premium/Discount Zone", pass: !!analysis?.premiumDiscount?.currentZone && analysis.premiumDiscount.currentZone !== 'equilibrium' },
-      { name: "Kill Zone Active", pass: kz.active },
-      { name: "PD/PW Levels Available", pass: !!pdLevels },
-    ];
-    const passCount = items.filter(i => i.pass).length;
-    const rating = passCount >= 6 ? "A+" : passCount >= 5 ? "Strong" : passCount >= 3 ? "Moderate" : "Weak";
-    return { items, passCount, total: items.length, rating };
-  }, [bias, structure, activeOBs, activeFVGs, analysis, kz, pdLevels]);
+  // Layer detail tooltips
+  const layerDetails = useMemo(() => ({
+    ob: activeOBs.length > 0 ? `${activeOBs.length} active` : 'none',
+    fvg: activeFVGs.length > 0 ? `${activeFVGs.length} unfilled` : 'none',
+    sp: `${(analysis?.structure?.swingPoints || []).length} points`,
+    liq: `${(analysis?.liquidityPools || []).length} pools`,
+    iz: botScanSignal?.signal?.impulseZone?.hasZone ? `${botScanSignal.signal.impulseZone.selectedTF} zone` : 'no signal',
+    sr: pdLevels ? 'PDH/PDL/PWH/PWL' : 'loading',
+  }), [activeOBs, activeFVGs, analysis, botScanSignal, pdLevels]);
 
   return (
     <AppShell>
-      <div className="flex flex-col md:flex-row gap-3 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
-        {/* Chart Area */}
-        <div className="flex-1 flex flex-col gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex flex-col lg:flex-row gap-0 h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
+        {/* ═══════ Chart Area ═══════ */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Top toolbar */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 flex-wrap">
             <select value={selectedSymbol} onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="bg-card border border-border px-2 py-1 text-xs">
+              className="bg-card border border-border rounded px-2 py-1 text-xs font-medium">
               {INSTRUMENTS.map(i => <option key={i.symbol} value={i.symbol}>{i.symbol}</option>)}
             </select>
-            <div className="flex gap-0.5 overflow-x-auto">
+            <div className="flex gap-0.5">
               {TIMEFRAMES.map(tf => (
                 <button key={tf.value} onClick={() => setSelectedTimeframe(tf.value)}
-                  className={`px-2 py-1 text-[10px] font-medium transition-colors ${
-                    selectedTimeframe === tf.value ? 'bg-primary/20 text-primary border border-primary/40' : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+                  className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                    selectedTimeframe === tf.value
+                      ? 'bg-primary/20 text-primary border border-primary/40'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                   }`}>{tf.label}</button>
               ))}
             </div>
@@ -207,216 +212,281 @@ export default function Chart() {
               <DataSourceBadge source={candleSource} />
               {quote && <span className="font-mono font-bold text-sm">{quote.price?.toFixed(instrument.pipSize < 0.01 ? 5 : 3)}</span>}
               {quote?.spread != null && <span className="text-muted-foreground">{quote.spread.toFixed(1)} sp</span>}
-              <span className="flex items-center gap-1 text-muted-foreground"><Clock className="h-2.5 w-2.5" /> {session}</span>
+              <span className="hidden sm:flex items-center gap-1 text-muted-foreground"><Clock className="h-2.5 w-2.5" /> {session}</span>
               {kz.active && <span className="text-primary font-medium">⚡ {kz.name}</span>}
-              <button onClick={() => setPanelOpen(!panelOpen)} className="text-muted-foreground hover:text-foreground">
-                {panelOpen ? 'Hide ▶' : '◀ Show'}
+              {/* Panel toggle - desktop */}
+              <button onClick={() => setPanelOpen(!panelOpen)} className="hidden lg:block text-muted-foreground hover:text-foreground" title={panelOpen ? 'Hide panel' : 'Show panel'}>
+                {panelOpen ? <PanelRightClose className="h-4 w-4" /> : <PanelRightOpen className="h-4 w-4" />}
+              </button>
+              {/* Panel toggle - mobile */}
+              <button onClick={() => setMobileSheetOpen(!mobileSheetOpen)} className="lg:hidden text-muted-foreground hover:text-foreground">
+                {mobileSheetOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
               </button>
             </div>
           </div>
-          <div className="flex-1 min-h-[250px]">
+
+          {/* Chart with HUD overlay */}
+          <div className="flex-1 min-h-[250px] relative">
             <SMCChart
               candles={(candles as any[]) ?? []}
               symbol={selectedSymbol}
               overlays={chartOverlays}
               loading={!candles}
             />
+            {/* Floating HUD */}
+            <ChartOverlayHUD
+              visibility={overlayVisibility}
+              onToggle={toggleOverlay}
+              confluenceScore={unified?.total}
+              direction={unified?.direction === 'BUY' ? 'bullish' : unified?.direction === 'SELL' ? 'bearish' : 'neutral'}
+              layerDetails={layerDetails}
+            />
           </div>
         </div>
 
-        {/* Analysis Panels */}
+        {/* ═══════ Right Panel (Desktop) ═══════ */}
         {panelOpen && (
-          <div className="w-full md:w-96 overflow-y-auto space-y-0 max-h-[50vh] md:max-h-none">
-            <Accordion type="multiple" defaultValue={["confluence", "structure", "checklist", "levels", "session", "premium", "risk", "botscan"]}>
-              {/* Unified Confluence */}
-              <AccordionItem value="confluence">
-                <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2 w-full">
-                    <Zap className="h-3.5 w-3.5 text-primary" />
-                    Confluence
-                    <span className="ml-auto flex items-center gap-2">
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                        unified.direction === 'BUY' ? 'bg-success/20 text-success' :
-                        unified.direction === 'SELL' ? 'bg-destructive/20 text-destructive' :
-                        'bg-muted text-muted-foreground'
-                      }`}>{unified.direction}</span>
-                      <span className={`font-mono font-bold ${
-                        (unified.total > 10 ? (unified.total >= 65 ? 'text-success' : unified.total >= 40 ? 'text-warning' : 'text-destructive') : (unified.total >= 6.5 ? 'text-success' : unified.total >= 4 ? 'text-warning' : 'text-destructive'))
-                      }`}>{unified.total > 10 ? `${unified.total.toFixed(1)}%` : `${unified.total.toFixed(1)}/10`}</span>
-                    </span>
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="px-3 pb-2">
-                  <div className="bg-secondary/30 border border-border p-2 space-y-2 text-[11px]">
-                    {/* Sub-score breakdown */}
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground border-b border-border/50 pb-1.5">
-                      <span>SMC <span className="font-mono text-foreground">{unified.smcScore > 10 ? `${unified.smcScore.toFixed(1)}%` : `${unified.smcScore}/10`}</span></span>
-                      <span>·</span>
-                      <span>Extended <span className="font-mono text-foreground">{unified.extScore > 10 ? `${unified.extScore.toFixed(1)}%` : `${unified.extScore}/10`}</span></span>
-                      <span>·</span>
-                      <span>{unified.passCount}/{unified.totalFactors} factors</span>
-                    </div>
+          <div className="hidden lg:flex flex-col w-80 xl:w-96 border-l border-border/50 bg-card/50">
+            {/* Panel mode toggle */}
+            <div className="flex border-b border-border/50">
+              <button
+                onClick={() => setPanelMode('context')}
+                className={`flex-1 px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                  panelMode === 'context' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Context
+              </button>
+              <button
+                onClick={() => setPanelMode('detail')}
+                className={`flex-1 px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                  panelMode === 'detail' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Detail
+              </button>
+            </div>
 
-                    {/* Grouped factors */}
-                    {unified.groups.map((g) => (
-                      <div key={g.name} className="space-y-0.5">
-                        <p className="text-[9px] uppercase tracking-wider font-bold text-muted-foreground flex items-center gap-1">
-                          <ChevronRight className="h-2.5 w-2.5" />{g.name}
-                        </p>
-                        <div className="pl-3 space-y-0.5">
-                          {g.items.map((it, i) => (
-                            <FactorRow key={i} label={it.label} pass={it.pass} detail={it.detail} />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+            {/* Context mode — clean, actionable */}
+            {panelMode === 'context' && (
+              <ChartContextPanel
+                analysis={analysis}
+                unified={unified}
+                botScanSignal={botScanSignal}
+                currentPrice={quote?.price}
+                className="flex-1"
+              />
+            )}
 
-                    {analysis?.reasoning?.length > 0 && (
-                      <div className="pt-1 border-t border-border/50 space-y-0.5">
-                        {analysis.reasoning.slice(0, 3).map((r: string, i: number) => (
-                          <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
-                        ))}
-                      </div>
-                    )}
-                    <p className="text-[9px] text-muted-foreground/70 italic">SMT divergence requires cross-pair data — see Bot Scan below</p>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-
-              {/* Bot Scan (live) */}
-              <AccordionItem value="botscan">
-                <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2">
-                    <Radio className="h-3.5 w-3.5 text-primary" />
-                    Bot Scan (live)
-                    {botScanSignal?.signal?.score != null && (
-                      <span className={`font-mono font-bold ml-auto ${Number(botScanSignal.signal.score) > 10 ? (Number(botScanSignal.signal.score) >= 60 ? 'text-success' : Number(botScanSignal.signal.score) >= 40 ? 'text-warning' : 'text-muted-foreground') : (botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground')}`}>
-                        {Number(botScanSignal.signal.score) > 10 ? `${Number(botScanSignal.signal.score).toFixed(1)}%` : `${Number(botScanSignal.signal.score).toFixed(1)}/10`}
+            {/* Detail mode — full accordion breakdown */}
+            {panelMode === 'detail' && (
+              <div className="flex-1 overflow-y-auto">
+                <Accordion type="multiple" defaultValue={["confluence", "structure", "levels", "premium", "risk", "botscan"]}>
+                  {/* Unified Confluence */}
+                  <AccordionItem value="confluence">
+                    <AccordionTrigger className="text-xs px-3 py-2">
+                      <span className="flex items-center gap-2 w-full">
+                        <Zap className="h-3.5 w-3.5 text-primary" />
+                        Confluence
+                        <span className="ml-auto flex items-center gap-2">
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            unified.direction === 'BUY' ? 'bg-success/20 text-success' :
+                            unified.direction === 'SELL' ? 'bg-destructive/20 text-destructive' :
+                            'bg-muted text-muted-foreground'
+                          }`}>{unified.direction}</span>
+                          <span className={`font-mono font-bold ${
+                            (unified.total > 10 ? (unified.total >= 65 ? 'text-success' : unified.total >= 40 ? 'text-warning' : 'text-destructive') : (unified.total >= 6.5 ? 'text-success' : unified.total >= 4 ? 'text-warning' : 'text-destructive'))
+                          }`}>{unified.total > 10 ? `${unified.total.toFixed(1)}%` : `${unified.total.toFixed(1)}/10`}</span>
+                        </span>
                       </span>
-                    )}
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="px-3 pb-2">
-                  <div className="bg-secondary/30 border border-border p-2 text-[11px]">
-                    {botScanSignal?.signal ? (
-                      <BotScanInline signal={botScanSignal.signal} scannedAt={botScanSignal.scannedAt} />
-                    ) : (
-                      <p className="text-[10px] text-muted-foreground">No recent bot scan for {selectedSymbol}. The scanner runs on its own cycle — check back soon.</p>
-                    )}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-
-              {/* Market Structure */}
-              <AccordionItem value="structure">
-                <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2">
-                    <Activity className="h-3.5 w-3.5 text-primary" />
-                    Market Structure
-                  </span>
-                </AccordionTrigger>
-                <AccordionContent className="px-3 pb-2">
-                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
-                    <div className="flex justify-between"><span className="text-muted-foreground">BOS</span><span className="font-mono">{structure.bos?.length || 0}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">CHoCH</span><span className="font-mono">{structure.choch?.length || 0}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Active OBs</span><span className="font-mono">{activeOBs.length}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Unfilled FVGs</span><span className="font-mono">{activeFVGs.length}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Liquidity Pools</span><span className="font-mono">{analysis?.liquidityPools?.length || 0}</span></div>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-
-              {/* Premium / Discount */}
-              {analysis?.premiumDiscount && (
-                <AccordionItem value="premium">
-                  <AccordionTrigger className="text-xs px-3 py-2">
-                    <span className="flex items-center gap-2">
-                      <Target className="h-3.5 w-3.5 text-primary" />
-                      Premium / Discount
-                      <span className="text-[10px] font-medium ml-auto">{analysis.premiumDiscount.currentZone ?? '—'}</span>
-                    </span>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-3 pb-2">
-                    <div className="bg-secondary/30 border border-border p-2 space-y-2">
-                      <div className="relative h-20 border border-border overflow-hidden">
-                        <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2">
-                          <span className="text-[10px] text-destructive font-medium">PREMIUM</span>
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-2">
+                      <div className="bg-secondary/30 border border-border p-2 space-y-2 text-[11px]">
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground border-b border-border/50 pb-1.5">
+                          <span>SMC <span className="font-mono text-foreground">{unified.smcScore > 10 ? `${unified.smcScore.toFixed(1)}%` : `${unified.smcScore}/10`}</span></span>
+                          <span>·</span>
+                          <span>Extended <span className="font-mono text-foreground">{unified.extScore > 10 ? `${unified.extScore.toFixed(1)}%` : `${unified.extScore}/10`}</span></span>
+                          <span>·</span>
+                          <span>{unified.passCount}/{unified.totalFactors} factors</span>
                         </div>
-                        <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                          <span className="text-[10px] text-muted-foreground font-mono">{fx(analysis.premiumDiscount.equilibrium)}</span>
-                        </div>
-                        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2">
-                          <span className="text-[10px] text-success font-medium">DISCOUNT</span>
-                        </div>
-                        <div
-                          className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
-                          style={{ top: `${100 - (typeof analysis.premiumDiscount.zonePercent === 'number' ? analysis.premiumDiscount.zonePercent : 50)}%` }}
-                        />
+                        {unified.groups.map((g) => (
+                          <div key={g.name} className="space-y-0.5">
+                            <p className="text-[9px] uppercase tracking-wider font-bold text-muted-foreground flex items-center gap-1">
+                              <ChevronRight className="h-2.5 w-2.5" />{g.name}
+                            </p>
+                            <div className="pl-3 space-y-0.5">
+                              {g.items.map((it, i) => (
+                                <FactorRow key={i} label={it.label} pass={it.pass} detail={it.detail} />
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {analysis?.reasoning?.length > 0 && (
+                          <div className="pt-1 border-t border-border/50 space-y-0.5">
+                            {analysis.reasoning.slice(0, 3).map((r: string, i: number) => (
+                              <p key={i} className="text-[10px] text-muted-foreground">• {r}</p>
+                            ))}
+                          </div>
+                        )}
                       </div>
-                      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                        <span>H: {fx(analysis.premiumDiscount.swingHigh)}</span>
-                        <span className="text-primary">{fx(analysis.premiumDiscount.zonePercent, 0)}%</span>
-                        <span>L: {fx(analysis.premiumDiscount.swingLow)}</span>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  {/* Bot Scan */}
+                  <AccordionItem value="botscan">
+                    <AccordionTrigger className="text-xs px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <Radio className="h-3.5 w-3.5 text-primary" />
+                        Bot Scan (live)
+                        {botScanSignal?.signal?.score != null && (
+                          <span className={`font-mono font-bold ml-auto ${Number(botScanSignal.signal.score) > 10 ? (Number(botScanSignal.signal.score) >= 60 ? 'text-success' : Number(botScanSignal.signal.score) >= 40 ? 'text-warning' : 'text-muted-foreground') : (botScanSignal.signal.score >= 6 ? 'text-success' : botScanSignal.signal.score >= 4 ? 'text-warning' : 'text-muted-foreground')}`}>
+                            {Number(botScanSignal.signal.score) > 10 ? `${Number(botScanSignal.signal.score).toFixed(1)}%` : `${Number(botScanSignal.signal.score).toFixed(1)}/10`}
+                          </span>
+                        )}
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-2">
+                      <div className="bg-secondary/30 border border-border p-2 text-[11px]">
+                        {botScanSignal?.signal ? (
+                          <BotScanInline signal={botScanSignal.signal} scannedAt={botScanSignal.scannedAt} />
+                        ) : (
+                          <p className="text-[10px] text-muted-foreground">No recent bot scan for {selectedSymbol}.</p>
+                        )}
                       </div>
-                      {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              )}
+                    </AccordionContent>
+                  </AccordionItem>
 
-              {/* Judas Swing */}
-              {analysis?.judasSwing?.detected && (
-                <AccordionItem value="judas">
-                  <AccordionTrigger className="text-xs px-3 py-2">
-                    <span className="flex items-center gap-2 text-primary">
-                      ⚡ Judas Swing
-                      <span className="text-[10px] ml-auto">{analysis.judasSwing.type}</span>
-                    </span>
-                  </AccordionTrigger>
-                  <AccordionContent className="px-3 pb-2">
-                    <div className="bg-primary/5 border border-primary/20 p-2 text-[11px]">
-                      <p>{analysis.judasSwing.description}</p>
-                      <p className="mt-1 text-muted-foreground font-mono">Midnight Open: {fx(analysis.judasSwing.midnightOpen)}</p>
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              )}
+                  {/* Market Structure */}
+                  <AccordionItem value="structure">
+                    <AccordionTrigger className="text-xs px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <Activity className="h-3.5 w-3.5 text-primary" />
+                        Market Structure
+                      </span>
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-2">
+                      <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
+                        <div className="flex justify-between"><span className="text-muted-foreground">BOS</span><span className="font-mono">{structure.bos?.length || 0}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">CHoCH</span><span className="font-mono">{structure.choch?.length || 0}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Active OBs</span><span className="font-mono">{activeOBs.length}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Unfilled FVGs</span><span className="font-mono">{activeFVGs.length}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Liquidity Pools</span><span className="font-mono">{analysis?.liquidityPools?.length || 0}</span></div>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
 
-              {/* Key Levels */}
-              <AccordionItem value="levels">
-                <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2"><Target className="h-3.5 w-3.5 text-warning" /> Key Levels</span>
-                </AccordionTrigger>
-                <AccordionContent className="px-3 pb-2">
-                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
-                    {pdLevels ? (
-                      <>
-                        <div className="flex justify-between"><span className="text-muted-foreground">PDH</span><span className="font-mono">{pdLevels.pdh?.toFixed(5)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">PDL</span><span className="font-mono">{pdLevels.pdl?.toFixed(5)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">PWH</span><span className="font-mono">{pdLevels.pwh?.toFixed(5)}</span></div>
-                        <div className="flex justify-between"><span className="text-muted-foreground">PWL</span><span className="font-mono">{pdLevels.pwl?.toFixed(5)}</span></div>
-                      </>
-                    ) : <span className="text-muted-foreground">Loading...</span>}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
+                  {/* Premium / Discount */}
+                  {analysis?.premiumDiscount && (
+                    <AccordionItem value="premium">
+                      <AccordionTrigger className="text-xs px-3 py-2">
+                        <span className="flex items-center gap-2">
+                          <Target className="h-3.5 w-3.5 text-primary" />
+                          Premium / Discount
+                          <span className="text-[10px] font-medium ml-auto">{analysis.premiumDiscount.currentZone ?? '—'}</span>
+                        </span>
+                      </AccordionTrigger>
+                      <AccordionContent className="px-3 pb-2">
+                        <div className="bg-secondary/30 border border-border p-2 space-y-2">
+                          <div className="relative h-20 border border-border overflow-hidden">
+                            <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2">
+                              <span className="text-[10px] text-destructive font-medium">PREMIUM</span>
+                            </div>
+                            <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
+                              <span className="text-[10px] text-muted-foreground font-mono">{fx(analysis.premiumDiscount.equilibrium)}</span>
+                            </div>
+                            <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2">
+                              <span className="text-[10px] text-success font-medium">DISCOUNT</span>
+                            </div>
+                            <div
+                              className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10"
+                              style={{ top: `${100 - (typeof analysis.premiumDiscount.zonePercent === 'number' ? analysis.premiumDiscount.zonePercent : 50)}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+                            <span>H: {fx(analysis.premiumDiscount.swingHigh)}</span>
+                            <span className="text-primary">{fx(analysis.premiumDiscount.zonePercent, 0)}%</span>
+                            <span>L: {fx(analysis.premiumDiscount.swingLow)}</span>
+                          </div>
+                          {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
 
-              {/* Risk Calculator */}
-              <AccordionItem value="risk">
-                <AccordionTrigger className="text-xs px-3 py-2">
-                  <span className="flex items-center gap-2"><Shield className="h-3.5 w-3.5 text-primary" /> Risk Calculator</span>
-                </AccordionTrigger>
-                <AccordionContent className="px-3 pb-2">
-                  <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
-                    <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">${balance.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Risk %</span><span className="font-mono">{riskPct}%</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">${riskAmount.toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">${(riskAmount * 2).toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">${(riskAmount * 3).toFixed(2)}</span></div>
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
+                  {/* Judas Swing */}
+                  {analysis?.judasSwing?.detected && (
+                    <AccordionItem value="judas">
+                      <AccordionTrigger className="text-xs px-3 py-2">
+                        <span className="flex items-center gap-2 text-primary">
+                          ⚡ Judas Swing
+                          <span className="text-[10px] ml-auto">{analysis.judasSwing.type}</span>
+                        </span>
+                      </AccordionTrigger>
+                      <AccordionContent className="px-3 pb-2">
+                        <div className="bg-primary/5 border border-primary/20 p-2 text-[11px]">
+                          <p>{analysis.judasSwing.description}</p>
+                          <p className="mt-1 text-muted-foreground font-mono">Midnight Open: {fx(analysis.judasSwing.midnightOpen)}</p>
+                        </div>
+                      </AccordionContent>
+                    </AccordionItem>
+                  )}
+
+                  {/* Key Levels */}
+                  <AccordionItem value="levels">
+                    <AccordionTrigger className="text-xs px-3 py-2">
+                      <span className="flex items-center gap-2"><Target className="h-3.5 w-3.5 text-warning" /> Key Levels</span>
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-2">
+                      <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
+                        {pdLevels ? (
+                          <>
+                            <div className="flex justify-between"><span className="text-muted-foreground">PDH</span><span className="font-mono">{pdLevels.pdh?.toFixed(5)}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">PDL</span><span className="font-mono">{pdLevels.pdl?.toFixed(5)}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">PWH</span><span className="font-mono">{pdLevels.pwh?.toFixed(5)}</span></div>
+                            <div className="flex justify-between"><span className="text-muted-foreground">PWL</span><span className="font-mono">{pdLevels.pwl?.toFixed(5)}</span></div>
+                          </>
+                        ) : <span className="text-muted-foreground">Loading...</span>}
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+
+                  {/* Risk Calculator */}
+                  <AccordionItem value="risk">
+                    <AccordionTrigger className="text-xs px-3 py-2">
+                      <span className="flex items-center gap-2"><Shield className="h-3.5 w-3.5 text-primary" /> Risk Calculator</span>
+                    </AccordionTrigger>
+                    <AccordionContent className="px-3 pb-2">
+                      <div className="bg-secondary/30 border border-border p-2 space-y-1 text-[11px]">
+                        <div className="flex justify-between"><span className="text-muted-foreground">Account</span><span className="font-mono">${balance.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Risk %</span><span className="font-mono">{riskPct}%</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">Risk $</span><span className="font-mono text-destructive">${riskAmount.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:2 Target</span><span className="font-mono text-success">${(riskAmount * 2).toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-muted-foreground">1:3 Target</span><span className="font-mono text-success">${(riskAmount * 3).toFixed(2)}</span></div>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══════ Mobile Bottom Sheet ═══════ */}
+        {mobileSheetOpen && (
+          <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[60vh] bg-card border-t border-border rounded-t-xl shadow-2xl overflow-y-auto">
+            <div className="sticky top-0 bg-card border-b border-border/50 px-4 py-2 flex items-center justify-between">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Analysis</span>
+              <button onClick={() => setMobileSheetOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <ChevronDown className="h-4 w-4" />
+              </button>
+            </div>
+            <ChartContextPanel
+              analysis={analysis}
+              unified={unified}
+              botScanSignal={botScanSignal}
+              currentPrice={quote?.price}
+              onClose={() => setMobileSheetOpen(false)}
+            />
           </div>
         )}
       </div>
