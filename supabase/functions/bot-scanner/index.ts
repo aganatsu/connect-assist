@@ -3282,18 +3282,61 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
+    // ── Daily POI Detection ──
+    // Daily candles have fewer structure breaks, so quality threshold is lower (>= 2 vs >= 3 for intraday).
+    // The BOOST_MAP already assigns highest weights to "D" timeframe (fvg: 1.0, ob: 0.8, breaker: 0.6).
+    let dFVGs: any[] = [];
+    let dOBs: any[] = [];
+    let dBreakers: any[] = [];
+    if (dailyCandles.length >= 10) {
+      const dStructure = analyzeMarketStructure(dailyCandles);
+      const dStructureBreaks = [...dStructure.bos, ...dStructure.choch];
+      dFVGs = detectFVGs(dailyCandles, dStructureBreaks);
+      dOBs = detectOrderBlocks(dailyCandles, dStructureBreaks);
+      dBreakers = detectBreakerBlocks(dOBs, dailyCandles, dStructureBreaks);
+      for (const fvg of dFVGs) {
+        if (fvg.state !== "filled" && (fvg.quality ?? 0) >= 2) {
+          htfPOIs.push({ timeframe: "D", type: "fvg", high: fvg.high, low: fvg.low, direction: fvg.type });
+        }
+      }
+      for (const ob of dOBs) {
+        if (ob.state !== "broken" && ob.state !== "mitigated") {
+          htfPOIs.push({ timeframe: "D", type: "ob", high: ob.high, low: ob.low, direction: ob.type });
+        }
+      }
+      for (const bb of dBreakers) {
+        if (bb.isActive && bb.state !== "broken") {
+          htfPOIs.push({ timeframe: "D", type: "breaker", high: bb.high, low: bb.low, direction: bb.type === "bullish_breaker" ? "bullish" : "bearish" });
+        }
+      }
+    }
     // Inject HTF POIs for confluence scoring boost
-    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfPOIs.length} (4H: ${htfPOIs.filter(p => p.timeframe === "4H").length}, 1H: ${htfPOIs.filter(p => p.timeframe === "1H").length})`);
+    console.log(`[scan ${scanCycleId}] ${pair} HTF POIs found: ${htfPOIs.length} (D: ${htfPOIs.filter(p => p.timeframe === "D").length}, 4H: ${htfPOIs.filter(p => p.timeframe === "4H").length}, 1H: ${htfPOIs.filter(p => p.timeframe === "1H").length})`);
     (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
 
-    // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on 4H + 1H ──
+    // ── HTF Phase 2: Fibonacci, Premium/Discount, Liquidity Pools on D + 4H + 1H ──
     // Run Fib, PD, and Liquidity detection on HTF candles for multi-TF scoring.
+    let htfFibLevelsD: any = null;
     let htfFibLevels4H: any = null;
     let htfFibLevels1H: any = null;
+    let htfPDD: any = null;
     let htfPD4H: any = null;
     let htfPD1H: any = null;
+    let htfLiquidityPoolsD: LiquidityPool[] = [];
     let htfLiquidityPools4H: LiquidityPool[] = [];
     let htfLiquidityPools1H: LiquidityPool[] = [];
+
+    if (dailyCandles.length >= 10) {
+      // Daily Fibonacci: ZigZag pivots → Fib levels
+      const dZigzag = detectZigZagPivots(dailyCandles, 5, 20);
+      if (dZigzag.lastTwo) {
+        htfFibLevelsD = computeFibLevels(dZigzag.lastTwo[0], dZigzag.lastTwo[1]);
+      }
+      // Daily Premium/Discount zone
+      htfPDD = calculatePremiumDiscount(dailyCandles);
+      // Daily Liquidity Pools (wider threshold for daily candles)
+      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, 0.002, 2);
+    }
 
     if (h4Candles.length >= 20) {
       // 4H Fibonacci: ZigZag pivots → Fib levels
@@ -3320,10 +3363,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Inject HTF Phase 2 data for confluence scoring
-    console.log(`[scan ${scanCycleId}] ${pair} HTF Phase 2: Fib4H=${htfFibLevels4H ? "yes" : "no"}, Fib1H=${htfFibLevels1H ? "yes" : "no"}, PD4H=${htfPD4H?.currentZone ?? "none"}, PD1H=${htfPD1H?.currentZone ?? "none"}, Liq4H=${htfLiquidityPools4H.length}, Liq1H=${htfLiquidityPools1H.length}`);
-    (pairConfig as any)._htfFibLevels = { h4: htfFibLevels4H, h1: htfFibLevels1H };
-    (pairConfig as any)._htfPD = { h4: htfPD4H, h1: htfPD1H };
-    (pairConfig as any)._htfLiquidityPools = { h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
+    console.log(`[scan ${scanCycleId}] ${pair} HTF Phase 2: FibD=${htfFibLevelsD ? "yes" : "no"}, Fib4H=${htfFibLevels4H ? "yes" : "no"}, Fib1H=${htfFibLevels1H ? "yes" : "no"}, PDD=${htfPDD?.currentZone ?? "none"}, PD4H=${htfPD4H?.currentZone ?? "none"}, PD1H=${htfPD1H?.currentZone ?? "none"}, LiqD=${htfLiquidityPoolsD.length}, Liq4H=${htfLiquidityPools4H.length}, Liq1H=${htfLiquidityPools1H.length}`);
+    (pairConfig as any)._htfFibLevels = { d: htfFibLevelsD, h4: htfFibLevels4H, h1: htfFibLevels1H };
+    (pairConfig as any)._htfPD = { d: htfPDD, h4: htfPD4H, h1: htfPD1H };
+    (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
     let simpleDirectionResult: DirectionResult | null = null;
@@ -3564,6 +3607,66 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         retracements: analysis.fibLevels.retracements,
         extensions: analysis.fibLevels.extensions,
       } : null,
+      // ── Chart Overlays: Full entity data with price levels for UI chart plotting ──
+      // Provides raw price-level data so the frontend can render OBs, FVGs, Breakers,
+      // Swing Points, Liquidity Pools, and Fib Levels as chart overlays.
+      chartOverlays: {
+        orderBlocks: (analysis.orderBlocks || []).slice(0, 30).map((ob: any) => ({
+          high: ob.high, low: ob.low, datetime: ob.datetime || ob.time,
+          state: ob.state, direction: ob.type, timeframe: "entry",
+        })),
+        fvgs: (analysis.fvgs || []).slice(0, 30).map((f: any) => ({
+          high: f.high, low: f.low, datetime: f.datetime || f.time,
+          state: f.state, direction: f.type, fillPercent: f.fillPercent ?? 0, timeframe: "entry",
+        })),
+        breakerBlocks: (analysis.breakerBlocks || []).slice(0, 20).map((bb: any) => ({
+          high: bb.high, low: bb.low, datetime: bb.datetime || bb.time,
+          state: bb.state, direction: bb.type, timeframe: "entry",
+        })),
+        swingPoints: (analysis.structure?.swingPoints || []).slice(0, 40).map((sp: any) => ({
+          price: sp.price, datetime: sp.datetime || sp.time,
+          type: sp.type, state: sp.state, timeframe: "entry",
+        })),
+        liquidityPools: (analysis.liquidityPools || []).slice(0, 20).map((lp: any) => ({
+          price: lp.price ?? ((lp.high ?? 0) + (lp.low ?? 0)) / 2,
+          high: lp.high, low: lp.low, datetime: lp.datetime || lp.time,
+          strength: lp.strength ?? lp.touches ?? 0, state: lp.state,
+          direction: lp.direction ?? lp.type, timeframe: "entry",
+        })),
+        fibLevels: analysis.fibLevels ? {
+          swingHigh: analysis.fibLevels.swingHigh,
+          swingLow: analysis.fibLevels.swingLow,
+          direction: analysis.fibLevels.direction,
+          retracements: analysis.fibLevels.retracements,
+          extensions: analysis.fibLevels.extensions,
+          timeframe: "entry",
+        } : null,
+        // HTF overlays: Daily, 4H, 1H POIs with price levels for multi-TF chart plotting
+        htfPOIs: htfPOIs.map(p => ({ ...p })),
+        // Daily entities (full data for D1 chart overlay)
+        dailyEntities: dailyCandles.length >= 10 ? {
+          orderBlocks: dOBs.slice(0, 15).map((ob: any) => ({
+            high: ob.high, low: ob.low, datetime: ob.datetime || ob.time,
+            state: ob.state, direction: ob.type,
+          })),
+          fvgs: dFVGs.slice(0, 15).map((f: any) => ({
+            high: f.high, low: f.low, datetime: f.datetime || f.time,
+            state: f.state, direction: f.type, fillPercent: f.fillPercent ?? 0,
+          })),
+          breakerBlocks: dBreakers.slice(0, 10).map((bb: any) => ({
+            high: bb.high, low: bb.low, datetime: bb.datetime || bb.time,
+            state: bb.state, direction: bb.type,
+          })),
+          fibLevels: htfFibLevelsD,
+          premiumDiscount: htfPDD,
+          liquidityPools: htfLiquidityPoolsD.slice(0, 10).map((lp: any) => ({
+            price: lp.price ?? ((lp.high ?? 0) + (lp.low ?? 0)) / 2,
+            high: lp.high, low: lp.low, datetime: lp.datetime || lp.time,
+            strength: lp.strength ?? lp.touches ?? 0, state: lp.state,
+            direction: lp.direction ?? lp.type,
+          })),
+        } : null,
+      },
     };
 
     // ── Impulse Zone Engine (informational — enriches scan detail, does NOT gate trades) ──

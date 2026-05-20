@@ -1,54 +1,77 @@
-# Task: Fix Scanner Type Errors
-## Branch: manus/fix-scanner-type-errors
+# Task: Daily POI Detection & Chart Overlays
+
+## Branch: manus/daily-poi-and-chart-overlays
+
 ## Behavior changes
 
-1. **`setup_confidence` values now accurate**: Previously, `setupClassification.confidence` (a numeric 0–1 value) was compared as a string (`=== "high"` etc.), which always fell to the else branch producing 0.5. Now the actual numeric confidence is stored directly. Signals will have accurate confidence values (e.g., 0.82) instead of always 0.5.
+1. **Daily POIs now feed into HTF POI scoring**: When daily candles have >= 10 bars, the scanner detects D1 FVGs, Order Blocks, and Breaker Blocks and pushes them to the `htfPOIs` array with `timeframe: "D"`. The existing BOOST_MAP already assigns the highest weights to "D" (fvg: 1.0, ob: 0.8, breaker: 0.6), so pairs where price sits inside a Daily POI will now receive a higher HTF POI Alignment score. This means some trades that previously scored just below threshold may now pass if price is at a Daily level.
 
-2. **`newsBias.strength` now populated**: Previously referenced `pairBias.strength` (non-existent field, always `undefined`). Now correctly uses `pairBias.netStrength`. Game plan data will have the actual net strength value populated.
+2. **Daily Fib/PD/Liquidity detection added**: The scanner now computes Daily ZigZag Fibonacci levels, Premium/Discount zones, and Liquidity Pools. These are injected into `_htfFibLevels.d`, `_htfPD.d`, and `_htfLiquidityPools.d` for downstream multi-TF scoring.
 
-Both changes are bug fixes — the old code was silently producing incorrect/undefined values due to type mismatches.
+3. **`chartOverlays` field added to scan detail**: The scan detail object now includes a `chartOverlays` property containing full entity price-level data (OBs, FVGs, Breakers, Swing Points, Liquidity Pools, Fib Levels, HTF POIs, Daily Entities). This is purely informational for the frontend — it does NOT affect scoring or trade decisions.
 
 ## Files modified
-- `supabase/functions/_shared/gamePlan.ts` — Fixed OrderBlock type (isActive → state field check) and FVG type (filled boolean → state/mitigated check) to match actual smcAnalysis.ts interfaces
-- `supabase/functions/_shared/weeklyProfile.ts` — Fixed candle.time (non-existent on Candle interface) → candle.datetime (correct field) in 3 locations
-- `supabase/functions/_shared/weeklyProfile.test.ts` — Updated test fixture helpers to construct candles with `datetime: string` (ISO format) instead of `time: number` (deprecated/non-existent field)
-- `supabase/functions/bot-scanner/index.ts` — Fixed pairBias.strength → pairBias.netStrength (correct return field from newsImpact API); Fixed setupClassification.confidence string comparison → direct numeric assignment
+
+| File | Description |
+|------|-------------|
+| `supabase/functions/bot-scanner/index.ts` | Added Daily POI detection block (28 lines), Daily Fib/PD/Liquidity detection (14 lines), updated HTF Phase 2 injection to include Daily data, added `chartOverlays` field to detail object (60 lines), updated console.log to show Daily counts |
+| `supabase/functions/_shared/dailyPOIAndChartOverlays.test.ts` | New test file with 12 tests covering Daily POI detection, scoring hierarchy, quality thresholds, chart overlay structure, and regression checks |
 
 ## Tests added
-- No new test files; existing `weeklyProfile.test.ts` fixtures corrected to use proper `Candle` interface fields (datetime instead of time). This is effectively a test fix that would have failed before (and was failing — 9 tests broken).
+
+| Test | Assertion |
+|------|-----------|
+| `Daily POI: analyzeMarketStructure works on daily candles with >= 10 bars` | Structure detection produces BOS, CHoCH, and swing points from daily candles |
+| `Daily POI: detectFVGs produces FVGs from daily candles` | FVGs have valid high/low/state/type fields |
+| `Daily POI: detectOrderBlocks produces OBs from daily candles` | OBs have valid high/low/state/type fields |
+| `Daily POI: detectBreakerBlocks produces breakers from daily OBs` | Breakers have valid structure |
+| `Daily POI: 'D' timeframe POIs score higher than equivalent '4H' POIs` | D FVG weight >= 4H FVG weight |
+| `Daily POI: 'D' OB scores higher than '4H' OB` | D OB weight >= 4H OB weight |
+| `Daily POI: 'D' breaker scores higher than '4H' breaker` | D breaker weight >= 4H breaker weight |
+| `Daily POI: FVG quality threshold >= 2 allows lower-quality FVGs` | Threshold 2 qualifies >= threshold 3 count |
+| `Daily POI: no regression — adding D POIs does not change 4H/1H scoring` | Far-away D POI doesn't affect 4H scoring |
+| `Chart Overlays: structure has all required top-level fields` | All 7 overlay categories present with correct field types |
+| `Chart Overlays: dailyEntities contains full D1 entity data` | Daily OBs/FVGs/Breakers have numeric high/low and valid state/direction |
+| `Chart Overlays: slicing limits prevent payload bloat` | Arrays capped at configured limits (30/20/40) |
 
 ## Tests run
-```
-$ deno test --no-check supabase/functions/_shared/ --allow-read --allow-write --allow-net --allow-env
-ok | 468 passed | 0 failed (9s)
 
-$ deno check supabase/functions/bot-scanner/index.ts
-Check supabase/functions/bot-scanner/index.ts  (0 errors)
 ```
+$ deno test supabase/functions/_shared/ --allow-all --no-check
+ok | 480 passed | 0 failed (9s)
+```
+
+Note: 35 pre-existing type errors in `tpNextLevelSkip.test.ts` (missing `datetime`/`state`/`testedCount` fields on mock SwingPoints) — these are unrelated to this change and existed before.
 
 ## Regression check
-- `deno check` passes clean with zero errors (previously had 7 type errors preventing deployment)
-- All 468 tests pass (previously 9 weeklyProfile tests were failing)
-- gamePlan.ts: `ob.state === "fresh" || ob.state === "tested"` matches same OBs that had `isActive: true`
-- gamePlan.ts: `f.state !== "filled" && !f.mitigated` is equivalent to old `!f.filled`
-- weeklyProfile.ts: `new Date(candle.datetime).getTime()` produces identical timestamps to `candle.time * 1000`
-- The two bot-scanner changes fix bugs (undefined/incorrect values → correct values)
+
+1. **Scoring regression**: Test `"Daily POI: no regression — adding D POIs does not change 4H/1H scoring"` verifies that adding a far-away Daily POI does not alter the score of an existing 4H POI alignment.
+2. **Existing test suite**: All 468 pre-existing tests pass unchanged.
+3. **BOOST_MAP unchanged**: The `confluenceScoring.ts` BOOST_MAP already had a "D" entry — we did NOT modify it. We only feed POIs into it.
+4. **Gate definitions unchanged**: No gate logic was modified. Daily POIs only affect the HTF POI Alignment factor score (Factor 23), which is a Tier 2 scoring factor, not a gate.
 
 ## Open questions
-1. **Bot scanner deployment**: After merging to main, please confirm the scanner runs successfully on the next scan cycle.
-2. **setup_confidence change**: Signals will now store actual numeric confidence (e.g., 0.85) instead of always 0.5. Any downstream logic that assumed bucketed values (0.9/0.7/0.5) should be checked.
-3. **newsBias.strength populated**: Game plans will now have actual `netStrength` values. Any UI or logic consuming this field should handle numeric values (was previously `undefined`).
+
+1. **Quality threshold for Daily FVGs**: Set to >= 2 (vs >= 3 for 4H/1H). This is a judgment call — daily candles produce fewer structure breaks so FVGs tend to have lower quality scores. Should this be configurable per-pair?
+2. **chartOverlays payload size**: Currently capped at 30 OBs, 30 FVGs, 20 breakers, 40 swing points, 20 liquidity pools, 15 daily OBs, 15 daily FVGs, 10 daily breakers. These limits keep the JSON payload reasonable (~5-10KB) but could be adjusted.
+3. **Frontend consumption**: The `chartOverlays` field is now available in scan detail but the Lovable UI (connect-assist repo) does not yet render it. Issue #46 tracks the frontend chart visualization work.
+4. **Daily Fib ZigZag parameters**: Using `detectZigZagPivots(dailyCandles, 5, 20)` — wider parameters than 4H (3, 10) to capture larger daily swings. May need tuning.
 
 ## Suggested PR title and description
-**Title:** fix: resolve 7 type errors preventing bot-scanner from running
+
+**Title:** feat: Add Daily POI detection and chartOverlays for UI chart plotting
 
 **Description:**
-The bot-scanner was failing to deploy due to 7 TypeScript type errors across `gamePlan.ts`, `weeklyProfile.ts`, and `bot-scanner/index.ts`. These errors arose from interface drift — the `Candle`, `OrderBlock`, `FairValueGap`, and `SetupClassification` types were updated in `smcAnalysis.ts` but consuming code still referenced old field names.
 
-**Changes:**
-- `gamePlan.ts`: OrderBlock `isActive` → `state` field check; FVG `filled` → `state`/`mitigated` check
-- `weeklyProfile.ts`: `candle.time` → `candle.datetime` (3 locations)
-- `weeklyProfile.test.ts`: Test fixtures updated to use `datetime` ISO strings
-- `bot-scanner/index.ts`: `pairBias.strength` → `pairBias.netStrength`; `confidence` string comparison → numeric value
+Implements GitHub issue #45 (Daily POI detection) and prepares data for issue #46 (chart visualization).
 
-**Verification:** `deno check` passes clean. 468/468 tests pass, 0 failures.
+### What this does:
+- **Daily POI Detection**: Runs `analyzeMarketStructure` → `detectFVGs` / `detectOrderBlocks` / `detectBreakerBlocks` on D1 candles and feeds results into the HTF POI scoring pipeline with `timeframe: "D"`. The existing BOOST_MAP assigns highest weights to Daily (fvg: 1.0, ob: 0.8, breaker: 0.6).
+- **Daily Fib/PD/Liquidity**: Adds Daily ZigZag Fibonacci, Premium/Discount, and Liquidity Pool detection alongside existing 4H/1H analysis.
+- **Chart Overlays**: Adds a `chartOverlays` field to the scan detail object containing full entity price-level data for frontend chart rendering (OBs, FVGs, Breakers, Swing Points, Liquidity Pools, Fib Levels, HTF POIs, Daily Entities).
+
+### Behavior impact:
+Trades where price sits inside a Daily POI will now score higher on the HTF POI Alignment factor. This may cause some borderline pairs to pass the confluence threshold that previously didn't.
+
+### Tests:
+12 new tests added. All 480 tests pass.
