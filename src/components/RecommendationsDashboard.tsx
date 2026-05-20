@@ -314,6 +314,7 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
