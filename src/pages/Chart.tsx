@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
-import TradingViewChart from "@/components/TradingViewChart";
+import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
 import { Card, CardContent } from "@/components/ui/card";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
 import { marketApi, smcApi, paperApi, type CandleSource } from "@/lib/api";
@@ -110,6 +110,29 @@ export default function Chart() {
     [analysis, kz]
   );
 
+  // Transform analysis into chart overlays
+  const chartOverlays = useMemo<SMCOverlays | undefined>(() => {
+    if (!analysis) return undefined;
+    return {
+      orderBlocks: (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
+        high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
+      })),
+      fvgs: (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
+        high: f.high, low: f.low, datetime: f.datetime, direction: f.type,
+      })),
+      swingPoints: (analysis.structure?.swingPoints || []).map((sp: any) => ({
+        price: sp.price, index: sp.index, type: sp.type, datetime: sp.datetime,
+      })),
+      liquidityPools: (analysis.liquidityPools || []).map((lp: any) => ({
+        price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept,
+      })),
+      fibLevels: analysis.fibLevels,
+      fiftyPercentLevel: analysis.fiftyPercentLevel,
+      keySupport: analysis.keySupport,
+      keyResistance: analysis.keyResistance,
+    };
+  }, [analysis]);
+
   // Entry checklist
   const checklist = useMemo(() => {
     const items = [
@@ -155,7 +178,14 @@ export default function Chart() {
               </button>
             </div>
           </div>
-          <div className="flex-1 min-h-[250px]"><TradingViewChart instrument={instrument} timeframe={selectedTimeframe} /></div>
+          <div className="flex-1 min-h-[250px]">
+            <SMCChart
+              candles={(candles as any[]) ?? []}
+              symbol={selectedSymbol}
+              overlays={chartOverlays}
+              loading={!candles}
+            />
+          </div>
         </div>
 
         {/* Analysis Panels */}
