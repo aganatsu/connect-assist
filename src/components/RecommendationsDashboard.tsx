@@ -378,6 +378,7 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
 
           {/* Collapsible per-instrument table */}
           {showInstruments && (
+            <>
             {/* Mobile: Stacked cards */}
             <div className="md:hidden mt-2 space-y-1.5">
               {instrumentRegimes
@@ -443,6 +444,7 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
       )}
