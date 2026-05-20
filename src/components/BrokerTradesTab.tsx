@@ -237,6 +237,7 @@ function OpenPositionsContent({
   }
 
   return (
+    <>
     {/* Mobile: Stacked cards */}
     <div className="md:hidden space-y-1.5 p-2">
       {positions.map((pos: any) => {
@@ -417,6 +418,7 @@ function OpenPositionsContent({
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 

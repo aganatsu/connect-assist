@@ -292,6 +292,7 @@ export function BrokerLog() {
             {statusFilter === "all" ? "No broker execution events recorded" : `No ${statusFilter} events`}
           </p>
         ) : (
+          <>
           {/* Mobile: Stacked cards */}
           <div className="md:hidden space-y-1.5">
             {filtered.map((r) => (
@@ -361,6 +362,7 @@ export function BrokerLog() {
             </tbody>
           </table>
           </div>
+          </>
         )}
       </div>
     </div>

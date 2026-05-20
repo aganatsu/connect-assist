@@ -101,6 +101,7 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
         ) : filtered.length === 0 ? (
           <p className="text-[10px] text-muted-foreground text-center py-8">No close events recorded</p>
         ) : (
+          <>
           {/* Mobile: Stacked cards */}
           <div className="md:hidden space-y-1.5">
             {filtered.map((r) => {
@@ -178,6 +179,7 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
             </tbody>
           </table>
           </div>
+          </>
         )}
       </div>
     </div>
