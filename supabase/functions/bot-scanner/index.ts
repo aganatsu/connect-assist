@@ -799,6 +799,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw.fvgOnlyUnfilled ?? true,
     structureLookback: strategy.structureLookback ?? raw.structureLookback ?? 50,
     liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? 2,
+    // Liquidity detection sensitivity (1-5 scale → ATR multiplier)
+    // 1=tight (0.10×ATR), 2=moderate (0.15×ATR), 3=balanced (0.20×ATR), 4=loose (0.25×ATR), 5=wide (0.30×ATR)
+    equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? 3,
     // Premium/Discount filters (legacy DB keys)
     onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
     onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
@@ -3007,7 +3010,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cachedFetch(sym, "1h", "5d"),
             ]);
             if (gpDaily.length < 10 || gpEntry.length < 10) return null;
-            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled });
+            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled, equalHighsLowsSensitivity: config.equalHighsLowsSensitivity, liquidityPoolMinTouches: config.liquidityPoolMinTouches });
           } catch (e: any) {
             console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
             return null;
@@ -3334,8 +3337,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // Daily Premium/Discount zone
       htfPDD = calculatePremiumDiscount(dailyCandles);
-      // Daily Liquidity Pools (wider tolerance for daily candles: 0.30 × ATR)
-      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, 0.30, 2);
+      // Daily Liquidity Pools — sensitivity-driven tolerance + TF bump for daily
+      const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
+      const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
+      const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
+      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, Math.min(liqTolBase + 0.10, 0.40), liqMinTouches);
     }
 
     if (h4Candles.length >= 20) {
@@ -3346,8 +3352,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // 4H Premium/Discount zone
       htfPD4H = calculatePremiumDiscount(h4Candles);
-      // 4H Liquidity Pools (0.25 × ATR)
-      htfLiquidityPools4H = detectLiquidityPools(h4Candles, 0.25, 2);
+      // 4H Liquidity Pools — sensitivity base + 0.05 bump for 4H
+      htfLiquidityPools4H = detectLiquidityPools(h4Candles, Math.min(liqTolBase + 0.05, 0.35), liqMinTouches);
     }
 
     if (hourlyCandles.length >= 20) {
@@ -3358,8 +3364,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // 1H Premium/Discount zone
       htfPD1H = calculatePremiumDiscount(hourlyCandles);
-      // 1H Liquidity Pools (0.20 × ATR)
-      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, 0.20, 2);
+      // 1H Liquidity Pools — sensitivity base (no bump for 1H)
+      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, liqTolBase, liqMinTouches);
     }
 
     // Inject HTF Phase 2 data for confluence scoring

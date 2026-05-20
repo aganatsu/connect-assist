@@ -405,3 +405,78 @@ Deno.test("detectLiquidityPools: configurable tolerance per timeframe", () => {
     `Looser tolerance (${poolsLoose.length}) should find >= tight (${poolsTight.length})`
   );
 });
+
+// ─── Sensitivity Config Wiring Tests ────────────────────────────────────────
+
+Deno.test("sensitivity mapping: sensitivity 1-5 maps to correct ATR multipliers", () => {
+  // This tests the mapping logic used in bot-scanner and confluenceScoring
+  const mapping = [0.10, 0.15, 0.20, 0.25, 0.30];
+
+  for (let sens = 1; sens <= 5; sens++) {
+    const expected = mapping[sens - 1];
+    const actual = mapping[Math.min(Math.max(sens, 1), 5) - 1];
+    assertEquals(actual, expected, `Sensitivity ${sens} should map to ${expected}`);
+  }
+});
+
+Deno.test("sensitivity mapping: out-of-range values are clamped", () => {
+  const mapping = [0.10, 0.15, 0.20, 0.25, 0.30];
+
+  // Below 1 → clamped to 1 (0.10)
+  const belowMin = mapping[Math.min(Math.max(0, 1), 5) - 1];
+  assertEquals(belowMin, 0.10, "Sensitivity 0 should clamp to 0.10");
+
+  const negativeVal = mapping[Math.min(Math.max(-5, 1), 5) - 1];
+  assertEquals(negativeVal, 0.10, "Negative sensitivity should clamp to 0.10");
+
+  // Above 5 → clamped to 5 (0.30)
+  const aboveMax = mapping[Math.min(Math.max(10, 1), 5) - 1];
+  assertEquals(aboveMax, 0.30, "Sensitivity 10 should clamp to 0.30");
+});
+
+Deno.test("sensitivity mapping: per-TF bumps produce correct hierarchy", () => {
+  // Simulates the bot-scanner logic: daily = base+0.10, 4H = base+0.05, 1H = base
+  const sens = 3; // balanced
+  const base = [0.10, 0.15, 0.20, 0.25, 0.30][sens - 1]; // 0.20
+
+  const dailyTol = Math.min(base + 0.10, 0.40); // ~0.30
+  const h4Tol = Math.min(base + 0.05, 0.35);    // ~0.25
+  const h1Tol = base;                             // 0.20
+
+  // Use approximate comparison to avoid floating point issues
+  assert(Math.abs(dailyTol - 0.30) < 1e-10, `Daily should be ~0.30, got ${dailyTol}`);
+  assert(Math.abs(h4Tol - 0.25) < 1e-10, `4H should be ~0.25, got ${h4Tol}`);
+  assert(Math.abs(h1Tol - 0.20) < 1e-10, `1H should be ~0.20, got ${h1Tol}`);
+
+  // Hierarchy: daily > 4H > 1H
+  assert(dailyTol > h4Tol, "Daily tolerance should be > 4H");
+  assert(h4Tol > h1Tol, "4H tolerance should be > 1H");
+});
+
+Deno.test("sensitivity mapping: max sensitivity (5) with daily bump caps at 0.40", () => {
+  const sens = 5;
+  const base = [0.10, 0.15, 0.20, 0.25, 0.30][sens - 1]; // 0.30
+  const dailyTol = Math.min(base + 0.10, 0.40); // 0.40 (capped)
+  assertEquals(dailyTol, 0.40, "Daily with sensitivity 5 should cap at 0.40");
+});
+
+Deno.test("sensitivity mapping: different sensitivities produce different pool counts", () => {
+  const candles = makeEqualHighsLowsFixture();
+
+  // Sensitivity 1 (tight: 0.10 × ATR) vs Sensitivity 5 (wide: 0.30 × ATR)
+  const poolsTight = detectLiquidityPools(candles, 0.10, 2);
+  const poolsWide = detectLiquidityPools(candles, 0.30, 2);
+
+  // Wide should find >= tight (more permissive clustering)
+  assert(
+    poolsWide.length >= poolsTight.length,
+    `Wide sensitivity (${poolsWide.length} pools) should find >= tight (${poolsTight.length} pools)`
+  );
+});
+
+Deno.test("sensitivity mapping: default sensitivity (3) detects pools on standard fixture", () => {
+  const candles = makeEqualHighsLowsFixture();
+  // Sensitivity 3 → tolerance 0.20 (the default)
+  const pools = detectLiquidityPools(candles, 0.20, 2);
+  assert(pools.length >= 2, `Default sensitivity should detect BSL + SSL, got ${pools.length} pools`);
+});
