@@ -266,6 +266,7 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
   if (!weeklyData || weeklyData.length === 0) return null;
 
   return (
+    <>
     {/* Mobile: Stacked cards */}
     <div className="md:hidden space-y-1.5">
       {weeklyData.map((w, i) => (
