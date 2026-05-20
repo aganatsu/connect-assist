@@ -1226,7 +1226,26 @@ export default function Backtest() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="overflow-x-auto">
+                    {/* Mobile: Stacked cards */}
+                    <div className="md:hidden space-y-1.5">
+                      {results.walkForward.folds.map((f: any) => (
+                        <div key={f.fold} className={`border border-border bg-card/50 p-2 space-y-0.5 ${f.totalPnl > 0 ? '' : 'opacity-60'}`}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium">Fold {f.fold}</span>
+                            <span className={`text-[10px] font-bold ${f.totalPnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(f.totalPnl, true)}</span>
+                          </div>
+                          <div className="text-[9px] text-muted-foreground">{f.startDate} → {f.endDate}</div>
+                          <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+                            <span>{f.trades} trades</span>
+                            <span className={f.winRate >= 50 ? 'text-success' : 'text-destructive'}>{f.winRate.toFixed(1)}% WR</span>
+                            <span>PF: {f.profitFactor === Infinity ? '∞' : f.profitFactor.toFixed(2)}</span>
+                            <span>DD: {f.maxDrawdownPct.toFixed(1)}%</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Desktop: Table */}
+                    <div className="hidden md:block overflow-x-auto">
                       <table className="w-full text-[10px]">
                         <thead>
                           <tr className="border-b border-border/30">
@@ -1352,7 +1371,42 @@ export default function Backtest() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                  {/* Mobile: Stacked cards */}
+                  <div className="md:hidden space-y-1.5 max-h-[500px] overflow-y-auto">
+                    {results.trades.filter(t => !t.id.includes("_partial")).reverse().map((t, idx) => (
+                      <div key={t.id} className="border border-border bg-card/50 p-2 space-y-1 cursor-pointer" onClick={() => setExpandedTrade(expandedTrade === t.id ? null : t.id)}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-medium text-[11px]">{t.symbol}</span>
+                            <span className={`text-[10px] font-bold ${t.direction === 'long' ? 'text-success' : 'text-destructive'}`}>{t.direction === 'long' ? '▲' : '▼'} {t.direction.toUpperCase()}</span>
+                          </div>
+                          <span className={`font-mono font-bold text-[11px] ${t.pnl >= 0 ? 'text-success' : 'text-destructive'}`}>{formatMoney(t.pnl, true)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+                          <span>{t.entryTime.slice(5, 16).replace('T', ' ')}</span>
+                          <span className={`${CLOSE_REASONS[t.closeReason]?.color || 'text-muted-foreground'}`}>{CLOSE_REASONS[t.closeReason]?.label || t.closeReason}</span>
+                          <span>{t.pnlPips >= 0 ? '+' : ''}{t.pnlPips.toFixed(1)} pips</span>
+                        </div>
+                        {expandedTrade === t.id && (
+                          <div className="mt-1 pt-1 border-t border-border/30 space-y-1">
+                            <div className="grid grid-cols-2 gap-2 text-[9px]">
+                              <div><span className="text-muted-foreground">Entry:</span> <span className="font-mono">{t.entryPrice.toFixed(5)}</span></div>
+                              <div><span className="text-muted-foreground">Exit:</span> <span className="font-mono">{t.exitPrice.toFixed(5)}</span></div>
+                              <div><span className="text-muted-foreground">Size:</span> <span className="font-mono">{t.size.toFixed(2)} lots</span></div>
+                              <div><span className="text-muted-foreground">Score:</span> <span className="font-mono">{t.confluenceScore > 10 ? `${t.confluenceScore.toFixed(0)}%` : t.confluenceScore.toFixed(1)}</span></div>
+                            </div>
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {t.factors.filter(f => f.present).map((f, fi) => (
+                                <span key={fi} className="text-[8px] bg-primary/10 text-primary px-1 py-0.5 rounded">{f.name} +{f.weight.toFixed(1)}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Desktop: Table */}
+                  <div className="hidden md:block overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-card z-10">
                         <tr className="border-b border-border text-muted-foreground">

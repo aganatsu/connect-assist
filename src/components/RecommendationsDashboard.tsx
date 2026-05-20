@@ -266,7 +266,24 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
   if (!weeklyData || weeklyData.length === 0) return null;
 
   return (
-    <div className="overflow-x-auto">
+    {/* Mobile: Stacked cards */}
+    <div className="md:hidden space-y-1.5">
+      {weeklyData.map((w, i) => (
+        <div key={i} className="border border-border bg-card/50 p-2 space-y-0.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-medium">{w.weekLabel}</span>
+            <span className={`text-[10px] font-bold ${w.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>${w.totalPnl.toFixed(2)}</span>
+          </div>
+          <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+            <span>{w.totalTrades} trades</span>
+            <span className={w.winRate >= 50 ? "text-green-400" : "text-red-400"}>{w.winRate.toFixed(0)}% WR</span>
+            <span>PF: {w.profitFactor === Infinity ? "∞" : w.profitFactor?.toFixed(2)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+    {/* Desktop: Table */}
+    <div className="hidden md:block overflow-x-auto">
       <table className="w-full text-[10px] font-mono">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
@@ -359,7 +376,29 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
 
           {/* Collapsible per-instrument table */}
           {showInstruments && (
-            <div className="mt-2 overflow-x-auto">
+            {/* Mobile: Stacked cards */}
+            <div className="md:hidden mt-2 space-y-1.5">
+              {instrumentRegimes
+                .sort((a, b) => b.confidence - a.confidence)
+                .map((ir, i) => {
+                  const irConfig = regimeLabels[ir.regime] || regimeLabels.unknown;
+                  return (
+                    <div key={i} className="border border-border bg-card/50 p-2 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium">{ir.symbol}</span>
+                        <span className={`text-[10px] ${irConfig.color} font-medium`}>{irConfig.label}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+                        <span className={ir.directionalBias === "bullish" ? "text-green-400" : ir.directionalBias === "bearish" ? "text-red-400" : "text-muted-foreground"}>{ir.directionalBias}</span>
+                        <span className={ir.atrTrend === "expanding" ? "text-yellow-400" : ir.atrTrend === "contracting" ? "text-blue-400" : "text-muted-foreground"}>{ir.atrTrend}</span>
+                        <span>{(ir.confidence * 100).toFixed(0)}%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+            {/* Desktop: Table */}
+            <div className="hidden md:block mt-2 overflow-x-auto">
               <table className="w-full text-[10px] font-mono">
                 <thead>
                   <tr className="border-b border-border text-muted-foreground">
@@ -428,7 +467,30 @@ function FactorSuggestionsTable({ suggestions }: { suggestions: PerformanceSumma
         <BarChart3 className="w-3.5 h-3.5 text-muted-foreground" />
         <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Factor Analysis</span>
       </div>
-      <div className="overflow-x-auto">
+      {/* Mobile: Stacked cards */}
+      <div className="md:hidden space-y-1.5">
+        {suggestions.slice(0, 10).map((f, i) => {
+          const isIncrease = f.suggestedWeight > f.currentWeight;
+          const isDecrease = f.suggestedWeight < f.currentWeight;
+          return (
+            <div key={i} className="border border-border bg-card/50 p-2 space-y-0.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-medium">{f.factorName}</span>
+                <span className={`text-[10px] font-bold ${isIncrease ? "text-green-400" : isDecrease ? "text-red-400" : "text-foreground"}`}>
+                  {f.currentWeight.toFixed(1)} → {f.suggestedWeight.toFixed(1)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+                <span className={f.winRateWhenPresent >= 50 ? "text-green-400" : "text-red-400"}>WR Present: {f.winRateWhenPresent.toFixed(0)}%</span>
+                <span>WR Absent: {f.winRateWhenAbsent.toFixed(0)}%</span>
+                <span>N={f.sampleSize}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {/* Desktop: Table */}
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full text-[10px] font-mono">
           <thead>
             <tr className="border-b border-border text-muted-foreground">

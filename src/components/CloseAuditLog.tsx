@@ -101,7 +101,34 @@ export function CloseAuditLog({ brokerConns }: { brokerConns: BrokerConn[] }) {
         ) : filtered.length === 0 ? (
           <p className="text-[10px] text-muted-foreground text-center py-8">No close events recorded</p>
         ) : (
-          <div className="h-scroll">
+          {/* Mobile: Stacked cards */}
+          <div className="md:hidden space-y-1.5">
+            {filtered.map((r) => {
+              const pnl = r.pnl != null ? parseFloat(r.pnl) : null;
+              const time = formatBrokerTime(r.created_at);
+              const reasonClass = REASON_COLORS[r.close_reason] || "text-muted-foreground bg-muted/20 border-border";
+              return (
+                <div key={r.id} className="border border-border bg-card/50 p-2 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-[11px]">{r.symbol}</span>
+                    <span className={`text-[9px] font-bold uppercase px-1 py-0.5 border ${reasonClass}`}>{r.close_reason}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">{time}</span>
+                    <span className={`font-medium ${pnl == null ? "text-muted-foreground" : pnl >= 0 ? "text-success" : "text-destructive"}`}>
+                      {pnl == null ? "—" : formatMoney(pnl, true)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span>Exit: {r.exit_price ? parseFloat(r.exit_price).toFixed(5) : "—"}</span>
+                    <span>{r.close_source}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {/* Desktop: Table */}
+          <div className="hidden md:block h-scroll">
           <table className="w-full text-[11px] font-mono min-w-[700px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground text-[10px]">

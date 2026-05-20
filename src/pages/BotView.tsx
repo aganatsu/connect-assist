@@ -1370,7 +1370,34 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
   return (
     <>
-    <div className="overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[700px]">
+    {/* Mobile: Stacked cards */}
+    <div className="md:hidden space-y-1.5">
+      {pagedTrades.map((t: any, i: number) => {
+        const key = t.orderId || t.positionId || `${t.symbol}-${t.closedAt}-${i}`;
+        return (
+          <div key={key} className="border border-border bg-card/50 p-2 space-y-1 cursor-pointer" onClick={() => setExpanded(expanded === key ? null : key)}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-[11px]">{t.symbol}</span>
+                <span className={`text-[10px] ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲ BUY" : "▼ SELL"}</span>
+              </div>
+              <span className={`text-[11px] font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>{formatBrokerTime(t.closedAt)}</span>
+              <span className={reasonColor(t.closeReason)}>{t.closeReason}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>Entry: {parseFloat(t.entryPrice)?.toFixed(5)}</span>
+              <span>Exit: {parseFloat(t.exitPrice)?.toFixed(5)}</span>
+              <span>{t.pnlPips?.toFixed(1)} pips</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+    {/* Desktop: Table */}
+    <div className="hidden md:block overflow-x-auto"><table className="w-full text-[11px] font-mono min-w-[700px]">
       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
         <th className="w-4 py-1 px-1"></th>
         <th className="text-left py-1 px-1">Opened</th><th className="text-left py-1 px-1">Closed</th>
@@ -1807,7 +1834,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
           );
         })}
       </tbody>
-    </table></div>
+    </table></div></div>
     {totalPages > 1 && (
       <div className="flex items-center justify-between px-2 py-2 border-t border-border">
         <span className="text-[10px] text-muted-foreground font-mono">

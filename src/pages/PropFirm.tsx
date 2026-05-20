@@ -420,7 +420,31 @@ function DailyHistoryTable({ history, config }: { history: any[]; config: PropFi
         <CardTitle className="text-sm font-medium">Daily Trading History</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="overflow-x-auto">
+        {/* Mobile: Stacked cards */}
+        <div className="md:hidden space-y-1.5">
+          {history.map((day: any) => {
+            const eod = day.end_of_day_balance ?? day.current_equity ?? day.day_start_balance;
+            const pnl = eod - day.day_start_balance;
+            return (
+              <div key={day.trading_day} className="border border-border bg-card/50 p-2 space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-mono font-medium">{day.trading_day}</span>
+                  <span className={`text-[11px] font-mono font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <span>Start: ${day.day_start_balance.toFixed(0)}</span>
+                  <span>EOD: ${eod.toFixed(0)}</span>
+                  <span>{day.trade_count_today} trades</span>
+                  {day.is_locked && <Badge variant="destructive" className="text-[8px] px-1 py-0">Locked</Badge>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Desktop: Table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b text-muted-foreground">
