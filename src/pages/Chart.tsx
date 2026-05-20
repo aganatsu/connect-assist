@@ -232,6 +232,7 @@ export default function Chart() {
               symbol={selectedSymbol}
               overlays={chartOverlays}
               loading={!candles}
+              hideToolbar
             />
             {/* Floating HUD */}
             <ChartOverlayHUD

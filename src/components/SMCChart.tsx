@@ -634,7 +634,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
         .sort((a, b) => (a.time as number) - (b.time as number));
 
       if (markers.length > 0) {
-        try { series.setMarkers(markers); } catch {}
+        try { series.setMarkers(markers as any); } catch {}
       }
     } else {
       try { series.setMarkers([]); } catch {}
