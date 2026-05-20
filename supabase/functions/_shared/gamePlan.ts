@@ -612,8 +612,9 @@ export function generateInstrumentGamePlan(
     : [];
 
   // ── Liquidity Pools (from daily for bigger targets) ──
+  // Daily uses 0.30 × ATR tolerance (wider for daily swing points)
   const liquidityPools = dailyCandles.length >= 10
-    ? detectLiquidityPools(dailyCandles, 0.001, 2)
+    ? detectLiquidityPools(dailyCandles, 0.30, 2)
     : [];
 
   // ── Swing Points ──

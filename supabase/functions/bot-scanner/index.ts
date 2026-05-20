@@ -3334,8 +3334,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // Daily Premium/Discount zone
       htfPDD = calculatePremiumDiscount(dailyCandles);
-      // Daily Liquidity Pools (wider threshold for daily candles)
-      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, 0.002, 2);
+      // Daily Liquidity Pools (wider tolerance for daily candles: 0.30 × ATR)
+      htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, 0.30, 2);
     }
 
     if (h4Candles.length >= 20) {
@@ -3346,8 +3346,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // 4H Premium/Discount zone
       htfPD4H = calculatePremiumDiscount(h4Candles);
-      // 4H Liquidity Pools
-      htfLiquidityPools4H = detectLiquidityPools(h4Candles, 0.001, 2);
+      // 4H Liquidity Pools (0.25 × ATR)
+      htfLiquidityPools4H = detectLiquidityPools(h4Candles, 0.25, 2);
     }
 
     if (hourlyCandles.length >= 20) {
@@ -3358,8 +3358,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
       // 1H Premium/Discount zone
       htfPD1H = calculatePremiumDiscount(hourlyCandles);
-      // 1H Liquidity Pools
-      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, 0.001, 2);
+      // 1H Liquidity Pools (0.20 × ATR)
+      htfLiquidityPools1H = detectLiquidityPools(hourlyCandles, 0.20, 2);
     }
 
     // Inject HTF Phase 2 data for confluence scoring

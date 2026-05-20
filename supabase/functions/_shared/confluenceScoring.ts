@@ -282,7 +282,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     (ob as any).hasFVGAdjacency = hasFVGNearby;
   }
   // P1: liquidity pool min touches — pass config-driven threshold
-  const liquidityPools = detectLiquidityPools(candles, 0.001, config.liquidityPoolMinTouches);
+  // tolerance is now ATR-multiplier (0.20 = 20% of ATR, industry standard for equal highs/lows)
+  const liquidityPools = detectLiquidityPools(candles, 0.20, config.liquidityPoolMinTouches);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
   const pd = calculatePremiumDiscount(candles);

@@ -1,18 +1,18 @@
 {
-  "score": 25.7,
-  "rawScore": 6.05,
+  "score": 23.6,
+  "rawScore": 5.55,
   "direction": "long",
   "bias": "bullish",
-  "strongFactorCount": 4,
+  "strongFactorCount": 3,
   "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 2,
     "tier1Max": 4,
-    "tier2Count": 2,
+    "tier2Count": 1,
     "tier2Max": 10,
-    "tier3Count": 2,
+    "tier3Count": 3,
     "tier3Max": 9,
-    "tieredScore": 6.05,
+    "tieredScore": 5.55,
     "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
@@ -56,7 +56,7 @@
     {
       "name": "Judas Swing",
       "present": true,
-      "weight": 0,
+      "weight": 0.75,
       "tier": 3
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "name": "Liquidity Sweep",
-      "present": true,
+      "present": false,
       "weight": 1.5,
       "tier": 2
     },

@@ -205,7 +205,7 @@
         "npm:globals@^15.15.0",
         "npm:input-otp@^1.4.2",
         "npm:jsdom@^20.0.3",
-        "npm:lightweight-charts@^4.2.0",
+        "npm:lightweight-charts@4.2.3",
         "npm:lovable-tagger@^1.1.13",
         "npm:lucide-react@0.462",
         "npm:next-themes@0.3",
