@@ -110,9 +110,43 @@ export default function Chart() {
     [analysis, kz]
   );
 
-  // Transform analysis into chart overlays
+  // Transform analysis + bot scan signal into chart overlays
   const chartOverlays = useMemo<SMCOverlays | undefined>(() => {
     if (!analysis) return undefined;
+
+    // Build impulse zone from bot scan signal if available
+    let impulseZone: SMCOverlays["impulseZone"] = undefined;
+    const sig = botScanSignal?.signal;
+    if (sig?.impulseZone?.hasZone && sig.impulseZone.impulse) {
+      const iz = sig.impulseZone;
+      impulseZone = {
+        impulse: {
+          high: iz.impulse.high,
+          low: iz.impulse.low,
+          direction: iz.impulse.direction,
+        },
+        bestZone: iz.bestZone ? {
+          type: iz.bestZone.type,
+          high: iz.bestZone.high,
+          low: iz.bestZone.low,
+          fibLevel: iz.bestZone.fibLevel ?? 0,
+          fibDepth: iz.bestZone.fibDepth ?? 0,
+          totalScore: iz.bestZone.totalScore ?? 0,
+          refinedEntry: iz.bestZone.refinedEntry ?? null,
+          refinedSL: iz.bestZone.refinedSL ?? null,
+          priceAtZone: iz.bestZone.priceAtZone ?? false,
+          distanceToZone: iz.bestZone.distanceToZone ?? 0,
+        } : null,
+        selectedTF: iz.selectedTF ?? null,
+        hasZone: true,
+      };
+    }
+
+    // Build HTF POIs from scan signal if available
+    const htfPOIs = sig?.htfPOIs?.map((p: any) => ({
+      timeframe: p.timeframe, type: p.type, high: p.high, low: p.low, direction: p.direction,
+    })) ?? [];
+
     return {
       orderBlocks: (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
         high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
@@ -130,8 +164,10 @@ export default function Chart() {
       fiftyPercentLevel: analysis.fiftyPercentLevel,
       keySupport: analysis.keySupport,
       keyResistance: analysis.keyResistance,
+      impulseZone,
+      htfPOIs: htfPOIs.length > 0 ? htfPOIs : undefined,
     };
-  }, [analysis]);
+  }, [analysis, botScanSignal]);
 
   // Entry checklist
   const checklist = useMemo(() => {
