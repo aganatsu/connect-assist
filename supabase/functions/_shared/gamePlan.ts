@@ -575,7 +575,7 @@ export function generateInstrumentGamePlan(
   entryCandles: Candle[],
   hourlyCandles: Candle[],
   session: SessionName,
-  options?: { ipdaRangesEnabled?: boolean },
+  options?: { ipdaRangesEnabled?: boolean; equalHighsLowsSensitivity?: number; liquidityPoolMinTouches?: number },
 ): InstrumentGamePlan {
   const ipdaEnabled = options?.ipdaRangesEnabled !== false; // ON by default
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -612,8 +612,12 @@ export function generateInstrumentGamePlan(
     : [];
 
   // ── Liquidity Pools (from daily for bigger targets) ──
+  // Sensitivity-driven: base from config + 0.10 bump for daily TF
+  const _gpSens = Math.min(Math.max(options?.equalHighsLowsSensitivity ?? 3, 1), 5);
+  const _gpTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][_gpSens - 1];
+  const _gpMinTouches = options?.liquidityPoolMinTouches ?? 2;
   const liquidityPools = dailyCandles.length >= 10
-    ? detectLiquidityPools(dailyCandles, 0.001, 2)
+    ? detectLiquidityPools(dailyCandles, Math.min(_gpTolBase + 0.10, 0.40), _gpMinTouches)
     : [];
 
   // ── Swing Points ──

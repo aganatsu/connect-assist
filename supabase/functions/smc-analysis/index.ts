@@ -72,6 +72,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     (ob as any).hasFVGAdjacency = hasFVGNearby;
   }
 
+  // Uses default ATR-based tolerance (0.20 × ATR) for entry timeframe
   const liquidityPools = detectLiquidityPools(candles);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
@@ -424,7 +425,7 @@ Deno.serve(async (req) => {
       const s = analyzeMarketStructure(candles);
       return respond(detectFVGs(candles, [...s.bos, ...s.choch]));
     }
-    if (action === "liquidity") return respond(detectLiquidityPools(candles));
+    if (action === "liquidity") return respond(detectLiquidityPools(candles)); // default 0.20 × ATR
     if (action === "session") return respond(detectSession());
 
     return new Response(JSON.stringify({ error: "Unknown action" }), {

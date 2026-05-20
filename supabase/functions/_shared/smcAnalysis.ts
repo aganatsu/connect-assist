@@ -1558,23 +1558,72 @@ function scoreFVGQuality(
   return Math.round(quality * 10) / 10; // 1 decimal precision
 }
 
-export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTouches = 2): LiquidityPool[] {
+export function detectLiquidityPools(candles: Candle[], tolerance = 0.20, minTouches = 2): LiquidityPool[] {
   const pools: LiquidityPool[] = [];
-  const priceRange = Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low));
-  const tol = priceRange * tolerance;
-  const last = candles[candles.length - 1];
+  if (candles.length < 10) return pools;
+
+  // ── ATR-based tolerance (industry standard: ATR × tolerance factor) ──
+  // tolerance param is now a multiplier of ATR (default 0.20 = 20% of ATR)
+  // Fallback: if not enough candles for ATR, use price-range heuristic
+  const atr = calculateATR(candles, 14);
+  const tol = atr > 0
+    ? atr * tolerance
+    : (Math.max(...candles.map(c => c.high)) - Math.min(...candles.map(c => c.low))) * 0.005;
+
+  // ── Swing point detection for filtering ──
+  // Only compare swing highs/lows (local extremes), not every candle
+  // Use lookback=2 for intraday (< 200 candles), lookback=3 for daily+
+  const swingLookback = candles.length >= 200 ? 3 : 2;
+  const swingHighIndices: number[] = [];
+  const swingLowIndices: number[] = [];
+
+  for (let i = swingLookback; i < candles.length - swingLookback; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= swingLookback; j++) {
+      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) isHigh = false;
+      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) isLow = false;
+    }
+    if (isHigh) swingHighIndices.push(i);
+    if (isLow) swingLowIndices.push(i);
+  }
+
   const usedH = new Set<number>(), usedL = new Set<number>();
 
-  // Buy-side liquidity (equal highs)
-  for (let i = 0; i < candles.length; i++) {
-    if (usedH.has(i)) continue;
-    let count = 1;
-    for (let j = i + 1; j < candles.length; j++) {
-      if (usedH.has(j)) continue;
-      if (Math.abs(candles[i].high - candles[j].high) <= tol) { count++; usedH.add(j); }
+  // ── Buy-side liquidity (equal highs from swing points) ──
+  for (let a = 0; a < swingHighIndices.length; a++) {
+    if (usedH.has(a)) continue;
+    const i = swingHighIndices[a];
+    const clusterIndices = [i];
+    let priceSum = candles[i].high;
+
+    for (let b = a + 1; b < swingHighIndices.length; b++) {
+      if (usedH.has(b)) continue;
+      const j = swingHighIndices[b];
+      if (Math.abs(candles[i].high - candles[j].high) <= tol) {
+        clusterIndices.push(j);
+        priceSum += candles[j].high;
+        usedH.add(b);
+      }
     }
-    if (count >= minTouches) {
-      const poolPrice = candles[i].high;
+
+    if (clusterIndices.length >= minTouches) {
+      // Use the average price of the cluster as the pool level
+      const poolPrice = priceSum / clusterIndices.length;
+      const firstIdx = Math.min(...clusterIndices);
+      const lastIdx = Math.max(...clusterIndices);
+
+      // Validate: no candle CLOSED above the pool level between first and last touch
+      // (if price already broke through, it's not valid unswept liquidity)
+      let brokenBetween = false;
+      for (let k = firstIdx + 1; k < lastIdx; k++) {
+        if (candles[k].close > poolPrice + tol) {
+          brokenBetween = true;
+          break;
+        }
+      }
+      if (brokenBetween) continue;
+
+      // Lifecycle tracking (sweep detection from last touch onward)
       let swept = false;
       let sweptAtIndex: number | undefined;
       let rejectionConfirmed = false;
@@ -1583,8 +1632,7 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       let retestedAt: number | undefined;
       let retestedHeld: boolean | undefined;
 
-      // Find the FIRST candle that swept above this pool level
-      for (let k = i + 1; k < candles.length; k++) {
+      for (let k = lastIdx + 1; k < candles.length; k++) {
         if (candles[k].high > poolPrice) {
           swept = true;
           sweptAtIndex = k;
@@ -1593,15 +1641,13 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
             rejectionConfirmed = true;
             state = "swept_rejected";
           } else {
-            // Price closed above = liquidity absorbed (continuation)
             state = "swept_absorbed";
           }
           // After sweep, check for retest from the other side
-          // Buy-side swept = level may now act as support. Check if price comes back down to test it.
           for (let r = k + 1; r < candles.length; r++) {
             if (candles[r].low <= poolPrice + tol && candles[r].low >= poolPrice - tol) {
               retestedAt = r;
-              retestedHeld = candles[r].close > poolPrice; // held as support?
+              retestedHeld = candles[r].close > poolPrice;
               if (retestedHeld) state = "retested";
               break;
             }
@@ -1609,21 +1655,51 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
           break;
         }
       }
-      if (i >= candles.length - 80 || swept) {
-        pools.push({ price: poolPrice, type: "buy-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld });
+
+      // Include if recent (within last 80 candles) or already swept
+      if (firstIdx >= candles.length - 80 || swept) {
+        pools.push({
+          price: poolPrice, type: "buy-side", strength: clusterIndices.length,
+          datetime: candles[firstIdx].datetime, swept, sweptAtIndex,
+          rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld,
+        });
       }
     }
   }
-  // Sell-side liquidity (equal lows)
-  for (let i = 0; i < candles.length; i++) {
-    if (usedL.has(i)) continue;
-    let count = 1;
-    for (let j = i + 1; j < candles.length; j++) {
-      if (usedL.has(j)) continue;
-      if (Math.abs(candles[i].low - candles[j].low) <= tol) { count++; usedL.add(j); }
+
+  // ── Sell-side liquidity (equal lows from swing points) ──
+  for (let a = 0; a < swingLowIndices.length; a++) {
+    if (usedL.has(a)) continue;
+    const i = swingLowIndices[a];
+    const clusterIndices = [i];
+    let priceSum = candles[i].low;
+
+    for (let b = a + 1; b < swingLowIndices.length; b++) {
+      if (usedL.has(b)) continue;
+      const j = swingLowIndices[b];
+      if (Math.abs(candles[i].low - candles[j].low) <= tol) {
+        clusterIndices.push(j);
+        priceSum += candles[j].low;
+        usedL.add(b);
+      }
     }
-    if (count >= minTouches) {
-      const poolPrice = candles[i].low;
+
+    if (clusterIndices.length >= minTouches) {
+      const poolPrice = priceSum / clusterIndices.length;
+      const firstIdx = Math.min(...clusterIndices);
+      const lastIdx = Math.max(...clusterIndices);
+
+      // Validate: no candle CLOSED below the pool level between first and last touch
+      let brokenBetween = false;
+      for (let k = firstIdx + 1; k < lastIdx; k++) {
+        if (candles[k].close < poolPrice - tol) {
+          brokenBetween = true;
+          break;
+        }
+      }
+      if (brokenBetween) continue;
+
+      // Lifecycle tracking
       let swept = false;
       let sweptAtIndex: number | undefined;
       let rejectionConfirmed = false;
@@ -1632,7 +1708,7 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
       let retestedAt: number | undefined;
       let retestedHeld: boolean | undefined;
 
-      for (let k = i + 1; k < candles.length; k++) {
+      for (let k = lastIdx + 1; k < candles.length; k++) {
         if (candles[k].low < poolPrice) {
           swept = true;
           sweptAtIndex = k;
@@ -1643,12 +1719,10 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
           } else {
             state = "swept_absorbed";
           }
-          // After sweep, check for retest from the other side
-          // Sell-side swept = level may now act as resistance. Check if price comes back up.
           for (let r = k + 1; r < candles.length; r++) {
             if (candles[r].high >= poolPrice - tol && candles[r].high <= poolPrice + tol) {
               retestedAt = r;
-              retestedHeld = candles[r].close < poolPrice; // held as resistance?
+              retestedHeld = candles[r].close < poolPrice;
               if (retestedHeld) state = "retested";
               break;
             }
@@ -1656,11 +1730,17 @@ export function detectLiquidityPools(candles: Candle[], tolerance = 0.001, minTo
           break;
         }
       }
-      if (i >= candles.length - 80 || swept) {
-        pools.push({ price: poolPrice, type: "sell-side", strength: count, datetime: candles[i].datetime, swept, sweptAtIndex, rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld });
+
+      if (firstIdx >= candles.length - 80 || swept) {
+        pools.push({
+          price: poolPrice, type: "sell-side", strength: clusterIndices.length,
+          datetime: candles[firstIdx].datetime, swept, sweptAtIndex,
+          rejectionConfirmed, state, sweepDepth, retestedAt, retestedHeld,
+        });
       }
     }
   }
+
   return pools.sort((a, b) => b.strength - a.strength);
 }
 

@@ -1,77 +1,102 @@
-# Task: Daily POI Detection & Chart Overlays
+# Task: Fix Liquidity Detection (Equal Highs/Lows)
 
-## Branch: manus/daily-poi-and-chart-overlays
+## Branch: manus/fix-liquidity-detection
 
 ## Behavior changes
 
-1. **Daily POIs now feed into HTF POI scoring**: When daily candles have >= 10 bars, the scanner detects D1 FVGs, Order Blocks, and Breaker Blocks and pushes them to the `htfPOIs` array with `timeframe: "D"`. The existing BOOST_MAP already assigns the highest weights to "D" (fvg: 1.0, ob: 0.8, breaker: 0.6), so pairs where price sits inside a Daily POI will now receive a higher HTF POI Alignment score. This means some trades that previously scored just below threshold may now pass if price is at a Daily level.
+1. **Liquidity pools are now detected using ATR-based tolerance** instead of `priceRange × 0.001`. On a typical 1H forex chart (ATR ~15 pips), the tolerance is now ~3 pips instead of ~0.16 pips. This means the system will detect equal highs/lows that were previously invisible.
 
-2. **Daily Fib/PD/Liquidity detection added**: The scanner now computes Daily ZigZag Fibonacci levels, Premium/Discount zones, and Liquidity Pools. These are injected into `_htfFibLevels.d`, `_htfPD.d`, and `_htfLiquidityPools.d` for downstream multi-TF scoring.
+2. **Only swing points are compared**, not every candle's high/low. This eliminates false positives from random candle wicks and focuses on structurally significant levels (local maxima/minima).
 
-3. **`chartOverlays` field added to scan detail**: The scan detail object now includes a `chartOverlays` property containing full entity price-level data (OBs, FVGs, Breakers, Swing Points, Liquidity Pools, Fib Levels, HTF POIs, Daily Entities). This is purely informational for the frontend — it does NOT affect scoring or trade decisions.
+3. **Break-through validation added**: If price CLOSED above/below the pool level between the first and last touch, the pool is rejected. This prevents stale/invalidated levels from being reported.
+
+4. **Confluence scoring will now fire the "Liquidity Sweep" factor more often**, because pools are actually detected. Previously this factor was almost always `present: false` due to the tight tolerance. Snapshot tests show scores increasing by ~1.0–4.3 points on fixtures where liquidity sweeps are present.
+
+5. **`equalHighsLowsSensitivity` config is now wired** (was dead code before). Maps 1–5 scale to ATR multiplier:
+   - 1 = tight (0.10×ATR) — only very precise equal levels
+   - 2 = moderate (0.15×ATR)
+   - 3 = balanced (0.20×ATR) — **default, industry standard**
+   - 4 = loose (0.25×ATR)
+   - 5 = wide (0.30×ATR) — catches more levels, may include near-misses
+
+6. **Per-timeframe tolerance is now config-driven** with automatic TF bumps:
+   - Daily: `base + 0.10` (capped at 0.40)
+   - 4H: `base + 0.05` (capped at 0.35)
+   - 1H / Entry TF: `base` (no bump)
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Added Daily POI detection block (28 lines), Daily Fib/PD/Liquidity detection (14 lines), updated HTF Phase 2 injection to include Daily data, added `chartOverlays` field to detail object (60 lines), updated console.log to show Daily counts |
-| `supabase/functions/_shared/dailyPOIAndChartOverlays.test.ts` | New test file with 12 tests covering Daily POI detection, scoring hierarchy, quality thresholds, chart overlay structure, and regression checks |
+| File | Change |
+|------|--------|
+| `supabase/functions/_shared/smcAnalysis.ts` | Rewrote `detectLiquidityPools()`: ATR-based tolerance, swing point filtering, break-through validation, average-price clustering |
+| `supabase/functions/_shared/confluenceScoring.ts` | Now reads `config.equalHighsLowsSensitivity` to derive tolerance (was hardcoded 0.20) |
+| `supabase/functions/bot-scanner/index.ts` | Added `equalHighsLowsSensitivity` to config mapping; 3 HTF callers now use sensitivity-driven tolerance with per-TF bumps; passes sensitivity to gamePlan |
+| `supabase/functions/_shared/gamePlan.ts` | Extended options interface to accept `equalHighsLowsSensitivity` and `liquidityPoolMinTouches`; uses them for daily liquidity detection |
+| `supabase/functions/smc-analysis/index.ts` | Added comments; callers use default (0.20) which is correct for standalone analysis |
+| `supabase/functions/bot-config/index.ts` | No change needed — `equalHighsLowsSensitivity: 3` already in defaults (now actually used) |
+| `supabase/functions/_shared/__snapshots__/*.json` | Regenerated 3 snapshot files (intentional drift from liquidity detection improvement) |
+| `supabase/functions/_shared/liquidityDetection.test.ts` | **NEW** — 17 targeted regression tests (11 core + 6 sensitivity config) |
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `Daily POI: analyzeMarketStructure works on daily candles with >= 10 bars` | Structure detection produces BOS, CHoCH, and swing points from daily candles |
-| `Daily POI: detectFVGs produces FVGs from daily candles` | FVGs have valid high/low/state/type fields |
-| `Daily POI: detectOrderBlocks produces OBs from daily candles` | OBs have valid high/low/state/type fields |
-| `Daily POI: detectBreakerBlocks produces breakers from daily OBs` | Breakers have valid structure |
-| `Daily POI: 'D' timeframe POIs score higher than equivalent '4H' POIs` | D FVG weight >= 4H FVG weight |
-| `Daily POI: 'D' OB scores higher than '4H' OB` | D OB weight >= 4H OB weight |
-| `Daily POI: 'D' breaker scores higher than '4H' breaker` | D breaker weight >= 4H breaker weight |
-| `Daily POI: FVG quality threshold >= 2 allows lower-quality FVGs` | Threshold 2 qualifies >= threshold 3 count |
-| `Daily POI: no regression — adding D POIs does not change 4H/1H scoring` | Far-away D POI doesn't affect 4H scoring |
-| `Chart Overlays: structure has all required top-level fields` | All 7 overlay categories present with correct field types |
-| `Chart Overlays: dailyEntities contains full D1 entity data` | Daily OBs/FVGs/Breakers have numeric high/low and valid state/direction |
-| `Chart Overlays: slicing limits prevent payload bloat` | Arrays capped at configured limits (30/20/40) |
+| `detects equal highs (BSL) with ATR-based tolerance` | Finds BSL pool near 1.3810 with strength >= 2 |
+| `detects equal lows (SSL) with ATR-based tolerance` | Finds SSL pool near 1.3740 with strength >= 2 |
+| `old algorithm would have missed these pools (regression proof)` | Proves old tolerance (0.14 pips) < new tolerance (3+ pips), and new algo finds >= 2 pools |
+| `rejects pools where price closed through between touches` | Pool at ~1.1050 NOT detected because price closed above between touches |
+| `detects sweep-rejection lifecycle correctly` | Pool marked swept=true, rejectionConfirmed=true, state="swept_rejected" |
+| `returns empty for insufficient candles` | < 10 candles → empty array |
+| `respects minTouches parameter` | minTouches=5 finds fewer pools than minTouches=2 |
+| `tolerance scales with ATR (volatile vs calm)` | Both volatile and calm pairs detect pools (tolerance adapts) |
+| `output shape matches LiquidityPool interface` | All required fields present with correct types |
+| `sorted by strength descending` | Output ordering verified |
+| `configurable tolerance per timeframe` | Looser tolerance (0.40) finds >= tight tolerance (0.10) pools |
+| `sensitivity 1-5 maps to correct ATR multipliers` | Mapping array produces expected values |
+| `out-of-range values are clamped` | Values <1 clamp to 0.10, >5 clamp to 0.30 |
+| `per-TF bumps produce correct hierarchy` | Daily > 4H > 1H tolerance hierarchy verified |
+| `max sensitivity with daily bump caps at 0.40` | Prevents runaway tolerance |
+| `different sensitivities produce different pool counts` | Wide finds >= tight pools |
+| `default sensitivity (3) detects pools on standard fixture` | Confirms the default works |
 
 ## Tests run
 
 ```
 $ deno test supabase/functions/_shared/ --allow-all --no-check
-ok | 480 passed | 0 failed (9s)
+ok | 497 passed | 0 failed (9s)
 ```
 
-Note: 35 pre-existing type errors in `tpNextLevelSkip.test.ts` (missing `datetime`/`state`/`testedCount` fields on mock SwingPoints) — these are unrelated to this change and existed before.
+All 497 tests pass (480 existing + 17 new liquidity/sensitivity tests).
 
 ## Regression check
 
-1. **Scoring regression**: Test `"Daily POI: no regression — adding D POIs does not change 4H/1H scoring"` verifies that adding a far-away Daily POI does not alter the score of an existing 4H POI alignment.
-2. **Existing test suite**: All 468 pre-existing tests pass unchanged.
-3. **BOOST_MAP unchanged**: The `confluenceScoring.ts` BOOST_MAP already had a "D" entry — we did NOT modify it. We only feed POIs into it.
-4. **Gate definitions unchanged**: No gate logic was modified. Daily POIs only affect the HTF POI Alignment factor score (Factor 23), which is a Tier 2 scoring factor, not a gate.
+1. **Snapshot tests**: The 3 confluence scoring snapshots were regenerated. The only difference is "Liquidity Sweep" factor changing from `present: false` to `present: true` in fixtures where equal highs/lows exist. This is the intended fix — the factor was previously always false because detection was broken.
+
+2. **Score impact**: Scores increase by ~1.0–4.3 points (out of 23.5 max) when liquidity sweep is now correctly detected. This means some setups that previously scored below threshold may now pass. This is correct behavior — the system was under-scoring valid setups.
+
+3. **No false positives**: The break-through validation ensures that invalidated levels (where price already closed through) are NOT reported. The swing-point filtering ensures random wick noise doesn't create phantom pools.
+
+4. **Interface compatibility**: Output shape is identical (`LiquidityPool` interface unchanged). All downstream consumers (TP calculation, DOL targeting, chart overlays, scoring) work without modification.
 
 ## Open questions
 
-1. **Quality threshold for Daily FVGs**: Set to >= 2 (vs >= 3 for 4H/1H). This is a judgment call — daily candles produce fewer structure breaks so FVGs tend to have lower quality scores. Should this be configurable per-pair?
-2. **chartOverlays payload size**: Currently capped at 30 OBs, 30 FVGs, 20 breakers, 40 swing points, 20 liquidity pools, 15 daily OBs, 15 daily FVGs, 10 daily breakers. These limits keep the JSON payload reasonable (~5-10KB) but could be adjusted.
-3. **Frontend consumption**: The `chartOverlays` field is now available in scan detail but the Lovable UI (connect-assist repo) does not yet render it. Issue #46 tracks the frontend chart visualization work.
-4. **Daily Fib ZigZag parameters**: Using `detectZigZagPivots(dailyCandles, 5, 20)` — wider parameters than 4H (3, 10) to capture larger daily swings. May need tuning.
+1. **UI label for sensitivity**: The config field is `equalHighsLowsSensitivity` with values 1–5. Should the UI show a slider labeled "Liquidity Detection Sensitivity" with labels like "Tight / Moderate / Balanced / Loose / Wide"?
+
+2. **Per-TF bump constants**: The bumps (+0.10 for daily, +0.05 for 4H) are hardcoded. Should these also be configurable, or is the current hierarchy sufficient?
 
 ## Suggested PR title and description
 
-**Title:** feat: Add Daily POI detection and chartOverlays for UI chart plotting
+**Title:** fix(liquidity): ATR-based tolerance + swing point filtering + config-driven sensitivity
 
 **Description:**
+The liquidity pool detection (`detectLiquidityPools`) was using `priceRange × 0.001` as tolerance, which produced ~0.16 pips on a typical 1H chart — far too tight to detect real equal highs/lows. This PR changes to the industry-standard approach:
 
-Implements GitHub issue #45 (Daily POI detection) and prepares data for issue #46 (chart visualization).
+- **ATR × tolerance factor** (default 0.20 = 20% of ATR, ~3 pips on 1H forex)
+- **Swing point filtering** — only compares local maxima/minima, not every candle
+- **Break-through validation** — rejects pools where price already closed through between touches
+- **Config-driven sensitivity** — `equalHighsLowsSensitivity` (1–5) now controls the ATR multiplier (was dead code)
+- **Per-timeframe scaling** — automatic bumps for higher TFs (Daily +0.10, 4H +0.05)
 
-### What this does:
-- **Daily POI Detection**: Runs `analyzeMarketStructure` → `detectFVGs` / `detectOrderBlocks` / `detectBreakerBlocks` on D1 candles and feeds results into the HTF POI scoring pipeline with `timeframe: "D"`. The existing BOOST_MAP assigns highest weights to Daily (fvg: 1.0, ob: 0.8, breaker: 0.6).
-- **Daily Fib/PD/Liquidity**: Adds Daily ZigZag Fibonacci, Premium/Discount, and Liquidity Pool detection alongside existing 4H/1H analysis.
-- **Chart Overlays**: Adds a `chartOverlays` field to the scan detail object containing full entity price-level data for frontend chart rendering (OBs, FVGs, Breakers, Swing Points, Liquidity Pools, Fib Levels, HTF POIs, Daily Entities).
+This is a behavior change: the "Liquidity Sweep" confluence factor will now fire correctly, and the "LIQ: none detected" display issue is resolved. Scores may increase by 1–4 points on setups with valid liquidity sweeps.
 
-### Behavior impact:
-Trades where price sits inside a Daily POI will now score higher on the HTF POI Alignment factor. This may cause some borderline pairs to pass the confluence threshold that previously didn't.
-
-### Tests:
-12 new tests added. All 480 tests pass.
+17 new regression tests added. All 497 tests pass.

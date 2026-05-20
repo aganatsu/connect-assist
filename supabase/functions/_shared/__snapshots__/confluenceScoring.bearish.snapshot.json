@@ -1,18 +1,18 @@
 {
-  "score": 14.9,
-  "rawScore": 3.5,
+  "score": 10.6,
+  "rawScore": 2.5,
   "direction": "long",
   "bias": "bullish",
-  "strongFactorCount": 3,
+  "strongFactorCount": 2,
   "enabledMax": 23.5,
   "tieredScoring": {
     "tier1Count": 0,
     "tier1Max": 4,
-    "tier2Count": 3,
+    "tier2Count": 2,
     "tier2Max": 10,
     "tier3Count": 2,
     "tier3Max": 9,
-    "tieredScore": 3.5,
+    "tieredScore": 2.5,
     "tieredMax": 23.5,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 0 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
@@ -73,7 +73,7 @@
     },
     {
       "name": "Liquidity Sweep",
-      "present": true,
+      "present": false,
       "weight": 1.5,
       "tier": 2
     },

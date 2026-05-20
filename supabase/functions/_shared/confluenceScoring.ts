@@ -281,8 +281,11 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     const hasFVGNearby = fvgs.some(f => Math.abs(f.index - ob.index) <= 5);
     (ob as any).hasFVGAdjacency = hasFVGNearby;
   }
-  // P1: liquidity pool min touches — pass config-driven threshold
-  const liquidityPools = detectLiquidityPools(candles, 0.001, config.liquidityPoolMinTouches);
+  // P1: liquidity pool detection — config-driven sensitivity & min touches
+  // equalHighsLowsSensitivity (1-5) maps to ATR multiplier: 1=0.10, 2=0.15, 3=0.20, 4=0.25, 5=0.30
+  const _liqSens = Math.min(Math.max(config.equalHighsLowsSensitivity ?? 3, 1), 5);
+  const _liqTol = [0.10, 0.15, 0.20, 0.25, 0.30][_liqSens - 1];
+  const liquidityPools = detectLiquidityPools(candles, _liqTol, config.liquidityPoolMinTouches);
   const judasSwing = detectJudasSwing(candles);
   const reversalCandle = detectReversalCandle(candles);
   const pd = calculatePremiumDiscount(candles);
