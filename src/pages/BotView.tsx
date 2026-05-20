@@ -1834,7 +1834,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
           );
         })}
       </tbody>
-    </table></div></div>
+    </table></div>
     {totalPages > 1 && (
       <div className="flex items-center justify-between px-2 py-2 border-t border-border">
         <span className="text-[10px] text-muted-foreground font-mono">
