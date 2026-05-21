@@ -59,9 +59,10 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
   const activeOBs = (analysis?.orderBlocks || []).filter((ob: any) => !ob.mitigated);
   const activeFVGs = (analysis?.fvgs || []).filter((f: any) => !f.mitigated);
   const liquidityPools = analysis?.liquidityPools || [];
+  const activeLiqPools = liquidityPools.filter((lp: any) => !lp.swept);
 
   const nearestOB = activeOBs.length > 0 ? activeOBs.reduce((closest: any, ob: any) => {
-    if (!currentPrice) return closest;
+    if (!currentPrice) return ob; // fallback: pick first if no price yet
     const mid = (ob.high + ob.low) / 2;
     const dist = Math.abs(currentPrice - mid);
     const closestDist = closest ? Math.abs(currentPrice - (closest.high + closest.low) / 2) : Infinity;
@@ -69,15 +70,15 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
   }, null) : null;
 
   const nearestFVG = activeFVGs.length > 0 ? activeFVGs.reduce((closest: any, fvg: any) => {
-    if (!currentPrice) return closest;
+    if (!currentPrice) return fvg; // fallback: pick first if no price yet
     const mid = (fvg.high + fvg.low) / 2;
     const dist = Math.abs(currentPrice - mid);
     const closestDist = closest ? Math.abs(currentPrice - (closest.high + closest.low) / 2) : Infinity;
     return dist < closestDist ? fvg : closest;
   }, null) : null;
 
-  const nearestLiq = liquidityPools.length > 0 ? liquidityPools.reduce((closest: any, lp: any) => {
-    if (!currentPrice) return closest;
+  const nearestLiq = activeLiqPools.length > 0 ? activeLiqPools.reduce((closest: any, lp: any) => {
+    if (!currentPrice) return lp; // fallback: pick first if no price yet
     const dist = Math.abs(currentPrice - lp.price);
     const closestDist = closest ? Math.abs(currentPrice - closest.price) : Infinity;
     return dist < closestDist ? lp : closest;
@@ -180,12 +181,14 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           </div>
           {/* Nearest Liquidity */}
           <div className="flex items-center justify-between">
-            <span className="text-red-400 font-medium">LIQ</span>
+            <span className="text-purple-400 font-medium">LIQ</span>
             {nearestLiq ? (
               <span className="font-mono text-[10px]">
-                {nearestLiq.type === 'high' ? '↑' : '↓'} {fx(nearestLiq.price)}
-                {nearestLiq.swept && <span className="text-amber-400 ml-1">swept</span>}
+                {nearestLiq.type === 'high' ? '↑ BSL' : '↓ SSL'} {fx(nearestLiq.price)}
+                {activeLiqPools.length > 1 && <span className="text-muted-foreground ml-1">+{activeLiqPools.length - 1}</span>}
               </span>
+            ) : liquidityPools.length > 0 ? (
+              <span className="text-amber-400 text-[10px]">all swept</span>
             ) : (
               <span className="text-muted-foreground">none detected</span>
             )}
