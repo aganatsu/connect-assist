@@ -113,6 +113,6 @@ export const DEFAULT_VISIBILITY: OverlayVisibility = {
   fvg: true,
   sp: true,
   liq: true,
-  fib: false,
+  fib: true,
   sr: true,
 };
