@@ -298,6 +298,7 @@ export default function Chart() {
               overlays={chartOverlays}
               loading={!candles}
               hideToolbar
+              visibleLayers={smcVisibleLayers}
             />
             {/* Floating HUD */}
             <ChartOverlayHUD
