@@ -61,8 +61,11 @@ function TradingViewChart({ instrument, timeframe }: Props) {
       theme: 'dark',
       style: '1',
       locale: 'en',
+      range: '12M',
       allow_symbol_change: true,
-      calendar: false,
+      calendar: true,
+      details: true,
+      hotlist: true,
       hide_top_toolbar: false,
       hide_side_toolbar: false,
       hide_legend: false,
@@ -73,6 +76,8 @@ function TradingViewChart({ instrument, timeframe }: Props) {
       gridColor: 'rgba(255, 255, 255, 0.03)',
       studies: [],
       watchlist: ['FX:EURUSD', 'FX:GBPUSD', 'FX:USDJPY', 'BITSTAMP:BTCUSD', 'OANDA:XAUUSD'],
+      enabled_features: ['drawing_tools'],
+      disabled_features: [],
     });
 
     widgetContainer.appendChild(script);
@@ -83,7 +88,7 @@ function TradingViewChart({ instrument, timeframe }: Props) {
   }, [instrument.symbol, timeframe]);
 
   return (
-    <div ref={containerRef} className="w-full h-full min-h-[500px] rounded-lg overflow-hidden border border-border bg-card" />
+    <div ref={containerRef} className="w-full h-full min-h-[650px] rounded-lg overflow-hidden border border-border bg-card" />
   );
 }
 
