@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
+import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
 import { ChartContextPanel } from "@/components/ChartContextPanel";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
