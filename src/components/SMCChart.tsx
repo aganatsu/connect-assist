@@ -2,7 +2,8 @@
  * SMCChart — Consolidated Lightweight Charts component for all SMC overlays.
  *
  * Layers: Impulse Zone, Order Blocks, FVGs, Breakers, Swing Points,
- * Liquidity Pools, Fibs, HTF POIs, Trade Entry/SL/TP, Support/Resistance.
+ * Liquidity Pools, Fibs, HTF POIs, Trade Entry/SL/TP, Support/Resistance,
+ * BOS/CHoCH, Displacement Candles, Judas Swing, Session Boxes, Kill Zones.
  *
  * Uses v4 API (addCandlestickSeries) for stability.
  * Proper cleanup: stores all price line refs and removes them on re-render.
@@ -124,6 +125,29 @@ export interface ChartImpulseZone {
   hasZone: boolean;
 }
 
+export interface ChartStructureBreak {
+  index: number;
+  type: "bullish" | "bearish";
+  price: number;
+  datetime?: string;
+  level: number;
+  significance?: "internal" | "external";
+}
+
+export interface ChartDisplacementCandle {
+  index: number;
+  direction: "bullish" | "bearish";
+  bodyRatio?: number;
+  rangeMultiple?: number;
+}
+
+export interface ChartJudasSwing {
+  detected: boolean;
+  type: "bullish" | "bearish" | null;
+  confirmed: boolean;
+  description: string;
+}
+
 export interface SMCOverlays {
   orderBlocks?: ChartOrderBlock[];
   fvgs?: ChartFVG[];
@@ -137,6 +161,11 @@ export interface SMCOverlays {
   keySupport?: number[];
   keyResistance?: number[];
   impulseZone?: ChartImpulseZone;
+  // New overlays
+  bosLevels?: ChartStructureBreak[];
+  chochLevels?: ChartStructureBreak[];
+  displacementCandles?: ChartDisplacementCandle[];
+  judasSwing?: ChartJudasSwing | null;
 }
 
 export type OverlayLayer =
@@ -150,7 +179,12 @@ export type OverlayLayer =
   | "htfPOIs"
   | "trades"
   | "support"
-  | "resistance";
+  | "resistance"
+  | "bosChoch"
+  | "displacement"
+  | "judasSwing"
+  | "sessions"
+  | "killZones";
 
 interface Props {
   candles: ChartCandle[];
@@ -203,6 +237,21 @@ const COLORS = {
   entry: "#06b6d4",
   sl: "#ef4444",
   tp: "#22c55e",
+  // BOS/CHoCH
+  bos: "rgba(56,189,248,0.7)", // sky-400
+  choch: "rgba(251,146,60,0.8)", // orange-400
+  // Displacement
+  dispBull: "#34d399", // emerald-400
+  dispBear: "#f87171", // red-400
+  // Judas
+  judas: "#fbbf24", // amber-400
+  // Sessions
+  sessionAsian: "rgba(99,102,241,0.06)", // indigo
+  sessionLondon: "rgba(34,197,94,0.06)", // green
+  sessionNY: "rgba(239,68,68,0.06)", // red
+  // Kill Zones
+  kzLondon: "rgba(236,72,153,0.08)", // pink
+  kzNY: "rgba(236,72,153,0.08)",
 };
 
 // ─── Layer Definitions ──────────────────────────────────────────────────────
@@ -219,7 +268,40 @@ const LAYER_DEFS: { id: OverlayLayer; label: string; color: string }[] = [
   { id: "trades", label: "TRADE", color: "#06b6d4" },
   { id: "support", label: "S", color: "#22c55e" },
   { id: "resistance", label: "R", color: "#ef4444" },
+  { id: "bosChoch", label: "BOS", color: "#38bdf8" },
+  { id: "displacement", label: "DISP", color: "#34d399" },
+  { id: "judasSwing", label: "JDS", color: "#fbbf24" },
+  { id: "sessions", label: "SES", color: "#6366f1" },
+  { id: "killZones", label: "KZ", color: "#ec4899" },
 ];
+
+// ─── Session/KZ time helpers (NY local) ─────────────────────────────────────
+
+function getNYHour(utcTimestamp: number): number {
+  const d = new Date(utcTimestamp * 1000);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(d);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
+  return h === 24 ? m / 60 : h + m / 60;
+}
+
+type SessionName = "asian" | "london" | "newyork" | "offhours";
+function getSession(nyHour: number): SessionName {
+  if (nyHour >= 2 && nyHour < 8.5) return "london";
+  if (nyHour >= 8.5 && nyHour < 16) return "newyork";
+  if (nyHour >= 20 || nyHour < 2) return "asian";
+  return "offhours";
+}
+function isKillZone(nyHour: number): "london" | "newyork" | null {
+  if (nyHour >= 2 && nyHour < 5) return "london";
+  if (nyHour >= 8.5 && nyHour < 12) return "newyork";
+  return null;
+}
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -228,11 +310,13 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayers, setVisibleLayers] = useState<Set<OverlayLayer>>(
     new Set(defaultLayers ?? allLayers)
   );
+  const [tooltipData, setTooltipData] = useState<{ x: number; y: number; text: string } | null>(null);
 
   const toggleLayer = useCallback((layer: OverlayLayer) => {
     setVisibleLayers((prev) => {
@@ -249,9 +333,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     const seen = new Set<number>();
     return candles
       .map((c) => {
-        // Parse datetime to unix timestamp for proper time handling
-        // Backend returns "YYYY-MM-DD HH:MM:SS" (UTC, no zone) — force UTC parse,
-        // otherwise the browser treats it as local time and shifts every candle.
         const ts = Math.floor(
           new Date(typeof c.datetime === "string" ? c.datetime.replace(" ", "T") + "Z" : c.datetime).getTime() / 1000
         );
@@ -300,7 +381,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     });
 
     // Determine price precision based on symbol
-    // JPY pairs = 3 decimals, crypto = 2, most forex = 5
     const getMinMove = (sym?: string): number => {
       if (!sym) return 0.00001;
       const s = sym.toUpperCase();
@@ -308,7 +388,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       if (s.includes("XAU") || s.includes("GOLD")) return 0.01;
       if (s.includes("BTC") || s.includes("ETH")) return 0.01;
       if (s.includes("XAG") || s.includes("SILVER")) return 0.001;
-      return 0.00001; // Standard forex: 5 decimal places (pipette)
+      return 0.00001;
     };
     const getPrecision = (sym?: string): number => {
       if (!sym) return 5;
@@ -317,7 +397,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       if (s.includes("XAU") || s.includes("GOLD")) return 2;
       if (s.includes("BTC") || s.includes("ETH")) return 2;
       if (s.includes("XAG") || s.includes("SILVER")) return 3;
-      return 5; // Standard forex: 5 decimal places
+      return 5;
     };
 
     const series = chart.addCandlestickSeries({
@@ -336,6 +416,21 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     chartRef.current = chart;
     candleSeriesRef.current = series;
+
+    // Crosshair move handler for tooltip
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.point || !param.time || !param.seriesData) {
+        setTooltipData(null);
+        return;
+      }
+      // Show OHLC tooltip
+      const data = param.seriesData.get(series) as any;
+      if (!data) { setTooltipData(null); return; }
+      const { open, high, low, close } = data;
+      const prec = getPrecision(symbol);
+      const text = `O: ${open.toFixed(prec)}  H: ${high.toFixed(prec)}  L: ${low.toFixed(prec)}  C: ${close.toFixed(prec)}`;
+      setTooltipData({ x: param.point.x, y: param.point.y, text });
+    });
 
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -385,7 +480,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       const iz = overlays.impulseZone;
       const isBull = iz.impulse.direction === "bullish";
 
-      // Full impulse leg boundaries (subtle)
       addLine({
         price: iz.impulse.high,
         color: isBull ? "rgba(6,182,212,0.3)" : "rgba(239,68,68,0.25)",
@@ -403,7 +497,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
         title: "",
       });
 
-      // Entry zone (the POI inside the impulse) — prominent
       if (iz.bestZone) {
         const fibLabel = `${(iz.bestZone.fibLevel * 100).toFixed(0)}%`;
         const tfLabel = iz.selectedTF ?? "";
@@ -425,7 +518,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           title: "",
         });
 
-        // Refined entry line (if LTF refined)
         if (iz.bestZone.refinedEntry) {
           addLine({
             price: iz.bestZone.refinedEntry,
@@ -436,7 +528,6 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
             title: "Refined Entry",
           });
         }
-        // Refined SL
         if (iz.bestZone.refinedSL) {
           addLine({
             price: iz.bestZone.refinedSL,
@@ -602,7 +693,35 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       }
     }
 
-    // ─── Trade Overlays (Entry/SL/TP) ─────────────────────────────────
+    // ─── BOS / CHoCH Lines ────────────────────────────────────────────
+    if (visibleLayers.has("bosChoch")) {
+      if (overlays.bosLevels?.length) {
+        for (const b of overlays.bosLevels.slice(-10)) {
+          addLine({
+            price: b.level,
+            color: COLORS.bos,
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: false,
+            title: `BOS ${b.type === "bullish" ? "▲" : "▼"}`,
+          });
+        }
+      }
+      if (overlays.chochLevels?.length) {
+        for (const c of overlays.chochLevels.slice(-6)) {
+          addLine({
+            price: c.level,
+            color: COLORS.choch,
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `CHoCH ${c.type === "bullish" ? "▲" : "▼"}`,
+          });
+        }
+      }
+    }
+
+    // ─── Trade Overlays (Entry/SL/TP + R:R visual) ────────────────────
     if (visibleLayers.has("trades") && overlays.trades?.length) {
       for (const trade of overlays.trades) {
         const isLong = trade.direction === "long";
@@ -615,60 +734,136 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           title: `${isLong ? "BUY" : "SELL"} ${trade.label ?? ""}`.trim(),
         });
         if (trade.stopLoss != null) {
+          const risk = Math.abs(trade.entryPrice - trade.stopLoss);
           addLine({
             price: trade.stopLoss,
             color: COLORS.sl,
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
             axisLabelVisible: true,
-            title: "SL",
+            title: `SL (${risk.toFixed(5)})`,
           });
         }
         if (trade.takeProfit != null) {
+          const reward = Math.abs(trade.takeProfit - trade.entryPrice);
+          const risk = trade.stopLoss != null ? Math.abs(trade.entryPrice - trade.stopLoss) : 0;
+          const rr = risk > 0 ? (reward / risk).toFixed(1) : "—";
           addLine({
             price: trade.takeProfit,
             color: COLORS.tp,
             lineWidth: 1,
             lineStyle: LineStyle.Dashed,
             axisLabelVisible: true,
-            title: "TP",
+            title: `TP (${rr}R)`,
           });
         }
-        // Multiple TPs
         if (trade.takeProfits?.length) {
           trade.takeProfits.forEach((tp, i) => {
+            const reward = Math.abs(tp - trade.entryPrice);
+            const risk = trade.stopLoss != null ? Math.abs(trade.entryPrice - trade.stopLoss) : 0;
+            const rr = risk > 0 ? (reward / risk).toFixed(1) : "—";
             addLine({
               price: tp,
               color: COLORS.tp,
               lineWidth: 1,
               lineStyle: LineStyle.Dashed,
               axisLabelVisible: true,
-              title: `TP${i + 1}`,
+              title: `TP${i + 1} (${rr}R)`,
             });
           });
         }
       }
     }
 
-    // ─── Swing Point Markers ──────────────────────────────────────────
-    if (visibleLayers.has("swingPoints") && overlays.swingPoints?.length && chartData.length > 0) {
-      const markers = overlays.swingPoints
-        .filter((sp) => sp.index != null && sp.index! >= 0 && sp.index! < chartData.length)
-        .map((sp) => ({
-          time: chartData[sp.index!].time,
-          position: sp.type === "high" ? ("aboveBar" as const) : ("belowBar" as const),
-          color: sp.type === "high" ? "#f59e0b" : "#f59e0b",
-          shape: "diamond" as const,
-          text: sp.type === "high" ? "HH" : "LL",
-        }))
-        .sort((a, b) => (a.time as number) - (b.time as number));
+    // ─── Markers (Swing Points + BOS/CHoCH + Displacement + Judas) ───
+    const markers: any[] = [];
 
-      if (markers.length > 0) {
-        try { series.setMarkers(markers as any); } catch {}
+    // Swing Point Markers
+    if (visibleLayers.has("swingPoints") && overlays.swingPoints?.length && chartData.length > 0) {
+      for (const sp of overlays.swingPoints) {
+        if (sp.index == null || sp.index < 0 || sp.index >= chartData.length) continue;
+        markers.push({
+          time: chartData[sp.index].time,
+          position: sp.type === "high" ? "aboveBar" : "belowBar",
+          color: "#f59e0b",
+          shape: "diamond",
+          text: sp.type === "high" ? "HH" : "LL",
+        });
       }
-    } else {
-      try { series.setMarkers([]); } catch {}
     }
+
+    // BOS/CHoCH break-point markers
+    if (visibleLayers.has("bosChoch") && chartData.length > 0) {
+      if (overlays.bosLevels?.length) {
+        for (const b of overlays.bosLevels.slice(-10)) {
+          if (b.index >= 0 && b.index < chartData.length) {
+            markers.push({
+              time: chartData[b.index].time,
+              position: b.type === "bullish" ? "belowBar" : "aboveBar",
+              color: COLORS.bos,
+              shape: "arrowUp",
+              text: b.significance === "external" ? "BOS★" : "BOS",
+            });
+          }
+        }
+      }
+      if (overlays.chochLevels?.length) {
+        for (const c of overlays.chochLevels.slice(-6)) {
+          if (c.index >= 0 && c.index < chartData.length) {
+            markers.push({
+              time: chartData[c.index].time,
+              position: c.type === "bullish" ? "belowBar" : "aboveBar",
+              color: COLORS.choch,
+              shape: "circle",
+              text: "CHoCH",
+            });
+          }
+        }
+      }
+    }
+
+    // Displacement Candle Markers
+    if (visibleLayers.has("displacement") && overlays.displacementCandles?.length && chartData.length > 0) {
+      for (const d of overlays.displacementCandles) {
+        if (d.index >= 0 && d.index < chartData.length) {
+          markers.push({
+            time: chartData[d.index].time,
+            position: d.direction === "bullish" ? "belowBar" : "aboveBar",
+            color: d.direction === "bullish" ? COLORS.dispBull : COLORS.dispBear,
+            shape: "arrowUp",
+            text: "DISP",
+          });
+        }
+      }
+    }
+
+    // Judas Swing Marker (mark the most recent candle as the reversal point)
+    if (visibleLayers.has("judasSwing") && overlays.judasSwing?.detected && chartData.length > 0) {
+      const js = overlays.judasSwing;
+      // Place on the last candle (current) since Judas is a live detection
+      const lastIdx = chartData.length - 1;
+      markers.push({
+        time: chartData[lastIdx].time,
+        position: js.type === "bullish" ? "belowBar" : "aboveBar",
+        color: COLORS.judas,
+        shape: "square",
+        text: `JDS ${js.type === "bullish" ? "▲" : "▼"}${js.confirmed ? "✓" : ""}`,
+      });
+    }
+
+    // Sort markers by time (required by lightweight-charts)
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
+
+    // Deduplicate markers at same time+position (keep first)
+    const seen = new Set<string>();
+    const dedupedMarkers = markers.filter((m) => {
+      const key = `${m.time}_${m.position}_${m.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    try { series.setMarkers(dedupedMarkers); } catch {}
 
     return () => {
       for (const line of priceLinesRef.current) {
@@ -677,6 +872,106 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       priceLinesRef.current = [];
     };
   }, [overlays, visibleLayers, chartData]);
+
+  // ─── Session / Kill Zone background shading via canvas overlay ─────
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartData.length) return;
+    if (!visibleLayers.has("sessions") && !visibleLayers.has("killZones")) return;
+
+    // Use a custom canvas overlay for background shading
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Find or create the overlay canvas
+    let canvas = container.querySelector(".smc-session-canvas") as HTMLCanvasElement | null;
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.className = "smc-session-canvas";
+      canvas.style.position = "absolute";
+      canvas.style.top = "0";
+      canvas.style.left = "0";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      canvas.style.pointerEvents = "none";
+      canvas.style.zIndex = "1";
+      container.style.position = "relative";
+      container.appendChild(canvas);
+    }
+
+    const draw = () => {
+      if (!canvas || !chart) return;
+      const rect = container!.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      const timeScale = chart.timeScale();
+      const priceScale = chart.priceScale("right");
+      if (!timeScale || !priceScale) return;
+
+      // Get visible range
+      const visibleRange = timeScale.getVisibleLogicalRange();
+      if (!visibleRange) return;
+
+      const startIdx = Math.max(0, Math.floor(visibleRange.from));
+      const endIdx = Math.min(chartData.length - 1, Math.ceil(visibleRange.to));
+
+      // Draw session/KZ bands for each visible candle
+      for (let i = startIdx; i <= endIdx; i++) {
+        const bar = chartData[i];
+        if (!bar) continue;
+        const ts = bar.time as number;
+        const nyH = getNYHour(ts);
+
+        // Get x coordinate for this bar
+        const x = timeScale.timeToCoordinate(bar.time);
+        if (x === null) continue;
+
+        // Get next bar x for width (or use a fixed width)
+        const nextX = i < endIdx && chartData[i + 1]
+          ? timeScale.timeToCoordinate(chartData[i + 1].time)
+          : null;
+        const barWidth = nextX !== null ? Math.max(2, (nextX as number) - (x as number)) : 8;
+
+        let fillColor: string | null = null;
+
+        if (visibleLayers.has("sessions")) {
+          const sess = getSession(nyH);
+          if (sess === "asian") fillColor = COLORS.sessionAsian;
+          else if (sess === "london") fillColor = COLORS.sessionLondon;
+          else if (sess === "newyork") fillColor = COLORS.sessionNY;
+        }
+
+        if (visibleLayers.has("killZones")) {
+          const kz = isKillZone(nyH);
+          if (kz === "london") fillColor = COLORS.kzLondon;
+          else if (kz === "newyork") fillColor = COLORS.kzNY;
+        }
+
+        if (fillColor) {
+          ctx.fillStyle = fillColor;
+          ctx.fillRect(x as number, 0, barWidth, rect.height);
+        }
+      }
+    };
+
+    draw();
+
+    // Redraw on visible range change
+    const sub = chart.timeScale().subscribeVisibleLogicalRangeChange(draw);
+
+    return () => {
+      try { chart.timeScale().unsubscribeVisibleLogicalRangeChange(draw); } catch {}
+      if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
+    };
+  }, [chartData, visibleLayers]);
 
   // Check which layers have data
   const layerHasData = useMemo(() => {
@@ -693,6 +988,12 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     if (overlays.trades?.length) s.add("trades");
     if (overlays.keySupport?.length) s.add("support");
     if (overlays.keyResistance?.length) s.add("resistance");
+    if (overlays.bosLevels?.length || overlays.chochLevels?.length) s.add("bosChoch");
+    if (overlays.displacementCandles?.length) s.add("displacement");
+    if (overlays.judasSwing?.detected) s.add("judasSwing");
+    // Sessions and KZ are always "available" (time-based, not data-dependent)
+    s.add("sessions");
+    s.add("killZones");
     return s;
   }, [overlays]);
 
@@ -749,7 +1050,18 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       )}
 
       {/* Chart Container */}
-      <div ref={containerRef} className="flex-1 min-h-0" />
+      <div ref={containerRef} className="flex-1 min-h-0 relative" />
+
+      {/* OHLC Tooltip */}
+      {tooltipData && (
+        <div
+          ref={tooltipRef}
+          className="absolute z-30 pointer-events-none px-2 py-1 rounded bg-card/90 border border-border/50 text-[10px] font-mono text-foreground shadow-lg backdrop-blur-sm"
+          style={{ left: 12, top: 48 }}
+        >
+          {tooltipData.text}
+        </div>
+      )}
 
       {/* Loading overlay */}
       {loading && (

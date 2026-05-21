@@ -63,7 +63,7 @@ export default function Chart() {
 
   const { data: candleData } = useQuery({
     queryKey: ['chart-candles', selectedSymbol, selectedTimeframe],
-    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 200),
+    queryFn: () => marketApi.candlesWithMeta(selectedSymbol, selectedTimeframe, 500),
     staleTime: refreshInterval / 2,
     refetchInterval: refreshInterval,
   });
@@ -221,6 +221,17 @@ export default function Chart() {
       keyResistance: computedResistance?.length ? computedResistance : undefined,
       impulseZone: overlayVisibility.iz ? impulseZone : undefined,
       htfPOIs: htfPOIs.length > 0 ? htfPOIs : undefined,
+      // ─── New overlays ───
+      bosLevels: overlayVisibility.bos ? (analysis.structure?.bos || []).map((b: any) => ({
+        index: b.index, type: b.type, price: b.price, datetime: b.datetime, level: b.level, significance: b.significance,
+      })) : [],
+      chochLevels: overlayVisibility.bos ? (analysis.structure?.choch || []).map((c: any) => ({
+        index: c.index, type: c.type, price: c.price, datetime: c.datetime, level: c.level, significance: c.significance,
+      })) : [],
+      displacementCandles: overlayVisibility.disp ? (analysis.extendedFactors?.displacement?.displacementCandles || []).map((d: any) => ({
+        index: d.index, direction: d.direction, bodyRatio: d.bodyRatio, rangeMultiple: d.rangeMultiple,
+      })) : [],
+      judasSwing: overlayVisibility.judas ? (analysis.judasSwing ?? null) : null,
     };
   }, [analysis, botScanSignal, overlayVisibility, candles]);
 
@@ -233,6 +244,11 @@ export default function Chart() {
     fib: analysis?.structure?.swingPoints?.length ? '5 levels' : 'no swings',
     iz: botScanSignal?.signal?.impulseZone?.hasZone ? `${botScanSignal.signal.impulseZone.selectedTF} zone` : 'no signal',
     sr: pdLevels ? 'PDH/PDL/PWH/PWL/DO/WO' : 'loading',
+    bos: `${(analysis?.structure?.bos || []).length} BOS, ${(analysis?.structure?.choch || []).length} CHoCH`,
+    disp: `${(analysis?.extendedFactors?.displacement?.displacementCandles || []).length} candles`,
+    judas: analysis?.judasSwing?.detected ? `${analysis.judasSwing.type} ${analysis.judasSwing.confirmed ? '(confirmed)' : '(unconfirmed)'}` : 'none',
+    sessions: 'Asian/London/NY boxes',
+    killZones: 'London 02-05 / NY 08:30-12',
   }), [activeOBs, activeFVGs, analysis, botScanSignal, pdLevels]);
 
   return (

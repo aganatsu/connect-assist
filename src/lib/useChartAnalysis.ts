@@ -56,7 +56,7 @@ export function useChartAnalysis(symbol: string, timeframe: Timeframe): ChartAna
   // Candles
   const { data: candleData, isLoading: candlesLoading } = useQuery({
     queryKey: ['chart-candles', symbol, timeframe],
-    queryFn: () => marketApi.candlesWithMeta(symbol, timeframe, 200),
+    queryFn: () => marketApi.candlesWithMeta(symbol, timeframe, 500),
     staleTime,
     refetchInterval: refreshInterval,
   });

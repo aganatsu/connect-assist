@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 
-export type OverlayLayer = 'iz' | 'ob' | 'fvg' | 'sp' | 'liq' | 'fib' | 'sr';
+export type OverlayLayer = 'iz' | 'ob' | 'fvg' | 'sp' | 'liq' | 'fib' | 'sr' | 'bos' | 'disp' | 'judas' | 'sessions' | 'killZones';
 
 export interface OverlayVisibility {
   iz: boolean;
@@ -17,6 +17,11 @@ export interface OverlayVisibility {
   liq: boolean;
   fib: boolean;
   sr: boolean;
+  bos: boolean;
+  disp: boolean;
+  judas: boolean;
+  sessions: boolean;
+  killZones: boolean;
 }
 
 interface LayerInfo {
@@ -35,6 +40,11 @@ const LAYERS: LayerInfo[] = [
   { key: 'liq', label: 'LIQ', color: 'border-red-500/40 text-red-400', activeColor: 'bg-red-500/20 border-red-400 text-red-300', tooltip: 'Liquidity Pools — equal highs/lows' },
   { key: 'fib', label: 'FIB', color: 'border-blue-500/40 text-blue-400', activeColor: 'bg-blue-500/20 border-blue-400 text-blue-300', tooltip: 'Fibonacci Levels — retracement zones' },
   { key: 'sr', label: 'S/R', color: 'border-emerald-500/40 text-emerald-400', activeColor: 'bg-emerald-500/20 border-emerald-400 text-emerald-300', tooltip: 'Support / Resistance levels' },
+  { key: 'bos', label: 'BOS', color: 'border-sky-500/40 text-sky-400', activeColor: 'bg-sky-500/20 border-sky-400 text-sky-300', tooltip: 'BOS/CHoCH — structure break & change of character' },
+  { key: 'disp', label: 'DISP', color: 'border-rose-500/40 text-rose-400', activeColor: 'bg-rose-500/20 border-rose-400 text-rose-300', tooltip: 'Displacement Candles — strong momentum candles' },
+  { key: 'judas', label: 'JDS', color: 'border-amber-500/40 text-amber-400', activeColor: 'bg-amber-500/20 border-amber-400 text-amber-300', tooltip: 'Judas Swing — false break & reversal' },
+  { key: 'sessions', label: 'SES', color: 'border-indigo-500/40 text-indigo-400', activeColor: 'bg-indigo-500/20 border-indigo-400 text-indigo-300', tooltip: 'Session Boxes — Asian/London/NY time windows' },
+  { key: 'killZones', label: 'KZ', color: 'border-pink-500/40 text-pink-400', activeColor: 'bg-pink-500/20 border-pink-400 text-pink-300', tooltip: 'Kill Zones — high-probability time windows' },
 ];
 
 interface ChartOverlayHUDProps {
@@ -58,9 +68,9 @@ export function ChartOverlayHUD({ visibility, onToggle, confluenceScore, directi
   const dirColor = direction === 'bullish' ? 'text-emerald-400' : direction === 'bearish' ? 'text-red-400' : 'text-muted-foreground';
 
   return (
-    <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5">
+    <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 flex-wrap max-w-[calc(100%-6rem)]">
       {/* Glass panel with chips */}
-      <div className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-card/70 backdrop-blur-md border border-border/50 shadow-lg">
+      <div className="flex items-center gap-1 px-2 py-1.5 rounded-md bg-card/70 backdrop-blur-md border border-border/50 shadow-lg flex-wrap">
         {LAYERS.map((layer) => {
           const active = visibility[layer.key];
           const isHovered = hoveredLayer === layer.key;
@@ -115,4 +125,9 @@ export const DEFAULT_VISIBILITY: OverlayVisibility = {
   liq: true,
   fib: true,
   sr: true,
+  bos: true,
+  disp: true,
+  judas: true,
+  sessions: false,
+  killZones: false,
 };
