@@ -39,6 +39,27 @@ export default function Chart() {
     setOverlayVisibility(prev => ({ ...prev, [layer]: !prev[layer] }));
   }, []);
 
+  // Map HUD visibility → SMCChart layer set (controlled mode)
+  const smcVisibleLayers = useMemo(() => {
+    const s = new Set<SMCOverlayLayer>();
+    if (overlayVisibility.iz) s.add('impulseZone');
+    if (overlayVisibility.ob) s.add('orderBlocks');
+    if (overlayVisibility.fvg) s.add('fvgs');
+    if (overlayVisibility.sp) s.add('swingPoints');
+    if (overlayVisibility.liq) s.add('liquidity');
+    if (overlayVisibility.fib) s.add('fibs');
+    if (overlayVisibility.sr) { s.add('support'); s.add('resistance'); }
+    if (overlayVisibility.bos) s.add('bosChoch');
+    if (overlayVisibility.disp) s.add('displacement');
+    if (overlayVisibility.judas) s.add('judasSwing');
+    if (overlayVisibility.sessions) s.add('sessions');
+    if (overlayVisibility.killZones) s.add('killZones');
+    // Always-on layers (no HUD chip)
+    s.add('htfPOIs');
+    s.add('trades');
+    return s;
+  }, [overlayVisibility]);
+
   // Listen for global symbol change
   useEffect(() => {
     const handler = (e: Event) => {
