@@ -155,6 +155,53 @@ export default function Chart() {
       timeframe: p.timeframe, type: p.type, high: p.high, low: p.low, direction: p.direction,
     })) ?? [];
 
+    // ─── Compute Fib levels from swing structure (same as bot's premium/discount logic) ───
+    let computedFibLevels: { level: number; price: number; label: string }[] | undefined;
+    let computedFiftyPercent: number | undefined;
+    if (overlayVisibility.fib && analysis.structure?.swingPoints?.length) {
+      const swings = analysis.structure.swingPoints;
+      const recentHighs = swings.filter((s: any) => s.type === 'high').slice(-5);
+      const recentLows = swings.filter((s: any) => s.type === 'low').slice(-5);
+      if (recentHighs.length > 0 && recentLows.length > 0) {
+        const swingHigh = Math.max(...recentHighs.map((s: any) => s.price));
+        const swingLow = Math.min(...recentLows.map((s: any) => s.price));
+        const range = swingHigh - swingLow;
+        if (range > 0) {
+          const FIB_RATIOS = [
+            { ratio: 0.236, label: '23.6%' },
+            { ratio: 0.382, label: '38.2%' },
+            { ratio: 0.5, label: '50%' },
+            { ratio: 0.618, label: '61.8%' },
+            { ratio: 0.786, label: '78.6%' },
+          ];
+          computedFibLevels = FIB_RATIOS.map(f => ({
+            level: f.ratio,
+            price: swingHigh - range * f.ratio,
+            label: f.label,
+          }));
+          computedFiftyPercent = swingHigh - range * 0.5;
+        }
+      }
+    }
+
+    // ─── Compute S/R from pdLevels (PDH/PDL/PWH/PWL — same levels the bot uses) ───
+    let computedSupport: number[] | undefined;
+    let computedResistance: number[] | undefined;
+    if (overlayVisibility.sr && analysis.pdLevels) {
+      const pd = analysis.pdLevels;
+      const lastPrice = candles?.[candles.length - 1]?.close ?? 0;
+      const allLevels = [
+        { price: pd.pdh, label: 'PDH' },
+        { price: pd.pdl, label: 'PDL' },
+        { price: pd.pwh, label: 'PWH' },
+        { price: pd.pwl, label: 'PWL' },
+        ...(pd.dailyOpen ? [{ price: pd.dailyOpen, label: 'DO' }] : []),
+        ...(pd.weeklyOpen ? [{ price: pd.weeklyOpen, label: 'WO' }] : []),
+      ].filter(l => l.price != null && l.price > 0);
+      computedResistance = allLevels.filter(l => l.price > lastPrice).map(l => l.price);
+      computedSupport = allLevels.filter(l => l.price <= lastPrice).map(l => l.price);
+    }
+
     return {
       orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
         high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
@@ -168,14 +215,14 @@ export default function Chart() {
       liquidityPools: overlayVisibility.liq ? (analysis.liquidityPools || []).map((lp: any) => ({
         price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept,
       })) : [],
-      fibLevels: overlayVisibility.fib ? analysis.fibLevels : undefined,
-      fiftyPercentLevel: analysis.fiftyPercentLevel,
-      keySupport: overlayVisibility.sr ? analysis.keySupport : undefined,
-      keyResistance: overlayVisibility.sr ? analysis.keyResistance : undefined,
+      fibLevels: computedFibLevels,
+      fiftyPercentLevel: computedFiftyPercent,
+      keySupport: computedSupport?.length ? computedSupport : undefined,
+      keyResistance: computedResistance?.length ? computedResistance : undefined,
       impulseZone: overlayVisibility.iz ? impulseZone : undefined,
       htfPOIs: htfPOIs.length > 0 ? htfPOIs : undefined,
     };
-  }, [analysis, botScanSignal, overlayVisibility]);
+  }, [analysis, botScanSignal, overlayVisibility, candles]);
 
   // Layer detail tooltips
   const layerDetails = useMemo(() => ({
@@ -183,8 +230,9 @@ export default function Chart() {
     fvg: activeFVGs.length > 0 ? `${activeFVGs.length} unfilled` : 'none',
     sp: `${(analysis?.structure?.swingPoints || []).length} points`,
     liq: `${(analysis?.liquidityPools || []).length} pools`,
+    fib: analysis?.structure?.swingPoints?.length ? '5 levels' : 'no swings',
     iz: botScanSignal?.signal?.impulseZone?.hasZone ? `${botScanSignal.signal.impulseZone.selectedTF} zone` : 'no signal',
-    sr: pdLevels ? 'PDH/PDL/PWH/PWL' : 'loading',
+    sr: pdLevels ? 'PDH/PDL/PWH/PWL/DO/WO' : 'loading',
   }), [activeOBs, activeFVGs, analysis, botScanSignal, pdLevels]);
 
   return (
