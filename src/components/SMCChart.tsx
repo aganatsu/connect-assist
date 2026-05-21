@@ -250,7 +250,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     return candles
       .map((c) => {
         // Parse datetime to unix timestamp for proper time handling
-        const ts = Math.floor(new Date(c.datetime).getTime() / 1000);
+        // Backend returns "YYYY-MM-DD HH:MM:SS" (UTC, no zone) — force UTC parse,
+        // otherwise the browser treats it as local time and shifts every candle.
+        const ts = Math.floor(
+          new Date(typeof c.datetime === "string" ? c.datetime.replace(" ", "T") + "Z" : c.datetime).getTime() / 1000
+        );
         return { time: ts as Time, open: c.open, high: c.high, low: c.low, close: c.close };
       })
       .filter((d) => {
