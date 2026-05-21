@@ -1,49 +1,57 @@
-## Why no scans show up
+## Problem
 
-Cron is firing `bot-scanner` every 5 minutes and succeeds at the HTTP layer, but the actual scan crashes inside the function with:
+The floating HUD on `/chart` has 12 toggle chips, but several don't visibly do anything — most obviously **SES** (sessions) and **KZ** (kill zones).
 
+Root cause: the HUD lives in `src/pages/Chart.tsx` and only controls which data is passed into `<SMCChart overlays={...} />` (by zero‑ing the relevant arrays). That works for data‑driven layers (OB, FVG, SP, LIQ, FIB, S/R, BOS, DISP, JDS, IZ).
+
+But `SMCChart` has its own internal `visibleLayers` state, and the **sessions** and **killZones** layers are drawn purely from time (no input data to filter). They're added to the default set unconditionally:
+
+```ts
+// SMCChart.tsx
+const [visibleLayers, setVisibleLayers] = useState<Set<OverlayLayer>>(
+  new Set(defaultLayers ?? allLayers)
+);
+…
+if (!visibleLayers.has("sessions") && !visibleLayers.has("killZones")) return;
 ```
-ERROR [scan] background error for <user>: liqTolBase is not defined
-    at runScanForUser (bot-scanner/index.ts:3970:72)  ← reported by Deno; root cause at line 3356/3368
-```
 
-So no scan rows get written, the UI shows "no scans", and trades never get placed.
+Since Chart.tsx hides the SMCChart toolbar (`hideToolbar`), the user has no way to turn them off, and the HUD chip can't reach that internal state.
 
-## Root cause
-
-In `supabase/functions/bot-scanner/index.ts` (HTF Phase 2 block, lines ~3320–3370):
-
-- `liqTolBase` and `liqMinTouches` are declared with `const` **inside** `if (dailyCandles.length >= 10) { … }` (lines 3341–3343).
-- They are then referenced **outside** that block, inside the separate `if (h4Candles.length >= 20)` block (line 3356) and `if (hourlyCandles.length >= 20)` block (line 3368).
-- `const` is block-scoped, so those references throw `ReferenceError: liqTolBase is not defined`, killing the whole scan.
+A secondary issue: clicking IZ/FIB/S/R toggles re‑filters the data, but other internal layers (e.g. anything SMCChart decides to keep on by default) are still influenced only by SMCChart's own state, not the HUD. Today every layer Chart.tsx cares about happens to be data‑gated, so that works — but it's fragile.
 
 ## Fix
 
-Hoist the two consts to the outer scope (just above the daily `if`) so all three timeframe blocks can see them:
+Make HUD the single source of truth by letting Chart.tsx control SMCChart's visible layers directly.
 
-```ts
-const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
-const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
-const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
+### `src/components/SMCChart.tsx`
+- Add an optional controlled prop: `visibleLayers?: Set<OverlayLayer>`.
+- If provided, use it instead of the internal `useState` (skip `setVisibleLayers` updates — toolbar toggles become no‑ops in controlled mode, which is fine because we already hide the toolbar from Chart.tsx).
+- Leave existing uncontrolled behavior intact for other call sites (e.g. `TradeReplayChart`, `Backtest`).
 
-if (dailyCandles.length >= 10) { … uses liqTolBase, liqMinTouches … }
-if (h4Candles.length >= 20)    { … uses liqTolBase, liqMinTouches … }
-if (hourlyCandles.length >= 20){ … uses liqTolBase, liqMinTouches … }
-```
+### `src/pages/Chart.tsx`
+- Build a `Set<OverlayLayer>` from `overlayVisibility`, mapping HUD keys → SMCChart layer ids:
+  - `iz → impulseZone`, `ob → orderBlocks`, `fvg → fvgs`, `sp → swingPoints`,
+    `liq → liquidity`, `fib → fibs`, `sr → support` + `resistance`,
+    `bos → bosChoch`, `disp → displacement`, `judas → judasSwing`,
+    `sessions → sessions`, `killZones → killZones`.
+  - Always include `htfPOIs` and `trades` (no HUD chip for them today; keep current behavior).
+- Pass this as `<SMCChart visibleLayers={…} />`.
+- Drop the now‑redundant `overlayVisibility.*` gates inside `chartOverlays` (or keep them — they're a harmless extra filter). Keep the `fib`/`sr` compute gates as a perf optimization.
 
-Remove the inner duplicate declarations from the daily block.
-
-No business-logic change — same values, just correct scope.
-
-## Validation
-
-1. Redeploy `bot-scanner` (auto on save, plus an explicit redeploy to be sure).
-2. Trigger a manual scan from the Bot page (or wait for the next 5-min cron).
-3. Check edge function logs — the `liqTolBase` ReferenceError should be gone.
-4. Confirm a new row appears in `scan_logs` with `pairs_scanned > 0`.
-5. UI on `/bot` should show the new "Latest Scan" timestamp updating.
+### `src/components/ChartOverlayHUD.tsx`
+- Flip `DEFAULT_VISIBILITY.sessions` and `DEFAULT_VISIBILITY.killZones` to `true` so the initial state matches what was actually rendering before.
 
 ## Out of scope
 
-- The `Broker equity fetch failed … invalid peer certificate` warning from MetaApi is separate (and non-fatal — code already falls back to paper). Not touching that here unless you want me to.
-- No trading-bot logic changes; this is purely a scope/declaration bug fix.
+- No bot logic, no backend, no SMCChart drawing changes.
+- Not adding HUD chips for `htfPOIs` / `trades` (they have no chip today).
+- Not touching `TradeReplayChart` / `Backtest` usage of `SMCChart` — they stay uncontrolled.
+
+## Validation
+
+1. Open `/chart`. All 12 chips should visibly toggle their layer on/off:
+   - SES → session boxes appear/disappear
+   - KZ → kill zone shading appears/disappears
+   - IZ/OB/FVG/SP/LIQ/FIB/S/R/BOS/DISP/JDS → existing behavior preserved
+2. Confluence pill and tooltips unchanged.
+3. `/replay` and `/backtest` charts still render with their own toolbar working (uncontrolled mode).

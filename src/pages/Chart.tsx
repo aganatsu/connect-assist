@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from "@/components/AppShell";
 import SMCChart, { type SMCOverlays } from "@/components/SMCChart";
+import type { OverlayLayer as SMCOverlayLayer } from "@/components/SMCChart";
 import { ChartOverlayHUD, DEFAULT_VISIBILITY, type OverlayLayer, type OverlayVisibility } from "@/components/ChartOverlayHUD";
 import { ChartContextPanel } from "@/components/ChartContextPanel";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
@@ -37,6 +38,27 @@ export default function Chart() {
   const toggleOverlay = useCallback((layer: OverlayLayer) => {
     setOverlayVisibility(prev => ({ ...prev, [layer]: !prev[layer] }));
   }, []);
+
+  // Map HUD visibility → SMCChart layer set (controlled mode)
+  const smcVisibleLayers = useMemo(() => {
+    const s = new Set<SMCOverlayLayer>();
+    if (overlayVisibility.iz) s.add('impulseZone');
+    if (overlayVisibility.ob) s.add('orderBlocks');
+    if (overlayVisibility.fvg) s.add('fvgs');
+    if (overlayVisibility.sp) s.add('swingPoints');
+    if (overlayVisibility.liq) s.add('liquidity');
+    if (overlayVisibility.fib) s.add('fibs');
+    if (overlayVisibility.sr) { s.add('support'); s.add('resistance'); }
+    if (overlayVisibility.bos) s.add('bosChoch');
+    if (overlayVisibility.disp) s.add('displacement');
+    if (overlayVisibility.judas) s.add('judasSwing');
+    if (overlayVisibility.sessions) s.add('sessions');
+    if (overlayVisibility.killZones) s.add('killZones');
+    // Always-on layers (no HUD chip)
+    s.add('htfPOIs');
+    s.add('trades');
+    return s;
+  }, [overlayVisibility]);
 
   // Listen for global symbol change
   useEffect(() => {
@@ -297,6 +319,7 @@ export default function Chart() {
               overlays={chartOverlays}
               loading={!candles}
               hideToolbar
+              visibleLayers={smcVisibleLayers}
             />
             {/* Floating HUD */}
             <ChartOverlayHUD
