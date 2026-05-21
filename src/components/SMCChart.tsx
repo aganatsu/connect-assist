@@ -307,7 +307,7 @@ function isKillZone(nyHour: number): "london" | "newyork" | null {
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolbar, compact }: Props) {
+function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolbar, compact, visibleLayers: visibleLayersProp }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -315,19 +315,21 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
-  const [visibleLayers, setVisibleLayers] = useState<Set<OverlayLayer>>(
+  const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
     new Set(defaultLayers ?? allLayers)
   );
+  const visibleLayers = visibleLayersProp ?? visibleLayersState;
   const [tooltipData, setTooltipData] = useState<{ x: number; y: number; text: string } | null>(null);
 
   const toggleLayer = useCallback((layer: OverlayLayer) => {
+    if (visibleLayersProp) return; // controlled — no-op
     setVisibleLayers((prev) => {
       const next = new Set(prev);
       if (next.has(layer)) next.delete(layer);
       else next.add(layer);
       return next;
     });
-  }, []);
+  }, [visibleLayersProp]);
 
   // Convert candles to chart format
   const chartData: CandlestickData<Time>[] = useMemo(() => {
