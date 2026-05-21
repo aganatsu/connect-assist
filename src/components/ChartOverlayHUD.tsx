@@ -128,6 +128,6 @@ export const DEFAULT_VISIBILITY: OverlayVisibility = {
   bos: true,
   disp: true,
   judas: true,
-  sessions: false,
-  killZones: false,
+  sessions: true,
+  killZones: true,
 };
