@@ -833,7 +833,7 @@ Deno.serve(async (req) => {
           const entryPrice = parseFloat(pos.entry_price);
           let sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
           const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
-          const size = parseFloat(pos.size);
+          let size = parseFloat(pos.size);
           let closeReason: string | null = null;
           let exitPrice = currentPrice;
 
@@ -1036,6 +1036,7 @@ Deno.serve(async (req) => {
                 signal_reason: JSON.stringify(updatedSignalReasonPartial),
               }).eq("id", pos.id);
               exitFlags.partialTPActivated = true; // keep local in sync (unblocks trailing)
+              size = remainSize; // FIX: sync local size so same-cycle SL/TP close uses reduced size
               // Determine which bot's account to update based on position's bot_id
               const posBotId = pos.bot_id || "smc";
               const acctQuery = supabase.from("paper_accounts").select("balance, peak_balance").eq("user_id", user.id);
@@ -1062,7 +1063,7 @@ Deno.serve(async (req) => {
             const closeBotId = pos.bot_id || "smc";
             await supabase.from("paper_trade_history").insert({
               user_id: user.id, position_id: pos.position_id, symbol: pos.symbol,
-              direction: pos.direction, size: pos.size, entry_price: pos.entry_price,
+              direction: pos.direction, size: size.toString(), entry_price: pos.entry_price,
               exit_price: exitPrice.toString(), pnl: pnl.toFixed(2), pnl_pips: pnlPips.toFixed(1),
               open_time: pos.open_time, closed_at: new Date().toISOString(),
               close_reason: closeReason, signal_reason: pos.signal_reason || "",
