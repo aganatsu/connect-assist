@@ -3329,6 +3329,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     let htfLiquidityPools4H: LiquidityPool[] = [];
     let htfLiquidityPools1H: LiquidityPool[] = [];
 
+    // Liquidity-pool sensitivity (hoisted so all three TF blocks below can use them)
+    const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
+    const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
+    const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
+
     if (dailyCandles.length >= 10) {
       // Daily Fibonacci: ZigZag pivots → Fib levels
       const dZigzag = detectZigZagPivots(dailyCandles, 5, 20);
@@ -3338,9 +3343,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // Daily Premium/Discount zone
       htfPDD = calculatePremiumDiscount(dailyCandles);
       // Daily Liquidity Pools — sensitivity-driven tolerance + TF bump for daily
-      const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
-      const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
-      const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
       htfLiquidityPoolsD = detectLiquidityPools(dailyCandles, Math.min(liqTolBase + 0.10, 0.40), liqMinTouches);
     }
 

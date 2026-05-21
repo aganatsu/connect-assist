@@ -1,31 +1,49 @@
-# Remove duplicate chart overlay legend
+## Why no scans show up
 
-## Problem
-On `/chart` two overlay legends render:
-1. The new floating `ChartOverlayHUD` (IZ/OB/FVG/SP/LIQ/FIB/S/R + confluence pill) — intended.
-2. `SMCChart`'s built-in toolbar (IZ/OB/FVG/BRK/SP/LIQ/FIB/HTF/TRADE/S/R from `LAYER_DEFS`) — leftover, visible behind the new HUD.
+Cron is firing `bot-scanner` every 5 minutes and succeeds at the HTTP layer, but the actual scan crashes inside the function with:
 
-## Fix
-`SMCChart` already supports a `hideToolbar` prop. Pass it from `Chart.tsx`.
-
-### Edit: `src/pages/Chart.tsx` (line ~230)
-```tsx
-<SMCChart
-  candles={(candles as any[]) ?? []}
-  symbol={selectedSymbol}
-  overlays={chartOverlays}
-  loading={!candles}
-  hideToolbar          // ← add this
-/>
+```
+ERROR [scan] background error for <user>: liqTolBase is not defined
+    at runScanForUser (bot-scanner/index.ts:3970:72)  ← reported by Deno; root cause at line 3356/3368
 ```
 
-That's the only change. The new HUD remains the single source of truth for layer toggles, and the chips it drives already gate `chartOverlays` (via `overlayVisibility`), so the chart still respects toggles correctly.
+So no scan rows get written, the UI shows "no scans", and trades never get placed.
+
+## Root cause
+
+In `supabase/functions/bot-scanner/index.ts` (HTF Phase 2 block, lines ~3320–3370):
+
+- `liqTolBase` and `liqMinTouches` are declared with `const` **inside** `if (dailyCandles.length >= 10) { … }` (lines 3341–3343).
+- They are then referenced **outside** that block, inside the separate `if (h4Candles.length >= 20)` block (line 3356) and `if (hourlyCandles.length >= 20)` block (line 3368).
+- `const` is block-scoped, so those references throw `ReferenceError: liqTolBase is not defined`, killing the whole scan.
+
+## Fix
+
+Hoist the two consts to the outer scope (just above the daily `if`) so all three timeframe blocks can see them:
+
+```ts
+const liqSens = pairConfig.equalHighsLowsSensitivity ?? 3;
+const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
+const liqMinTouches = pairConfig.liquidityPoolMinTouches ?? 2;
+
+if (dailyCandles.length >= 10) { … uses liqTolBase, liqMinTouches … }
+if (h4Candles.length >= 20)    { … uses liqTolBase, liqMinTouches … }
+if (hourlyCandles.length >= 20){ … uses liqTolBase, liqMinTouches … }
+```
+
+Remove the inner duplicate declarations from the daily block.
+
+No business-logic change — same values, just correct scope.
+
+## Validation
+
+1. Redeploy `bot-scanner` (auto on save, plus an explicit redeploy to be sure).
+2. Trigger a manual scan from the Bot page (or wait for the next 5-min cron).
+3. Check edge function logs — the `liqTolBase` ReferenceError should be gone.
+4. Confirm a new row appears in `scan_logs` with `pairs_scanned > 0`.
+5. UI on `/bot` should show the new "Latest Scan" timestamp updating.
 
 ## Out of scope
-- No changes to `SMCChart` internals, overlay drawing, or analysis logic.
-- Other pages that mount `SMCChart` without `hideToolbar` (e.g. `TradeReplay`) keep their existing toolbar.
 
-## Verify
-- `/chart` shows only the floating HUD; no second row of chips behind it.
-- Toggling IZ/OB/FVG/SP/LIQ/FIB/S/R from the HUD still hides/shows the corresponding overlays on the chart.
-- No console errors.
+- The `Broker equity fetch failed … invalid peer certificate` warning from MetaApi is separate (and non-fatal — code already falls back to paper). Not touching that here unless you want me to.
+- No trading-bot logic changes; this is purely a scope/declaration bug fix.
