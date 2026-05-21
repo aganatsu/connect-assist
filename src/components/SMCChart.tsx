@@ -299,6 +299,27 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       handleScale: true,
     });
 
+    // Determine price precision based on symbol
+    // JPY pairs = 3 decimals, crypto = 2, most forex = 5
+    const getMinMove = (sym?: string): number => {
+      if (!sym) return 0.00001;
+      const s = sym.toUpperCase();
+      if (s.includes("JPY") || s.includes("HUF")) return 0.001;
+      if (s.includes("XAU") || s.includes("GOLD")) return 0.01;
+      if (s.includes("BTC") || s.includes("ETH")) return 0.01;
+      if (s.includes("XAG") || s.includes("SILVER")) return 0.001;
+      return 0.00001; // Standard forex: 5 decimal places (pipette)
+    };
+    const getPrecision = (sym?: string): number => {
+      if (!sym) return 5;
+      const s = sym.toUpperCase();
+      if (s.includes("JPY") || s.includes("HUF")) return 3;
+      if (s.includes("XAU") || s.includes("GOLD")) return 2;
+      if (s.includes("BTC") || s.includes("ETH")) return 2;
+      if (s.includes("XAG") || s.includes("SILVER")) return 3;
+      return 5; // Standard forex: 5 decimal places
+    };
+
     const series = chart.addCandlestickSeries({
       upColor: COLORS.bullCandle,
       downColor: COLORS.bearCandle,
@@ -306,6 +327,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       borderDownColor: COLORS.bearCandle,
       wickUpColor: COLORS.bullCandle,
       wickDownColor: COLORS.bearCandle,
+      priceFormat: {
+        type: "price",
+        precision: getPrecision(symbol),
+        minMove: getMinMove(symbol),
+      },
     });
 
     chartRef.current = chart;
@@ -325,7 +351,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       chartRef.current = null;
       candleSeriesRef.current = null;
     };
-  }, [compact]);
+  }, [compact, symbol]);
 
   // Update candle data
   useEffect(() => {

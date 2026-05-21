@@ -90,6 +90,19 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       handleScale: true,
     });
 
+    // Derive price precision from candle data (check decimal places of first candle close)
+    const inferPrecision = (): number => {
+      if (!candles.length) return 5;
+      const sample = candles[0].close;
+      const str = sample.toString();
+      const dotIdx = str.indexOf(".");
+      if (dotIdx === -1) return 2;
+      const decimals = str.length - dotIdx - 1;
+      return Math.max(decimals, 4); // At least 4 decimal places
+    };
+    const precision = inferPrecision();
+    const minMove = 1 / Math.pow(10, precision);
+
     const series = chart.addCandlestickSeries({
       upColor: "#22c55e",
       downColor: "#ef4444",
@@ -97,6 +110,11 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       borderDownColor: "#ef4444",
       wickUpColor: "#22c55e",
       wickDownColor: "#ef4444",
+      priceFormat: {
+        type: "price",
+        precision,
+        minMove,
+      },
     });
 
     chartRef.current = chart;
@@ -116,7 +134,7 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       chartRef.current = null;
       candleSeriesRef.current = null;
     };
-  }, []);
+  }, [candles]);
 
   /* ─── update candle data ─── */
   useEffect(() => {
