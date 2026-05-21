@@ -194,6 +194,8 @@ interface Props {
   defaultLayers?: OverlayLayer[];
   hideToolbar?: boolean;
   compact?: boolean;
+  /** Controlled visible layers — when provided, overrides internal state */
+  visibleLayers?: Set<OverlayLayer>;
 }
 
 // ─── Color Constants ────────────────────────────────────────────────────────
