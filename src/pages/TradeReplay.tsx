@@ -176,7 +176,7 @@ export default function TradeReplay() {
     return candleData
       .map((c: any) => {
         const time = c.datetime
-          ? Math.floor(new Date(c.datetime).getTime() / 1000)
+          ? Math.floor(new Date(c.datetime.replace(" ", "T") + "Z").getTime() / 1000)
           : c.time || c.timestamp;
         return {
           time: time as Time,
