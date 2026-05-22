@@ -313,6 +313,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const structureLineSeriesRef = useRef<any[]>([]);
 
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
