@@ -1,75 +1,54 @@
-# Task: Tiered Scoring Display Sync
-
-## Branch: manus/tiered-scoring-display-sync
-
+# Task: Fix Market Order Look-Ahead Bias
+## Branch: manus/fix-market-order-lookahead
 ## Behavior changes
-
-none — pure display fix. No change to trade logic, gate decisions, scoring, or position sizing.
-
-The bot's actual gate decisions were already correct (Gate 19 runs AFTER the impulse zone credits
-and reads the updated `analysis.tieredScoring`). Only the dashboard display was showing stale data
-because `detail.tieredScoring` held a reference to the pre-credit object.
+1. **Market orders now fill at current price (analysis.lastPrice)** — previously, when `izGateMode === "hard"`, market orders used the zone's `refinedEntry` or zone midpoint as the fill price, which was look-ahead bias (recording fills at prices that hadn't been reached yet).
+2. **SL sanity guard added** — trades where the market entry price is already past the SL are now rejected with status `skipped_sl_sanity`. This catches scenarios where the zone-based SL is too tight relative to the actual current price.
+3. **Some trades that previously appeared profitable will now be correctly rejected** — specifically, trades where the "entry" was artificially favorable due to using zone price instead of market price. These trades would have been instant losers in real execution.
 
 ## Files modified
+- `supabase/functions/bot-scanner/index.ts` — Replaced zone-price market entry logic (lines 4694-4712) with `analysis.lastPrice`. Added SL sanity guard that skips trades where entry is already past SL.
+- `supabase/functions/_shared/marketOrderLookahead.test.ts` — New test file with 8 tests covering the fix.
 
-- `supabase/functions/bot-scanner/index.ts` — Added 2 sync blocks:
-  1. Line ~4271: Syncs `detail.tieredScoring` and `detail.score` in the above-threshold path (before gates are assigned to detail)
-  2. Line ~5170: Catch-all sync before `scanDetails.push(detail)` for all paths (below-threshold, staged, no-direction)
-- `supabase/functions/_shared/tieredScoringDisplaySync.test.ts` — New test file (3 tests)
+## Caution file explanation: bot-scanner/index.ts
+The change removes 10 lines of zone-entry logic for market orders and replaces with:
+1. `const marketEntryPrice = analysis.lastPrice;` — single source of truth for market fills
+2. An SL sanity guard (8 lines) that checks if entry is already past SL before placing the trade
 
-## Why bot-scanner/index.ts was modified
-
-The root cause is a JavaScript reference semantics issue:
-1. `detail.tieredScoring = analysis.tieredScoring` (line 3461) stores a reference to the original object
-2. Impulse zone credit code (lines 3934-4120) creates a NEW object: `analysis.tieredScoring = { ...ts, tier1Count: newCount }`
-3. `detail.tieredScoring` still points to the OLD object with `tier1Count: 1`
-4. The dashboard reads `detail.tieredScoring` and shows "only 1 core factor" even though the gate correctly passed
-
-The fix adds `detail.tieredScoring = analysis.tieredScoring` after all credits are applied, ensuring
-the dashboard display matches the actual gate decision.
+This is a **behavior change that affects which trades get taken**: trades where the current price is already past the SL (which were previously hidden by the look-ahead bias) will now be correctly skipped. This is intentional — these trades would have been instant losses in live execution.
 
 ## Tests added
-
-1. `detail.tieredScoring stays in sync after impulse zone credit reassignment` — Simulates the exact bug: creates detail with reference to original tieredScoring, then reassigns analysis.tieredScoring (as impulse zone credit does), verifies the sync logic updates detail.tieredScoring.
-2. `detail.tieredScoring is NOT overwritten when no credit was applied` — Verifies that when no credit fires (references are already the same), the sync is a no-op.
-3. `detail.factors reflects in-place mutations from impulse zone credit` — Verifies that factor mutations (present=true) are visible through the reference (no copy issue there).
+| Test | Assertion |
+|------|-----------|
+| Market entry uses lastPrice, not zone refinedEntry | entryPrice === lastPrice, not zone price |
+| Market entry uses lastPrice even when zone data is available | Ignores refinedEntry and zone midpoint |
+| SL sanity guard: short with entry above SL is rejected | entry >= SL → rejected |
+| SL sanity guard: short with entry below SL is accepted | entry < SL → accepted |
+| SL sanity guard: long with entry below SL is rejected | entry <= SL → rejected |
+| SL sanity guard: long with entry above SL is accepted | entry > SL → accepted |
+| SL sanity guard: entry exactly at SL is rejected for both directions | entry == SL → rejected |
+| Regression: old code would have used zone price, new code uses lastPrice | XAU/USD scenario from user report: entry 4545 > SL 4544.367 → correctly rejected |
 
 ## Tests run
-
 ```
-# New tests:
-ok | 3 passed | 0 failed (8ms)
-
-# All supabase tests (this branch):
-FAILED | 677 passed | 33 failed (7s)
-
-# All supabase tests (main branch baseline):
-FAILED | 676 passed | 34 failed (7s)
-
-# Net: +1 pass, -1 fail (our 3 new tests pass; all failures are pre-existing)
+supabase/ tests: 684 passed | 34 failed (all pre-existing, same as main branch)
+New test file: 8 passed | 0 failed
 ```
 
 ## Regression check
-
-- Compared test results between `main` (676 pass / 34 fail) and this branch (677 pass / 33 fail)
-- No new failures introduced
-- The change is display-only: it syncs a reference after all scoring logic has completed, so it cannot alter any gate decision or trade execution
-- Gate 19 at line 4221 reads `analysis.tieredScoring` (the updated one), not `detail.tieredScoring`
-- The sync happens AFTER all gate decisions are made, so it's impossible for this change to affect trade logic
+- Backtest engine already uses `analysis.lastPrice` for entry — no change needed there
+- The 34 test failures are identical to main branch (pre-existing, unrelated to this change)
+- The fix intentionally changes behavior: trades that relied on look-ahead zone pricing will now be rejected by the SL sanity guard
 
 ## Open questions
-
-None — this is a straightforward reference sync fix with no ambiguity.
+1. **Limit orders are the correct path for zone-price entries.** If you want entries at the zone's refined level, enable `limitOrderEnabled: true` in config. The limit order system already correctly waits for price to reach the level before filling. Should I enable this by default for `izGateMode: "hard"`?
+2. **Existing paper positions** that were opened with look-ahead entries are still in the database. Want me to write a query to flag/close them?
 
 ## Suggested PR title and description
-
-**Title:** fix: sync detail.tieredScoring after impulse zone credits (display-only)
+**Title:** Fix look-ahead bias: market orders use actual price, not zone price
 
 **Description:**
-The dashboard was showing contradictory information: factor checkmarks showed "present" (via IMPULSE-ZONE CREDIT) but the Tier Gates section showed "only 1 core factor — FAILED."
+Market orders in the bot-scanner were using the impulse zone's `refinedEntry` as the fill price when `izGateMode === "hard"`. This is look-ahead bias — the bot recorded fills at prices that hadn't been reached yet, inflating paper P&L.
 
-Root cause: `detail.tieredScoring` was set at line 3461 (before credits), but impulse zone credit code at lines 3934-4120 creates a NEW `analysis.tieredScoring` object. The detail reference became stale.
+Fix: Market orders always fill at `analysis.lastPrice` (the actual current price). Zone-price entries should use limit orders (`limitOrderEnabled: true`) which correctly wait for price to touch the level.
 
-Fix: Sync `detail.tieredScoring = analysis.tieredScoring` after all credits complete, in both the above-threshold and below-threshold code paths.
-
-No behavior change — the bot's actual gate decisions were already correct (Gate 19 at line 4221 reads the updated `analysis.tieredScoring`). This only fixes what the dashboard displays.
+Also adds an SL sanity guard that rejects trades where the entry price is already past the SL (which the look-ahead was masking).
