@@ -185,8 +185,12 @@ export default function Chart() {
       const recentHighs = swings.filter((s: any) => s.type === 'high').slice(-5);
       const recentLows = swings.filter((s: any) => s.type === 'low').slice(-5);
       if (recentHighs.length > 0 && recentLows.length > 0) {
-        const swingHigh = Math.max(...recentHighs.map((s: any) => s.price));
-        const swingLow = Math.min(...recentLows.map((s: any) => s.price));
+        const swingHighPoint = recentHighs.reduce((max: any, s: any) => s.price > max.price ? s : max, recentHighs[0]);
+        const swingLowPoint = recentLows.reduce((min: any, s: any) => s.price < min.price ? s : min, recentLows[0]);
+        const swingHigh = swingHighPoint.price;
+        const swingLow = swingLowPoint.price;
+        const startIndex = Math.min(swingHighPoint.index ?? 0, swingLowPoint.index ?? 0);
+        const endIndex = Math.max(swingHighPoint.index ?? candles.length - 1, swingLowPoint.index ?? candles.length - 1);
         const range = swingHigh - swingLow;
         if (range > 0) {
           const FIB_RATIOS = [
@@ -200,6 +204,8 @@ export default function Chart() {
             level: f.ratio,
             price: swingHigh - range * f.ratio,
             label: f.label,
+            startIndex,
+            endIndex,
           }));
           computedFiftyPercent = swingHigh - range * 0.5;
         }
