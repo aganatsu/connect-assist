@@ -1004,12 +1004,23 @@ async function runSafetyGates(
   }
 
   // Gate 2: Premium/Discount zone filter
-  if (config.onlyBuyInDiscount && direction === "long" && analysis.pd.currentZone === "premium") {
-    gates.push({ passed: false, reason: "Buying in premium zone rejected" });
-  } else if (config.onlySellInPremium && direction === "short" && analysis.pd.currentZone === "discount") {
-    gates.push({ passed: false, reason: "Selling in discount zone rejected" });
-  } else {
-    gates.push({ passed: true, reason: "P/D zone OK" });
+  {
+    const pdZone = analysis.pd.currentZone;
+    const pdPct = analysis.pd.zonePercent ?? 50;
+    const curPrice = analysis.lastPrice;
+    const fmtP = (p: number) => p > 10 ? p.toFixed(3) : p.toFixed(5);
+    // Back-calculate swing high/low from zonePercent:
+    // zonePercent = ((price - swingLow) / range) * 100
+    // range = price / (pdPct/100) when pdPct > 0 (price - swingLow = range * pdPct/100 → range = (price - swingLow)/(pdPct/100))
+    // swingLow = price - range*(pdPct/100), swingHigh = swingLow + range
+
+    if (config.onlyBuyInDiscount && direction === "long" && pdZone === "premium") {
+      gates.push({ passed: false, reason: `Buying in premium zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (premium > 55%, need discount < 45% to buy)` });
+    } else if (config.onlySellInPremium && direction === "short" && pdZone === "discount") {
+      gates.push({ passed: false, reason: `Selling in discount zone rejected — price ${fmtP(curPrice)} at ${pdPct.toFixed(1)}% of range (discount < 45%, need premium > 55% to sell)` });
+    } else {
+      gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%)` });
+    }
   }
 
   // Gate 3: Structural Conviction — block when entry-TF has 0% fractals in entry direction + chaotic structure
