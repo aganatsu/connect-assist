@@ -955,46 +955,53 @@ Deno.test("findImpulseLeg — rejects impulse when origin is broken", () => {
 });
 
 Deno.test("findImpulseLeg — ETH-like bearish impulse with wave structure is found", () => {
-  // Simulates the ETH/USD scenario: bearish impulse from 2337 to 2299
+  // Simulates the ETH/USD scenario: bearish impulse from ~2350 to 2299
   // with internal pullbacks (consolidation around 2325-2330 area).
+  // Key: consolidation highs must be BELOW the impulse origin high so that
+  // the origin candle is detected as a swing high by the lookback algorithm.
   const candles: Candle[] = [];
 
-  // Phase 1: Consolidation around 2340 (candles 0-9)
+  // Phase 1: Consolidation around 2330 (candles 0-9) — highs stay below 2340
   for (let i = 0; i < 10; i++) {
-    const base = 2340 + (Math.random() * 4 - 2);
-    candles.push(makeCandle(base, base + 3, base - 3, base + 1, i));
+    candles.push(makeCandle(2330, 2334, 2327, 2331, i));
   }
 
-  // Phase 2: Push up to 2337 high (candle 10)
-  candles.push(makeCandle(2335, 2338, 2333, 2337, 10));
+  // Phase 2: Push up to 2350 high — this becomes the impulse origin swing high (candle 10)
+  candles.push(makeCandle(2335, 2350, 2333, 2348, 10));
 
-  // Phase 3: First leg down to 2320 (candles 11-13)
-  candles.push(makeCandle(2337, 2337.5, 2328, 2329, 11));
-  candles.push(makeCandle(2329, 2330, 2322, 2323, 12));
-  candles.push(makeCandle(2323, 2325, 2319, 2320, 13));
+  // Phase 3: First leg down to 2320, creating a swing low (candles 11-14)
+  candles.push(makeCandle(2348, 2349, 2338, 2340, 11));
+  candles.push(makeCandle(2340, 2341, 2328, 2330, 12));
+  candles.push(makeCandle(2330, 2331, 2318, 2320, 13));
+  candles.push(makeCandle(2320, 2321, 2316, 2318, 14));
 
-  // Phase 4: Internal pullback to 2330 (>50% retrace of 2337->2320)
-  candles.push(makeCandle(2320, 2328, 2319, 2327, 14));
-  candles.push(makeCandle(2327, 2331, 2326, 2330, 15));
+  // Phase 4: Internal pullback to 2335 — creates a swing low at idx ~14 area
+  // then rallies, making idx 14 a confirmed swing low (candles 15-17)
+  candles.push(makeCandle(2318, 2330, 2317, 2328, 15));
+  candles.push(makeCandle(2328, 2336, 2327, 2335, 16));
+  candles.push(makeCandle(2335, 2337, 2333, 2334, 17));
 
-  // Phase 5: Second leg down through 2320 to 2299 — creates BOS
-  candles.push(makeCandle(2330, 2330.5, 2318, 2319, 16));
-  candles.push(makeCandle(2319, 2320, 2308, 2309, 17));
-  candles.push(makeCandle(2309, 2310, 2300, 2301, 18));
-  candles.push(makeCandle(2301, 2302, 2298, 2299, 19));
+  // Phase 5: Second leg down — breaks below the swing low at 2316 → bearish BOS (candles 18-22)
+  candles.push(makeCandle(2334, 2335, 2320, 2322, 18));
+  candles.push(makeCandle(2322, 2323, 2310, 2312, 19));
+  candles.push(makeCandle(2312, 2313, 2302, 2304, 20));
+  candles.push(makeCandle(2304, 2305, 2298, 2299, 21));
+  candles.push(makeCandle(2299, 2300, 2296, 2298, 22));
 
-  // Phase 6: Retracement up — stays below origin 2338 (candles 20-34)
-  let price = 2299;
-  for (let i = 20; i < 35; i++) {
+  // Phase 6: Retracement up — stays below origin 2350 (candles 23-34)
+  let price = 2298;
+  for (let i = 23; i < 35; i++) {
     const prev = price;
-    price += 2.5;
+    price += 3;
     candles.push(makeCandle(prev, price + 1, prev - 0.5, price, i));
   }
 
   const result = findImpulseLeg(candles, "bearish");
   assertExists(result, "Should find bearish impulse in ETH-like scenario");
-  assert(result.isValid, "Impulse should be valid — origin (2338) not broken");
+  assert(result.isValid, "Impulse should be valid — origin not broken by retracement");
   assertEquals(result.direction, "bearish");
+  // The impulse traces from the swing high before the BOS (idx 17, high=2337)
+  // down to the BOS candle (idx 22, low=2296). Origin (2350) is not broken.
   assert(result.high >= 2330, `Impulse high ${result.high} should be near 2337`);
-  assert(result.low <= 2305, `Impulse low ${result.low} should be near 2299`);
+  assert(result.low <= 2300, `Impulse low ${result.low} should be near 2296`);
 });
