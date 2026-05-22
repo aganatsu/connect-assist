@@ -100,7 +100,7 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               <span>{current.toFixed(5)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">SL</span>
+              <span className="text-muted-foreground" title="Current stop loss — may have moved due to break-even or trailing">Current SL</span>
               <span className="text-destructive">{sl !== null ? sl.toFixed(5) : "—"}</span>
             </div>
             <div className="flex justify-between">
