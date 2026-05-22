@@ -105,7 +105,7 @@ function SLTPEditor({ position, onSaved }: { position: any; onSaved: () => void 
   return (
     <div className="flex items-end gap-3 pt-2 border-t border-border/30">
       <div className="space-y-1 flex-1">
-        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Stop Loss</Label>
+        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">Current SL</Label>
         <Input
           type="number" step="0.00001" value={sl}
           onChange={(e) => setSl(e.target.value)} placeholder="—"

@@ -283,7 +283,7 @@ function OpenPositionsContent({
             <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Lots</th>
             <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Entry</th>
             <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">Current</th>
-            <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">SL</th>
+            <th className="text-right px-2 py-1.5 font-medium text-muted-foreground" title="Current SL — may have moved from initial via break-even or trailing">Current SL</th>
             <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">TP</th>
             <th className="text-right px-2 py-1.5 font-medium text-muted-foreground">P&L</th>
             <th className="text-center px-2 py-1.5 font-medium text-muted-foreground">Source</th>
