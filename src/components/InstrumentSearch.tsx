@@ -10,10 +10,10 @@ interface InstrumentSearchProps {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  forex: "text-blue-400",
-  index: "text-amber-400",
-  commodity: "text-yellow-400",
-  crypto: "text-purple-400",
+  forex: "text-info-c",
+  index: "text-warn",
+  commodity: "text-highlight",
+  crypto: "text-tier3",
 };
 
 export function InstrumentSearch({ open, onClose, mobile }: InstrumentSearchProps) {

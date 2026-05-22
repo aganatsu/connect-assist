@@ -1108,7 +1108,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
                 className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded-full transition-all flex-shrink-0 border ${
                   active
                     ? "border-current bg-white/5"
-                    : "border-transparent text-gray-600 hover:text-gray-400"
+                    : "border-transparent text-gray-600 hover:text-muted-foreground"
                 }`}
                 style={{ color: active ? layer.color : undefined }}
                 title={`Toggle ${layer.label}`}
@@ -1127,7 +1127,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
             if (risk === 0) return null;
             const rr = (reward / risk).toFixed(1);
             return (
-              <span className="ml-auto text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full flex-shrink-0">
+              <span className="ml-auto text-[10px] font-mono font-bold text-profit bg-badge-profit px-2 py-0.5 rounded-full flex-shrink-0">
                 {rr}R
               </span>
             );
@@ -1159,7 +1159,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
             <div className="w-1.5 h-8 bg-cyan-500 animate-pulse" />
             <div className="w-1.5 h-8 bg-cyan-500 animate-pulse" style={{ animationDelay: "0.15s" }} />
             <div className="w-1.5 h-8 bg-cyan-500 animate-pulse" style={{ animationDelay: "0.3s" }} />
-            <span className="text-xs font-mono text-gray-500 ml-3 uppercase tracking-wider">
+            <span className="text-xs font-mono text-muted-foreground ml-3 uppercase tracking-wider">
               Loading chart
             </span>
           </div>

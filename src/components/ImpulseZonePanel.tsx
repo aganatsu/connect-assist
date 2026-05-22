@@ -58,19 +58,19 @@ export function ImpulseZonePanel({ data }: Props) {
   // Color scheme based on zone status
   const borderColor = hasZone
     ? bestZone?.priceAtZone
-      ? "border-emerald-500/40"
+      ? "border-profit/40"
       : "border-violet-500/30"
     : "border-zinc-500/20";
   const bgColor = hasZone
     ? bestZone?.priceAtZone
-      ? "bg-emerald-500/5"
-      : "bg-violet-500/5"
+      ? "bg-badge-profit"
+      : "bg-badge-info"
     : "bg-zinc-500/5";
   const titleColor = hasZone
     ? bestZone?.priceAtZone
-      ? "text-emerald-400"
-      : "text-violet-400"
-    : "text-zinc-400";
+      ? "text-profit"
+      : "text-tier3"
+    : "text-muted-foreground";
 
   // Format price based on magnitude
   const fmt = (price: number | null | undefined) => {
@@ -83,10 +83,10 @@ export function ImpulseZonePanel({ data }: Props) {
 
   // Score badge color
   const scoreBadgeColor = (score: number) => {
-    if (score >= 5) return "bg-emerald-500/20 text-emerald-300";
-    if (score >= 3) return "bg-violet-500/20 text-violet-300";
-    if (score >= 1) return "bg-amber-500/20 text-amber-300";
-    return "bg-zinc-500/20 text-zinc-400";
+    if (score >= 5) return "bg-badge-profit text-profit";
+    if (score >= 3) return "bg-badge-info text-tier3";
+    if (score >= 1) return "bg-badge-warn text-warn";
+    return "bg-zinc-500/20 text-muted-foreground";
   };
 
   return (
@@ -99,19 +99,19 @@ export function ImpulseZonePanel({ data }: Props) {
         {/* TF badges */}
         <div className="flex gap-0.5">
           <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-            h1HasZone ? "bg-blue-500/20 text-blue-300" : "bg-zinc-500/10 text-zinc-500"
+            h1HasZone ? "bg-badge-info text-info-c" : "bg-zinc-500/10 text-muted-foreground"
           }`}>1H{h1HasZone ? " ✓" : ""}</span>
           <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-            h4HasZone ? "bg-purple-500/20 text-purple-300" : "bg-zinc-500/10 text-zinc-500"
+            h4HasZone ? "bg-purple-500/20 text-tier3" : "bg-zinc-500/10 text-muted-foreground"
           }`}>4H{h4HasZone ? " ✓" : ""}</span>
         </div>
         {/* Status badge */}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-auto ${
           hasZone
             ? bestZone?.priceAtZone
-              ? "bg-emerald-500/20 text-emerald-300"
-              : "bg-violet-500/15 text-violet-300"
-            : "bg-zinc-500/15 text-zinc-400"
+              ? "bg-badge-profit text-profit"
+              : "bg-badge-info text-tier3"
+            : "bg-zinc-500/15 text-muted-foreground"
         }`}>
           {hasZone ? (bestZone?.priceAtZone ? "AT ZONE" : "ZONE FOUND") : "NO ZONE"}
         </span>
@@ -123,11 +123,11 @@ export function ImpulseZonePanel({ data }: Props) {
           {/* Zone type + Fib + Score row */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-              bestZone.type === "ob" ? "bg-orange-500/15 text-orange-300" : "bg-cyan-500/15 text-cyan-300"
+              bestZone.type === "ob" ? "bg-badge-warn text-warn" : "bg-cyan-500/15 text-cyan-300"
             }`}>
               {bestZone.type.toUpperCase()}
             </span>
-            <span className="text-[11px] font-mono text-amber-300 px-1 py-0.5 rounded bg-amber-500/10">
+            <span className="text-[11px] font-mono text-warn px-1 py-0.5 rounded bg-badge-warn">
               Fib {fibLabel(bestZone.fibLevel)}
             </span>
             <span className={`text-[11px] font-mono font-bold px-1.5 py-0.5 rounded ${scoreBadgeColor(bestZone.totalScore)}`}>
@@ -147,7 +147,7 @@ export function ImpulseZonePanel({ data }: Props) {
             {impulse && (
               <>
                 <span className="text-muted-foreground ml-1">Impulse:</span>
-                <span className={impulse.direction === "bullish" ? "text-emerald-400" : "text-red-400"}>
+                <span className={impulse.direction === "bullish" ? "text-profit" : "text-loss"}>
                   {impulse.direction === "bullish" ? "↑" : "↓"} {fmt(impulse.low)} – {fmt(impulse.high)}
                 </span>
               </>
@@ -157,17 +157,17 @@ export function ImpulseZonePanel({ data }: Props) {
           {/* Confirmation badges */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-              bestZone.srConfirmed ? "bg-emerald-500/15 text-emerald-300" : "bg-zinc-500/10 text-zinc-500"
+              bestZone.srConfirmed ? "bg-badge-profit text-profit" : "bg-zinc-500/10 text-muted-foreground"
             }`}>
               S/R {bestZone.srConfirmed ? "✓" : "✗"}
             </span>
             <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-              bestZone.ltfRefined ? "bg-emerald-500/15 text-emerald-300" : "bg-zinc-500/10 text-zinc-500"
+              bestZone.ltfRefined ? "bg-badge-profit text-profit" : "bg-zinc-500/10 text-muted-foreground"
             }`}>
               LTF {bestZone.ltfRefined ? `✓ ${bestZone.ltfType?.toUpperCase() || ""}` : "✗"}
             </span>
             {bestZone.refinedEntry && (
-              <span className={`text-[10px] font-mono ${bestZone.priceAtZone ? "text-amber-300" : "text-muted-foreground"}`}>
+              <span className={`text-[10px] font-mono ${bestZone.priceAtZone ? "text-warn" : "text-muted-foreground"}`}>
                 {bestZone.priceAtZone ? "Trigger: " : "Entry: "}{fmt(bestZone.refinedEntry)}
               </span>
             )}
@@ -177,7 +177,7 @@ export function ImpulseZonePanel({ data }: Props) {
               </span>
             )}
             {bestZone.priceAtZone && (
-              <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 animate-pulse">
+              <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded bg-badge-warn text-warn animate-pulse">
                 ⏳ Hunting 5m CHoCH
               </span>
             )}
@@ -198,10 +198,10 @@ export function ImpulseZonePanel({ data }: Props) {
           <span className="text-[10px] text-muted-foreground">Scoring:</span>
           <span className={`text-[10px] font-mono font-bold px-1 py-0.5 rounded ${
             hasZone && bestZone?.priceAtZone
-              ? "bg-emerald-500/15 text-emerald-300"
+              ? "bg-badge-profit text-profit"
               : !hasZone
-                ? "bg-red-500/15 text-red-300"
-                : "bg-zinc-500/10 text-zinc-400"
+                ? "bg-badge-loss text-loss"
+                : "bg-zinc-500/10 text-muted-foreground"
           }`}>
             {hasZone && bestZone?.priceAtZone ? "+bonus" : !hasZone ? "−penalty" : "neutral"}
           </span>
@@ -217,23 +217,23 @@ export function ImpulseZonePanel({ data }: Props) {
               <div className="flex items-center gap-1 flex-wrap">
                 {directionDetail.bias && (
                   <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                    directionDetail.bias === "bullish" ? "bg-emerald-500/15 text-emerald-300" : "bg-red-500/15 text-red-300"
+                    directionDetail.bias === "bullish" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"
                   }`}>
                     {directionDetail.biasSource?.toUpperCase()} {directionDetail.bias === "bullish" ? "↑ BULL" : "↓ BEAR"}
                   </span>
                 )}
                 {!directionDetail.bias && (
-                  <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-zinc-500/15 text-zinc-400">
+                  <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-zinc-500/15 text-muted-foreground">
                     NO BIAS
                   </span>
                 )}
                 <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                  directionDetail.h4Retrace ? "bg-amber-500/15 text-amber-300" : "bg-zinc-500/10 text-zinc-500"
+                  directionDetail.h4Retrace ? "bg-badge-warn text-warn" : "bg-zinc-500/10 text-muted-foreground"
                 }`}>
                   4H {directionDetail.h4ChochAgainst ? "✗ CHoCH AGAINST" : directionDetail.h4Retrace ? "↩ RETRACE" : "— intact"}
                 </span>
                 <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                  directionDetail.h1Confirmed ? "bg-emerald-500/15 text-emerald-300" : "bg-zinc-500/10 text-zinc-500"
+                  directionDetail.h1Confirmed ? "bg-badge-profit text-profit" : "bg-zinc-500/10 text-muted-foreground"
                 }`}>
                   1H {directionDetail.h1Confirmed ? "✓ CONFIRMED" : "✗ waiting"}
                 </span>

@@ -470,8 +470,8 @@ export default function TradeReplay() {
                     className={cn(
                       "text-[10px] font-bold px-2 py-0.5 rounded",
                       selectedTrade.direction === "BUY"
-                        ? "text-green-400 bg-green-400/15"
-                        : "text-red-400 bg-red-400/15"
+                        ? "text-profit bg-green-400/15"
+                        : "text-loss bg-badge-loss"
                     )}
                   >
                     {selectedTrade.direction}
@@ -484,16 +484,16 @@ export default function TradeReplay() {
                   <span className="text-muted-foreground">Entry</span>
                   <span className="font-mono text-right">{selectedTrade.entry_price.toFixed(5)}</span>
                   <span className="text-muted-foreground">SL</span>
-                  <span className="font-mono text-right text-red-400">{selectedTrade.stop_loss ? selectedTrade.stop_loss.toFixed(5) : "N/A"}</span>
+                  <span className="font-mono text-right text-loss">{selectedTrade.stop_loss ? selectedTrade.stop_loss.toFixed(5) : "N/A"}</span>
                   <span className="text-muted-foreground">TP</span>
-                  <span className="font-mono text-right text-green-400">{selectedTrade.take_profit ? selectedTrade.take_profit.toFixed(5) : "N/A"}</span>
+                  <span className="font-mono text-right text-profit">{selectedTrade.take_profit ? selectedTrade.take_profit.toFixed(5) : "N/A"}</span>
                   {selectedTrade.pnl_pips !== undefined && (
                     <>
                       <span className="text-muted-foreground">P&L</span>
                       <span
                         className={cn(
                           "font-mono text-right font-semibold",
-                          (selectedTrade.pnl_pips ?? 0) >= 0 ? "text-green-400" : "text-red-400"
+                          (selectedTrade.pnl_pips ?? 0) >= 0 ? "text-profit" : "text-loss"
                         )}
                       >
                         {(selectedTrade.pnl_pips ?? 0) >= 0 ? "+" : ""}

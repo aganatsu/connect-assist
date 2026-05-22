@@ -100,7 +100,7 @@ export function OverrideBadge({ position }: { position: any }) {
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-violet-500/15 border border-violet-500/40 text-violet-400 cursor-help">
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-badge-info border border-violet-500/40 text-tier3 cursor-help">
             <Settings2 className="h-2.5 w-2.5" />
             {count}
           </span>
@@ -140,7 +140,7 @@ function SectionCard({
           {icon}
           <span className="text-[11px] font-bold text-foreground/80 uppercase tracking-wider">{title}</span>
           {isOverridden && (
-            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400">
+            <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-badge-info text-tier3">
               CUSTOM
             </span>
           )}
@@ -329,19 +329,19 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
         <Button
           size="sm"
           variant="outline"
-          className="h-8 text-xs gap-1.5 border-violet-500/40 text-violet-400 hover:bg-violet-500/10 hover:text-violet-300"
+          className="h-8 text-xs gap-1.5 border-violet-500/40 text-tier3 hover:bg-violet-500/10 hover:text-tier3"
           onClick={() => setIsOpen(true)}
         >
           <Settings2 className="h-3.5 w-3.5" />
           Trade Management Overrides
           {hasActiveOverrides && (
-            <span className="ml-1 px-1.5 py-0.5 rounded bg-violet-500/20 text-[9px] font-bold">
+            <span className="ml-1 px-1.5 py-0.5 rounded bg-badge-info text-[9px] font-bold">
               {Object.keys(existing!).length} active
             </span>
           )}
         </Button>
         {hasActiveOverrides && (
-          <span className="text-[10px] text-violet-400/70 italic">
+          <span className="text-[10px] text-tier3/70 italic">
             Custom settings override global config for this trade
           </span>
         )}
@@ -354,8 +354,8 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Settings2 className="h-4 w-4 text-violet-400" />
-          <span className="text-xs font-bold text-violet-400 uppercase tracking-wider">
+          <Settings2 className="h-4 w-4 text-tier3" />
+          <span className="text-xs font-bold text-tier3 uppercase tracking-wider">
             Per-Trade Management Overrides
           </span>
           <TooltipProvider>
@@ -387,7 +387,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
         {/* Break Even */}
         <SectionCard
           title="Break Even"
-          icon={<span className="text-yellow-400 text-sm">⚖</span>}
+          icon={<span className="text-highlight text-sm">⚖</span>}
           enabled={beEnabled}
           onToggle={setBeEnabled}
           borderColor="border-l-yellow-500"
@@ -408,7 +408,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
         {/* Trailing Stop */}
         <SectionCard
           title="Trailing Stop"
-          icon={<span className="text-emerald-400 text-sm">↗</span>}
+          icon={<span className="text-profit text-sm">↗</span>}
           enabled={trailEnabled}
           onToggle={setTrailEnabled}
           borderColor="border-l-emerald-500"
@@ -476,7 +476,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
         {/* Max Hold Time */}
         <SectionCard
           title="Max Hold Time"
-          icon={<span className="text-orange-400 text-sm">⏳</span>}
+          icon={<span className="text-warn text-sm">⏳</span>}
           enabled={holdEnabled}
           onToggle={setHoldEnabled}
           borderColor="border-l-orange-500"

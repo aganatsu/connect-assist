@@ -101,49 +101,49 @@ async function fetchGamePlans(): Promise<GamePlanLog[]> {
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function getBiasColor(bias: string) {
-  if (bias === "bullish") return "text-emerald-400";
-  if (bias === "bearish") return "text-red-400";
-  return "text-zinc-400";
+  if (bias === "bullish") return "text-profit";
+  if (bias === "bearish") return "text-loss";
+  return "text-muted-foreground";
 }
 
 function getBiasBg(bias: string) {
-  if (bias === "bullish") return "bg-emerald-500/10 border-emerald-500/30";
-  if (bias === "bearish") return "bg-red-500/10 border-red-500/30";
+  if (bias === "bullish") return "bg-badge-profit border-emerald-500/30";
+  if (bias === "bearish") return "bg-badge-loss border-red-500/30";
   return "bg-zinc-500/10 border-zinc-500/30";
 }
 
 function getBiasIcon(bias: string) {
-  if (bias === "bullish") return <TrendingUp className="h-4 w-4 text-emerald-400" />;
-  if (bias === "bearish") return <TrendingDown className="h-4 w-4 text-red-400" />;
-  return <Minus className="h-4 w-4 text-zinc-400" />;
+  if (bias === "bullish") return <TrendingUp className="h-4 w-4 text-profit" />;
+  if (bias === "bearish") return <TrendingDown className="h-4 w-4 text-loss" />;
+  return <Minus className="h-4 w-4 text-muted-foreground" />;
 }
 
 function getConfidenceColor(confidence: number) {
-  if (confidence >= 60) return "text-emerald-400";
-  if (confidence >= 40) return "text-yellow-400";
-  return "text-zinc-500";
+  if (confidence >= 60) return "text-profit";
+  if (confidence >= 40) return "text-highlight";
+  return "text-muted-foreground";
 }
 
 function getLevelTypeIcon(type: string) {
   switch (type) {
     case "ob": return <Shield className="h-3 w-3 text-cyan-400" />;
-    case "fvg": return <Zap className="h-3 w-3 text-purple-400" />;
-    case "liquidity": return <Target className="h-3 w-3 text-orange-400" />;
-    case "pd_level": return <MapPin className="h-3 w-3 text-yellow-400" />;
-    default: return <Crosshair className="h-3 w-3 text-zinc-400" />;
+    case "fvg": return <Zap className="h-3 w-3 text-tier3" />;
+    case "liquidity": return <Target className="h-3 w-3 text-warn" />;
+    case "pd_level": return <MapPin className="h-3 w-3 text-highlight" />;
+    default: return <Crosshair className="h-3 w-3 text-muted-foreground" />;
   }
 }
 
 function getLevelTypeBadge(type: string) {
   const colors: Record<string, string> = {
     ob: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
-    fvg: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-    liquidity: "bg-orange-500/15 text-orange-400 border-orange-500/30",
-    pd_level: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
-    support: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-    resistance: "bg-red-500/15 text-red-400 border-red-500/30",
+    fvg: "bg-purple-500/15 text-tier3 border-purple-500/30",
+    liquidity: "bg-badge-warn text-warn border-orange-500/30",
+    pd_level: "bg-yellow-500/15 text-highlight border-yellow-500/30",
+    support: "bg-badge-profit text-profit border-emerald-500/30",
+    resistance: "bg-badge-loss text-loss border-red-500/30",
   };
-  return colors[type] || "bg-zinc-500/15 text-zinc-400 border-zinc-500/30";
+  return colors[type] || "bg-zinc-500/15 text-muted-foreground border-zinc-500/30";
 }
 
 function formatTime(isoStr: string) {
@@ -185,7 +185,7 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           {getBiasIcon(plan.bias)}
           <span className="font-mono text-sm font-semibold">{plan.symbol}</span>
           {!plan.tradeable && (
-            <Badge variant="outline" className="text-[9px] h-4 bg-zinc-800/50 text-zinc-500 border-zinc-600">
+            <Badge variant="outline" className="text-[9px] h-4 bg-zinc-800/50 text-muted-foreground border-zinc-600">
               SKIP
             </Badge>
           )}
@@ -218,7 +218,7 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           <Target className="h-3 w-3 text-cyan-400 shrink-0" />
           <span className="text-[10px] text-cyan-300 font-mono">
             DOL: {plan.dol.description} @ {formatPrice(plan.dol.price, plan.symbol)}
-            <span className="text-zinc-500 ml-1">({plan.dol.distancePips.toFixed(0)} pips)</span>
+            <span className="text-muted-foreground ml-1">({plan.dol.distancePips.toFixed(0)} pips)</span>
           </span>
         </div>
       )}
@@ -226,8 +226,8 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
       {/* Skip reason */}
       {plan.skipReason && (
         <div className="flex items-center gap-1.5 mt-1.5">
-          <AlertTriangle className="h-3 w-3 text-yellow-500 shrink-0" />
-          <span className="text-[10px] text-yellow-400 font-mono">{plan.skipReason}</span>
+          <AlertTriangle className="h-3 w-3 text-highlight shrink-0" />
+          <span className="text-[10px] text-highlight font-mono">{plan.skipReason}</span>
         </div>
       )}
 
@@ -261,8 +261,8 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
                         variant="outline"
                         className={`text-[9px] h-4 ${
                           scenario.direction === "long"
-                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
-                            : "bg-red-500/15 text-red-400 border-red-500/30"
+                            ? "bg-badge-profit text-profit border-emerald-500/30"
+                            : "bg-badge-loss text-loss border-red-500/30"
                         }`}
                       >
                         {scenario.direction.toUpperCase()}
@@ -273,16 +273,16 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
                       <span className="text-cyan-400">IF:</span> {scenario.condition}
                     </div>
                     <div className="text-[10px] text-foreground/90 font-mono mb-0.5">
-                      <span className="text-emerald-400">THEN:</span> {scenario.action}
+                      <span className="text-profit">THEN:</span> {scenario.action}
                     </div>
                     {scenario.targetLevel && (
                       <div className="text-[10px] text-foreground/70 font-mono">
-                        <span className="text-yellow-400">TARGET:</span> {formatPrice(scenario.targetLevel, plan.symbol)}
+                        <span className="text-highlight">TARGET:</span> {formatPrice(scenario.targetLevel, plan.symbol)}
                       </div>
                     )}
                     {scenario.invalidation && (
                       <div className="text-[10px] text-foreground/70 font-mono">
-                        <span className="text-red-400">INVALID:</span> {scenario.invalidation}
+                        <span className="text-loss">INVALID:</span> {scenario.invalidation}
                       </div>
                     )}
                   </div>
@@ -311,9 +311,9 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
                         variant="outline"
                         className={`text-[8px] h-3.5 px-1 ${
                           level.significance === "high"
-                            ? "text-yellow-400 border-yellow-500/30"
+                            ? "text-highlight border-yellow-500/30"
                             : level.significance === "medium"
-                            ? "text-zinc-400 border-zinc-500/30"
+                            ? "text-muted-foreground border-zinc-500/30"
                             : "text-zinc-600 border-zinc-700/30"
                         }`}
                       >
@@ -350,8 +350,8 @@ function NewsTimeline({ events }: { events: NewsEvent[] }) {
               variant="outline"
               className={`text-[8px] h-3.5 px-1 shrink-0 ${
                 ev.impact === "high"
-                  ? "bg-red-500/15 text-red-400 border-red-500/30"
-                  : "bg-orange-500/15 text-orange-400 border-orange-500/30"
+                  ? "bg-badge-loss text-loss border-red-500/30"
+                  : "bg-badge-warn text-warn border-orange-500/30"
               }`}
             >
               {ev.currency}
@@ -512,9 +512,9 @@ export function GamePlanPanel() {
             <Card className="border-orange-500/20 bg-orange-500/5">
               <CardHeader className="pb-1.5 pt-2.5 px-3">
                 <CardTitle className="text-[11px] font-mono flex items-center gap-1.5">
-                  <Newspaper className="h-3.5 w-3.5 text-orange-400" />
+                  <Newspaper className="h-3.5 w-3.5 text-warn" />
                   Today's Events
-                  <Badge variant="outline" className="text-[8px] h-3.5 bg-orange-500/15 text-orange-400 border-orange-500/30 ml-auto">
+                  <Badge variant="outline" className="text-[8px] h-3.5 bg-badge-warn text-warn border-orange-500/30 ml-auto">
                     {currentPlan.newsEvents.filter(e => e.impact === "high").length} HIGH
                   </Badge>
                 </CardTitle>
@@ -546,7 +546,7 @@ export function GamePlanPanel() {
           {skipPairs.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
-                <EyeOff className="h-3.5 w-3.5 text-zinc-500" />
+                <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
                   Skipped / Neutral ({skipPairs.length})
                 </span>

@@ -99,9 +99,9 @@ interface BotRecommendation {
 // ─── Helpers ─────────────────────────────────────────────────
 
 const assessmentConfig: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  winning: { color: "text-green-400", icon: <TrendingUp className="w-3.5 h-3.5" />, label: "WINNING" },
-  losing: { color: "text-red-400", icon: <TrendingDown className="w-3.5 h-3.5" />, label: "LOSING" },
-  breakeven: { color: "text-yellow-400", icon: <Minus className="w-3.5 h-3.5" />, label: "BREAKEVEN" },
+  winning: { color: "text-profit", icon: <TrendingUp className="w-3.5 h-3.5" />, label: "WINNING" },
+  losing: { color: "text-loss", icon: <TrendingDown className="w-3.5 h-3.5" />, label: "LOSING" },
+  breakeven: { color: "text-highlight", icon: <Minus className="w-3.5 h-3.5" />, label: "BREAKEVEN" },
   insufficient_data: { color: "text-muted-foreground", icon: <Clock className="w-3.5 h-3.5" />, label: "INSUFFICIENT DATA" },
 };
 
@@ -118,15 +118,15 @@ const categoryIcons: Record<string, React.ReactNode> = {
 };
 
 const confidenceColors: Record<string, string> = {
-  high: "bg-green-500/20 text-green-400 border-green-500/30",
-  medium: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+  high: "bg-badge-profit text-profit border-green-500/30",
+  medium: "bg-badge-warn text-highlight border-yellow-500/30",
   low: "bg-muted text-muted-foreground border-border",
 };
 
 const riskColors: Record<string, string> = {
-  low: "text-green-400",
-  medium: "text-yellow-400",
-  high: "text-red-400",
+  low: "text-profit",
+  medium: "text-highlight",
+  high: "text-loss",
 };
 
 function timeAgo(dateStr: string): string {
@@ -178,7 +178,7 @@ function RecommendationCard({
               </span>
             )}
             {isPending && !isAutoApplicable && (
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-amber-500/10 text-amber-400 border-amber-500/30">
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-badge-warn text-warn border-amber-500/30">
                 MANUAL
               </Badge>
             )}
@@ -217,7 +217,7 @@ function RecommendationCard({
 
           {/* Manual-action notice */}
           {isPending && !isAutoApplicable && (
-            <p className="text-[10px] text-amber-400/90 leading-relaxed border-l-2 border-amber-500/40 pl-2">
+            <p className="text-[10px] text-warn/90 leading-relaxed border-l-2 border-warn/40 pl-2">
               💡 Manual action required — this recommendation can&apos;t be auto-applied.
               Apply the change yourself in the relevant config tab, then click <span className="font-semibold">Mark as done</span>.
             </p>
@@ -273,11 +273,11 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
         <div key={i} className="border border-border bg-card/50 p-2 space-y-0.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium">{w.weekLabel}</span>
-            <span className={`text-[10px] font-bold ${w.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>${w.totalPnl.toFixed(2)}</span>
+            <span className={`text-[10px] font-bold ${w.totalPnl >= 0 ? "text-profit" : "text-loss"}`}>${w.totalPnl.toFixed(2)}</span>
           </div>
           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
             <span>{w.totalTrades} trades</span>
-            <span className={w.winRate >= 50 ? "text-green-400" : "text-red-400"}>{w.winRate.toFixed(0)}% WR</span>
+            <span className={w.winRate >= 50 ? "text-profit" : "text-loss"}>{w.winRate.toFixed(0)}% WR</span>
             <span>PF: {w.profitFactor === Infinity ? "∞" : w.profitFactor?.toFixed(2)}</span>
           </div>
         </div>
@@ -301,10 +301,10 @@ function WeeklyPerformanceTable({ weeklyData }: { weeklyData: PerformanceSummary
             <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
               <td className="py-1 px-1.5 text-foreground">{w.weekLabel}</td>
               <td className="text-right py-1 px-1.5">{w.totalTrades}</td>
-              <td className={`text-right py-1 px-1.5 ${w.winRate >= 50 ? "text-green-400" : "text-red-400"}`}>
+              <td className={`text-right py-1 px-1.5 ${w.winRate >= 50 ? "text-profit" : "text-loss"}`}>
                 {w.winRate.toFixed(0)}%
               </td>
-              <td className={`text-right py-1 px-1.5 ${w.totalPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+              <td className={`text-right py-1 px-1.5 ${w.totalPnl >= 0 ? "text-profit" : "text-loss"}`}>
                 ${w.totalPnl.toFixed(2)}
               </td>
               <td className="text-right py-1 px-1.5">{w.profitFactor === Infinity ? "∞" : w.profitFactor?.toFixed(2)}</td>
@@ -323,11 +323,11 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
   if (!regime) return null;
 
   const regimeLabels: Record<string, { label: string; color: string; bg: string }> = {
-    strong_trend: { label: "Strong Trend", color: "text-green-400", bg: "bg-green-400/10" },
-    mild_trend: { label: "Mild Trend", color: "text-blue-400", bg: "bg-blue-400/10" },
-    transitional: { label: "Transitional", color: "text-yellow-400", bg: "bg-yellow-400/10" },
-    mild_range: { label: "Mild Range", color: "text-orange-400", bg: "bg-orange-400/10" },
-    choppy_range: { label: "Choppy Range", color: "text-red-400", bg: "bg-red-400/10" },
+    strong_trend: { label: "Strong Trend", color: "text-profit", bg: "bg-green-400/10" },
+    mild_trend: { label: "Mild Trend", color: "text-info-c", bg: "bg-badge-info" },
+    transitional: { label: "Transitional", color: "text-highlight", bg: "bg-badge-warn" },
+    mild_range: { label: "Mild Range", color: "text-warn", bg: "bg-orange-400/10" },
+    choppy_range: { label: "Choppy Range", color: "text-loss", bg: "bg-badge-loss" },
     unknown: { label: "Unknown", color: "text-muted-foreground", bg: "bg-muted/30" },
   };
 
@@ -354,17 +354,17 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
         <div className="mt-2">
           <div className="flex items-center gap-1.5 flex-wrap">
             {trendingCount > 0 && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-400/10 text-green-400 font-medium">
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-400/10 text-profit font-medium">
                 {trendingCount} Trending
               </span>
             )}
             {rangingCount > 0 && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-400/10 text-red-400 font-medium">
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-badge-loss text-loss font-medium">
                 {rangingCount} Ranging
               </span>
             )}
             {otherCount > 0 && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-yellow-400/10 text-yellow-400 font-medium">
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-badge-warn text-highlight font-medium">
                 {otherCount} Transitional
               </span>
             )}
@@ -392,8 +392,8 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
                         <span className={`text-[10px] ${irConfig.color} font-medium`}>{irConfig.label}</span>
                       </div>
                       <div className="flex items-center justify-between text-[9px] text-muted-foreground">
-                        <span className={ir.directionalBias === "bullish" ? "text-green-400" : ir.directionalBias === "bearish" ? "text-red-400" : "text-muted-foreground"}>{ir.directionalBias}</span>
-                        <span className={ir.atrTrend === "expanding" ? "text-yellow-400" : ir.atrTrend === "contracting" ? "text-blue-400" : "text-muted-foreground"}>{ir.atrTrend}</span>
+                        <span className={ir.directionalBias === "bullish" ? "text-profit" : ir.directionalBias === "bearish" ? "text-loss" : "text-muted-foreground"}>{ir.directionalBias}</span>
+                        <span className={ir.atrTrend === "expanding" ? "text-highlight" : ir.atrTrend === "contracting" ? "text-info-c" : "text-muted-foreground"}>{ir.atrTrend}</span>
                         <span>{(ir.confidence * 100).toFixed(0)}%</span>
                       </div>
                     </div>
@@ -427,12 +427,12 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
                             </span>
                           </td>
                           <td className="py-1 px-1">
-                            <span className={ir.directionalBias === "bullish" ? "text-green-400" : ir.directionalBias === "bearish" ? "text-red-400" : "text-muted-foreground"}>
+                            <span className={ir.directionalBias === "bullish" ? "text-profit" : ir.directionalBias === "bearish" ? "text-loss" : "text-muted-foreground"}>
                               {ir.directionalBias}
                             </span>
                           </td>
                           <td className="text-right py-1 px-1">
-                            <span className={ir.atrTrend === "expanding" ? "text-yellow-400" : ir.atrTrend === "contracting" ? "text-blue-400" : "text-muted-foreground"}>
+                            <span className={ir.atrTrend === "expanding" ? "text-highlight" : ir.atrTrend === "contracting" ? "text-info-c" : "text-muted-foreground"}>
                               {ir.atrTrend}
                             </span>
                           </td>
@@ -480,12 +480,12 @@ function FactorSuggestionsTable({ suggestions }: { suggestions: PerformanceSumma
             <div key={i} className="border border-border bg-card/50 p-2 space-y-0.5">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-medium">{f.factorName}</span>
-                <span className={`text-[10px] font-bold ${isIncrease ? "text-green-400" : isDecrease ? "text-red-400" : "text-foreground"}`}>
+                <span className={`text-[10px] font-bold ${isIncrease ? "text-profit" : isDecrease ? "text-loss" : "text-foreground"}`}>
                   {f.currentWeight.toFixed(1)} → {f.suggestedWeight.toFixed(1)}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[9px] text-muted-foreground">
-                <span className={f.winRateWhenPresent >= 50 ? "text-green-400" : "text-red-400"}>WR Present: {f.winRateWhenPresent.toFixed(0)}%</span>
+                <span className={f.winRateWhenPresent >= 50 ? "text-profit" : "text-loss"}>WR Present: {f.winRateWhenPresent.toFixed(0)}%</span>
                 <span>WR Absent: {f.winRateWhenAbsent.toFixed(0)}%</span>
                 <span>N={f.sampleSize}</span>
               </div>
@@ -514,10 +514,10 @@ function FactorSuggestionsTable({ suggestions }: { suggestions: PerformanceSumma
                 <tr key={i} className="border-b border-border/50 hover:bg-muted/30">
                   <td className="py-1 px-1 text-foreground">{f.factorName}</td>
                   <td className="text-right py-1 px-1">{f.currentWeight.toFixed(1)}</td>
-                  <td className={`text-right py-1 px-1 font-semibold ${isIncrease ? "text-green-400" : isDecrease ? "text-red-400" : "text-foreground"}`}>
+                  <td className={`text-right py-1 px-1 font-semibold ${isIncrease ? "text-profit" : isDecrease ? "text-loss" : "text-foreground"}`}>
                     {f.suggestedWeight.toFixed(1)}
                   </td>
-                  <td className={`text-right py-1 px-1 ${f.winRateWhenPresent >= 50 ? "text-green-400" : "text-red-400"}`}>
+                  <td className={`text-right py-1 px-1 ${f.winRateWhenPresent >= 50 ? "text-profit" : "text-loss"}`}>
                     {f.winRateWhenPresent.toFixed(0)}%
                   </td>
                   <td className="text-right py-1 px-1 text-muted-foreground">
@@ -939,7 +939,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
 
   if (error) {
     return (
-      <div className="flex items-center justify-center py-8 text-red-400 text-[11px]">
+      <div className="flex items-center justify-center py-8 text-loss text-[11px]">
         <AlertTriangle className="w-4 h-4 mr-2" /> Failed to load recommendations
       </div>
     );
@@ -1023,11 +1023,11 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         if (!regime || regime.currentRegime === "unknown") return null;
 
         const regimeStyles: Record<string, { bg: string; border: string; icon: string; label: string }> = {
-          strong_trend: { bg: "bg-green-500/10", border: "border-green-500/30", icon: "↑↑", label: "Strong Trend" },
+          strong_trend: { bg: "bg-badge-profit", border: "border-green-500/30", icon: "↑↑", label: "Strong Trend" },
           mild_trend: { bg: "bg-green-500/5", border: "border-green-500/20", icon: "↑", label: "Mild Trend" },
-          choppy_range: { bg: "bg-red-500/10", border: "border-red-500/30", icon: "⇆", label: "Choppy / Range" },
+          choppy_range: { bg: "bg-badge-loss", border: "border-red-500/30", icon: "⇆", label: "Choppy / Range" },
           mild_range: { bg: "bg-yellow-500/10", border: "border-yellow-500/30", icon: "↔", label: "Mild Range" },
-          transitional: { bg: "bg-orange-500/10", border: "border-orange-500/30", icon: "?", label: "Transitional" },
+          transitional: { bg: "bg-badge-warn", border: "border-orange-500/30", icon: "?", label: "Transitional" },
         };
         const style = regimeStyles[regime.currentRegime] || regimeStyles.transitional;
 
@@ -1099,7 +1099,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
       {/* Pending recommendations */}
       {pending.length > 0 && (
         <div className="space-y-2">
-          <span className="text-[10px] font-semibold text-yellow-400 uppercase tracking-wider">
+          <span className="text-[10px] font-semibold text-highlight uppercase tracking-wider">
             Pending Review ({pending.length})
           </span>
           {pending.map(review => {
@@ -1161,7 +1161,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                               <div className="absolute top-2 right-7 z-10 pointer-events-none">
                                 <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${
                                   recStatus === "approved"
-                                    ? "bg-green-500/20 text-green-400 border-green-500/30"
+                                    ? "bg-badge-profit text-profit border-green-500/30"
                                     : "bg-muted text-muted-foreground border-border"
                                 }`}>
                                   {recStatus.toUpperCase()}
@@ -1185,7 +1185,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                       {review.feature_gaps?.length > 0 && (
                         <div className="border border-border rounded-md p-2 bg-card/50">
                           <div className="flex items-center gap-2 mb-1">
-                            <Lightbulb className="w-3.5 h-3.5 text-yellow-400" />
+                            <Lightbulb className="w-3.5 h-3.5 text-highlight" />
                             <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Feature Gaps Identified</span>
                           </div>
                           {review.feature_gaps.map((gap, i) => (
@@ -1228,7 +1228,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
           {resolved.map(review => {
             const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
             const statusBadge = review.status === "approved"
-              ? { color: "bg-green-500/20 text-green-400 border-green-500/30", label: "APPROVED" }
+              ? { color: "bg-badge-profit text-profit border-green-500/30", label: "APPROVED" }
               : { color: "bg-muted text-muted-foreground border-border", label: "DISMISSED" };
             const isExpanded = expandedReview === review.id;
 

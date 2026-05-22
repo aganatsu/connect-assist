@@ -245,7 +245,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
       <Card className={dailyLossPct > 80 ? "border-destructive" : dailyLossPct > 60 ? "border-yellow-500" : ""}>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <TrendingDown className="w-4 h-4 text-red-500" />
+            <TrendingDown className="w-4 h-4 text-loss" />
             Daily Loss
           </CardTitle>
         </CardHeader>
@@ -253,7 +253,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Used</span>
-              <span className={dailyLossPct > 80 ? "text-red-500 font-bold" : "font-medium"}>
+              <span className={dailyLossPct > 80 ? "text-loss font-bold" : "font-medium"}>
                 ${dailyLossAbs.toFixed(2)} / ${dailyLossLimit.toFixed(2)}
               </span>
             </div>
@@ -270,7 +270,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
       <Card className={drawdownPct > 80 ? "border-destructive" : drawdownPct > 60 ? "border-yellow-500" : ""}>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 text-orange-500" />
+            <ShieldAlert className="w-4 h-4 text-warn" />
             Max Drawdown
           </CardTitle>
         </CardHeader>
@@ -278,7 +278,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Used</span>
-              <span className={drawdownPct > 80 ? "text-red-500 font-bold" : "font-medium"}>
+              <span className={drawdownPct > 80 ? "text-loss font-bold" : "font-medium"}>
                 ${currentDrawdown.toFixed(2)} / ${totalDrawdownAllowed.toFixed(2)}
               </span>
             </div>
@@ -295,7 +295,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
       <Card className={profitProgress >= 100 ? "border-green-500" : ""}>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Target className="w-4 h-4 text-green-500" />
+            <Target className="w-4 h-4 text-profit" />
             Profit Target
           </CardTitle>
         </CardHeader>
@@ -303,7 +303,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Progress</span>
-              <span className={profitProgress >= 100 ? "text-green-500 font-bold" : "font-medium"}>
+              <span className={profitProgress >= 100 ? "text-profit font-bold" : "font-medium"}>
                 ${(currentBalance - config.initial_balance).toFixed(2)} / ${profitTarget ? (profitTarget - config.initial_balance).toFixed(2) : "N/A"}
               </span>
             </div>
@@ -338,7 +338,7 @@ function AccountSummary({ config, dailyState, derived }: { config: PropFirmConfi
         <div className="flex justify-between"><span className="text-muted-foreground">Current Equity</span><span className="font-mono">${currentEquity.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>
         <div className="flex justify-between">
           <span className="text-muted-foreground">P&L from Start</span>
-          <span className={`font-mono ${profitFromStart >= 0 ? "text-green-500" : "text-red-500"}`}>
+          <span className={`font-mono ${profitFromStart >= 0 ? "text-profit" : "text-loss"}`}>
             {profitFromStart >= 0 ? "+" : ""}${profitFromStart.toFixed(2)}
           </span>
         </div>
@@ -348,8 +348,8 @@ function AccountSummary({ config, dailyState, derived }: { config: PropFirmConfi
         {dailyState && (
           <>
             <div className="flex justify-between"><span className="text-muted-foreground">Today's Trades</span><span>{dailyState.trade_count_today}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Today's High</span><span className="font-mono text-green-500">${dailyState.highest_equity_today.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Today's Low</span><span className="font-mono text-red-500">${dailyState.lowest_equity_today.toFixed(2)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Today's High</span><span className="font-mono text-profit">${dailyState.highest_equity_today.toFixed(2)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Today's Low</span><span className="font-mono text-loss">${dailyState.lowest_equity_today.toFixed(2)}</span></div>
           </>
         )}
       </CardContent>
@@ -397,9 +397,9 @@ function RecentEvents({ events }: { events: PropFirmEvent[] }) {
 
 function SeverityIcon({ severity }: { severity: string }) {
   switch (severity) {
-    case "critical": return <ShieldAlert className="w-3.5 h-3.5 text-red-500 shrink-0 mt-0.5" />;
-    case "warning": return <AlertTriangle className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />;
-    default: return <ShieldCheck className="w-3.5 h-3.5 text-green-500 shrink-0 mt-0.5" />;
+    case "critical": return <ShieldAlert className="w-3.5 h-3.5 text-loss shrink-0 mt-0.5" />;
+    case "warning": return <AlertTriangle className="w-3.5 h-3.5 text-highlight shrink-0 mt-0.5" />;
+    default: return <ShieldCheck className="w-3.5 h-3.5 text-profit shrink-0 mt-0.5" />;
   }
 }
 
@@ -429,7 +429,7 @@ function DailyHistoryTable({ history, config }: { history: any[]; config: PropFi
               <div key={day.trading_day} className="border border-border bg-card/50 p-2 space-y-0.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-mono font-medium">{day.trading_day}</span>
-                  <span className={`text-[11px] font-mono font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  <span className={`text-[11px] font-mono font-bold ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
                     {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
                   </span>
                 </div>
@@ -467,11 +467,11 @@ function DailyHistoryTable({ history, config }: { history: any[]; config: PropFi
                     <td className="py-2 px-2 font-mono">{day.trading_day}</td>
                     <td className="py-2 px-2 text-right font-mono">${day.day_start_balance.toFixed(2)}</td>
                     <td className="py-2 px-2 text-right font-mono">${eod.toFixed(2)}</td>
-                    <td className={`py-2 px-2 text-right font-mono ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    <td className={`py-2 px-2 text-right font-mono ${pnl >= 0 ? "text-profit" : "text-loss"}`}>
                       {pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}
                     </td>
-                    <td className="py-2 px-2 text-right font-mono text-green-500">${day.highest_equity_today.toFixed(2)}</td>
-                    <td className="py-2 px-2 text-right font-mono text-red-500">${day.lowest_equity_today.toFixed(2)}</td>
+                    <td className="py-2 px-2 text-right font-mono text-profit">${day.highest_equity_today.toFixed(2)}</td>
+                    <td className="py-2 px-2 text-right font-mono text-loss">${day.lowest_equity_today.toFixed(2)}</td>
                     <td className="py-2 px-2 text-right">{day.trade_count_today}</td>
                     <td className="py-2 px-2 text-center">
                       {day.is_locked ? (
@@ -523,8 +523,8 @@ function EventLog({ events }: { events: PropFirmEvent[] }) {
                 <div className="flex gap-4 text-[10px] text-muted-foreground">
                   <span>Balance: ${event.balance_at_event.toFixed(2)}</span>
                   <span>Equity: ${event.equity_at_event.toFixed(2)}</span>
-                  {event.daily_loss_at_event > 0 && <span className="text-red-400">Daily Loss: ${event.daily_loss_at_event.toFixed(2)}</span>}
-                  {event.drawdown_at_event > 0 && <span className="text-orange-400">Drawdown: ${event.drawdown_at_event.toFixed(2)}</span>}
+                  {event.daily_loss_at_event > 0 && <span className="text-loss">Daily Loss: ${event.daily_loss_at_event.toFixed(2)}</span>}
+                  {event.drawdown_at_event > 0 && <span className="text-warn">Drawdown: ${event.drawdown_at_event.toFixed(2)}</span>}
                 </div>
               </div>
             </div>

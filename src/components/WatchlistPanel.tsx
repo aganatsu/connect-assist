@@ -67,8 +67,8 @@ function ScoreBar({ current, gate, watchThreshold }: { current: number; gate: nu
 
 // ── Factor pill ──
 function FactorPill({ name, tier, present }: { name: string; tier?: string; present: boolean }) {
-  const tierColor = tier === "T1" ? "border-amber-500/40 text-amber-400"
-    : tier === "T2" ? "border-blue-500/40 text-blue-400"
+  const tierColor = tier === "T1" ? "border-warn/40 text-warn"
+    : tier === "T2" ? "border-info-c/40 text-info-c"
     : "border-muted-foreground/30 text-muted-foreground";
   return (
     <span className={`inline-flex items-center text-[8px] px-1.5 py-0 rounded border ${present ? tierColor : "border-border/40 text-muted-foreground/40 line-through"}`}>
@@ -91,7 +91,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 
   return (
     <div className={`border rounded-md p-2 transition-all ${
-      isNearGate ? "border-amber-500/40 bg-amber-500/5" : "border-border/60 bg-card/50"
+      isNearGate ? "border-warn/40 bg-badge-warn" : "border-border/60 bg-card/50"
     }`}>
       {/* Header row */}
       <div className="flex items-center justify-between gap-2">
@@ -112,7 +112,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className={`font-mono font-bold text-[11px] ${
-            setup.current_score >= gate ? "text-success" : isNearGate ? "text-amber-400" : "text-muted-foreground"
+            setup.current_score >= gate ? "text-success" : isNearGate ? "text-warn" : "text-muted-foreground"
           }`}>
             {setup.current_score.toFixed(1)}%
           </span>
@@ -160,8 +160,8 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 
       {/* Tier summary */}
       <div className="flex items-center gap-2 mt-1.5 text-[9px]">
-        <span className="text-amber-400 font-medium">T1: {setup.tier1_count}/4</span>
-        <span className="text-blue-400 font-medium">T2: {setup.tier2_count}/5</span>
+        <span className="text-warn font-medium">T1: {setup.tier1_count}/4</span>
+        <span className="text-info-c font-medium">T2: {setup.tier2_count}/5</span>
         <span className="text-muted-foreground">T3: {setup.tier3_count}</span>
         {setup.current_score > setup.initial_score && (
           <span className="text-success text-[8px]">↑ {(setup.current_score - setup.initial_score).toFixed(1)}%</span>
@@ -263,12 +263,12 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
           className="w-full flex items-center justify-between mb-1"
         >
           <div className="flex items-center gap-1.5">
-            <Eye className="h-3.5 w-3.5 text-amber-400" />
+            <Eye className="h-3.5 w-3.5 text-warn" />
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
               Watchlist
             </span>
             {active.length > 0 && (
-              <Badge variant="outline" className="text-[8px] h-4 px-1 border-amber-500/30 text-amber-400">
+              <Badge variant="outline" className="text-[8px] h-4 px-1 border-amber-500/30 text-warn">
                 {active.length}
               </Badge>
             )}

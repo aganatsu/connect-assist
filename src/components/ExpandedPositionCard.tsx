@@ -328,11 +328,11 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
     max_hold_exceeded: "\u23F3", no_action: "\u2014",
   };
   const triggerColors: Record<string, string> = {
-    trailing_enabled: "text-emerald-400", trailing_stop: "text-emerald-400",
-    be_enabled: "text-yellow-400", break_even: "text-yellow-400",
+    trailing_enabled: "text-profit", trailing_stop: "text-profit",
+    be_enabled: "text-highlight", break_even: "text-highlight",
     partial_enabled: "text-cyan-400", partial_tp: "text-cyan-400",
-    structure_invalidated: "text-destructive", session_close: "text-orange-400",
-    max_hold_exceeded: "text-orange-400", no_action: "text-muted-foreground",
+    structure_invalidated: "text-destructive", session_close: "text-warn",
+    max_hold_exceeded: "text-warn", no_action: "text-muted-foreground",
   };
 
   return (
@@ -380,8 +380,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               active={!!ef.trailingStopActivated}
               borderColor="border-l-emerald-500"
               badgeColor={ef.trailingStopActivated
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-yellow-500/20 text-yellow-400"
+                ? "bg-badge-profit text-profit"
+                : "bg-badge-warn text-highlight"
               }
               lines={ef.trailingStopActivated
                 ? [
@@ -412,8 +412,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               active={!!ef.breakEvenActivated}
               borderColor="border-l-yellow-500"
               badgeColor={ef.breakEvenActivated
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-yellow-500/20 text-yellow-400"
+                ? "bg-badge-profit text-profit"
+                : "bg-badge-warn text-highlight"
               }
               lines={ef.breakEvenActivated
                 ? [`SL moved to entry (${formatPrice(entry, p.symbol)})`]
@@ -435,8 +435,8 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               active={!!ef.partialTPActivated || !!p.partialTpFired}
               borderColor="border-l-cyan-500"
               badgeColor={(ef.partialTPActivated || p.partialTpFired)
-                ? "bg-emerald-500/20 text-emerald-400"
-                : "bg-yellow-500/20 text-yellow-400"
+                ? "bg-badge-profit text-profit"
+                : "bg-badge-warn text-highlight"
               }
               lines={(ef.partialTPActivated || p.partialTpFired)
                 ? [`${ef.partialTPPercent ?? 50}% closed at ${partialR ?? "?"}R`]

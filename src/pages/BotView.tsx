@@ -797,7 +797,7 @@ export default function BotView() {
                                 : trailFired ? <span className={trailLevel ? "text-cyan-400" : "text-success"} title={trailLevel ? `Trail at ${trailLevel.toFixed(5)}` : "Trailing active"}>{trailLevel ? `🟢${trailLevel.toFixed(inst?.pipSize === 0.01 ? 3 : 5)}` : "🟢"}</span>
                                 : <span className="text-muted-foreground" title={`Triggers at ${trailActivationR.toFixed(1)}R`}>⏳{trailActivationR.toFixed(1)}R</span>}
                             </td>
-                            <td className={`py-1.5 px-1 text-center text-[10px] ${holdEnabled ? (holdPct >= 0.9 ? "text-destructive" : holdPct >= 0.75 ? "text-yellow-500" : "text-muted-foreground") : "text-muted-foreground"}`}>
+                            <td className={`py-1.5 px-1 text-center text-[10px] ${holdEnabled ? (holdPct >= 0.9 ? "text-destructive" : holdPct >= 0.75 ? "text-highlight" : "text-muted-foreground") : "text-muted-foreground"}`}>
                               {!holdEnabled ? "Off" : `${holdHours.toFixed(1)}h/${ef.maxHoldHours}h`}
                             </td>
                             <td className="py-1.5 px-1" onClick={e => e.stopPropagation()}>
@@ -998,7 +998,7 @@ export default function BotView() {
                     </Button>
                   </div>
                 )}
-                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-amber-400 hover:bg-amber-500/10" onClick={() => {
+                <Button size="sm" variant="outline" className="w-full h-7 text-[11px] border-amber-500/30 text-warn hover:bg-badge-warn" onClick={() => {
                   if (window.confirm("Reset balance to configured starting amount?\n\nThis will reset your balance, peak balance, and daily PnL counters.\n\nYour positions, trade history, scan logs, and reasonings will be PRESERVED.")) resetBalMut.mutate();
                 }} disabled={resetBalMut.isPending}>
                   {resetBalMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />} Reset Balance
@@ -1173,7 +1173,7 @@ export default function BotView() {
                       <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
                           const statusLabel = sig.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : sig.status === "limit_order_placed" ? "🔍 ZONE SETUP" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
-                          const statusColor = sig.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-amber-400 bg-amber-500/10 border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusColor = sig.status === "limit_order_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-info-c bg-badge-info border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1306,7 +1306,7 @@ export default function BotView() {
                           </Button>
                         </div>
                       )}
-                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-amber-400" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
+                      <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-amber-500/30 text-warn" onClick={() => { if (window.confirm("Reset balance to configured starting amount?")) { resetBalMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetBalMut.isPending}>
                         <RefreshCw className="h-3 w-3 mr-1" /> Reset Balance
                       </Button>
                       <Button size="sm" variant="outline" className="w-full h-8 text-[11px] border-destructive/30 text-destructive" onClick={() => { if (window.confirm("⚠️ FULL RESET — This will delete ALL data. Are you sure?")) { resetMut.mutate(); setMobileAccountSheet(false); } }} disabled={resetMut.isPending}>
@@ -1463,16 +1463,16 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
-                            <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
+                            <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-tier3 uppercase tracking-wider font-bold">Regime Detection</p>
                               <div className="flex flex-wrap gap-x-3 gap-y-1">
                                 {sr.regimeData.daily && (
                                   <div className="flex items-center gap-1">
                                     <span className="text-[8px] text-muted-foreground">Daily:</span>
                                     <span className={`text-[9px] font-bold ${
-                                      sr.regimeData.daily.regime?.includes("trend") ? "text-emerald-400"
-                                      : sr.regimeData.daily.regime?.includes("range") ? "text-orange-400"
-                                      : "text-yellow-400"
+                                      sr.regimeData.daily.regime?.includes("trend") ? "text-profit"
+                                      : sr.regimeData.daily.regime?.includes("range") ? "text-warn"
+                                      : "text-highlight"
                                     }`}>{(sr.regimeData.daily.regime || "—").replace(/_/g, " ")}</span>
                                     <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.daily.confidence || 0) * 100)}%)</span>
                                     {sr.regimeData.daily.bias && sr.regimeData.daily.bias !== "neutral" && (
@@ -1486,18 +1486,18 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   <div className="flex items-center gap-1">
                                     <span className="text-[8px] text-muted-foreground">4H:</span>
                                     <span className={`text-[9px] font-bold ${
-                                      sr.regimeData.h4.regime?.includes("trend") ? "text-emerald-400"
-                                      : sr.regimeData.h4.regime?.includes("range") ? "text-orange-400"
-                                      : "text-yellow-400"
+                                      sr.regimeData.h4.regime?.includes("trend") ? "text-profit"
+                                      : sr.regimeData.h4.regime?.includes("range") ? "text-warn"
+                                      : "text-highlight"
                                     }`}>{(sr.regimeData.h4.regime || "—").replace(/_/g, " ")}</span>
                                     <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.h4.confidence || 0) * 100)}%)</span>
                                   </div>
                                 )}
                                 {sr.regimeData.multiTFAlignment && (
                                   <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
-                                    sr.regimeData.multiTFAlignment === "agree" ? "bg-emerald-500/20 text-emerald-400"
-                                    : sr.regimeData.multiTFAlignment === "disagree" ? "bg-red-500/20 text-red-400"
-                                    : "bg-yellow-500/20 text-yellow-400"
+                                    sr.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
+                                    : sr.regimeData.multiTFAlignment === "disagree" ? "bg-badge-loss text-loss"
+                                    : "bg-badge-warn text-highlight"
                                   }`}>
                                     {sr.regimeData.multiTFAlignment === "agree" ? "TF ✓ AGREE" : sr.regimeData.multiTFAlignment === "disagree" ? "TF ✗ DISAGREE" : "TF ~ MIXED"}
                                   </span>
@@ -1506,10 +1506,10 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                               {sr.regimeData.daily?.transition && sr.regimeData.daily.transition.state !== "stable" && (
                                 <div className="flex items-center gap-1 mt-0.5">
                                   <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
-                                    sr.regimeData.daily.transition.state === "accelerating" ? "bg-blue-500/20 text-blue-400"
-                                    : sr.regimeData.daily.transition.state === "range_to_trending" ? "bg-emerald-500/20 text-emerald-400"
-                                    : sr.regimeData.daily.transition.state === "trending_to_range" ? "bg-orange-500/20 text-orange-400"
-                                    : sr.regimeData.daily.transition.state === "decelerating" ? "bg-red-500/20 text-red-400"
+                                    sr.regimeData.daily.transition.state === "accelerating" ? "bg-badge-info text-info-c"
+                                    : sr.regimeData.daily.transition.state === "range_to_trending" ? "bg-badge-profit text-profit"
+                                    : sr.regimeData.daily.transition.state === "trending_to_range" ? "bg-badge-warn text-warn"
+                                    : sr.regimeData.daily.transition.state === "decelerating" ? "bg-badge-loss text-loss"
                                     : "bg-muted text-muted-foreground"
                                   }`}>
                                     {sr.regimeData.daily.transition.state === "accelerating" ? "🚀 ACCELERATING"
@@ -1559,8 +1559,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   <span className="text-[9px] text-foreground font-medium">{sr.confluenceStacking.bestStack.label}</span>
                                   {sr.confluenceStacking.bestStack.alignment && (
                                     <span className={`text-[8px] px-1 py-0.5 rounded ${
-                                      sr.confluenceStacking.bestStack.alignment === "aligned" ? "bg-emerald-500/20 text-emerald-400"
-                                      : sr.confluenceStacking.bestStack.alignment === "counter" ? "bg-red-500/20 text-red-400"
+                                      sr.confluenceStacking.bestStack.alignment === "aligned" ? "bg-badge-profit text-profit"
+                                      : sr.confluenceStacking.bestStack.alignment === "counter" ? "bg-badge-loss text-loss"
                                       : "bg-muted text-muted-foreground"
                                     }`}>
                                       {sr.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : sr.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
@@ -1594,18 +1594,18 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {/* ── Pullback Health ── */}
                           {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
                             <div className={`rounded border px-2 py-1.5 space-y-1 ${
-                              sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-emerald-500/5"
-                              : sr.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-red-500/5"
+                              sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
+                              : sr.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
                               : "border-slate-500/30 bg-slate-500/5"
                             }`}>
                               <p className={`text-[8px] uppercase tracking-wider font-bold ${
-                                sr.pullbackHealth.trend === "healthy" ? "text-emerald-400" : sr.pullbackHealth.trend === "exhausting" ? "text-red-400" : "text-slate-400"
+                                sr.pullbackHealth.trend === "healthy" ? "text-profit" : sr.pullbackHealth.trend === "exhausting" ? "text-loss" : "text-muted-foreground"
                               }`}>Pullback Health</p>
                               <div className="flex items-center gap-1">
                                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                  sr.pullbackHealth.trend === "healthy" ? "bg-emerald-500/20 text-emerald-400"
-                                  : sr.pullbackHealth.trend === "exhausting" ? "bg-red-500/20 text-red-400"
-                                  : "bg-slate-500/20 text-slate-400"
+                                  sr.pullbackHealth.trend === "healthy" ? "bg-badge-profit text-profit"
+                                  : sr.pullbackHealth.trend === "exhausting" ? "bg-badge-loss text-loss"
+                                  : "bg-slate-500/20 text-muted-foreground"
                                 }`}>
                                   {sr.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : sr.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
                                 </span>
@@ -1630,14 +1630,14 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                           {/* ── Sweep Reclaim ── */}
                           {sr.sweepReclaim && sr.sweepReclaim.reclaimedCount > 0 && (
-                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+                            <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-warn uppercase tracking-wider font-bold">Sweep Reclaim</p>
                               {sr.sweepReclaim.sweeps?.filter((sw: any) => sw.reclaimed).slice(0, 3).map((sw: any, si: number) => (
                                 <div key={si} className="flex flex-wrap items-center gap-1">
                                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    sw.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
-                                    : sw.createdDisplacement ? "bg-amber-500/20 text-amber-400"
-                                    : "bg-amber-500/15 text-amber-400"
+                                    sw.createdFVG ? "bg-amber-500/25 text-warn border border-warn/40"
+                                    : sw.createdDisplacement ? "bg-badge-warn text-warn"
+                                    : "bg-badge-warn text-warn"
                                   }`}>
                                     {sw.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM{sw.createdFVG ? " + FVG" : sw.createdDisplacement ? " + DISP" : ""}
                                   </span>
@@ -1650,8 +1650,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                           {/* ── Structure Intelligence ── */}
                           {sr.structureIntel && (
-                            <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
+                            <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] uppercase tracking-wider font-bold text-tier3">Structure Intelligence</p>
                               <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
                                 <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">Internal BOS:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.internalBOS ?? 0}</span></div>
                                 <div className="flex items-center gap-1"><span className="text-[8px] text-muted-foreground">External BOS:</span><span className="text-[9px] font-mono text-foreground">{sr.structureIntel.counts?.externalBOS ?? 0}</span></div>
@@ -1662,9 +1662,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                 <div className="flex items-center gap-2 mt-0.5">
                                   <span className="text-[8px] text-muted-foreground">S2F Rate:</span>
                                   <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    sr.structureIntel.s2f.overallRate > 0.4 ? "bg-emerald-500/20 text-emerald-400"
-                                    : sr.structureIntel.s2f.overallRate > 0.2 ? "bg-amber-500/20 text-amber-400"
-                                    : "bg-red-500/20 text-red-400"
+                                    sr.structureIntel.s2f.overallRate > 0.4 ? "bg-badge-profit text-profit"
+                                    : sr.structureIntel.s2f.overallRate > 0.2 ? "bg-badge-warn text-warn"
+                                    : "bg-badge-loss text-loss"
                                   }`}>{(sr.structureIntel.s2f.overallRate * 100).toFixed(0)}%</span>
                                   <span className="text-[8px] text-muted-foreground">
                                     ({sr.structureIntel.s2f.totalFractals} fractals | Bull {(sr.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(sr.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
@@ -1675,9 +1675,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                 <div className="space-y-0.5 mt-0.5">
                                   {sr.structureIntel.derivedSR.active?.length > 0 && (
                                     <div className="flex items-center gap-1 flex-wrap">
-                                      <span className="text-[8px] text-emerald-400 font-semibold">Active S/R:</span>
+                                      <span className="text-[8px] text-profit font-semibold">Active S/R:</span>
                                       {sr.structureIntel.derivedSR.active.map((lv: any, li: number) => (
-                                        <span key={li} className={`text-[8px] font-mono px-1 py-0.5 rounded ${lv.type === "support" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                        <span key={li} className={`text-[8px] font-mono px-1 py-0.5 rounded ${lv.type === "support" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"}`}>
                                           {lv.type === "support" ? "S" : "R"} {lv.price?.toFixed(lv.price > 10 ? 3 : 5)}
                                         </span>
                                       ))}
@@ -1702,10 +1702,10 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {sr.entityLifecycles && (() => {
                             const lc = sr.entityLifecycles;
                             const stateColor = (state: string) => {
-                              if (state === "active" || state === "open") return "bg-emerald-500/20 text-emerald-400";
-                              if (state === "tested" || state === "respected" || state === "retested") return "bg-blue-500/20 text-blue-400";
-                              if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-amber-500/20 text-amber-400";
-                              if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-red-500/20 text-red-400";
+                              if (state === "active" || state === "open") return "bg-badge-profit text-profit";
+                              if (state === "tested" || state === "respected" || state === "retested") return "bg-badge-info text-info-c";
+                              if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-badge-warn text-warn";
+                              if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-badge-loss text-loss";
                               return "bg-muted/30 text-muted-foreground";
                             };
                             const renderStates = (byState: Record<string, number>) => (
@@ -1734,14 +1734,14 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                           {/* ── Fib Levels ── */}
                           {sr.fibLevels && (
-                            <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                            <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
                               <div className="flex items-center gap-2">
-                                <p className="text-[8px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
+                                <p className="text-[8px] text-warn uppercase tracking-wider font-bold">Fib Levels</p>
                                 <span className="text-[7px] font-mono text-muted-foreground">({sr.fibLevels.direction === "up" ? "↑" : "↓"} {sr.fibLevels.swingLow?.toFixed(sr.fibLevels.swingLow > 10 ? 3 : 5)} – {sr.fibLevels.swingHigh?.toFixed(sr.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
                               </div>
                               <div className="flex flex-wrap gap-1">
                                 {(sr.fibLevels.retracements || []).map((r: any, i: number) => (
-                                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
+                                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-badge-warn text-warn">
                                     {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
                                   </span>
                                 ))}
@@ -1750,7 +1750,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                 <div className="flex flex-wrap gap-1 mt-0.5">
                                   <span className="text-[7px] text-muted-foreground">Ext:</span>
                                   {sr.fibLevels.extensions.map((e: any, i: number) => (
-                                    <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                                    <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-badge-profit text-profit">
                                       {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
                                     </span>
                                   ))}
@@ -1822,8 +1822,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                         <div className="flex justify-between"><span className="text-muted-foreground">Closed</span><span className="font-mono">{formatFullDateTime(t.closedAt)}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">Size</span><span className="font-mono">{t.size}</span></div>
                         <div className="flex justify-between"><span className="text-muted-foreground">P&L Pips</span><span className="font-mono">{t.pnlPips?.toFixed(1)}</span></div>
-                        {t.stopLoss != null && <div className="flex justify-between"><span className="text-muted-foreground">Stop Loss</span><span className="font-mono text-red-400">{Number(t.stopLoss).toFixed(5)}</span></div>}
-                        {t.takeProfit != null && <div className="flex justify-between"><span className="text-muted-foreground">Take Profit</span><span className="font-mono text-green-400">{Number(t.takeProfit).toFixed(5)}</span></div>}
+                        {t.stopLoss != null && <div className="flex justify-between"><span className="text-muted-foreground">Stop Loss</span><span className="font-mono text-loss">{Number(t.stopLoss).toFixed(5)}</span></div>}
+                        {t.takeProfit != null && <div className="flex justify-between"><span className="text-muted-foreground">Take Profit</span><span className="font-mono text-profit">{Number(t.takeProfit).toFixed(5)}</span></div>}
                       </div>
                     </div>
                   </td>
@@ -1885,7 +1885,7 @@ function ScanLogLine({ log }: { log: any }) {
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
   const statusLabel = d.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" ? "text-purple-400 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" ? "text-blue-400 bg-blue-500/10 border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+  const statusColor = d.status === "limit_order_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -1946,17 +1946,17 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
 
   const STATUS_META: Record<string, { label: string; color: string; icon: string }> = {
     skipped_no_impulse_zone: { label: "No impulse zone", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "⛔" },
-    watching_zone: { label: "Watching zone", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⏳" },
+    watching_zone: { label: "Watching zone", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
     no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },
     trade_placed: { label: "Trade placed", color: "text-success border-success/30 bg-success/5", icon: "✅" },
     trade_placed_from_watchlist: { label: "Traded from watchlist", color: "text-cyan-400 border-cyan-500/30 bg-cyan-500/5", icon: "📋" },
-    limit_order_placed: { label: "Limit order placed", color: "text-blue-400 border-blue-500/30 bg-blue-500/5", icon: "🎯" },
-    limit_order_from_watchlist: { label: "Limit + watchlist", color: "text-purple-400 border-purple-500/30 bg-purple-500/5", icon: "🎯📋" },
+    limit_order_placed: { label: "Limit order placed", color: "text-info-c border-blue-500/30 bg-badge-info", icon: "🎯" },
+    limit_order_from_watchlist: { label: "Limit + watchlist", color: "text-tier3 border-purple-500/30 bg-purple-500/5", icon: "🎯📋" },
     rejected: { label: "Rejected (post-gate)", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "✗" },
     below_threshold: { label: "Below confluence", color: "text-muted-foreground border-border bg-muted/20", icon: "↓" },
-    staged_new: { label: "Newly staged", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⭐" },
-    staged_watching: { label: "Staged watching", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "👁" },
-    staged_confirming: { label: "Staged confirming", color: "text-amber-400 border-amber-500/30 bg-amber-500/5", icon: "⏳" },
+    staged_new: { label: "Newly staged", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⭐" },
+    staged_watching: { label: "Staged watching", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "👁" },
+    staged_confirming: { label: "Staged confirming", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⏳" },
     staged_invalidated: { label: "Staged invalidated", color: "text-muted-foreground border-border bg-muted/20", icon: "❌" },
     skipped: { label: "Skipped (session/data)", color: "text-muted-foreground border-border bg-muted/20", icon: "–" },
     paused: { label: "Paused", color: "text-muted-foreground border-border bg-muted/20", icon: "⏸" },
@@ -2033,7 +2033,7 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
 
 function ScanDetailInline({ signal: d }: { signal: any }) {
   const statusLabel = d.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" ? "text-purple-400" : d.status === "limit_order_placed" ? "text-blue-400" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+  const statusColor = d.status === "limit_order_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
   return (
     <div className="space-y-2">
@@ -2100,15 +2100,15 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Zone Setup Banner */}
       {d.limitOrder && (
-        <div className="rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1.5">
-          <p className="text-[11px] text-blue-400 uppercase tracking-wider font-bold">🔍 Zone Setup Active</p>
-          <p className="mt-1 text-[12px] text-blue-300">
+        <div className="rounded border border-blue-500/30 bg-badge-info px-2 py-1.5">
+          <p className="text-[11px] text-info-c uppercase tracking-wider font-bold">🔍 Zone Setup Active</p>
+          <p className="mt-1 text-[12px] text-info-c">
             Trigger: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
           </p>
-          <p className="text-[12px] text-blue-300/70">
+          <p className="text-[12px] text-info-c/70">
             Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </p>
-          <p className="text-[10px] text-amber-300/80 mt-1 italic">
+          <p className="text-[10px] text-warn/80 mt-1 italic">
             Will hunt for 5m CHoCH confirmation when price reaches zone
           </p>
         </div>
@@ -2116,16 +2116,16 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Regime Detection Panel — shows Daily + 4H regime, transition state, multi-TF alignment */}
       {d.regimeData && (
-        <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[11px] text-violet-400 uppercase tracking-wider font-bold">Regime Detection</p>
+        <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+          <p className="text-[11px] text-tier3 uppercase tracking-wider font-bold">Regime Detection</p>
           <div className="flex flex-wrap gap-x-3 gap-y-1">
             {/* Daily Regime */}
             <div className="flex items-center gap-1">
               <span className="text-[11px] text-muted-foreground">Daily:</span>
               <span className={`text-[11px] font-bold ${
-                d.regimeData.daily?.regime?.includes("trend") ? "text-emerald-400"
-                : d.regimeData.daily?.regime?.includes("range") ? "text-orange-400"
-                : "text-yellow-400"
+                d.regimeData.daily?.regime?.includes("trend") ? "text-profit"
+                : d.regimeData.daily?.regime?.includes("range") ? "text-warn"
+                : "text-highlight"
               }`}>
                 {(d.regimeData.daily?.regime || "—").replace(/_/g, " ")}
               </span>
@@ -2143,9 +2143,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               <div className="flex items-center gap-1">
                 <span className="text-[11px] text-muted-foreground">4H:</span>
                 <span className={`text-[11px] font-bold ${
-                  d.regimeData.h4.regime?.includes("trend") ? "text-emerald-400"
-                  : d.regimeData.h4.regime?.includes("range") ? "text-orange-400"
-                  : "text-yellow-400"
+                  d.regimeData.h4.regime?.includes("trend") ? "text-profit"
+                  : d.regimeData.h4.regime?.includes("range") ? "text-warn"
+                  : "text-highlight"
                 }`}>
                   {(d.regimeData.h4.regime || "—").replace(/_/g, " ")}
                 </span>
@@ -2163,9 +2163,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             {d.regimeData.multiTFAlignment && (
               <div className="flex items-center gap-1">
                 <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
-                  d.regimeData.multiTFAlignment === "agree" ? "bg-emerald-500/20 text-emerald-400"
-                  : d.regimeData.multiTFAlignment === "disagree" ? "bg-red-500/20 text-red-400"
-                  : "bg-yellow-500/20 text-yellow-400"
+                  d.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
+                  : d.regimeData.multiTFAlignment === "disagree" ? "bg-badge-loss text-loss"
+                  : "bg-badge-warn text-highlight"
                 }`}>
                   {d.regimeData.multiTFAlignment === "agree" ? "TF ✓ AGREE"
                     : d.regimeData.multiTFAlignment === "disagree" ? "TF ✗ DISAGREE"
@@ -2178,10 +2178,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
           {d.regimeData.daily?.transition && d.regimeData.daily.transition.state !== "stable" && (
             <div className="flex items-center gap-1 mt-0.5">
               <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
-                d.regimeData.daily.transition.state === "range_to_trending" ? "bg-emerald-500/20 text-emerald-400"
-                : d.regimeData.daily.transition.state === "accelerating" ? "bg-blue-500/20 text-blue-400"
-                : d.regimeData.daily.transition.state === "trending_to_range" ? "bg-orange-500/20 text-orange-400"
-                : d.regimeData.daily.transition.state === "decelerating" ? "bg-red-500/20 text-red-400"
+                d.regimeData.daily.transition.state === "range_to_trending" ? "bg-badge-profit text-profit"
+                : d.regimeData.daily.transition.state === "accelerating" ? "bg-badge-info text-info-c"
+                : d.regimeData.daily.transition.state === "trending_to_range" ? "bg-badge-warn text-warn"
+                : d.regimeData.daily.transition.state === "decelerating" ? "bg-badge-loss text-loss"
                 : "bg-muted text-muted-foreground"
               }`}>
                 {d.regimeData.daily.transition.state === "range_to_trending" ? "⚡ RANGE → TREND"
@@ -2200,8 +2200,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             <div className="flex items-center gap-1">
               <span className="text-[11px] text-muted-foreground">4H:</span>
               <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
-                d.regimeData.h4.transition.state.includes("trending") || d.regimeData.h4.transition.state === "accelerating" ? "bg-emerald-500/15 text-emerald-400"
-                : "bg-orange-500/15 text-orange-400"
+                d.regimeData.h4.transition.state.includes("trending") || d.regimeData.h4.transition.state === "accelerating" ? "bg-badge-profit text-profit"
+                : "bg-badge-warn text-warn"
               }`}>
                 {d.regimeData.h4.transition.state.replace(/_/g, " ")}
               </span>
@@ -2259,8 +2259,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               </span>
               {d.confluenceStacking.bestStack.alignment && (
                 <span className={`text-[11px] px-1 py-0.5 rounded ${
-                  d.confluenceStacking.bestStack.alignment === "aligned" ? "bg-emerald-500/20 text-emerald-400"
-                  : d.confluenceStacking.bestStack.alignment === "counter" ? "bg-red-500/20 text-red-400"
+                  d.confluenceStacking.bestStack.alignment === "aligned" ? "bg-badge-profit text-profit"
+                  : d.confluenceStacking.bestStack.alignment === "counter" ? "bg-badge-loss text-loss"
                   : "bg-muted text-muted-foreground"
                 }`}>
                   {d.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : d.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
@@ -2296,14 +2296,14 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Sweep Reclaim Panel — shows liquidity sweep + reclaim confirmation */}
       {d.sweepReclaim && d.sweepReclaim.reclaimedCount > 0 && (
-        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[11px] text-amber-400 uppercase tracking-wider font-bold">Sweep Reclaim</p>
+        <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
+          <p className="text-[11px] text-warn uppercase tracking-wider font-bold">Sweep Reclaim</p>
           {d.sweepReclaim.sweeps?.filter((sr: any) => sr.reclaimed).slice(0, 3).map((sr: any, i: number) => (
             <div key={i} className="flex flex-wrap items-center gap-1">
               <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-                sr.createdFVG ? "bg-amber-500/25 text-amber-300 border border-amber-400/40"
-                : sr.createdDisplacement ? "bg-amber-500/20 text-amber-400"
-                : "bg-amber-500/15 text-amber-400"
+                sr.createdFVG ? "bg-amber-500/25 text-warn border border-warn/40"
+                : sr.createdDisplacement ? "bg-badge-warn text-warn"
+                : "bg-badge-warn text-warn"
               }`}>
                 {sr.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM
                 {sr.createdFVG ? " + FVG" : sr.createdDisplacement ? " + DISP" : ""}
@@ -2327,20 +2327,20 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* Pullback Health Panel — shows trend health via retracement depth progression */}
       {d.pullbackHealth && d.pullbackHealth.trend !== "insufficient_data" && (
         <div className={`rounded border px-2 py-1.5 space-y-1 ${
-          d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-emerald-500/5"
-          : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-red-500/5"
+          d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
+          : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
           : "border-slate-500/30 bg-slate-500/5"
         }`}>
           <p className={`text-[11px] uppercase tracking-wider font-bold ${
-            d.pullbackHealth.trend === "healthy" ? "text-emerald-400"
-            : d.pullbackHealth.trend === "exhausting" ? "text-red-400"
-            : "text-slate-400"
+            d.pullbackHealth.trend === "healthy" ? "text-profit"
+            : d.pullbackHealth.trend === "exhausting" ? "text-loss"
+            : "text-muted-foreground"
           }`}>Pullback Health</p>
           <div className="flex items-center gap-1">
             <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-              d.pullbackHealth.trend === "healthy" ? "bg-emerald-500/20 text-emerald-400"
-              : d.pullbackHealth.trend === "exhausting" ? "bg-red-500/20 text-red-400"
-              : "bg-slate-500/20 text-slate-400"
+              d.pullbackHealth.trend === "healthy" ? "bg-badge-profit text-profit"
+              : d.pullbackHealth.trend === "exhausting" ? "bg-badge-loss text-loss"
+              : "bg-slate-500/20 text-muted-foreground"
             }`}>
               {d.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : d.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
             </span>
@@ -2365,8 +2365,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Structure Intelligence Panel — Internal/External BOS, S2F rate, derived S/R */}
       {d.structureIntel && (
-        <div className="rounded border border-violet-500/30 bg-violet-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[11px] uppercase tracking-wider font-bold text-violet-400">Structure Intelligence</p>
+        <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
+          <p className="text-[11px] uppercase tracking-wider font-bold text-tier3">Structure Intelligence</p>
           {/* BOS / CHoCH counts by significance */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             <div className="flex items-center gap-1">
@@ -2391,9 +2391,9 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-[11px] text-muted-foreground">S2F Rate:</span>
               <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-                d.structureIntel.s2f.overallRate > 0.4 ? "bg-emerald-500/20 text-emerald-400"
-                : d.structureIntel.s2f.overallRate > 0.2 ? "bg-amber-500/20 text-amber-400"
-                : "bg-red-500/20 text-red-400"
+                d.structureIntel.s2f.overallRate > 0.4 ? "bg-badge-profit text-profit"
+                : d.structureIntel.s2f.overallRate > 0.2 ? "bg-badge-warn text-warn"
+                : "bg-badge-loss text-loss"
               }`}>
                 {(d.structureIntel.s2f.overallRate * 100).toFixed(0)}%
               </span>
@@ -2407,10 +2407,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             <div className="space-y-0.5 mt-0.5">
               {d.structureIntel.derivedSR.active?.length > 0 && (
                 <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[11px] text-emerald-400 font-semibold">Active S/R:</span>
+                  <span className="text-[11px] text-profit font-semibold">Active S/R:</span>
                   {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
                     <span key={i} className={`text-[11px] font-mono px-1 py-0.5 rounded ${
-                      sr.type === "support" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
+                      sr.type === "support" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"
                     }`}>
                       {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
                     </span>
@@ -2436,10 +2436,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {d.analysis_snapshot?.entityLifecycles && (() => {
         const lc = d.analysis_snapshot.entityLifecycles;
         const stateColor = (state: string) => {
-          if (state === "active" || state === "open") return "bg-emerald-500/20 text-emerald-400";
-          if (state === "tested" || state === "respected" || state === "retested") return "bg-blue-500/20 text-blue-400";
-          if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-amber-500/20 text-amber-400";
-          if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-red-500/20 text-red-400";
+          if (state === "active" || state === "open") return "bg-badge-profit text-profit";
+          if (state === "tested" || state === "respected" || state === "retested") return "bg-badge-info text-info-c";
+          if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-badge-warn text-warn";
+          if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-badge-loss text-loss";
           return "bg-muted/30 text-muted-foreground";
         };
         const renderStates = (byState: Record<string, number>) => (
@@ -2495,7 +2495,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                 <p className="text-[11px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>
                 {renderStates(lc.unicornSetups.byState)}
                 {lc.unicornSetups.invalidationReasons?.length > 0 && (
-                  <p className="text-[10px] text-red-400/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
+                  <p className="text-[10px] text-loss/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
                 )}
               </div>
             )}
@@ -2512,15 +2512,15 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* Fib Levels Panel — shows ZigZag-based retracement + extension levels */}
       {d.fibLevels && (
-        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+        <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
           <div className="flex items-center gap-2">
-            <p className="text-[11px] text-amber-400 uppercase tracking-wider font-bold">Fib Levels</p>
+            <p className="text-[11px] text-warn uppercase tracking-wider font-bold">Fib Levels</p>
             <span className="text-[10px] font-mono text-muted-foreground">({d.fibLevels.direction === "up" ? "↑" : "↓"} {d.fibLevels.swingLow?.toFixed(d.fibLevels.swingLow > 10 ? 3 : 5)} – {d.fibLevels.swingHigh?.toFixed(d.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
           </div>
           {/* Retracement levels */}
           <div className="flex flex-wrap gap-1">
             {(d.fibLevels.retracements || []).map((r: any, i: number) => (
-              <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300">
+              <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-badge-warn text-warn">
                 {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
               </span>
             ))}
@@ -2530,7 +2530,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
             <div className="flex flex-wrap gap-1 mt-0.5">
               <span className="text-[10px] text-muted-foreground">Ext:</span>
               {d.fibLevels.extensions.map((e: any, i: number) => (
-                <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-badge-profit text-profit">
                   {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
                 </span>
               ))}

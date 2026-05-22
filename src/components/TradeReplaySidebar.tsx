@@ -72,10 +72,10 @@ export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
             className={cn(
               "text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wide",
               t.status === "staged"
-                ? "text-amber-400 bg-amber-400/15"
+                ? "text-warn bg-amber-400/15"
                 : t.direction === "BUY"
-                ? "text-green-400 bg-green-400/15"
-                : "text-red-400 bg-red-400/15"
+                ? "text-profit bg-green-400/15"
+                : "text-loss bg-badge-loss"
             )}
           >
             {t.status === "staged" ? "WATCH" : t.direction}
@@ -87,14 +87,14 @@ export function TradeReplaySidebar({ trades, selectedId, onSelect }: Props) {
             <span
               className={cn(
                 "font-mono font-semibold",
-                isPositive ? "text-green-400" : "text-red-400"
+                isPositive ? "text-profit" : "text-loss"
               )}
             >
               {isPositive ? "+" : ""}{fx(t.pnl_pips)} pips
             </span>
           )}
           {t.status === "staged" && (
-            <span className="text-amber-400 font-medium">
+            <span className="text-warn font-medium">
               {t.signal_reason?.score ? `${t.signal_reason.score}%` : "—"}
             </span>
           )}

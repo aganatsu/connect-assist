@@ -54,6 +54,21 @@
     --cyan: 185 80% 55%;
     --bullish: 155 70% 45%;
     --bearish: 0 72% 51%;
+
+    /* Trading semantic colors — dark mode (optimized for dark bg) */
+    --profit: 155 70% 55%;
+    --loss: 0 72% 60%;
+    --warn: 38 92% 60%;
+    --info: 210 80% 65%;
+    --highlight: 45 96% 60%;
+    --tier1: 38 92% 60%;
+    --tier2: 200 80% 60%;
+    --tier3: 270 60% 65%;
+    --neutral: 220 8% 55%;
+    --badge-profit-bg: 155 70% 45% / 0.15;
+    --badge-loss-bg: 0 72% 51% / 0.15;
+    --badge-warn-bg: 38 92% 50% / 0.15;
+    --badge-info-bg: 210 80% 55% / 0.15;
   }
 
   .light {
@@ -107,6 +122,21 @@
     --cyan: 185 80% 40%;
     --bullish: 155 70% 35%;
     --bearish: 0 72% 51%;
+
+    /* Trading semantic colors — light mode (optimized for light bg) */
+    --profit: 155 70% 30%;
+    --loss: 0 72% 45%;
+    --warn: 38 80% 40%;
+    --info: 210 70% 45%;
+    --highlight: 45 85% 35%;
+    --tier1: 38 80% 40%;
+    --tier2: 200 70% 40%;
+    --tier3: 270 50% 45%;
+    --neutral: 220 8% 40%;
+    --badge-profit-bg: 155 70% 35% / 0.12;
+    --badge-loss-bg: 0 72% 45% / 0.12;
+    --badge-warn-bg: 38 80% 40% / 0.12;
+    --badge-info-bg: 210 70% 45% / 0.12;
   }
 }
 
@@ -128,6 +158,35 @@
 }
 
 @layer components {
+  /* Theme-aware trading colors — auto-switch between dark/light optimized shades */
+  .text-profit { color: hsl(var(--profit)); }
+  .text-loss { color: hsl(var(--loss)); }
+  .text-warn { color: hsl(var(--warn)); }
+  .text-info-c { color: hsl(var(--info)); }
+  .text-highlight { color: hsl(var(--highlight)); }
+  .text-tier1 { color: hsl(var(--tier1)); }
+  .text-tier2 { color: hsl(var(--tier2)); }
+  .text-tier3 { color: hsl(var(--tier3)); }
+  .text-neutral-c { color: hsl(var(--neutral)); }
+
+  .bg-profit { background-color: hsl(var(--profit)); }
+  .bg-loss { background-color: hsl(var(--loss)); }
+  .bg-warn { background-color: hsl(var(--warn)); }
+  .bg-info-c { background-color: hsl(var(--info)); }
+
+  .bg-badge-profit { background-color: hsl(var(--badge-profit-bg)); }
+  .bg-badge-loss { background-color: hsl(var(--badge-loss-bg)); }
+  .bg-badge-warn { background-color: hsl(var(--badge-warn-bg)); }
+  .bg-badge-info { background-color: hsl(var(--badge-info-bg)); }
+
+  .border-profit { border-color: hsl(var(--profit)); }
+  .border-loss { border-color: hsl(var(--loss)); }
+  .border-warn { border-color: hsl(var(--warn)); }
+  .border-info-c { border-color: hsl(var(--info)); }
+  .border-tier1 { border-color: hsl(var(--tier1)); }
+  .border-tier2 { border-color: hsl(var(--tier2)); }
+  .border-tier3 { border-color: hsl(var(--tier3)); }
+
   /* Brutalist panel with thick border */
   .panel {
     @apply bg-card border-4 border-border;
@@ -135,31 +194,31 @@
 
   /* Cyan glow effect */
   .glow-cyan {
-    box-shadow: 0 0 12px hsl(185 80% 55% / 0.3), 0 0 4px hsl(185 80% 55% / 0.2);
+    box-shadow: 0 0 12px hsl(var(--cyan) / 0.3), 0 0 4px hsl(var(--cyan) / 0.2);
   }
 
   /* Left border glow for active items */
   .glow-border-left {
-    border-left: 3px solid hsl(185, 80%, 55%);
-    box-shadow: -4px 0 8px hsl(185 80% 55% / 0.2);
+    border-left: 3px solid hsl(var(--cyan));
+    box-shadow: -4px 0 8px hsl(var(--cyan) / 0.2);
   }
 
   /* Pulsing status dot */
   .status-dot-active {
     @apply w-2 h-2 rounded-full;
-    background: hsl(185, 80%, 55%);
-    box-shadow: 0 0 6px hsl(185 80% 55% / 0.6);
+    background: hsl(var(--cyan));
+    box-shadow: 0 0 6px hsl(var(--cyan) / 0.6);
     animation: pulse-dot 2s ease-in-out infinite;
   }
 
   @keyframes pulse-dot {
-    0%, 100% { opacity: 1; box-shadow: 0 0 6px hsl(185 80% 55% / 0.6); }
-    50% { opacity: 0.6; box-shadow: 0 0 12px hsl(185 80% 55% / 0.4); }
+    0%, 100% { opacity: 1; box-shadow: 0 0 6px hsl(var(--cyan) / 0.6); }
+    50% { opacity: 0.6; box-shadow: 0 0 12px hsl(var(--cyan) / 0.4); }
   }
 
   /* Price flash animation */
   @keyframes price-flash {
-    0% { background-color: hsl(185 80% 55% / 0.15); }
+    0% { background-color: hsl(var(--cyan) / 0.15); }
     100% { background-color: transparent; }
   }
   .price-flash {

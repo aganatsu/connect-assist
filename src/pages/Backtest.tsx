@@ -128,8 +128,8 @@ const CLOSE_REASONS: Record<string, { label: string; color: string; icon: any }>
   sl_hit: { label: "Stop Loss", color: "text-destructive", icon: XCircle },
   time_exit: { label: "Time Exit", color: "text-warning", icon: Clock },
   trailing_stop: { label: "Trailing Stop", color: "text-cyan", icon: TrendingUp },
-  reverse_signal: { label: "Reverse Signal", color: "text-purple-400", icon: ArrowLeftRight },
-  partial_tp: { label: "Partial TP", color: "text-blue-400", icon: Layers },
+  reverse_signal: { label: "Reverse Signal", color: "text-tier3", icon: ArrowLeftRight },
+  partial_tp: { label: "Partial TP", color: "text-info-c", icon: Layers },
   max_dd: { label: "Max Drawdown", color: "text-destructive", icon: AlertTriangle },
   circuit_breaker: { label: "Circuit Breaker", color: "text-destructive", icon: Shield },
 };

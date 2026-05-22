@@ -9,7 +9,7 @@ import type { CandleSource } from "@/lib/api";
 const SOURCE_META: Record<CandleSource, { label: string; cls: string; tip: string }> = {
   metaapi:    { label: "MetaAPI",      cls: "text-success bg-success/10 border-success/40",         tip: "Broker feed (live, broker-accurate)" },
   twelvedata: { label: "Twelve Data",  cls: "text-warning bg-warning/10 border-warning/40",         tip: "Real-time third-party feed" },
-  polygon:    { label: "Polygon",      cls: "text-blue-400 bg-blue-400/10 border-blue-400/40",      tip: "Polygon.io paid data feed" },
+  polygon:    { label: "Polygon",      cls: "text-blue-400 bg-badge-info border-blue-400/40",      tip: "Polygon.io paid data feed" },
   none:       { label: "No Data",      cls: "text-muted-foreground bg-muted/20 border-border",      tip: "No source returned candles" },
   unknown:    { label: "—",            cls: "text-muted-foreground bg-muted/20 border-border",      tip: "Source not reported yet" },
 };

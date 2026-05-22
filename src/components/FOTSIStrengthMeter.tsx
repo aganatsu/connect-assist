@@ -25,11 +25,11 @@ const BEAR_THRESHOLD = -25;
 const OS_THRESHOLD = -50;
 
 function getZone(value: number): { label: string; color: string; barColor: string; textColor: string } {
-  if (value >= OB_THRESHOLD) return { label: "OB", color: "border-red-500 text-red-500", barColor: "bg-red-500", textColor: "text-red-500" };
-  if (value > BULL_THRESHOLD) return { label: "BULL", color: "border-cyan-500 text-cyan-500", barColor: "bg-cyan-500", textColor: "text-cyan-500" };
+  if (value >= OB_THRESHOLD) return { label: "OB", color: "border-red-500 text-loss", barColor: "bg-red-500", textColor: "text-loss" };
+  if (value > BULL_THRESHOLD) return { label: "BULL", color: "border-cyan text-cyan", barColor: "bg-cyan-500", textColor: "text-cyan" };
   if (value > BEAR_THRESHOLD) return { label: "", color: "", barColor: "bg-zinc-400 dark:bg-zinc-500", textColor: "text-foreground" };
-  if (value > OS_THRESHOLD) return { label: "BEAR", color: "border-orange-500 text-orange-500", barColor: "bg-orange-500", textColor: "text-orange-500" };
-  return { label: "OS", color: "border-emerald-500 text-emerald-500", barColor: "bg-emerald-500", textColor: "text-emerald-500" };
+  if (value > OS_THRESHOLD) return { label: "BEAR", color: "border-warn text-warn", barColor: "bg-warn", textColor: "text-warn" };
+  return { label: "OS", color: "border-profit text-profit", barColor: "bg-profit", textColor: "text-profit" };
 }
 
 // All 28 forex pairs for "Ranked Pairs" tab
@@ -86,7 +86,7 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
       <Card className="border-border/50 bg-card/80 backdrop-blur-sm">
         <CardHeader className="py-3 px-4">
           <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-            <BarChart3 className="w-4 h-4 text-cyan-500" />
+            <BarChart3 className="w-4 h-4 text-cyan" />
             FOTSI Currency Strength
           </CardTitle>
         </CardHeader>
@@ -107,7 +107,7 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
       {/* Header */}
       <CardHeader className="py-2.5 px-4 flex flex-row items-center justify-between space-y-0">
         <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-          <BarChart3 className="w-4 h-4 text-cyan-500" />
+          <BarChart3 className="w-4 h-4 text-cyan" />
           Currency Strength
         </CardTitle>
         <div className="flex items-center gap-2">
@@ -140,7 +140,7 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
               onClick={() => setTab("meter")}
               className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 -mb-px ${
                 tab === "meter"
-                  ? "border-cyan-500 text-foreground"
+                  ? "border-cyan text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -150,7 +150,7 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
               onClick={() => setTab("pairs")}
               className={`px-3 py-1.5 text-xs font-medium transition-colors border-b-2 -mb-px ${
                 tab === "pairs"
-                  ? "border-cyan-500 text-foreground"
+                  ? "border-cyan text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -165,8 +165,8 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
                 <LegendItem color="bg-red-500" label="OB ≥50" />
                 <LegendItem color="bg-cyan-500" label="Bull >25" />
                 <LegendItem color="bg-zinc-400 dark:bg-zinc-500" label="Neutral" />
-                <LegendItem color="bg-orange-500" label="Bear <-25" />
-                <LegendItem color="bg-emerald-500" label="OS ≤-50" />
+                <LegendItem color="bg-warn" label="Bear <-25" />
+                <LegendItem color="bg-profit" label="OS ≤-50" />
               </div>
 
               {/* Currency Bars */}
@@ -229,27 +229,27 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
                   </p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
                     <div className="flex items-center gap-1.5">
-                      <TrendingUp className="w-3 h-3 text-cyan-500" />
+                      <TrendingUp className="w-3 h-3 text-cyan" />
                       <span className="text-muted-foreground">Strongest:</span>
                       <span className="font-mono">{CURRENCY_FLAGS[strongest[0]]}</span>
                       <span className="font-bold">{strongest[0]}</span>
-                      <span className="font-mono text-cyan-500">{strongest[1].toFixed(1)}</span>
+                      <span className="font-mono text-cyan">{strongest[1].toFixed(1)}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <TrendingDown className="w-3 h-3 text-orange-500" />
+                      <TrendingDown className="w-3 h-3 text-warn" />
                       <span className="text-muted-foreground">Weakest:</span>
                       <span className="font-mono">{CURRENCY_FLAGS[weakest[0]]}</span>
                       <span className="font-bold">{weakest[0]}</span>
-                      <span className={`font-mono ${weakest[1] < 0 ? "text-orange-500" : "text-foreground"}`}>
+                      <span className={`font-mono ${weakest[1] < 0 ? "text-warn" : "text-foreground"}`}>
                         {weakest[1].toFixed(1)}
                       </span>
                     </div>
                   </div>
                   {maxSpread && (
                     <div className="flex items-center gap-1.5 mt-1.5 text-xs">
-                      <Zap className="w-3 h-3 text-amber-500" />
+                      <Zap className="w-3 h-3 text-warn" />
                       <span className="text-muted-foreground">Max Spread:</span>
-                      <span className="font-mono font-bold text-amber-500">{Math.abs(maxSpread.spread).toFixed(1)}</span>
+                      <span className="font-mono font-bold text-warn">{Math.abs(maxSpread.spread).toFixed(1)}</span>
                       <span className="text-muted-foreground">({maxSpread.pair})</span>
                     </div>
                   )}
@@ -276,19 +276,19 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
                     <div className="flex-1 relative h-3 bg-zinc-100 dark:bg-zinc-800/60 rounded-sm overflow-hidden">
                       <div className="absolute left-1/2 top-0 bottom-0 w-px bg-zinc-300 dark:bg-zinc-600" />
                       <div
-                        className={`absolute h-full ${isBullish ? "bg-cyan-500/80" : "bg-orange-500/80"} transition-all duration-300`}
+                        className={`absolute h-full ${isBullish ? "bg-cyan-500/80" : "bg-warn/80"} transition-all duration-300`}
                         style={{
                           width: `${Math.min(absSpread / (maxAbs * 2) * 100, 50)}%`,
                           ...(isBullish ? { left: "50%" } : { right: "50%" }),
                         }}
                       />
                     </div>
-                    <span className={`text-xs font-mono font-bold w-10 text-right ${isBullish ? "text-cyan-500" : "text-orange-500"}`}>
+                    <span className={`text-xs font-mono font-bold w-10 text-right ${isBullish ? "text-cyan" : "text-warn"}`}>
                       {isBullish ? "+" : ""}{spread.toFixed(1)}
                     </span>
                     <div className="w-10 flex justify-center">
                       {absSpread > 25 && (
-                        <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${isBullish ? "border-cyan-500 text-cyan-500" : "border-orange-500 text-orange-500"}`}>
+                        <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${isBullish ? "border-cyan text-cyan" : "border-warn text-warn"}`}>
                           {isBullish ? "BUY" : "SELL"}
                         </Badge>
                       )}

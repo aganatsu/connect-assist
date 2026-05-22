@@ -104,15 +104,15 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
       <div className="px-3 py-3 border-b border-border/50">
         <div className="flex items-center gap-2">
           {direction === 'BUY' ? (
-            <TrendingUp className="h-5 w-5 text-emerald-400" />
+            <TrendingUp className="h-5 w-5 text-profit" />
           ) : direction === 'SELL' ? (
-            <TrendingDown className="h-5 w-5 text-red-400" />
+            <TrendingDown className="h-5 w-5 text-loss" />
           ) : (
             <Minus className="h-5 w-5 text-muted-foreground" />
           )}
           <div>
             <p className={`text-sm font-bold ${
-              direction === 'BUY' ? 'text-emerald-400' : direction === 'SELL' ? 'text-red-400' : 'text-muted-foreground'
+              direction === 'BUY' ? 'text-profit' : direction === 'SELL' ? 'text-loss' : 'text-muted-foreground'
             }`}>
               {direction === 'BUY' ? 'BULLISH' : direction === 'SELL' ? 'BEARISH' : 'NEUTRAL'}
             </p>
@@ -131,7 +131,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           <div className="space-y-1">
             {top3.map((f, i) => (
               <div key={i} className="flex items-start gap-1.5">
-                <span className="text-emerald-400 text-[10px] mt-0.5">✓</span>
+                <span className="text-profit text-[10px] mt-0.5">✓</span>
                 <div className="flex-1 min-w-0">
                   <span className="text-foreground font-medium text-[10px]">{f.label}</span>
                   {f.weight != null && (
@@ -151,7 +151,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
         <div className="space-y-1.5">
           {/* Nearest OB */}
           <div className="flex items-center justify-between">
-            <span className="text-orange-400 font-medium">OB</span>
+            <span className="text-warn font-medium">OB</span>
             {nearestOB ? (
               <span className="font-mono text-[10px]">
                 {nearestOB.type === 'bullish' ? '🟢' : '🔴'} {fx(nearestOB.high)} – {fx(nearestOB.low)}
@@ -167,7 +167,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           </div>
           {/* Nearest FVG */}
           <div className="flex items-center justify-between">
-            <span className="text-purple-400 font-medium">FVG</span>
+            <span className="text-tier3 font-medium">FVG</span>
             {nearestFVG ? (
               <span className="font-mono text-[10px]">
                 {nearestFVG.type === 'bullish' ? '🟢' : '🔴'} {fx(nearestFVG.high)} – {fx(nearestFVG.low)}
@@ -181,14 +181,14 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           </div>
           {/* Nearest Liquidity */}
           <div className="flex items-center justify-between">
-            <span className="text-purple-400 font-medium">LIQ</span>
+            <span className="text-tier3 font-medium">LIQ</span>
             {nearestLiq ? (
               <span className="font-mono text-[10px]">
                 {nearestLiq.type === 'high' ? '↑ BSL' : '↓ SSL'} {fx(nearestLiq.price)}
                 {activeLiqPools.length > 1 && <span className="text-muted-foreground ml-1">+{activeLiqPools.length - 1}</span>}
               </span>
             ) : liquidityPools.length > 0 ? (
-              <span className="text-amber-400 text-[10px]">all swept</span>
+              <span className="text-warn text-[10px]">all swept</span>
             ) : (
               <span className="text-muted-foreground">none detected</span>
             )}
@@ -209,7 +209,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Direction</span>
-              <span className={iz.impulse.direction === 'bullish' ? 'text-emerald-400' : 'text-red-400'}>
+              <span className={iz.impulse.direction === 'bullish' ? 'text-profit' : 'text-loss'}>
                 {iz.impulse.direction}
               </span>
             </div>
@@ -259,7 +259,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           <p className="text-[9px] text-primary mt-1">Silver Bullet window active</p>
         )}
         {sig?.extendedFactors?.macroTime && (
-          <p className="text-[9px] text-amber-400 mt-0.5">Macro time flag</p>
+          <p className="text-[9px] text-warn mt-0.5">Macro time flag</p>
         )}
       </div>
 
@@ -271,15 +271,15 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
             <span className="text-[8px] text-muted-foreground/60 normal-case ml-1">(gates may differ)</span>
           </p>
           <div className={`rounded p-2 border ${
-            sig.direction === 'long' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'
+            sig.direction === 'long' ? 'bg-badge-profit border-emerald-500/20' : 'bg-badge-loss border-red-500/20'
           }`}>
             <div className="flex items-center gap-2 mb-1.5">
               {sig.direction === 'long' ? (
-                <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
+                <TrendingUp className="h-3.5 w-3.5 text-profit" />
               ) : (
-                <TrendingDown className="h-3.5 w-3.5 text-red-400" />
+                <TrendingDown className="h-3.5 w-3.5 text-loss" />
               )}
-              <span className={`font-bold text-xs ${sig.direction === 'long' ? 'text-emerald-400' : 'text-red-400'}`}>
+              <span className={`font-bold text-xs ${sig.direction === 'long' ? 'text-profit' : 'text-loss'}`}>
                 {sig.direction.toUpperCase()}
               </span>
               {sig.score != null && (
@@ -290,18 +290,18 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
             </div>
             <div className="space-y-0.5 font-mono text-[10px]">
               {sig.entry && <div className="flex justify-between"><span className="text-muted-foreground">Entry</span><span>{fx(sig.entry)}</span></div>}
-              {sig.sl && <div className="flex justify-between"><span className="text-red-400">SL</span><span>{fx(sig.sl)}</span></div>}
-              {sig.tp && <div className="flex justify-between"><span className="text-emerald-400">TP</span><span>{fx(sig.tp)}</span></div>}
+              {sig.sl && <div className="flex justify-between"><span className="text-loss">SL</span><span>{fx(sig.sl)}</span></div>}
+              {sig.tp && <div className="flex justify-between"><span className="text-profit">TP</span><span>{fx(sig.tp)}</span></div>}
               {sig.rr && <div className="flex justify-between"><span className="text-muted-foreground">R:R</span><span className="text-primary font-bold">1:{sig.rr.toFixed(1)}</span></div>}
             </div>
             {sig.status === 'trade_placed' && (
-              <p className="text-[9px] text-emerald-400 font-bold mt-1.5">✓ Trade was placed</p>
+              <p className="text-[9px] text-profit font-bold mt-1.5">✓ Trade was placed</p>
             )}
             {sig.status === 'rejected' && sig.rejectionReasons?.length > 0 && (
               <div className="mt-1.5">
-                <p className="text-[8px] text-red-400 font-bold">Rejected:</p>
+                <p className="text-[8px] text-loss font-bold">Rejected:</p>
                 {sig.rejectionReasons.slice(0, 2).map((r: string, i: number) => (
-                  <p key={i} className="text-[9px] text-red-300">⚠ {r}</p>
+                  <p key={i} className="text-[9px] text-loss">⚠ {r}</p>
                 ))}
               </div>
             )}

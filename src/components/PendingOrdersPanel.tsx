@@ -89,19 +89,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
   const statusIcon = (status: string) => {
     switch (status) {
-      case "filled": return <TrendingUp className="w-3 h-3 text-green-400" />;
-      case "expired": return <Clock className="w-3 h-3 text-yellow-400" />;
-      case "cancelled": return <X className="w-3 h-3 text-red-400" />;
-      default: return <Target className="w-3 h-3 text-blue-400" />;
+      case "filled": return <TrendingUp className="w-3 h-3 text-profit" />;
+      case "expired": return <Clock className="w-3 h-3 text-highlight" />;
+      case "cancelled": return <X className="w-3 h-3 text-loss" />;
+      default: return <Target className="w-3 h-3 text-info-c" />;
     }
   };
 
   const statusColor = (status: string) => {
     switch (status) {
-      case "filled": return "text-green-400";
-      case "expired": return "text-yellow-400";
-      case "cancelled": return "text-red-400";
-      default: return "text-blue-400";
+      case "filled": return "text-profit";
+      case "expired": return "text-highlight";
+      case "cancelled": return "text-loss";
+      default: return "text-info-c";
     }
   };
 
@@ -117,17 +117,17 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         key={order.order_id}
         className={`border rounded-lg p-3 space-y-2 ${
           isHunting
-            ? "border-amber-500/30 bg-amber-500/5"
-            : "border-blue-500/30 bg-blue-500/5"
+            ? "border-amber-500/30 bg-badge-warn"
+            : "border-blue-500/30 bg-badge-info"
         }`}
       >
         {/* Row 1: Symbol, Direction, Stage Badge, Cancel */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             {order.direction === "long" ? (
-              <TrendingUp className="w-3.5 h-3.5 text-green-400" />
+              <TrendingUp className="w-3.5 h-3.5 text-profit" />
             ) : (
-              <TrendingDown className="w-3.5 h-3.5 text-red-400" />
+              <TrendingDown className="w-3.5 h-3.5 text-loss" />
             )}
             <span className="font-mono text-sm font-semibold text-foreground">
               {order.symbol}
@@ -136,22 +136,22 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               variant="outline"
               className={`text-[10px] px-1.5 py-0 ${
                 order.direction === "long"
-                  ? "border-green-500/50 text-green-400 bg-green-500/10"
-                  : "border-red-500/50 text-red-400 bg-red-500/10"
+                  ? "border-green-500/50 text-profit bg-badge-profit"
+                  : "border-red-500/50 text-loss bg-badge-loss"
               }`}
             >
               {order.direction.toUpperCase()}
             </Badge>
             <Badge
               variant="outline"
-              className="text-[10px] px-1.5 py-0 border-blue-500/50 text-blue-300 bg-blue-500/10"
+              className="text-[10px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
             >
               {order.order_type === "limit_ob" ? "OB" : "FVG"}
             </Badge>
             {isHunting && (
               <Badge
                 variant="outline"
-                className="text-[10px] px-1.5 py-0 border-amber-500/50 text-amber-300 bg-amber-500/10 animate-pulse"
+                className="text-[10px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
               >
                 <Crosshair className="w-2.5 h-2.5 mr-0.5" />
                 HUNTING
@@ -172,7 +172,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               size="sm"
               onClick={() => handleCancel(order.order_id)}
               disabled={cancelling === order.order_id}
-              className="h-5 w-5 p-0 text-muted-foreground hover:text-red-400"
+              className="h-5 w-5 p-0 text-muted-foreground hover:text-loss"
             >
               <X className="w-3 h-3" />
             </Button>
@@ -182,14 +182,14 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {/* Row 2: Status-specific info */}
         {isHunting ? (
           <div className="flex items-center justify-between text-[11px]">
-            <span className="text-amber-300 font-medium">
+            <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
               Price in zone — waiting for {order.direction === "short" ? "bearish" : "bullish"} CHoCH on 5m
             </span>
             <span className="text-muted-foreground">
-              SL: <span className="text-red-400 font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
-              TP: <span className="text-green-400 font-mono">{Number(order.take_profit).toFixed(5)}</span>
+              TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
           </div>
         ) : (
@@ -197,19 +197,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <span>
               Current: <span className="text-foreground font-mono">{order.current_price ? Number(order.current_price).toFixed(5) : "—"}</span>
               {" · "}
-              <span className="text-blue-300">{getDistancePips(order)} pips away</span>
+              <span className="text-info-c">{getDistancePips(order)} pips away</span>
             </span>
             <span>
-              SL: <span className="text-red-400 font-mono">{Number(order.stop_loss).toFixed(5)}</span>
+              SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
-              TP: <span className="text-green-400 font-mono">{Number(order.take_profit).toFixed(5)}</span>
+              TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
           </div>
         )}
 
         {/* Row 3: Zone info */}
         <div className="text-[11px] text-muted-foreground">
-          Zone: <span className={isHunting ? "text-amber-300" : "text-blue-300"}>{order.entry_zone_type}</span>
+          Zone: <span className={isHunting ? "text-warn" : "text-info-c"}>{order.entry_zone_type}</span>
           {" "}[{Number(order.entry_zone_low).toFixed(5)} – {Number(order.entry_zone_high).toFixed(5)}]
           {" · "}
           Size: <span className="text-foreground">{order.size} lots</span>
@@ -231,7 +231,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <div className="flex items-center justify-between text-[10px]">
               <div className="flex items-center gap-1">
                 <Clock className="w-3 h-3 text-muted-foreground" />
-                <span className={isExpiringSoon ? "text-amber-400" : "text-muted-foreground"}>
+                <span className={isExpiringSoon ? "text-warn" : "text-muted-foreground"}>
                   {getTimeRemaining(order.expires_at)}
                 </span>
               </div>
@@ -254,8 +254,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {isHunting && (
           <div className="flex items-center justify-between text-[10px]">
             <div className="flex items-center gap-1">
-              <Crosshair className="w-3 h-3 text-amber-400 animate-pulse" />
-              <span className="text-amber-300">
+              <Crosshair className="w-3 h-3 text-warn animate-pulse" />
+              <span className="text-warn">
                 Confirmation active — no time limit
               </span>
             </div>
@@ -276,12 +276,12 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Crosshair className="w-4 h-4 text-blue-400" />
-          <span className="text-sm font-semibold text-blue-300 uppercase tracking-wider">
+          <Crosshair className="w-4 h-4 text-info-c" />
+          <span className="text-sm font-semibold text-info-c uppercase tracking-wider">
             Zone Setups
           </span>
           {orders.length > 0 && (
-            <Badge variant="outline" className="text-xs border-blue-500/50 text-blue-300 bg-blue-500/10">
+            <Badge variant="outline" className="text-xs border-blue-500/50 text-info-c bg-badge-info">
               {orders.length}
             </Badge>
           )}
@@ -307,7 +307,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {/* Hunting section (higher priority) */}
           {huntingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-amber-300 uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[10px] text-warn uppercase tracking-wider font-semibold">
                 <Crosshair className="w-3 h-3" />
                 Hunting Confirmation ({huntingOrders.length})
               </div>
@@ -318,7 +318,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {/* Watching section */}
           {watchingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-blue-300 uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[10px] text-info-c uppercase tracking-wider font-semibold">
                 <Eye className="w-3 h-3" />
                 Watching — Waiting for Zone ({watchingOrders.length})
               </div>
@@ -353,8 +353,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                       variant="outline"
                       className={`text-[9px] px-1 py-0 ${
                         order.direction === "long"
-                          ? "border-green-500/30 text-green-400"
-                          : "border-red-500/30 text-red-400"
+                          ? "border-green-500/30 text-profit"
+                          : "border-red-500/30 text-loss"
                       }`}
                     >
                       {order.direction.toUpperCase()}

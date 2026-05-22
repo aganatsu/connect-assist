@@ -42,7 +42,7 @@ const TIER_CONFIG: Record<number, { label: string; sublabel: string; color: stri
   1: {
     label: "TIER 1",
     sublabel: "Core Setup",
-    color: "text-amber-400",
+    color: "text-warn",
     bgColor: "bg-amber-400/10",
     borderColor: "border-amber-400/30",
     pointLabel: "2 pts each",
@@ -50,7 +50,7 @@ const TIER_CONFIG: Record<number, { label: string; sublabel: string; color: stri
   2: {
     label: "TIER 2",
     sublabel: "Confirmation",
-    color: "text-sky-400",
+    color: "text-tier2",
     bgColor: "bg-sky-400/10",
     borderColor: "border-sky-400/30",
     pointLabel: "1 pt each",
@@ -58,7 +58,7 @@ const TIER_CONFIG: Record<number, { label: string; sublabel: string; color: stri
   3: {
     label: "TIER 3",
     sublabel: "Bonus",
-    color: "text-violet-400",
+    color: "text-tier3",
     bgColor: "bg-violet-400/10",
     borderColor: "border-violet-400/30",
     pointLabel: "0.5 pts each",
@@ -189,11 +189,11 @@ function TierSection({
             <>
               {htfPromotions.map((promo, i) => (
                 <div key={`htf-${i}`} className="flex items-start gap-1 text-[9px]">
-                  <span className="mt-0.5 text-blue-400">
+                  <span className="mt-0.5 text-info-c">
                     <ArrowUp className="h-2.5 w-2.5" />
                   </span>
                   <div className="flex-1 min-w-0">
-                    <span className="text-blue-400 font-medium">
+                    <span className="text-info-c font-medium">
                       {promo.type} (HTF-nested)
                     </span>
                     <span className="text-muted-foreground ml-1">— {promo.detail}</span>
@@ -214,11 +214,11 @@ export function TierScoreSummary({ tieredScoring }: { tieredScoring: TieredScori
   const ts = tieredScoring;
   return (
     <div className="flex items-center gap-1.5 flex-wrap text-[9px] font-mono">
-      <span className="text-amber-400">T1:{ts.tier1Count}/{ts.tier1Max}</span>
+      <span className="text-warn">T1:{ts.tier1Count}/{ts.tier1Max}</span>
       <span className="text-muted-foreground/40">|</span>
-      <span className="text-sky-400">T2:{ts.tier2Count}/{ts.tier2Max}</span>
+      <span className="text-tier2">T2:{ts.tier2Count}/{ts.tier2Max}</span>
       <span className="text-muted-foreground/40">|</span>
-      <span className="text-violet-400">T3:{ts.tier3Count}/{ts.tier3Max}</span>
+      <span className="text-tier3">T3:{ts.tier3Count}/{ts.tier3Max}</span>
     </div>
   );
 }

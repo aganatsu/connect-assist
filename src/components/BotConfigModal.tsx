@@ -692,8 +692,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                             <span className="text-sm font-mono font-bold text-primary w-12 text-right">{(config.strategy?.regimeScoringStrength ?? 1.0).toFixed(2)}x</span>
                           </div>
                           <div className="mt-2 rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
-                            <div><span className="text-emerald-500 font-medium">Aligned:</span> Trend setup in trending market → +0.25 to +0.5 bonus</div>
-                            <div><span className="text-red-500 font-medium">Mismatched:</span> Trend setup in choppy market → -0.75 to -1.5 penalty</div>
+                            <div><span className="text-profit font-medium">Aligned:</span> Trend setup in trending market → +0.25 to +0.5 bonus</div>
+                            <div><span className="text-loss font-medium">Mismatched:</span> Trend setup in choppy market → -0.75 to -1.5 penalty</div>
                             <div className="text-muted-foreground/70">Range setups get the inverse. All values scaled by the multiplier above.</div>
                           </div>
                         </FieldGroup>
@@ -703,14 +703,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Score Normalization</p>
                       <ToggleField label="Percentage Scoring" description="Score expressed as a percentage (0-100%) of the maximum possible from your enabled factors. 55% always means 55% of what's possible, regardless of which factors are enabled." checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
                       {(config.strategy?.normalizedScoring ?? true) ? (
-                        <div className="rounded-md bg-emerald-500/10 border border-emerald-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
-                          <div><span className="text-emerald-500 font-medium">Active:</span> Score = (raw points / max possible) × 100%</div>
-                          <div><span className="text-amber-500 font-medium">Example:</span> Raw 10.5 / max 19.0 = 55.3% confluence</div>
+                        <div className="rounded-md bg-badge-profit border border-emerald-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
+                          <div><span className="text-profit font-medium">Active:</span> Score = (raw points / max possible) × 100%</div>
+                          <div><span className="text-warn font-medium">Example:</span> Raw 10.5 / max 19.0 = 55.3% confluence</div>
                           <div className="text-muted-foreground/70">Disabling factors doesn't change the effective threshold. The percentage auto-adjusts so your confluence threshold always means the same quality level regardless of which factors are enabled.</div>
                         </div>
                       ) : (
-                        <div className="rounded-md bg-amber-500/10 border border-amber-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
-                          <div><span className="text-amber-500 font-medium">Legacy mode:</span> Score clamped to 0-10 scale</div>
+                        <div className="rounded-md bg-badge-warn border border-amber-500/20 p-3 text-[11px] text-muted-foreground space-y-1">
+                          <div><span className="text-warn font-medium">Legacy mode:</span> Score clamped to 0-10 scale</div>
                           <div className="text-muted-foreground/70">Warning: Disabling factors silently raises the effective threshold. Consider switching to percentage scoring.</div>
                         </div>
                       )}
@@ -1116,8 +1116,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       })()}
 
                       {/* Important: activation conditions note */}
-                      <div className="bg-blue-500/5 border border-blue-500/20 p-3">
-                        <p className="text-[10px] text-blue-400 font-medium">Activation Safety</p>
+                      <div className="bg-badge-info border border-blue-500/20 p-3">
+                        <p className="text-[10px] text-info-c font-medium">Activation Safety</p>
                         <p className="text-[10px] text-muted-foreground mt-1">Trailing stops and break-even only activate when the trade is <strong>in profit</strong>. They will never fire on a losing position. Structure invalidation may tighten SL on underwater trades to reduce loss.</p>
                       </div>
 
@@ -1327,8 +1327,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                           <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
                             <p className="text-xs text-muted-foreground mb-2 font-medium">How it works:</p>
                             <div className="space-y-1.5 text-xs text-muted-foreground">
-                              <p><span className="text-red-400 font-medium">Blocks conflicts:</span> Long EUR/USD + Long USD/CHF (betting against yourself on USD)</p>
-                              <p><span className="text-yellow-400 font-medium">Limits doubling:</span> Long EUR/USD + Long GBP/USD (both selling USD — capped by max above)</p>
+                              <p><span className="text-loss font-medium">Blocks conflicts:</span> Long EUR/USD + Long USD/CHF (betting against yourself on USD)</p>
+                              <p><span className="text-highlight font-medium">Limits doubling:</span> Long EUR/USD + Long GBP/USD (both selling USD — capped by max above)</p>
                               <p><span className="text-cyan font-medium">SMT pairs:</span> EUR/USD↔GBP/USD, USD/JPY↔USD/CHF, AUD/USD↔NZD/USD, XAU/USD↔XAG/USD, BTC/USD↔ETH/USD</p>
                             </div>
                           </div>
@@ -1577,9 +1577,9 @@ const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; ti
 ];
 
 const TIER_META: { tier: 1 | 2 | 3; label: string; subtitle: string; pts: string; color: string; borderColor: string }[] = [
-  { tier: 1, label: "TIER 1 — CORE SETUP", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-amber-400", borderColor: "border-amber-500/40" },
-  { tier: 2, label: "TIER 2 — CONFIRMATION", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-sky-400", borderColor: "border-sky-500/40" },
-  { tier: 3, label: "TIER 3 — BONUS", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-violet-400", borderColor: "border-violet-500/40" },
+  { tier: 1, label: "TIER 1 — CORE SETUP", subtitle: "Must-have setup components. At least 2 required for any trade.", pts: "×2 pts", color: "text-tier1", borderColor: "border-tier1/40" },
+  { tier: 2, label: "TIER 2 — CONFIRMATION", subtitle: "Adds confidence to the setup.", pts: "×1 pt", color: "text-tier2", borderColor: "border-tier2/40" },
+  { tier: 3, label: "TIER 3 — BONUS", subtitle: "Nice-to-have extras that boost score.", pts: "×0.5 pts", color: "text-tier3", borderColor: "border-tier3/40" },
 ];
 
 function FactorWeightsTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
