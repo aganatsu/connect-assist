@@ -3,7 +3,7 @@
 ## Behavior changes
 1. **New config field `instrumentBuffers`**: When a symbol has an entry in `instrumentBuffers`, the bot uses that value directly as the SL buffer (in pips) — bypassing the asset-class multiplier. This means gold's SL buffer can now be set to 150 pips ($1.50) instead of the previous 4 pips ($0.04).
 2. **Default config now ships with recommended overrides**: New users (or users who reset to defaults) will get: XAU/USD=150, XAG/USD=200, BTC/USD=100, ETH/USD=200, US Oil=100.
-3. **Existing users are NOT affected until they explicitly set overrides**: The `instrumentBuffers` field defaults to `{}` in the scanner DEFAULTS, so existing saved configs continue to use the old global × multiplier behavior unchanged.
+3. **Existing users get auto-migrated**: SQL migration `20260521120000_inject_instrument_buffers_defaults.sql` injects the recommended defaults into all existing `bot_configs` rows that don't already have `instrumentBuffers` set.
 
 ## Files modified
 | File | Change |
@@ -13,6 +13,7 @@
 | `supabase/functions/bot-config/index.ts` | Added validation for instrumentBuffers (1-1000 range); added recommended defaults to getDefaultConfig() |
 | `src/components/BotConfigModal.tsx` | Added search index entry; added per-instrument SL buffer editor UI in the instruments tab (commodities, crypto, indices) with real-time $ distance display |
 | `supabase/functions/_shared/instrumentBuffers.test.ts` | New test file with 9 tests |
+| `supabase/migrations/20260521120000_inject_instrument_buffers_defaults.sql` | Auto-injects recommended instrumentBuffers defaults into existing bot_configs |
 
 ## Extra caution: bot-scanner/index.ts changes explained
 The change is minimal and safe:
@@ -24,6 +25,12 @@ The change is minimal and safe:
 Mirrors the scanner logic exactly:
 1. Added `instrumentBuffers` to config mapping (line 423).
 2. Changed `adjustedSlBuffer` calculation (lines 1432-1436) with the same override-first logic.
+
+## Why scannerManagement.ts and paper-trading/index.ts were NOT modified
+After full code trace:
+- **scannerManagement.ts**: Does NOT use `slBufferPips` in any SL calculation. The `slBufferPips` field only appears in the `EXECUTION_PROFILES` type definition (informational metadata). SL tightening uses percentage-based logic (50% closer) with its own `MGMT_SL_FLOOR_PIPS` hardcoded map that already has reasonable values (XAU=30p, BTC=90p).
+- **paper-trading/index.ts**: Does NOT calculate initial SL. It receives the SL value from the bot-scanner (which already uses `adjustedSlBuffer` with per-instrument override). Paper-trading only manages open positions (trailing, break-even, tightening).
+- **confluenceScoring.ts → calculateSLTP()**: Uses raw `config.slBufferPips`, but the bot-scanner then **overrides** that SL with its own recalculation at line 4281 using `adjustedSlBuffer`. The final stored SL already has the per-instrument override applied.
 
 ## Tests added
 | Test | Assertion |
@@ -63,13 +70,15 @@ FAILED | 505 passed | 1 failed (9s)
 - Tests 3, 4, and 5 explicitly verify the fallback path produces the same values as before.
 - Vite production build passes cleanly (2556 modules, no errors).
 - No gate definitions were modified. No factor weights were changed. No protected files were touched.
+- Migration is idempotent (WHERE clause prevents overwrite if instrumentBuffers already exists).
 
 ## Open questions
-1. **Existing users**: Their saved config has no `instrumentBuffers` key, so they'll continue using the old (too-tight) buffers until they open settings and save. Should we auto-inject the recommended defaults for existing users via a migration script?
-2. **Paper trading**: `paper-trading/index.ts` also has SL logic — it imports from `scannerManagement.ts` which calls `calculateSLTP` from smcAnalysis.ts. That function uses `config.slBufferPips` directly without the asset-class multiplier. Should we add the override there too? (Would require modifying scannerManagement.ts — a caution file.)
+None — all original questions have been resolved:
+1. Migration auto-injects defaults for existing users ✓
+2. scannerManagement.ts and paper-trading don't need changes (verified by code trace) ✓
 
 ## Suggested PR title and description
-**Title:** feat: per-instrument SL buffer overrides (fixes gold/crypto buffer too tight)
+**Title:** feat: per-instrument SL buffer overrides + auto-migration (fixes gold/crypto buffer too tight)
 
 **Description:**
 Adds a new `instrumentBuffers` config field that lets you set per-symbol SL buffer values (in pips). When set, the override is used directly — no asset-class multiplier is applied on top.
@@ -83,4 +92,6 @@ Adds a new `instrumentBuffers` config field that lets you set per-symbol SL buff
 - ETH/USD: 200 pips = $2.00
 - US Oil: 100 pips = $1.00
 
-Changes: bot-scanner, backtest-engine, bot-config validation, BotConfigModal UI, 9 new tests.
+Includes SQL migration to auto-inject defaults into existing configs.
+
+Changes: bot-scanner, backtest-engine, bot-config validation, BotConfigModal UI, migration, 9 new tests.
