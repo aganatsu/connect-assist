@@ -317,6 +317,14 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const tooltipRef = useRef<HTMLDivElement>(null);
   const segmentLineSeriesRef = useRef<any[]>([]);
 
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme === "light";
+  const themedBg = isLight ? "#ffffff" : COLORS.bg;
+  const themedGrid = isLight ? "rgba(15,23,42,0.08)" : COLORS.grid;
+  const themedText = isLight ? "#475569" : "#64748b";
+  const themedBorder = isLight ? "rgba(15,23,42,0.15)" : "rgba(42,49,68,0.6)";
+  const themedLoadingBg = isLight ? "rgba(255,255,255,0.85)" : "rgba(10,14,23,0.85)";
+
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
     new Set(defaultLayers ?? allLayers)
