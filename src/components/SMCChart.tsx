@@ -83,6 +83,8 @@ export interface ChartFibLevel {
   level: number;
   price: number;
   label: string;
+  startIndex?: number;
+  endIndex?: number;
 }
 
 export interface ChartHTFPOI {
@@ -482,11 +484,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     }
     priceLinesRef.current = [];
 
-    // Cleanup previous structure line segments (BOS/CHoCH)
-    for (const s of structureLineSeriesRef.current) {
+    // Cleanup previous line segments (Fibs + BOS/CHoCH)
+    for (const s of segmentLineSeriesRef.current) {
       try { chartRef.current?.removeSeries(s); } catch {}
     }
-    structureLineSeriesRef.current = [];
+    segmentLineSeriesRef.current = [];
 
     if (!overlays) return;
 
@@ -494,6 +496,28 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       try {
         const line = series.createPriceLine(opts);
         priceLinesRef.current.push(line);
+      } catch {}
+    };
+
+    const addSegmentLine = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle) => {
+      const chart = chartRef.current;
+      if (!chart || !chartData.length || endIdx < 0 || endIdx >= chartData.length) return;
+      const sIdx = Math.min(Math.max(0, startIdx), chartData.length - 1);
+      if (sIdx >= endIdx) return;
+      try {
+        const lineSeries = chart.addLineSeries({
+          color,
+          lineWidth: width,
+          lineStyle: style,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        lineSeries.setData([
+          { time: chartData[sIdx].time, value: level },
+          { time: chartData[endIdx].time, value: level },
+        ]);
+        segmentLineSeriesRef.current.push(lineSeries);
       } catch {}
     };
 
