@@ -181,9 +181,9 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
     narrative += `. Score ${score.toFixed(1)}%.`;
   } else if (isLimit) {
     const zoneType = input.limitOrder?.zone_type || "OB/FVG";
-    narrative = `${dir} limit placed at ${zoneType}`;
+    narrative = `${dir} zone setup at ${zoneType}`;
     if (zone) narrative += ` ${zone}`;
-    narrative += `. Waiting for price retrace. Score ${score.toFixed(1)}%.`;
+    narrative += `. Watching for retrace → 5m CHoCH confirmation. Score ${score.toFixed(1)}%.`;
   } else if (isRejected) {
     const failedGates = (gates || []).filter(g => !g.passed);
     if (failedGates.length > 0) {
@@ -213,8 +213,8 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
 }
 
 /**
- * Pending order narrative — describes what the bot is waiting for.
- * Example: "Waiting for price to retrace to OB at 157.82. Expires in 45 min."
+ * Zone setup narrative — describes what the bot is watching for.
+ * Example: "Watching for price to reach OB zone at 157.82 → will hunt 5m CHoCH. Expires in 45 min."
  */
 export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput): string {
   const { direction, entry_price, entry_zone_type, order_type, expires_at, from_watchlist, signal_score } = input;
@@ -222,18 +222,20 @@ export function generatePendingOrderNarrative(input: PendingOrderNarrativeInput)
   const dir = dirLabel(direction);
   const zoneLabel = order_type === "limit_ob" ? "Order Block" : "FVG";
   const mins = minutesRemaining(expires_at);
+  const confirmType = direction === "long" ? "bullish" : "bearish";
 
-  let narrative = `Waiting for price to retrace to ${zoneLabel}`;
+  let narrative = `Watching for price to reach ${zoneLabel} zone`;
   if (entry_zone_type && entry_zone_type !== "unknown") {
-    narrative = `Waiting for price to retrace to ${entry_zone_type}`;
+    narrative = `Watching for price to reach ${entry_zone_type} zone`;
   }
   narrative += ` at ${Number(entry_price).toFixed(entry_price > 100 ? 2 : 5)}`;
+  narrative += ` → will hunt ${confirmType} CHoCH on 5m`;
 
   if (mins > 0) {
     const timeStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
-    narrative += `. Expires in ${timeStr}.`;
+    narrative += `. Zone watch expires in ${timeStr}.`;
   } else {
-    narrative += `. Expired.`;
+    narrative += `. Zone watch expired.`;
   }
 
   if (from_watchlist) {

@@ -68,10 +68,10 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
-  { tab: "entry_exit", label: "Enable Limit Orders", keywords: ["limit", "pending", "order", "ob", "fvg", "zone", "entry type"] },
-  { tab: "entry_exit", label: "Limit Order Expiry", keywords: ["limit", "expiry", "pending", "cancel", "minutes"] },
-  { tab: "entry_exit", label: "Limit Order Distance", keywords: ["limit", "distance", "pips", "max", "min"] },
-  { tab: "entry_exit", label: "Limit Order Zone Preference", keywords: ["limit", "zone", "ob", "fvg", "nearest", "prefer"] },
+  { tab: "entry_exit", label: "Enable Zone Setups", keywords: ["zone", "setup", "confirmation", "choch", "ob", "fvg", "entry type"] },
+  { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
+  { tab: "entry_exit", label: "Zone Setup Distance", keywords: ["zone", "distance", "pips", "max", "min"] },
+  { tab: "entry_exit", label: "Zone Preference", keywords: ["zone", "ob", "fvg", "nearest", "prefer"] },
   { tab: "entry_exit", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
   { tab: "entry_exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
   { tab: "entry_exit", label: "Close on Reverse Signal", keywords: ["reverse", "close", "opposite"] },
@@ -969,25 +969,25 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       <ToggleField label="Close on Reverse Signal" description="Auto-close position when an opposite signal appears" checked={config.entry?.closeOnReverse ?? false} onChange={v => updateField('entry', 'closeOnReverse', v)} />
                     </div>
 
-                    {/* ── Limit Orders (Pending Orders) ── */}
+                    {/* ── Zone Entry Setup ── */}
                     <div className="border-t border-border pt-4 space-y-4">
-                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Limit Orders</p>
-                      <ToggleField label="Enable Limit Orders" description="Place pending limit orders at OB/FVG zone edges instead of immediate market orders. Better entries but may miss fast moves." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Entry</p>
+                      <ToggleField label="Enable Zone Setups" description="Wait for price to reach OB/FVG zone, then hunt for 5m CHoCH confirmation before entering at live price. More precise entries with real confirmation." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
                       {config.entry?.limitOrderEnabled && (
                         <div className="pl-4 border-l-2 border-primary/20 space-y-3">
-                          <FieldGroup label="Expiry Time (minutes)" description="How long a pending limit order stays active before auto-cancelling">
+                          <FieldGroup label="Zone Watch Expiry (minutes)" description="How long the bot watches for price to reach the zone before cancelling the setup">
                             <div className="flex items-center gap-4">
                               <Slider value={[config.entry?.limitOrderExpiryMinutes ?? 60]} onValueChange={v => updateField('entry', 'limitOrderExpiryMinutes', v[0])} min={15} max={480} step={15} className="flex-1" />
                               <span className="text-sm font-mono font-bold w-16 text-right">{config.entry?.limitOrderExpiryMinutes ?? 60}m</span>
                             </div>
                           </FieldGroup>
-                          <FieldGroup label="Max Distance (pips)" description="Skip limit order if zone is further than this from current price — too far means low fill probability">
+                          <FieldGroup label="Max Distance (pips)" description="Skip zone setup if zone is further than this from current price — too far to reach">
                             <div className="flex items-center gap-4">
                               <Slider value={[config.entry?.limitOrderMaxDistancePips ?? 30]} onValueChange={v => updateField('entry', 'limitOrderMaxDistancePips', v[0])} min={5} max={100} step={1} className="flex-1" />
                               <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMaxDistancePips ?? 30}</span>
                             </div>
                           </FieldGroup>
-                          <FieldGroup label="Min Distance (pips)" description="If price is already within this distance of the zone, use market order instead — no point waiting">
+                          <FieldGroup label="Min Distance (pips)" description="If price is already within this distance of the zone, enter confirmation hunting immediately">
                             <div className="flex items-center gap-4">
                               <Slider value={[config.entry?.limitOrderMinDistancePips ?? 3]} onValueChange={v => updateField('entry', 'limitOrderMinDistancePips', v[0])} min={0} max={20} step={1} className="flex-1" />
                               <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMinDistancePips ?? 3}</span>
@@ -1003,7 +1003,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                               </SelectContent>
                             </Select>
                           </FieldGroup>
-                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot places a limit order at the zone's consequent encroachment (midpoint) instead of entering at market. If no valid zone is found within distance limits, a market order is used as fallback.</p>
+                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for a 5m CHoCH confirmation before entering at live price. If hard gate mode is active, zone setups are auto-enabled for impulse zones.</p>
                         </div>
                       )}
                     </div>
