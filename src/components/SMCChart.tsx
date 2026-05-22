@@ -20,6 +20,7 @@ import {
   type CandlestickData,
   type Time,
 } from "lightweight-charts";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -317,6 +318,14 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const tooltipRef = useRef<HTMLDivElement>(null);
   const segmentLineSeriesRef = useRef<any[]>([]);
 
+  const { resolvedTheme } = useTheme();
+  const isLight = resolvedTheme === "light";
+  const themedBg = isLight ? "#ffffff" : COLORS.bg;
+  const themedGrid = isLight ? "rgba(15,23,42,0.08)" : COLORS.grid;
+  const themedText = isLight ? "#475569" : "#64748b";
+  const themedBorder = isLight ? "rgba(15,23,42,0.15)" : "rgba(42,49,68,0.6)";
+  const themedLoadingBg = isLight ? "rgba(255,255,255,0.85)" : "rgba(10,14,23,0.85)";
+
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
     new Set(defaultLayers ?? allLayers)
@@ -360,14 +369,14 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: COLORS.bg },
-        textColor: "#64748b",
+        background: { type: ColorType.Solid, color: themedBg },
+        textColor: themedText,
         fontFamily: "'JetBrains Mono', 'IBM Plex Mono', monospace",
         fontSize: compact ? 10 : 11,
       },
       grid: {
-        vertLines: { color: COLORS.grid },
-        horzLines: { color: COLORS.grid },
+        vertLines: { color: themedGrid },
+        horzLines: { color: themedGrid },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -375,11 +384,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
         horzLine: { color: COLORS.crosshair, width: 1, style: LineStyle.Dashed },
       },
       rightPriceScale: {
-        borderColor: "rgba(42,49,68,0.6)",
+        borderColor: themedBorder,
         scaleMargins: { top: 0.08, bottom: 0.08 },
       },
       timeScale: {
-        borderColor: "rgba(42,49,68,0.6)",
+        borderColor: themedBorder,
         timeVisible: true,
         secondsVisible: false,
       },
@@ -465,6 +474,26 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       candleSeriesRef.current = null;
     };
   }, [compact, symbol]);
+
+  // Re-apply theme-dependent options when theme toggles
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    try {
+      chart.applyOptions({
+        layout: {
+          background: { type: ColorType.Solid, color: themedBg },
+          textColor: themedText,
+        },
+        grid: {
+          vertLines: { color: themedGrid },
+          horzLines: { color: themedGrid },
+        },
+        rightPriceScale: { borderColor: themedBorder },
+        timeScale: { borderColor: themedBorder },
+      });
+    } catch {}
+  }, [themedBg, themedText, themedGrid, themedBorder]);
 
   // Update candle data
   useEffect(() => {
@@ -1055,12 +1084,12 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   }, [overlays]);
 
   return (
-    <div className="relative w-full h-full flex flex-col" style={{ backgroundColor: COLORS.bg }}>
+    <div className="relative w-full h-full flex flex-col" style={{ backgroundColor: themedBg }}>
       {/* Layer Toggle Toolbar */}
       {!hideToolbar && (
         <div
           className="flex items-center gap-1 px-3 py-1.5 border-b border-white/5 flex-shrink-0 overflow-x-auto"
-          style={{ backgroundColor: COLORS.bg }}
+          style={{ backgroundColor: themedBg }}
         >
           {symbol && (
             <span className="text-xs font-mono font-bold text-cyan-400 mr-3 flex-shrink-0">
@@ -1124,7 +1153,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       {loading && (
         <div
           className="absolute inset-0 flex items-center justify-center z-10"
-          style={{ backgroundColor: "rgba(10,14,23,0.85)" }}
+          style={{ backgroundColor: themedLoadingBg }}
         >
           <div className="flex items-center gap-3">
             <div className="w-1.5 h-8 bg-cyan-500 animate-pulse" />
