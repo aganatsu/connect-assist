@@ -4265,6 +4265,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
       const allPassed = gates.every(g => g.passed);
+      // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
+      // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,
+      // but detail.tieredScoring still references the pre-credit snapshot. Sync it here.
+      detail.tieredScoring = analysis.tieredScoring;
+      detail.score = analysis.score;
       detail.gates = gates;
       detail.gamePlan = gpFilter; // attach game plan filter result to scan detail
 
@@ -5158,6 +5163,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       } else {
         detail.status = isPaused ? "paused" : "no_direction";
       }
+    }
+    // ── Final sync: ensure detail.tieredScoring/score reflect post-credit state for ALL paths ──
+    // (The above-threshold path already syncs at line ~4271, but below-threshold/staged/no-direction
+    //  paths skip that block. This catch-all ensures the dashboard always shows accurate data.)
+    if (analysis.tieredScoring && detail.tieredScoring !== analysis.tieredScoring) {
+      detail.tieredScoring = analysis.tieredScoring;
+      detail.score = analysis.score;
     }
 
     scanDetails.push(detail);
