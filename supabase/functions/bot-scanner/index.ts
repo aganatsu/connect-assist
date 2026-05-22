@@ -2606,13 +2606,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
-          // L1 Fix: Use the actual candle touch price for a more realistic fill.
-          // For longs, the fill would occur at the candle low (or limit price if low < limit).
-          // For shorts, the fill would occur at the candle high (or limit price if high > limit).
-          const actualFillPrice = pending.direction === "long"
-            ? Math.max(lastCandle.low, entryPrice)   // filled at low, but not below limit
-            : Math.min(lastCandle.high, entryPrice);  // filled at high, but not above limit
-          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (actual fill: ${actualFillPrice}, current: ${currentPrice})`);
+          // L1 Fix v2: Use the live price (candle close) at fill detection time.
+          // The old logic used Math.max/min(candle extreme, limitPrice) which almost always
+          // resolved to the static limit price — giving unrealistic fills identical to the
+          // zone's refinedEntry. In reality, once price touches the zone, the broker fills
+          // at the current market price (with possible improvement). Using lastCandle.close
+          // (the most recent tick) simulates this realistically for paper trading.
+          const actualFillPrice = currentPrice;  // live tick at detection time
+          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (live fill: ${actualFillPrice}, candle close: ${currentPrice})`);
 
           const positionId = pending.order_id;
           const orderId = crypto.randomUUID().slice(0, 8);
@@ -2627,7 +2628,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             filledFromLimitOrder: true,
             limitOrderOrigin: {
               orderType: pending.order_type,
-              entryPrice,
+              limitPrice: entryPrice,
+              actualFillPrice,
               placedAt: pending.placed_at,
               filledAt: nowStr,
               zoneType: pending.entry_zone_type,
@@ -2644,7 +2646,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             size: pending.size.toString(),
-            entry_price: actualFillPrice.toString(),  // L1: use actual fill price, not limit price
+            entry_price: actualFillPrice.toString(),  // L1 v2: live price at fill detection (currentPrice/candle close)
             current_price: currentPrice.toString(),
             stop_loss: pending.stop_loss.toString(),
             take_profit: pending.take_profit.toString(),
@@ -2664,7 +2666,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-            summary: `[LIMIT ORDER] ${pending.from_watchlist ? "[WATCHLIST] " : ""}Filled ${pending.direction.toUpperCase()} @ ${entryPrice} (${pending.entry_zone_type} zone)`,
+            summary: `[LIMIT ORDER] ${pending.from_watchlist ? "[WATCHLIST] " : ""}Filled ${pending.direction.toUpperCase()} @ ${actualFillPrice} (limit ${entryPrice}, ${pending.entry_zone_type} zone)`,
             bias: pending.direction === "long" ? "bullish" : "bearish",
             session: "limit_fill",
             timeframe: config.entryTimeframe || "15min",
@@ -2672,7 +2674,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           await supabase.from("pending_orders").update({
             status: "filled",
-            fill_reason: `Price touched ${entryPrice} (candle low: ${lastCandle.low}, high: ${lastCandle.high})`,
+            fill_reason: `Price touched ${entryPrice} (candle low: ${lastCandle.low}, high: ${lastCandle.high}, live fill: ${actualFillPrice})`,
             filled_at: nowStr,
             resolved_at: nowStr,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2680,7 +2682,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           pendingFilled++;
           tradesPlaced++;
 
-          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: entryPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
 
           // Send Telegram notification for limit order fill
           if (telegramChatIds.length > 0) {
@@ -2690,7 +2692,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>Symbol:</b> ${pending.symbol}\n` +
               `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
               `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${entryPrice} (limit)\n` +
+              `<b>Entry:</b> ${actualFillPrice} (live fill, limit @ ${entryPrice})\n` +
               `<b>SL:</b> ${pending.stop_loss}\n` +
               `<b>TP:</b> ${pending.take_profit}\n` +
               `<b>Score:</b> ${pending.signal_score}\n` +
