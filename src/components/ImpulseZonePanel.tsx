@@ -167,13 +167,18 @@ export function ImpulseZonePanel({ data }: Props) {
               LTF {bestZone.ltfRefined ? `✓ ${bestZone.ltfType?.toUpperCase() || ""}` : "✗"}
             </span>
             {bestZone.refinedEntry && (
-              <span className="text-[10px] font-mono text-muted-foreground">
-                Entry: {fmt(bestZone.refinedEntry)}
+              <span className={`text-[10px] font-mono ${bestZone.priceAtZone ? "text-amber-300" : "text-muted-foreground"}`}>
+                {bestZone.priceAtZone ? "Trigger: " : "Entry: "}{fmt(bestZone.refinedEntry)}
               </span>
             )}
             {bestZone.refinedSL && (
               <span className="text-[10px] font-mono text-muted-foreground">
                 SL: {fmt(bestZone.refinedSL)}
+              </span>
+            )}
+            {bestZone.priceAtZone && (
+              <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 animate-pulse">
+                ⏳ Hunting 5m CHoCH
               </span>
             )}
           </div>
