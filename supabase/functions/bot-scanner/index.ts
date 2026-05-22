@@ -4770,13 +4770,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           if (pendingInsertErr) {
             console.error(`[pending] INSERT failed for ${pair}: ${pendingInsertErr.message}`);
-            detail.status = "limit_order_insert_failed";
+            detail.status = "zone_setup_insert_failed";
             detail.error = pendingInsertErr.message;
             continue;
           }
 
           pendingPlaced++;
-          detail.status = isPromotedFromStaging ? "limit_order_from_watchlist" : "limit_order_placed";
+          detail.status = isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
           detail.limitOrder = {
             orderId: pendingOrderId,
             entryPrice: limitEntry.price,
@@ -4795,18 +4795,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           detail.stopLoss = limitSL;
           detail.takeProfit = limitTP;
 
-          // Telegram notification for limit order placement
+          // Telegram notification for zone setup activation
           if (telegramChatIds.length > 0) {
             const emoji = analysis.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            const msg = `${emoji} <b>${mode} Limit Order PLACED</b>
+            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
 
 ` +
               `<b>Symbol:</b> ${pair}
 ` +
               `<b>Direction:</b> ${analysis.direction.toUpperCase()}
 ` +
-              `<b>Limit Entry:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
+              `<b>Zone Trigger:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
 ` +
               `<b>Current Price:</b> ${analysis.lastPrice}
 ` +
@@ -4817,6 +4817,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>TP:</b> ${limitTP}
 ` +
               `<b>Score:</b> ${analysis.score.toFixed(1)}
+` +
+              `<b>Confirmation:</b> Waiting for 5m CHoCH at zone
 ` +
               `<b>Expires:</b> ${expiryMinutes}min` +
               (isPromotedFromStaging && existingStaged ? `

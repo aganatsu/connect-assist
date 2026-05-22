@@ -150,7 +150,7 @@ export function generateDetailNarrative(input: DetailNarrativeInput): string {
 
   // Determine if it's a trade, watchlist, or rejection
   const isTraded = status === "trade_placed" || status === "trade_placed_from_watchlist";
-  const isLimit = status === "limit_order_placed" || status === "limit_order_from_watchlist";
+  const isLimit = status === "limit_order_placed" || status === "limit_order_from_watchlist" || status === "zone_setup_active" || status === "zone_setup_from_watchlist";
   const isRejected = status === "rejected";
   const isSkipped = status === "below_threshold";
 

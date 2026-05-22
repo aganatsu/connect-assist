@@ -1172,8 +1172,8 @@ export default function BotView() {
                     return (
                       <div className="divide-y divide-border/40">
                         {latestDetailsClean.map((sig: any, i: number) => {
-                          const statusLabel = sig.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : sig.status === "limit_order_placed" ? "🔍 ZONE SETUP" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
-                          const statusColor = sig.status === "limit_order_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" ? "text-info-c bg-badge-info border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
+                          const statusLabel = sig.status === "limit_order_from_watchlist" || sig.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : sig.status === "limit_order_placed" || sig.status === "zone_setup_active" ? "🔍 ZONE SETUP" : sig.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : sig.status === "trade_placed" ? "PLACED" : sig.status === "rejected" ? "REJECTED" : sig.status === "below_threshold" ? "SKIP" : sig.status === "staged_new" ? "\u2B50 NEW WATCH" : sig.status === "staged_watching" ? "\uD83D\uDC41 WATCHING" : sig.status === "staged_confirming" ? "\u23F3 CONFIRMING" : sig.status === "staged_invalidated" ? "\u274C INVALIDATED" : sig.status?.toUpperCase() || "\u2014";
+                          const statusColor = sig.status === "limit_order_from_watchlist" || sig.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : sig.status === "limit_order_placed" || sig.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : sig.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : sig.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : sig.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : sig.status?.startsWith("staged_") ? "text-warn bg-badge-warn border-amber-500/30" : "text-muted-foreground bg-muted/20 border-border";
                           const isSelected = selectedPairIdx === i;
                           return (
                             <button
@@ -1884,8 +1884,8 @@ function ScanLogLine({ log }: { log: any }) {
 
 function ScanSignalDetail({ signal: d }: { signal: any }) {
   const [expanded, setExpanded] = useState(false);
-  const statusLabel = d.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
+  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3 bg-purple-500/10 border-purple-500/30" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c bg-badge-info border-blue-500/30" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" : d.status === "trade_placed" ? "text-success bg-success/10 border-success/30" : d.status === "rejected" ? "text-destructive bg-destructive/10 border-destructive/30" : "text-muted-foreground bg-muted/20 border-border";
 
   return (
     <div className="border-b border-border/30 last:border-b-0">
@@ -1950,8 +1950,8 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
     no_direction: { label: "No direction", color: "text-muted-foreground border-border bg-muted/20", icon: "🚫" },
     trade_placed: { label: "Trade placed", color: "text-success border-success/30 bg-success/5", icon: "✅" },
     trade_placed_from_watchlist: { label: "Traded from watchlist", color: "text-cyan-400 border-cyan-500/30 bg-cyan-500/5", icon: "📋" },
-    limit_order_placed: { label: "Limit order placed", color: "text-info-c border-blue-500/30 bg-badge-info", icon: "🎯" },
-    limit_order_from_watchlist: { label: "Limit + watchlist", color: "text-tier3 border-purple-500/30 bg-purple-500/5", icon: "🎯📋" },
+    zone_setup_active: { label: "Zone setup active", color: "text-info-c border-blue-500/30 bg-badge-info", icon: "🔍" },
+    zone_setup_from_watchlist: { label: "Zone + watchlist", color: "text-tier3 border-purple-500/30 bg-purple-500/5", icon: "🔍📋" },
     rejected: { label: "Rejected (post-gate)", color: "text-destructive border-destructive/30 bg-destructive/5", icon: "✗" },
     below_threshold: { label: "Below confluence", color: "text-muted-foreground border-border bg-muted/20", icon: "↓" },
     staged_new: { label: "Newly staged", color: "text-warn border-amber-500/30 bg-badge-warn", icon: "⭐" },
@@ -2032,8 +2032,8 @@ function RejectionSummaryPanel({ summary }: { summary: any }) {
 }
 
 function ScanDetailInline({ signal: d }: { signal: any }) {
-  const statusLabel = d.status === "limit_order_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
-  const statusColor = d.status === "limit_order_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
+  const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
+  const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
   return (
     <div className="space-y-2">
