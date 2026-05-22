@@ -706,28 +706,48 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     // ─── BOS / CHoCH Lines ────────────────────────────────────────────
     if (visibleLayers.has("bosChoch")) {
-      if (overlays.bosLevels?.length) {
-        for (const b of overlays.bosLevels.slice(-10)) {
-          addLine({
-            price: b.level,
-            color: COLORS.bos,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
-            axisLabelVisible: false,
-            title: `BOS ${b.type === "bullish" ? "▲" : "▼"}`,
-          });
+      const chart = chartRef.current;
+      if (chart && chartData.length > 0) {
+        const findStartIdx = (level: number, endIdx: number): number => {
+          const tol = Math.max(Math.abs(level) * 0.0005, 1e-6);
+          if (overlays.swingPoints?.length) {
+            for (let i = overlays.swingPoints.length - 1; i >= 0; i--) {
+              const sp = overlays.swingPoints[i];
+              if (sp.index == null || sp.index >= endIdx) continue;
+              if (Math.abs(sp.price - level) <= tol) return sp.index;
+            }
+          }
+          return Math.max(0, endIdx - 20);
+        };
+        const drawSeg = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle) => {
+          if (endIdx < 0 || endIdx >= chartData.length) return;
+          const sIdx = Math.min(Math.max(0, startIdx), chartData.length - 1);
+          if (sIdx >= endIdx) return;
+          try {
+            const lineSeries = chart.addLineSeries({
+              color,
+              lineWidth: width,
+              lineStyle: style,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+            });
+            lineSeries.setData([
+              { time: chartData[sIdx].time, value: level },
+              { time: chartData[endIdx].time, value: level },
+            ]);
+            structureLineSeriesRef.current.push(lineSeries);
+          } catch {}
+        };
+        if (overlays.bosLevels?.length) {
+          for (const b of overlays.bosLevels.slice(-10)) {
+            drawSeg(b.level, findStartIdx(b.level, b.index), b.index, COLORS.bos, 1, LineStyle.Dashed);
+          }
         }
-      }
-      if (overlays.chochLevels?.length) {
-        for (const c of overlays.chochLevels.slice(-6)) {
-          addLine({
-            price: c.level,
-            color: COLORS.choch,
-            lineWidth: 2,
-            lineStyle: LineStyle.Solid,
-            axisLabelVisible: true,
-            title: `CHoCH ${c.type === "bullish" ? "▲" : "▼"}`,
-          });
+        if (overlays.chochLevels?.length) {
+          for (const c of overlays.chochLevels.slice(-6)) {
+            drawSeg(c.level, findStartIdx(c.level, c.index), c.index, COLORS.choch, 2, LineStyle.Solid);
+          }
         }
       }
     }
