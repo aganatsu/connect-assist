@@ -83,6 +83,8 @@ export interface ChartFibLevel {
   level: number;
   price: number;
   label: string;
+  startIndex?: number;
+  endIndex?: number;
 }
 
 export interface ChartHTFPOI {
@@ -313,7 +315,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const structureLineSeriesRef = useRef<any[]>([]);
+  const segmentLineSeriesRef = useRef<any[]>([]);
 
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
@@ -437,16 +439,27 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       setTooltipData({ x: param.point.x, y: param.point.y, text });
     });
 
+    let disposed = false;
     const ro = new ResizeObserver((entries) => {
+      if (disposed) return;
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        chart.applyOptions({ width, height });
+        try { chart.applyOptions({ width, height }); } catch {}
       }
     });
     ro.observe(containerRef.current);
 
     return () => {
+      disposed = true;
       ro.disconnect();
+      for (const line of priceLinesRef.current) {
+        try { series.removePriceLine(line); } catch {}
+      }
+      priceLinesRef.current = [];
+      for (const s of segmentLineSeriesRef.current) {
+        try { chart.removeSeries(s); } catch {}
+      }
+      segmentLineSeriesRef.current = [];
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
@@ -471,11 +484,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     }
     priceLinesRef.current = [];
 
-    // Cleanup previous structure line segments (BOS/CHoCH)
-    for (const s of structureLineSeriesRef.current) {
+    // Cleanup previous line segments (Fibs + BOS/CHoCH)
+    for (const s of segmentLineSeriesRef.current) {
       try { chartRef.current?.removeSeries(s); } catch {}
     }
-    structureLineSeriesRef.current = [];
+    segmentLineSeriesRef.current = [];
 
     if (!overlays) return;
 
@@ -483,6 +496,28 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       try {
         const line = series.createPriceLine(opts);
         priceLinesRef.current.push(line);
+      } catch {}
+    };
+
+    const addSegmentLine = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle) => {
+      const chart = chartRef.current;
+      if (!chart || !chartData.length || endIdx < 0 || endIdx >= chartData.length) return;
+      const sIdx = Math.min(Math.max(0, startIdx), chartData.length - 1);
+      if (sIdx >= endIdx) return;
+      try {
+        const lineSeries = chart.addLineSeries({
+          color,
+          lineWidth: width,
+          lineStyle: style,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        lineSeries.setData([
+          { time: chartData[sIdx].time, value: level },
+          { time: chartData[endIdx].time, value: level },
+        ]);
+        segmentLineSeriesRef.current.push(lineSeries);
       } catch {}
     };
 
@@ -634,28 +669,24 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     // ─── Fibonacci Levels ─────────────────────────────────────────────
     if (visibleLayers.has("fibs")) {
-      if (overlays.fiftyPercentLevel) {
-        addLine({
-          price: overlays.fiftyPercentLevel,
-          color: COLORS.fib50,
-          lineWidth: 2,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "50% EQ",
-        });
+      if (overlays.fiftyPercentLevel && !overlays.fibLevels?.some((fib) => fib.label === "50%")) {
+        const endIdx = chartData.length - 1;
+        addSegmentLine(overlays.fiftyPercentLevel, Math.max(0, endIdx - 60), endIdx, COLORS.fib50, 2, LineStyle.Dashed);
       }
       if (overlays.fibLevels?.length) {
         for (const fib of overlays.fibLevels) {
           const isFifty = fib.label === "50%";
           const isKey = fib.label === "61.8%" || fib.label === "38.2%" || fib.label === "78.6%";
-          addLine({
-            price: fib.price,
-            color: isFifty ? COLORS.fib50 : isKey ? COLORS.fibKey : COLORS.fibMinor,
-            lineWidth: isFifty ? 2 : 1,
-            lineStyle: isFifty ? LineStyle.Solid : LineStyle.Dashed,
-            axisLabelVisible: isFifty || isKey,
-            title: fib.label,
-          });
+          const endIdx = Math.min(fib.endIndex ?? chartData.length - 1, chartData.length - 1);
+          const startIdx = fib.startIndex ?? Math.max(0, endIdx - 60);
+          addSegmentLine(
+            fib.price,
+            startIdx,
+            endIdx,
+            isFifty ? COLORS.fib50 : isKey ? COLORS.fibKey : COLORS.fibMinor,
+            isFifty ? 2 : 1,
+            isFifty ? LineStyle.Solid : LineStyle.Dashed,
+          );
         }
       }
     }
@@ -719,34 +750,14 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           }
           return Math.max(0, endIdx - 20);
         };
-        const drawSeg = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle) => {
-          if (endIdx < 0 || endIdx >= chartData.length) return;
-          const sIdx = Math.min(Math.max(0, startIdx), chartData.length - 1);
-          if (sIdx >= endIdx) return;
-          try {
-            const lineSeries = chart.addLineSeries({
-              color,
-              lineWidth: width,
-              lineStyle: style,
-              priceLineVisible: false,
-              lastValueVisible: false,
-              crosshairMarkerVisible: false,
-            });
-            lineSeries.setData([
-              { time: chartData[sIdx].time, value: level },
-              { time: chartData[endIdx].time, value: level },
-            ]);
-            structureLineSeriesRef.current.push(lineSeries);
-          } catch {}
-        };
         if (overlays.bosLevels?.length) {
           for (const b of overlays.bosLevels.slice(-10)) {
-            drawSeg(b.level, findStartIdx(b.level, b.index), b.index, COLORS.bos, 1, LineStyle.Dashed);
+            addSegmentLine(b.level, findStartIdx(b.level, b.index), b.index, COLORS.bos, 1, LineStyle.Dashed);
           }
         }
         if (overlays.chochLevels?.length) {
           for (const c of overlays.chochLevels.slice(-6)) {
-            drawSeg(c.level, findStartIdx(c.level, c.index), c.index, COLORS.choch, 2, LineStyle.Solid);
+            addSegmentLine(c.level, findStartIdx(c.level, c.index), c.index, COLORS.choch, 2, LineStyle.Solid);
           }
         }
       }
