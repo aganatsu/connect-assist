@@ -95,6 +95,8 @@ const DEFAULTS = {
   slATRMultiple: 1.5,
   slATRPeriod: 14,
   slBufferPips: 2,
+  // Per-instrument SL buffer overrides (pips). When set, the override is final — no asset-class multiplier applied.
+  instrumentBuffers: {} as Record<string, { slBufferPips?: number }>,
   tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
   fixedTPPips: 50,
   tpRatio: 2.0,
@@ -910,6 +912,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
 
     // ── Factor Weights (config-driven, AI-tunable) ──
     factorWeights: raw.factorWeights || {},
+    // ── Per-Instrument SL Buffer Overrides ──
+    instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {},
 
     // ── Spread Filter ──
     spreadFilterEnabled: instruments.spreadFilterEnabled ?? raw.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
@@ -3222,7 +3226,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // Apply asset-class profile adjustments
     const pairAssetProfileInner = getAssetProfile(pair);
-    const adjustedSlBuffer = pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
+    // Per-instrument SL buffer override: if set, use it directly (no multiplier).
+    // Otherwise fall back to global slBufferPips × asset-class multiplier.
+    const symbolBufferOverride = pairConfig.instrumentBuffers?.[pair]?.slBufferPips;
+    const adjustedSlBuffer = symbolBufferOverride != null
+      ? symbolBufferOverride
+      : pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
     const adjustedMinConfluence = Math.max(1, pairConfig.minConfluence + pairAssetProfileInner.minConfluenceAdj);
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)

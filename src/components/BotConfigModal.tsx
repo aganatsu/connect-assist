@@ -95,6 +95,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "instruments", label: "Global Spread Override", keywords: ["spread", "max", "pips", "per-instrument", "auto"] },
   { tab: "instruments", label: "Correlation Filter", keywords: ["correlation", "correlated", "pairs", "conflict", "hedge", "doubling", "exposure", "smt"] },
   { tab: "instruments", label: "Max Correlated Positions", keywords: ["correlation", "max", "positions", "limit", "same direction"] },
+  { tab: "instruments", label: "Per-Instrument SL Buffer", keywords: ["sl buffer", "stop loss", "per-instrument", "gold", "xau", "btc", "crypto", "commodity", "buffer pips", "instrument buffer"] },
   // Sessions
   { tab: "sessions", label: "Trading Sessions", keywords: ["session", "asian", "london", "new york", "off-hours", "offhours"] },
   { tab: "sessions", label: "Kill Zone Only Trading", keywords: ["kill zone", "killzone", "high volume"] },
@@ -1336,6 +1337,60 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                       {!(config.instruments?.correlationFilterEnabled) && (
                         <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot may open conflicting or doubling positions on correlated pairs.</p>
                       )}
+                    </div>
+
+                    {/* ── Per-Instrument SL Buffer Overrides ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="Per-Instrument SL Buffer" description="Override the global SL buffer for specific instruments. When set, the override is used directly (no asset-class multiplier). Leave empty to use the global buffer." />
+                      <div className="space-y-3 mt-3">
+                        {(['commodity', 'crypto', 'index'] as const).map(type => {
+                          const typeInstruments = INSTRUMENTS.filter(i => i.type === type);
+                          if (typeInstruments.length === 0) return null;
+                          return (
+                            <div key={type} className="space-y-2">
+                              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{INSTRUMENT_TYPE_LABELS[type]}</p>
+                              <div className="space-y-2">
+                                {typeInstruments.map(inst => {
+                                  const currentVal = (config.instrumentBuffers as any)?.[inst.symbol]?.slBufferPips;
+                                  const priceDistance = currentVal != null ? (currentVal * inst.pipSize).toFixed(inst.pipSize < 0.01 ? 4 : 2) : null;
+                                  return (
+                                    <div key={inst.symbol} className="flex items-center gap-3">
+                                      <span className="text-xs font-medium w-20 shrink-0">{inst.symbol}</span>
+                                      <Input
+                                        type="number"
+                                        placeholder="Global"
+                                        value={currentVal ?? ''}
+                                        onChange={e => {
+                                          const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                          setConfig((prev: any) => {
+                                            const buffers = { ...(prev?.instrumentBuffers || {}) };
+                                            if (val == null || isNaN(val)) {
+                                              delete buffers[inst.symbol];
+                                            } else {
+                                              buffers[inst.symbol] = { slBufferPips: val };
+                                            }
+                                            return { ...prev, instrumentBuffers: buffers };
+                                          });
+                                        }}
+                                        step={1}
+                                        min={1}
+                                        max={1000}
+                                        className="h-8 text-sm w-24"
+                                      />
+                                      <span className="text-[10px] text-muted-foreground w-24">
+                                        {priceDistance ? `= $${priceDistance}` : `Global: ${(config.entry?.slBufferPips ?? 2)} pips`}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-3 p-3 rounded-lg bg-muted/50 border border-border">
+                        <p className="text-xs text-muted-foreground"><span className="font-medium">How it works:</span> Forex pairs use the global SL buffer ({config.entry?.slBufferPips ?? 2} pips × asset multiplier). Commodities, crypto, and indices often need larger buffers due to higher volatility. Set a per-instrument value here to override the global calculation entirely.</p>
+                      </div>
                     </div>
                   </div>
                 )}
