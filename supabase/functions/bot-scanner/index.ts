@@ -4569,7 +4569,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
-        if (config.limitOrderEnabled && limitEntry) {
+        // Auto-enable limit orders when izGateMode is "hard" and a zone entry is available.
+        // This ensures zone-price entries wait for price to actually reach the level (no look-ahead).
+        const effectiveLimitEnabled = config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry);
+        if (effectiveLimitEnabled && limitEntry) {
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
           const expiryMinutes = config.limitOrderExpiryMinutes || 60;
@@ -5279,7 +5282,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
-      pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
+      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
       rejectionSummary,
     },
     ...scanDetails,
@@ -5296,7 +5299,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
