@@ -554,6 +554,7 @@ export type Database = {
         Row: {
           bot_id: string
           cancel_reason: string | null
+          confirmation_attempts: number | null
           created_at: string
           current_price: number
           direction: string
@@ -585,10 +586,12 @@ export type Database = {
           take_profit: number
           updated_at: string
           user_id: string
+          zone_touch_time: string | null
         }
         Insert: {
           bot_id?: string
           cancel_reason?: string | null
+          confirmation_attempts?: number | null
           created_at?: string
           current_price: number
           direction: string
@@ -620,10 +623,12 @@ export type Database = {
           take_profit: number
           updated_at?: string
           user_id: string
+          zone_touch_time?: string | null
         }
         Update: {
           bot_id?: string
           cancel_reason?: string | null
+          confirmation_attempts?: number | null
           created_at?: string
           current_price?: number
           direction?: string
@@ -655,6 +660,7 @@ export type Database = {
           take_profit?: number
           updated_at?: string
           user_id?: string
+          zone_touch_time?: string | null
         }
         Relationships: []
       }
