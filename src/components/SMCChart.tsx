@@ -369,14 +369,14 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
 
     const chart = createChart(containerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: COLORS.bg },
-        textColor: "#64748b",
+        background: { type: ColorType.Solid, color: themedBg },
+        textColor: themedText,
         fontFamily: "'JetBrains Mono', 'IBM Plex Mono', monospace",
         fontSize: compact ? 10 : 11,
       },
       grid: {
-        vertLines: { color: COLORS.grid },
-        horzLines: { color: COLORS.grid },
+        vertLines: { color: themedGrid },
+        horzLines: { color: themedGrid },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -384,11 +384,11 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
         horzLine: { color: COLORS.crosshair, width: 1, style: LineStyle.Dashed },
       },
       rightPriceScale: {
-        borderColor: "rgba(42,49,68,0.6)",
+        borderColor: themedBorder,
         scaleMargins: { top: 0.08, bottom: 0.08 },
       },
       timeScale: {
-        borderColor: "rgba(42,49,68,0.6)",
+        borderColor: themedBorder,
         timeVisible: true,
         secondsVisible: false,
       },
