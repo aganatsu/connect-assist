@@ -1,57 +1,32 @@
 ## Problem
 
-The floating HUD on `/chart` has 12 toggle chips, but several don't visibly do anything — most obviously **SES** (sessions) and **KZ** (kill zones).
-
-Root cause: the HUD lives in `src/pages/Chart.tsx` and only controls which data is passed into `<SMCChart overlays={...} />` (by zero‑ing the relevant arrays). That works for data‑driven layers (OB, FVG, SP, LIQ, FIB, S/R, BOS, DISP, JDS, IZ).
-
-But `SMCChart` has its own internal `visibleLayers` state, and the **sessions** and **killZones** layers are drawn purely from time (no input data to filter). They're added to the default set unconditionally:
-
-```ts
-// SMCChart.tsx
-const [visibleLayers, setVisibleLayers] = useState<Set<OverlayLayer>>(
-  new Set(defaultLayers ?? allLayers)
-);
-…
-if (!visibleLayers.has("sessions") && !visibleLayers.has("killZones")) return;
-```
-
-Since Chart.tsx hides the SMCChart toolbar (`hideToolbar`), the user has no way to turn them off, and the HUD chip can't reach that internal state.
-
-A secondary issue: clicking IZ/FIB/S/R toggles re‑filters the data, but other internal layers (e.g. anything SMCChart decides to keep on by default) are still influenced only by SMCChart's own state, not the HUD. Today every layer Chart.tsx cares about happens to be data‑gated, so that works — but it's fragile.
+BOS and CHoCH currently draw as **full-width horizontal lines** spanning the entire chart, because `SMCChart.tsx` renders them with lightweight-charts' `priceLine` API (`addLine({ price: b.level, ... })`). Price lines always extend across the full visible range — they're meant for things like SL/TP, not structural breaks.
 
 ## Fix
 
-Make HUD the single source of truth by letting Chart.tsx control SMCChart's visible layers directly.
+Replace the BOS/CHoCH price lines with **short horizontal segments** anchored between the broken swing and the break candle, the way every SMC charting tool draws them.
 
-### `src/components/SMCChart.tsx`
-- Add an optional controlled prop: `visibleLayers?: Set<OverlayLayer>`.
-- If provided, use it instead of the internal `useState` (skip `setVisibleLayers` updates — toolbar toggles become no‑ops in controlled mode, which is fine because we already hide the toolbar from Chart.tsx).
-- Leave existing uncontrolled behavior intact for other call sites (e.g. `TradeReplayChart`, `Backtest`).
+Implementation in `src/components/SMCChart.tsx` only:
 
-### `src/pages/Chart.tsx`
-- Build a `Set<OverlayLayer>` from `overlayVisibility`, mapping HUD keys → SMCChart layer ids:
-  - `iz → impulseZone`, `ob → orderBlocks`, `fvg → fvgs`, `sp → swingPoints`,
-    `liq → liquidity`, `fib → fibs`, `sr → support` + `resistance`,
-    `bos → bosChoch`, `disp → displacement`, `judas → judasSwing`,
-    `sessions → sessions`, `killZones → killZones`.
-  - Always include `htfPOIs` and `trades` (no HUD chip for them today; keep current behavior).
-- Pass this as `<SMCChart visibleLayers={…} />`.
-- Drop the now‑redundant `overlayVisibility.*` gates inside `chartOverlays` (or keep them — they're a harmless extra filter). Keep the `fib`/`sr` compute gates as a perf optimization.
-
-### `src/components/ChartOverlayHUD.tsx`
-- Flip `DEFAULT_VISIBILITY.sessions` and `DEFAULT_VISIBILITY.killZones` to `true` so the initial state matches what was actually rendering before.
+1. Remove the `addLine({...})` calls inside the BOS and CHoCH blocks (lines ~700–726). Keep the markers (arrows / circles at the break candle) untouched.
+2. For each `bosLevels[i]` / `chochLevels[i]`:
+   - **End point**: `chartData[b.index].time` at `b.level`.
+   - **Start point**: walk `overlays.swingPoints` backwards for the nearest swing whose `price` ≈ `b.level` (tolerance: `0.05%` of price, or pip-aware) and `index < b.index`. If none found, fall back to `max(0, b.index - 20)`.
+   - Create a tiny `addLineSeries({ color, lineWidth, lineStyle, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })` and `setData([{ time: startTime, value: b.level }, { time: endTime, value: b.level }])`.
+3. Track these series in a ref (e.g. `structureLineSeriesRef.current: ISeriesApi<'Line'>[]`) and remove them at the top of the effect (same pattern as `priceLinesRef`) so they don't leak across re-renders.
+4. Style:
+   - BOS: dashed, `COLORS.bos`, width 1.
+   - CHoCH: solid, `COLORS.choch`, width 2.
+   - Add a small text label via a marker at the start point ("BOS" / "CHoCH ▲▼") — optional, since markers already exist at the break candle.
 
 ## Out of scope
 
-- No bot logic, no backend, no SMCChart drawing changes.
-- Not adding HUD chips for `htfPOIs` / `trades` (they have no chip today).
-- Not touching `TradeReplayChart` / `Backtest` usage of `SMCChart` — they stay uncontrolled.
+- No changes to bot logic, scanner, or analysis. Pure visualization fix.
+- No changes to BOS/CHoCH detection or to the data passed in.
+- TradeReplayChart / Backtest use the same component and will benefit automatically.
 
 ## Validation
 
-1. Open `/chart`. All 12 chips should visibly toggle their layer on/off:
-   - SES → session boxes appear/disappear
-   - KZ → kill zone shading appears/disappears
-   - IZ/OB/FVG/SP/LIQ/FIB/S/R/BOS/DISP/JDS → existing behavior preserved
-2. Confluence pill and tooltips unchanged.
-3. `/replay` and `/backtest` charts still render with their own toolbar working (uncontrolled mode).
+1. Open `/chart`, toggle BOS off then on. The horizontal lines should now be short segments from the broken swing to the break candle, not chart-wide rails.
+2. Markers (arrows for BOS, circles for CHoCH) still appear at the break candle.
+3. SL/TP/entry trade lines still draw full-width (they should — those are correctly using `priceLine`).
