@@ -4692,16 +4692,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Place position (market order — fallback when limit orders disabled or no zone found)
-        // When impulse zone hard gate is active, use zone entry for market orders too
-        const rawMarketEntry = (izGateMode === "hard" && izData?.bestZone?.refinedEntry)
-          ? izData.bestZone.refinedEntry
-          : (izGateMode === "hard" && izData?.bestZone)
-            ? (izData.bestZone.high + izData.bestZone.low) / 2
-            : analysis.lastPrice;
-        // Guard: if impulse zone data produced NaN/undefined, fall back to lastPrice
-        const marketEntryPrice = (typeof rawMarketEntry === "number" && !isNaN(rawMarketEntry) && rawMarketEntry > 0)
-          ? rawMarketEntry
-          : analysis.lastPrice;
+        // FIX: Market orders ALWAYS fill at current price (analysis.lastPrice).
+        // Using zone refinedEntry for market orders was look-ahead bias — the bot recorded
+        // fills at prices that hadn't been reached yet, inflating paper P&L.
+        // Zone-price entries should use LIMIT ORDERS (limitOrderEnabled: true) which correctly
+        // wait for price to touch the level before filling.
+        const marketEntryPrice = analysis.lastPrice;
+        // SL sanity guard: reject if current price is already past the SL
+        // (e.g., for shorts: if price > SL, the trade is already a loser at entry)
+        const slSanityFailed = analysis.direction === "long"
+          ? marketEntryPrice <= sl  // For longs, entry below SL makes no sense
+          : marketEntryPrice >= sl; // For shorts, entry above SL makes no sense
+        if (slSanityFailed) {
+          detail.status = "skipped_sl_sanity";
+          detail.skipReason = `Market entry ${marketEntryPrice} already past SL ${sl} for ${analysis.direction} — trade would be instant loss`;
+          console.log(`[scan ${scanCycleId}] ⛔ ${pair}: SL SANITY FAILED — entry ${marketEntryPrice} vs SL ${sl} (${analysis.direction}). Skipping.`);
+          scanDetails.push(detail);
+          continue;
+        }
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
