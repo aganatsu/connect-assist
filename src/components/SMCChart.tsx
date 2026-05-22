@@ -20,6 +20,7 @@ import {
   type CandlestickData,
   type Time,
 } from "lightweight-charts";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
