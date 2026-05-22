@@ -1,65 +1,86 @@
-# Task: SMCChart Enhancements
-## Branch: manus/smcchart-enhancements
+# Task: Per-Instrument SL Buffer Override
+## Branch: manus/per-instrument-sl-buffer
 ## Behavior changes
-1. Chart now loads 500 candles instead of 200 — users see more price history on initial load
-2. BOS (Break of Structure) levels rendered as dashed sky-blue price lines at the broken swing level, with arrow markers at the break candle
-3. CHoCH (Change of Character) levels rendered as solid orange price lines at the broken swing level, with circle markers at the break candle
-4. Displacement candles highlighted with colored arrow markers (green for bullish, red for bearish) at the candle index
-5. Judas Swing detection shown as an amber square marker on the most recent candle when detected (with checkmark suffix if confirmed)
-6. Session background shading: Asian (indigo), London (green), New York (red) — uses NY-local time via Intl API for DST-aware accuracy
-7. Kill Zone shading: London KZ 02:00-05:00 NY, New York KZ 08:30-12:00 NY — pink background bands
-8. R:R ratio now displayed directly on TP/SL price line labels (e.g., "TP (2.5R)", "SL (0.00150)")
-9. OHLC crosshair tooltip displayed at top-left of chart showing Open/High/Low/Close at cursor position
-10. Five new toggleable overlay layers in the HUD: BOS, DISP, JDS, SES, KZ (sessions and kill zones default OFF to keep chart clean)
+1. **New config field `instrumentBuffers`**: When a symbol has an entry in `instrumentBuffers`, the bot uses that value directly as the SL buffer (in pips) — bypassing the asset-class multiplier. This means gold's SL buffer can now be set to 150 pips ($1.50) instead of the previous 4 pips ($0.04).
+2. **Default config now ships with recommended overrides**: New users (or users who reset to defaults) will get: XAU/USD=150, XAG/USD=200, BTC/USD=100, ETH/USD=200, US Oil=100.
+3. **Existing users are NOT affected until they explicitly set overrides**: The `instrumentBuffers` field defaults to `{}` in the scanner DEFAULTS, so existing saved configs continue to use the old global × multiplier behavior unchanged.
 
 ## Files modified
-- `src/components/SMCChart.tsx` — Major enhancement: added BOS/CHoCH price lines + markers, displacement markers, Judas marker, session/KZ canvas overlay, OHLC tooltip, R:R on trade lines, marker deduplication
-- `src/components/ChartOverlayHUD.tsx` — Added 5 new overlay layer toggles (bos, disp, judas, sessions, killZones) with colors and tooltips
-- `src/pages/Chart.tsx` — Extended overlay mapping to pass bosLevels, chochLevels, displacementCandles, judasSwing from analysis; increased candle limit 200→500; extended layerDetails tooltips
-- `src/lib/useChartAnalysis.ts` — Increased candle limit 200→500
+| File | Change |
+|------|--------|
+| `supabase/functions/bot-scanner/index.ts` | Added `instrumentBuffers` to DEFAULTS; added override resolution logic at line 3229 (3 lines of logic); added mapping in loadConfig merged object |
+| `supabase/functions/backtest-engine/index.ts` | Mirrored the same override resolution for backtest parity (lines 1432-1436); added instrumentBuffers to config mapping |
+| `supabase/functions/bot-config/index.ts` | Added validation for instrumentBuffers (1-1000 range); added recommended defaults to getDefaultConfig() |
+| `src/components/BotConfigModal.tsx` | Added search index entry; added per-instrument SL buffer editor UI in the instruments tab (commodities, crypto, indices) with real-time $ distance display |
+| `supabase/functions/_shared/instrumentBuffers.test.ts` | New test file with 9 tests |
+
+## Extra caution: bot-scanner/index.ts changes explained
+The change is minimal and safe:
+1. Added `instrumentBuffers: {} as Record<string, { slBufferPips?: number }>` to DEFAULTS (line 99) — empty map, no behavior change for existing users.
+2. Added `instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {}` to the loadConfig merged object (line 916) — reads from saved config.
+3. Changed the `adjustedSlBuffer` calculation (line 3229-3232): checks for a per-symbol override first; if found, uses it directly; otherwise falls through to the original `slBufferPips * slBufferMultiplier` calculation unchanged.
+
+## Extra caution: backtest-engine/index.ts changes explained
+Mirrors the scanner logic exactly:
+1. Added `instrumentBuffers` to config mapping (line 423).
+2. Changed `adjustedSlBuffer` calculation (lines 1432-1436) with the same override-first logic.
 
 ## Tests added
-- TypeScript compilation check (tsc --noEmit): passes with 0 errors
-- Vite production build: passes (2556 modules transformed, built in 11.76s)
+| Test | Assertion |
+|------|-----------|
+| XAU/USD override bypasses multiplier | Override=150 → result=150 (not 150×2) |
+| BTC/USD override bypasses multiplier | Override=100 → result=100 (not 100×2) |
+| No override for XAU uses global × commodity multiplier | 2×2.0=4 |
+| EUR/USD (forex) uses global × 1.0 multiplier | 2×1.0=2 |
+| US30 (index) uses global × 3.0 multiplier | 2×3.0=6 |
+| Override for XAU doesn't affect XAG | XAU=150, XAG=4 (global fallback) |
+| XAU override produces correct price distance | 150×0.01=$1.50 |
+| Regression: without override XAU buffer is only $0.04 | Proves the bug exists without the fix |
+| Recommended defaults produce reasonable price distances | All 5 symbols within expected $ ranges |
 
 ## Tests run
 ```
-$ npx tsc --noEmit --skipLibCheck
-(no output — 0 errors)
+$ deno test --allow-all supabase/functions/_shared/instrumentBuffers.test.ts
+running 9 tests from ./supabase/functions/_shared/instrumentBuffers.test.ts
+instrumentBuffers: XAU/USD override bypasses multiplier ... ok (0ms)
+instrumentBuffers: BTC/USD override bypasses multiplier ... ok (0ms)
+instrumentBuffers: no override for XAU/USD uses global × commodity multiplier ... ok (0ms)
+instrumentBuffers: EUR/USD (forex) uses global × 1.0 multiplier ... ok (0ms)
+instrumentBuffers: US30 (index) uses global × 3.0 multiplier ... ok (0ms)
+instrumentBuffers: override for XAU doesn't affect XAG ... ok (0ms)
+instrumentBuffers: XAU/USD override produces correct price distance ... ok (0ms)
+instrumentBuffers: regression — without override XAU buffer is only $0.04 ... ok (0ms)
+instrumentBuffers: recommended defaults produce reasonable price distances ... ok (0ms)
+ok | 9 passed | 0 failed (10ms)
 
-$ npx vite build
-✓ 2556 modules transformed.
-✓ built in 11.76s
+$ deno test --allow-all --no-check supabase/functions/_shared/
+FAILED | 505 passed | 1 failed (9s)
+# The 1 failure is pre-existing in impulseZoneEngine.test.ts (ETH bearish impulse fixture) — unrelated to this PR.
 ```
 
 ## Regression check
-- All existing overlay layers (IZ, OB, FVG, BRK, SP, LIQ, FIB, HTF, TRADE, S, R) remain unchanged in rendering logic
-- The `SMCOverlays` interface is backward-compatible (all new fields are optional)
-- The `OverlayLayer` union type is extended (not modified) — existing consumers unaffected
-- `ChartOverlayHUD` `DEFAULT_VISIBILITY` keeps all original layers as `true`; new layers (sessions, killZones) default to `false` to avoid visual noise
-- Marker pipeline now merges all marker sources (swing points + BOS + CHoCH + displacement + Judas) with deduplication, replacing the previous single-source `setMarkers` call — this is safe because the previous swing-point-only markers are still included
+- The `resolveAdjustedSlBuffer` function is a pure superset: when `instrumentBuffers` is empty (which it is for all existing saved configs), the logic falls through to the original `slBufferPips * slBufferMultiplier` calculation — identical behavior.
+- Tests 3, 4, and 5 explicitly verify the fallback path produces the same values as before.
+- Vite production build passes cleanly (2556 modules, no errors).
+- No gate definitions were modified. No factor weights were changed. No protected files were touched.
 
 ## Open questions
-1. **Session/KZ timing accuracy**: The canvas overlay uses NY-local time via `Intl.DateTimeFormat` which is DST-aware. However, for intraday timeframes (5min, 15min, 1H), each candle maps to a single session. For daily candles, the session shading is less meaningful — should we auto-hide session/KZ layers when timeframe is Daily or Weekly?
-2. **Judas Swing placement**: Currently placed on the last candle since it's a "live" detection about the current session. If the user wants it placed on the actual sweep candle, we'd need the sweep candle index from the backend (not currently returned by `detectJudasSwing`).
-3. **Marker density**: With BOS + CHoCH + displacement + swing points all enabled, the chart can get visually dense on 500 candles. The current approach limits BOS to last 10 and CHoCH to last 6 — user may want to adjust these limits.
+1. **Existing users**: Their saved config has no `instrumentBuffers` key, so they'll continue using the old (too-tight) buffers until they open settings and save. Should we auto-inject the recommended defaults for existing users via a migration script?
+2. **Paper trading**: `paper-trading/index.ts` also has SL logic — it imports from `scannerManagement.ts` which calls `calculateSLTP` from smcAnalysis.ts. That function uses `config.slBufferPips` directly without the asset-class multiplier. Should we add the override there too? (Would require modifying scannerManagement.ts — a caution file.)
 
 ## Suggested PR title and description
-**Title:** feat(chart): SMCChart enhancements — BOS/CHoCH, displacement, Judas, sessions, kill zones, R:R visual, 500 candles
+**Title:** feat: per-instrument SL buffer overrides (fixes gold/crypto buffer too tight)
 
 **Description:**
-Enhances the programmable SMCChart component with the full set of overlays the bot internally uses:
+Adds a new `instrumentBuffers` config field that lets you set per-symbol SL buffer values (in pips). When set, the override is used directly — no asset-class multiplier is applied on top.
 
-- **More data**: 500 candles loaded (was 200)
-- **Structure breaks**: BOS (dashed sky lines + arrow markers) and CHoCH (solid orange lines + circle markers) plotted at the broken swing level
-- **Displacement**: Strong momentum candles highlighted with colored arrows
-- **Judas Swing**: False-break-and-reversal detection shown as amber square marker
-- **Sessions**: Asian/London/NY background color bands (canvas overlay, DST-aware)
-- **Kill Zones**: London 02-05 / NY 08:30-12 highlighted in pink
-- **R:R visual**: TP/SL lines now show risk-to-reward ratio in their labels
-- **OHLC tooltip**: Crosshair shows precise OHLC values
-- **5 new toggles**: BOS, DISP, JDS, SES, KZ in the overlay HUD
+**Problem:** Gold (XAU/USD) with pipSize=0.01 and global buffer=2 pips × 2.0 commodity multiplier = $0.04 buffer. Gold moves $0.50-$2.00 in seconds, so SLs get wicked out immediately.
 
-All new layers are toggleable. Sessions and Kill Zones default OFF to keep the chart clean on first load.
+**Solution:** Per-instrument overrides with recommended defaults:
+- XAU/USD: 150 pips = $1.50
+- XAG/USD: 200 pips = $0.20
+- BTC/USD: 100 pips = $100
+- ETH/USD: 200 pips = $2.00
+- US Oil: 100 pips = $1.00
 
-No backend changes. No changes to protected files. Pure frontend enhancement.
+Changes: bot-scanner, backtest-engine, bot-config validation, BotConfigModal UI, 9 new tests.
