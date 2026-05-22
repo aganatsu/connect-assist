@@ -1084,12 +1084,12 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   }, [overlays]);
 
   return (
-    <div className="relative w-full h-full flex flex-col" style={{ backgroundColor: COLORS.bg }}>
+    <div className="relative w-full h-full flex flex-col" style={{ backgroundColor: themedBg }}>
       {/* Layer Toggle Toolbar */}
       {!hideToolbar && (
         <div
           className="flex items-center gap-1 px-3 py-1.5 border-b border-white/5 flex-shrink-0 overflow-x-auto"
-          style={{ backgroundColor: COLORS.bg }}
+          style={{ backgroundColor: themedBg }}
         >
           {symbol && (
             <span className="text-xs font-mono font-bold text-cyan-400 mr-3 flex-shrink-0">
@@ -1153,7 +1153,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       {loading && (
         <div
           className="absolute inset-0 flex items-center justify-center z-10"
-          style={{ backgroundColor: "rgba(10,14,23,0.85)" }}
+          style={{ backgroundColor: themedLoadingBg }}
         >
           <div className="flex items-center gap-3">
             <div className="w-1.5 h-8 bg-cyan-500 animate-pulse" />
