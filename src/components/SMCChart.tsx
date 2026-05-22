@@ -499,7 +499,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       } catch {}
     };
 
-    const addSegmentLine = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle) => {
+    const addSegmentLine = (level: number, startIdx: number, endIdx: number, color: string, width: 1 | 2, style: LineStyle, label?: string) => {
       const chart = chartRef.current;
       if (!chart || !chartData.length || endIdx < 0 || endIdx >= chartData.length) return;
       const sIdx = Math.min(Math.max(0, startIdx), chartData.length - 1);
@@ -517,6 +517,20 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           { time: chartData[sIdx].time, value: level },
           { time: chartData[endIdx].time, value: level },
         ]);
+        if (label) {
+          try {
+            lineSeries.setMarkers([
+              {
+                time: chartData[sIdx].time as any,
+                position: "inBar",
+                color,
+                shape: "circle",
+                size: 0,
+                text: label,
+              },
+            ]);
+          } catch {}
+        }
         segmentLineSeriesRef.current.push(lineSeries);
       } catch {}
     };
@@ -671,7 +685,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     if (visibleLayers.has("fibs")) {
       if (overlays.fiftyPercentLevel && !overlays.fibLevels?.some((fib) => fib.label === "50%")) {
         const endIdx = chartData.length - 1;
-        addSegmentLine(overlays.fiftyPercentLevel, Math.max(0, endIdx - 60), endIdx, COLORS.fib50, 2, LineStyle.Dashed);
+        addSegmentLine(overlays.fiftyPercentLevel, Math.max(0, endIdx - 60), endIdx, COLORS.fib50, 2, LineStyle.Dashed, "50%");
       }
       if (overlays.fibLevels?.length) {
         for (const fib of overlays.fibLevels) {
@@ -686,6 +700,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
             isFifty ? COLORS.fib50 : isKey ? COLORS.fibKey : COLORS.fibMinor,
             isFifty ? 2 : 1,
             isFifty ? LineStyle.Solid : LineStyle.Dashed,
+            fib.label,
           );
         }
       }
