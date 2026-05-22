@@ -59,6 +59,7 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
@@ -2522,8 +2523,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let pendingCancelled = 0;
   let pendingPlaced = 0;
   const { data: activePendingOrders } = await supabase.from("pending_orders").select("*")
-    .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
+    .eq("user_id", userId).eq("bot_id", BOT_ID).in("status", ["pending", "awaiting_confirmation"])
     .order("placed_at", { ascending: true });
+  let pendingConfirmationHunting = 0;  // orders currently in confirmation hunt mode
 
   if (activePendingOrders && activePendingOrders.length > 0) {
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
@@ -2575,56 +2577,184 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
-        // Check fill: use candle low/high to detect if price touched the level
-        const filled = pending.direction === "long"
-          ? lastCandle.low <= entryPrice
-          : lastCandle.high >= entryPrice;
+        // ═══════════════════════════════════════════════════════════════════
+        // ── ZONE CONFIRMATION ENTRY STATE MACHINE ──
+        // States: "pending" → "awaiting_confirmation" → "filled"/"cancelled"
+        // When price touches the zone, instead of immediately filling, we
+        // transition to "awaiting_confirmation" and wait for a 5m CHoCH
+        // confirming reversal before entering at live price.
+        // ═══════════════════════════════════════════════════════════════════
 
-        if (filled) {
+        // Parse impulse data from signal_reason for invalidation check
+        let impulseData: { high: number; low: number } | null = null;
+        try {
+          const signalReasonParsed = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : pending.signal_reason;
+          if (signalReasonParsed?.impulseZone?.impulse) {
+            impulseData = signalReasonParsed.impulseZone.impulse;
+          }
+        } catch { /* ignore parse errors */ }
+
+        // ── Branch A: Order is in "pending" status — check if price touched zone ──
+        if (pending.status === "pending") {
+          const filled = pending.direction === "long"
+            ? lastCandle.low <= entryPrice
+            : lastCandle.high >= entryPrice;
+
+          if (filled) {
+            // Price touched the zone! Transition to confirmation hunting mode.
+            const nowStr = new Date().toISOString();
+            await supabase.from("pending_orders").update({
+              status: "awaiting_confirmation",
+              zone_touch_time: nowStr,
+              confirmation_attempts: 0,
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingConfirmationHunting++;
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
+
+            // Send Telegram notification: zone touched, hunting confirmation
+            if (telegramChatIds.length > 0) {
+              const emoji = pending.direction === "long" ? "🟡" : "🟡";
+              const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
+                `<b>Symbol:</b> ${pending.symbol}\n` +
+                `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+                `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]\n` +
+                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} CHoCH on 5m\n` +
+                `<b>Entry Level:</b> ${entryPrice}`;
+              await Promise.all(telegramChatIds.map(async (chatId: string) => {
+                try {
+                  await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                    body: JSON.stringify({ chat_id: chatId, message: msg }),
+                  });
+                } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+              }));
+            }
+            continue;
+          }
+          // Price hasn't touched zone yet — nothing to do, keep waiting
+          continue;
+        }
+
+        // ── Branch B: Order is in "awaiting_confirmation" — check for CHoCH ──
+        if (pending.status === "awaiting_confirmation") {
+          pendingConfirmationHunting++;
+
+          // Check if impulse is broken (zone invalidation)
+          if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Impulse broken — price ${currentPrice} exceeded origin (high: ${impulseData.high}, low: ${impulseData.low})`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingCancelled++;
+            console.log(`[pending] Cancelled ${pending.symbol} ${pending.direction} — impulse broken at ${currentPrice}`);
+            continue;
+          }
+
+          // Check if price left the zone (reset to pending)
+          const zoneLow = parseFloat(pending.entry_zone_low || "0");
+          const zoneHigh = parseFloat(pending.entry_zone_high || "0");
+          if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
+            // Price left zone without confirming — reset to pending, wait for next approach
+            const attempts = (pending.confirmation_attempts || 0) + 1;
+            await supabase.from("pending_orders").update({
+              status: "pending",
+              zone_touch_time: null,
+              confirmation_attempts: attempts,
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            pendingConfirmationHunting--;
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
+            continue;
+          }
+
+          // Fetch 5m candles for CHoCH detection
+          const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
+          if (confirm5mCandles.length < 10) {
+            console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
+            continue;
+          }
+
+          // Determine the candle index when zone was touched (approximate from zone_touch_time)
+          let zoneTouchIdx: number | undefined;
+          if (pending.zone_touch_time) {
+            const touchTime = new Date(pending.zone_touch_time).getTime();
+            for (let i = confirm5mCandles.length - 1; i >= 0; i--) {
+              const candleTime = new Date(confirm5mCandles[i].datetime).getTime();
+              if (candleTime <= touchTime) { zoneTouchIdx = i; break; }
+            }
+          }
+
+          // Run zone confirmation detection
+          const confirmationSignal = detectZoneConfirmation(
+            confirm5mCandles,
+            pending.direction as "long" | "short",
+            DEFAULT_ZONE_CONFIRMATION_CONFIG,
+            zoneTouchIdx,
+          );
+
+          if (!confirmationSignal) {
+            // No confirmation yet — keep hunting
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no CHoCH yet)`);
+            continue;
+          }
+
+          // ═══════════════════════════════════════════════════════════════
+          // CHoCH CONFIRMED! Enter the trade at live price.
+          // ═══════════════════════════════════════════════════════════════
+          console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
+
           // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
-          // Multiple limit orders can fill in the same cycle — enforce limits before creating position.
           const currentOpenCount = openPosArr.length;
           const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
           if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
-            console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at fill time`,
+              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
             continue;
           }
           if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
-            console.log(`[pending] SKIPPED fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
+            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
             await supabase.from("pending_orders").update({
               status: "cancelled",
-              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at fill time`,
+              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at confirmation time`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingCancelled++;
             continue;
           }
 
-          // L1 Fix: Use the actual candle touch price for a more realistic fill.
-          // For longs, the fill would occur at the candle low (or limit price if low < limit).
-          // For shorts, the fill would occur at the candle high (or limit price if high > limit).
-          const actualFillPrice = pending.direction === "long"
-            ? Math.max(lastCandle.low, entryPrice)   // filled at low, but not below limit
-            : Math.min(lastCandle.high, entryPrice);  // filled at high, but not above limit
-          console.log(`[pending] FILLED ${pending.symbol} ${pending.direction} limit @ ${entryPrice} (actual fill: ${actualFillPrice}, current: ${currentPrice})`);
+          // Entry at live price (the 5m candle close where CHoCH was confirmed)
+          const actualFillPrice = confirmationSignal.price;
+          console.log(`[pending] CONFIRMED FILL ${pending.symbol} ${pending.direction} — CHoCH @ ${actualFillPrice} (zone entry was ${entryPrice})`);
+
 
           const positionId = pending.order_id;
           const orderId = crypto.randomUUID().slice(0, 8);
           const nowStr = new Date().toISOString();
           const exitFlags = pending.exit_flags || {};
 
-          // Build signal_reason with limit order provenance
+          // Build signal_reason with limit order provenance + confirmation data
           let parsedSignalReason: any = {};
           try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
           const signalReason = {
             ...parsedSignalReason,
             filledFromLimitOrder: true,
+            confirmationEntry: true,
+            confirmation: {
+              type: confirmationSignal.type,
+              price: confirmationSignal.price,
+              displacement: confirmationSignal.displacement,
+              significance: confirmationSignal.significance,
+              closeBased: confirmationSignal.closeBased,
+              supportingSignals: confirmationSignal.supportingSignals,
+              zoneTouchTime: pending.zone_touch_time,
+              confirmationAttempts: pending.confirmation_attempts || 0,
+            },
             limitOrderOrigin: {
               orderType: pending.order_type,
               entryPrice,
@@ -2664,15 +2794,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-            summary: `[LIMIT ORDER] ${pending.from_watchlist ? "[WATCHLIST] " : ""}Filled ${pending.direction.toUpperCase()} @ ${entryPrice} (${pending.entry_zone_type} zone)`,
+            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
             bias: pending.direction === "long" ? "bullish" : "bearish",
-            session: "limit_fill",
-            timeframe: config.entryTimeframe || "15min",
+            session: "confirmation_fill",
+            timeframe: "5m",
           });
 
           await supabase.from("pending_orders").update({
             status: "filled",
-            fill_reason: `Price touched ${entryPrice} (candle low: ${lastCandle.low}, high: ${lastCandle.high})`,
+            fill_reason: `Confirmed ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
             filled_at: nowStr,
             resolved_at: nowStr,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2680,20 +2810,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           pendingFilled++;
           tradesPlaced++;
 
-          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: entryPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
 
-          // Send Telegram notification for limit order fill
+          // Send Telegram notification for confirmed entry
           if (telegramChatIds.length > 0) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            const msg = `${emoji} <b>${mode} Limit Order FILLED</b>\n\n` +
+            const msg = `${emoji} <b>${mode} CONFIRMED Entry</b>\n\n` +
               `<b>Symbol:</b> ${pending.symbol}\n` +
               `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
               `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${entryPrice} (limit)\n` +
+              `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (live, ${confirmationSignal.type})\n` +
+              `<b>Zone Level:</b> ${entryPrice}\n` +
               `<b>SL:</b> ${pending.stop_loss}\n` +
               `<b>TP:</b> ${pending.take_profit}\n` +
               `<b>Score:</b> ${pending.signal_score}\n` +
+              `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
               `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
@@ -2771,7 +2903,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         console.warn(`[pending] Error monitoring ${pending.symbol}: ${e?.message}`);
       }
     }
-    console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled`);
+    console.log(`[scan ${scanCycleId}] Pending orders: ${pendingFilled} filled, ${pendingExpired} expired, ${pendingCancelled} cancelled, ${pendingConfirmationHunting} awaiting confirmation`);
   }
 
   // ── Management-Only Early Return ──
@@ -2787,7 +2919,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       tradesPlaced: pendingFilled,
       mode: "management_only",
       managementActions: activeActions,
-      pendingOrders: { filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled },
+      pendingOrders: { filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, awaitingConfirmation: pendingConfirmationHunting },
       scanCycleId,
     };
   }
@@ -5282,7 +5414,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
-      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
+      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
     },
     ...scanDetails,
@@ -5299,7 +5431,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
