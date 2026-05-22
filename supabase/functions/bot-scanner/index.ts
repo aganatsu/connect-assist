@@ -4569,7 +4569,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
-        if (config.limitOrderEnabled && limitEntry) {
+        // Auto-enable limit orders when izGateMode is "hard" and a zone entry is available.
+        // This ensures zone-price entries wait for price to actually reach the level (no look-ahead).
+        const effectiveLimitEnabled = config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry);
+        if (effectiveLimitEnabled && limitEntry) {
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
           const expiryMinutes = config.limitOrderExpiryMinutes || 60;
@@ -4692,16 +4695,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Place position (market order — fallback when limit orders disabled or no zone found)
-        // When impulse zone hard gate is active, use zone entry for market orders too
-        const rawMarketEntry = (izGateMode === "hard" && izData?.bestZone?.refinedEntry)
-          ? izData.bestZone.refinedEntry
-          : (izGateMode === "hard" && izData?.bestZone)
-            ? (izData.bestZone.high + izData.bestZone.low) / 2
-            : analysis.lastPrice;
-        // Guard: if impulse zone data produced NaN/undefined, fall back to lastPrice
-        const marketEntryPrice = (typeof rawMarketEntry === "number" && !isNaN(rawMarketEntry) && rawMarketEntry > 0)
-          ? rawMarketEntry
-          : analysis.lastPrice;
+        // FIX: Market orders ALWAYS fill at current price (analysis.lastPrice).
+        // Using zone refinedEntry for market orders was look-ahead bias — the bot recorded
+        // fills at prices that hadn't been reached yet, inflating paper P&L.
+        // Zone-price entries should use LIMIT ORDERS (limitOrderEnabled: true) which correctly
+        // wait for price to touch the level before filling.
+        const marketEntryPrice = analysis.lastPrice;
+        // SL sanity guard: reject if current price is already past the SL
+        // (e.g., for shorts: if price > SL, the trade is already a loser at entry)
+        const slSanityFailed = analysis.direction === "long"
+          ? marketEntryPrice <= sl  // For longs, entry below SL makes no sense
+          : marketEntryPrice >= sl; // For shorts, entry above SL makes no sense
+        if (slSanityFailed) {
+          detail.status = "skipped_sl_sanity";
+          detail.skipReason = `Market entry ${marketEntryPrice} already past SL ${sl} for ${analysis.direction} — trade would be instant loss`;
+          console.log(`[scan ${scanCycleId}] ⛔ ${pair}: SL SANITY FAILED — entry ${marketEntryPrice} vs SL ${sl} (${analysis.direction}). Skipping.`);
+          scanDetails.push(detail);
+          continue;
+        }
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -5271,7 +5282,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
-      pendingOrders: config.limitOrderEnabled ? { enabled: true, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
+      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : { enabled: false },
       rejectionSummary,
     },
     ...scanDetails,
@@ -5288,7 +5299,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

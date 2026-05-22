@@ -1,75 +1,76 @@
-# Task: Tiered Scoring Display Sync
-
-## Branch: manus/tiered-scoring-display-sync
-
+# Task: Fix Market Order Look-Ahead Bias
+## Branch: manus/fix-market-order-lookahead
 ## Behavior changes
-
-none — pure display fix. No change to trade logic, gate decisions, scoring, or position sizing.
-
-The bot's actual gate decisions were already correct (Gate 19 runs AFTER the impulse zone credits
-and reads the updated `analysis.tieredScoring`). Only the dashboard display was showing stale data
-because `detail.tieredScoring` held a reference to the pre-credit object.
+1. **Market orders now use `analysis.lastPrice` (actual current price)** instead of zone `refinedEntry` or zone midpoint. Paper trades opened via market order path will have entry prices matching the real market price at scan time, not a future zone level.
+2. **SL sanity guard added**: Trades where the market entry price is already past the stop-loss (e.g., short where entry > SL) are rejected with status `skipped_sl_sanity` instead of being opened as instant losers.
+3. **Auto-enable limit orders when `izGateMode === "hard"`**: When the impulse zone gate is in hard mode and a zone entry price is available, limit orders are automatically enabled even if `config.limitOrderEnabled` is false. This ensures zone-price entries correctly wait for price to reach the level (via pending_orders) instead of filling at market with look-ahead bias.
+4. **Pending orders summary reflects auto-enable**: The scan result metadata now reports `pendingOrders.enabled: true` and `pendingOrders.autoEnabled: true` when limit orders are auto-enabled by hard gate mode.
+5. **Cleanup migration flags affected positions**: Existing paper positions opened before the fix with impulse zone data and entry_price != current_price are flagged with `close_reason = 'lookahead_bias_flagged'`. Pending orders from before the fix are cancelled with `cancel_reason = 'lookahead_bias_cleanup'`.
 
 ## Files modified
+- `supabase/functions/bot-scanner/index.ts` — (CAUTION file) Market order lastPrice fix (line 4703), SL sanity guard (lines 4706-4714), `effectiveLimitEnabled` auto-enable logic (line 4574), updated `pendingOrders` summary (lines 5285, 5302).
+- `supabase/functions/_shared/marketOrderLookahead.test.ts` — 8 unit tests for the look-ahead bias fix and SL sanity guard.
+- `supabase/functions/_shared/effectiveLimitEnabled.test.ts` — 10 unit tests for the auto-enable limit order logic and pendingOrders summary.
+- `supabase/migrations/20260522100000_flag_lookahead_paper_positions.sql` — SQL migration to flag open paper positions and cancel pending orders affected by look-ahead pricing.
+- `REPORT.md` — This report.
 
-- `supabase/functions/bot-scanner/index.ts` — Added 2 sync blocks:
-  1. Line ~4271: Syncs `detail.tieredScoring` and `detail.score` in the above-threshold path (before gates are assigned to detail)
-  2. Line ~5170: Catch-all sync before `scanDetails.push(detail)` for all paths (below-threshold, staged, no-direction)
-- `supabase/functions/_shared/tieredScoringDisplaySync.test.ts` — New test file (3 tests)
+## Caution file explanation: bot-scanner/index.ts
+**Commit 1 (market order fix):** Removed zone-entry logic for market orders, replaced with `const marketEntryPrice = analysis.lastPrice`. Added SL sanity guard (8 lines) that rejects trades where entry is already past SL.
 
-## Why bot-scanner/index.ts was modified
+**Commit 2 (auto-enable limit orders):** Added `effectiveLimitEnabled` variable (1 line) that OR's `config.limitOrderEnabled` with `(izGateMode === "hard" && !!limitEntry)`. Changed the limit-order-path condition from `config.limitOrderEnabled && limitEntry` to `effectiveLimitEnabled && limitEntry`. Updated pendingOrders summary to use the same condition.
 
-The root cause is a JavaScript reference semantics issue:
-1. `detail.tieredScoring = analysis.tieredScoring` (line 3461) stores a reference to the original object
-2. Impulse zone credit code (lines 3934-4120) creates a NEW object: `analysis.tieredScoring = { ...ts, tier1Count: newCount }`
-3. `detail.tieredScoring` still points to the OLD object with `tier1Count: 1`
-4. The dashboard reads `detail.tieredScoring` and shows "only 1 core factor" even though the gate correctly passed
-
-The fix adds `detail.tieredScoring = analysis.tieredScoring` after all credits are applied, ensuring
-the dashboard display matches the actual gate decision.
+These are **behavior changes that affect which trades get taken**: (a) trades where current price is past SL are now skipped, (b) hard-gate trades with zone entries now go through the limit order path (pending_orders) instead of market-filling at current price.
 
 ## Tests added
-
-1. `detail.tieredScoring stays in sync after impulse zone credit reassignment` — Simulates the exact bug: creates detail with reference to original tieredScoring, then reassigns analysis.tieredScoring (as impulse zone credit does), verifies the sync logic updates detail.tieredScoring.
-2. `detail.tieredScoring is NOT overwritten when no credit was applied` — Verifies that when no credit fires (references are already the same), the sync is a no-op.
-3. `detail.factors reflects in-place mutations from impulse zone credit` — Verifies that factor mutations (present=true) are visible through the reference (no copy issue there).
+| # | Test | Assertion |
+|---|------|----------|
+| 1 | Market entry uses lastPrice, not zone refinedEntry | entryPrice === lastPrice |
+| 2 | Market entry uses lastPrice even when zone data is available | Ignores refinedEntry and midpoint |
+| 3 | SL sanity guard: short with entry above SL is rejected | entry >= SL → rejected |
+| 4 | SL sanity guard: short with entry below SL is accepted | entry < SL → accepted |
+| 5 | SL sanity guard: long with entry below SL is rejected | entry <= SL → rejected |
+| 6 | SL sanity guard: long with entry above SL is accepted | entry > SL → accepted |
+| 7 | SL sanity guard: entry exactly at SL is rejected | entry == SL → rejected both dirs |
+| 8 | Regression: XAU/USD scenario correctly rejected | entry 4545 > SL 4544.367 for short |
+| 9 | effectiveLimitEnabled: auto-enables for hard+limitEntry | true when hard gate + zone |
+| 10 | effectiveLimitEnabled: no auto-enable without limitEntry | false when hard gate + no zone |
+| 11 | effectiveLimitEnabled: no auto-enable for soft mode | false for soft gate |
+| 12 | effectiveLimitEnabled: no auto-enable for off mode | false for off gate |
+| 13 | effectiveLimitEnabled: respects explicit config=true | true regardless of gate mode |
+| 14 | effectiveLimitEnabled: false when all disabled | false for soft/off + config off |
+| 15 | pendingOrders summary: enabled for explicit config | true for config.limitOrderEnabled |
+| 16 | pendingOrders summary: enabled for hard gate | true for izGateMode=hard |
+| 17 | pendingOrders summary: disabled otherwise | false for soft/off + config off |
+| 18 | Regression: hard gate + zone → limit order path | Documents XAU/USD behavior change |
 
 ## Tests run
-
 ```
-# New tests:
-ok | 3 passed | 0 failed (8ms)
-
-# All supabase tests (this branch):
-FAILED | 677 passed | 33 failed (7s)
-
-# All supabase tests (main branch baseline):
-FAILED | 676 passed | 34 failed (7s)
-
-# Net: +1 pass, -1 fail (our 3 new tests pass; all failures are pre-existing)
+$ deno test supabase/ --no-check
+FAILED | 694 passed | 34 failed (8s)
 ```
+All 34 failures are pre-existing (identical to main branch). 18 new tests all pass.
 
 ## Regression check
-
-- Compared test results between `main` (676 pass / 34 fail) and this branch (677 pass / 33 fail)
-- No new failures introduced
-- The change is display-only: it syncs a reference after all scoring logic has completed, so it cannot alter any gate decision or trade execution
-- Gate 19 at line 4221 reads `analysis.tieredScoring` (the updated one), not `detail.tieredScoring`
-- The sync happens AFTER all gate decisions are made, so it's impossible for this change to affect trade logic
+- The `effectiveLimitEnabled` logic is additive: only auto-enables in hard gate + zone entry scenario. All other paths unchanged.
+- Backtest engine already uses `analysis.lastPrice` — no change needed.
+- The SQL migration uses safe WHERE clauses with date cutoff and only flags (does not auto-close).
+- The pendingOrders summary adds `autoEnabled` field — existing consumers checking `.enabled` see same value for previously-enabled configs.
 
 ## Open questions
-
-None — this is a straightforward reference sync fix with no ambiguity.
+1. **Should flagged positions be auto-closed?** The migration flags them with `close_reason = 'lookahead_bias_flagged'` but does not close. User can review and decide.
+2. **UI indicator for auto-enabled limit orders?** Dashboard could show "Limit orders auto-enabled (hard gate mode)" in scan results.
+3. **bot-config validation?** Should the config UI show a warning or auto-check the limit order toggle when hard gate is selected?
 
 ## Suggested PR title and description
-
-**Title:** fix: sync detail.tieredScoring after impulse zone credits (display-only)
+**Title:** fix: market order look-ahead bias + auto-enable limit orders for hard IZ gate
 
 **Description:**
-The dashboard was showing contradictory information: factor checkmarks showed "present" (via IMPULSE-ZONE CREDIT) but the Tier Gates section showed "only 1 core factor — FAILED."
+Fixes look-ahead bias where market orders used zone `refinedEntry` price instead of actual current price (`analysis.lastPrice`). Adds SL sanity guard that rejects trades where entry is already past the SL. Auto-enables limit orders when `izGateMode === "hard"` to ensure zone-price entries wait for price to reach the level. Includes cleanup migration to flag affected paper positions.
 
-Root cause: `detail.tieredScoring` was set at line 3461 (before credits), but impulse zone credit code at lines 3934-4120 creates a NEW `analysis.tieredScoring` object. The detail reference became stale.
-
-Fix: Sync `detail.tieredScoring = analysis.tieredScoring` after all credits complete, in both the above-threshold and below-threshold code paths.
-
-No behavior change — the bot's actual gate decisions were already correct (Gate 19 at line 4221 reads the updated `analysis.tieredScoring`). This only fixes what the dashboard displays.
+Changes:
+- Market orders always fill at `analysis.lastPrice` (no more free look-ahead profit)
+- SL sanity guard rejects instant-loss trades (`skipped_sl_sanity` status)
+- `effectiveLimitEnabled` auto-enables limit orders in hard IZ gate mode
+- Scan result summary reflects auto-enable state
+- SQL migration flags pre-fix positions for review
+- 18 new unit tests
