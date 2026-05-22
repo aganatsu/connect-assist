@@ -287,6 +287,18 @@ function validateConfig(config: any): string[] {
     }
   }
 
+  // Per-instrument SL buffer overrides validation
+  if (config.instrumentBuffers && typeof config.instrumentBuffers === "object") {
+    for (const [sym, val] of Object.entries(config.instrumentBuffers)) {
+      if (val && typeof val === "object") {
+        const v = val as any;
+        if (typeof v.slBufferPips === "number" && (v.slBufferPips < 1 || v.slBufferPips > 1000)) {
+          errors.push(`instrumentBuffers.${sym}.slBufferPips must be between 1 and 1000`);
+        }
+      }
+    }
+  }
+
   // Sessions validations
   const sess = config.sessions;
   if (sess) {
@@ -407,5 +419,15 @@ function getDefaultConfig() {
     //       silverBullet, macroWindow, smtDivergence, volumeProfile,
     //       amdPhase, currencyStrength, trendDirection, dailyBias
     factorWeights: {},
+    // Per-instrument SL buffer overrides (pips).
+    // When set, the override is final — no asset-class multiplier applied.
+    // Empty = use global slBufferPips × asset-class multiplier.
+    instrumentBuffers: {
+      "XAU/USD": { slBufferPips: 150 },
+      "XAG/USD": { slBufferPips: 200 },
+      "BTC/USD": { slBufferPips: 100 },
+      "ETH/USD": { slBufferPips: 200 },
+      "US Oil":  { slBufferPips: 100 },
+    },
   };
 }

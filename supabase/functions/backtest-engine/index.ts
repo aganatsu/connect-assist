@@ -419,6 +419,8 @@ function mapConfig(raw: any): any {
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
     slBufferPips: entry.slBufferPips ?? DEFAULTS.slBufferPips,
+    // Per-instrument SL buffer overrides (mirrors bot-scanner)
+    instrumentBuffers: (raw?.instrumentBuffers || entry.instrumentBuffers || {}) as Record<string, { slBufferPips?: number }>,
     slMethod: exit.stopLossMethod ?? DEFAULTS.slMethod,
     fixedSLPips: exit.fixedSLPips ?? DEFAULTS.fixedSLPips,
     slATRMultiple: exit.slATRMultiple ?? DEFAULTS.slATRMultiple,
@@ -1427,7 +1429,11 @@ async function runBacktestJob(runId: string, body: any) {
 
         // ── Recalculate SL with asset-adjusted buffer (mirrors bot-scanner) ──
         const spec = SPECS[symbol] || SPECS["EUR/USD"];
-        const adjustedSlBuffer = config.slBufferPips * assetProfile.slBufferMultiplier;
+        // Per-instrument SL buffer override: if set, use it directly (no multiplier).
+        const symbolBufferOverride = config.instrumentBuffers?.[symbol]?.slBufferPips;
+        const adjustedSlBuffer = symbolBufferOverride != null
+          ? symbolBufferOverride
+          : config.slBufferPips * assetProfile.slBufferMultiplier;
         let sl = analysis.stopLoss;
         let tp = analysis.takeProfit;
 
