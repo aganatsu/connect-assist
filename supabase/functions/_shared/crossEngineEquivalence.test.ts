@@ -121,7 +121,7 @@ Deno.test("atMs: same timestamp produces same session detection", () => {
   const r1 = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
   const r2 = runConfluenceAnalysis(candles, null, baseConfig, undefined, fixedTime);
   assertEquals(r1.session.name, r2.session.name);
-  assertEquals(r1.session.active, r2.session.active);
+  assertEquals(r1.session.isKillZone, r2.session.isKillZone);
 });
 
 Deno.test("atMs: different timestamps can produce different session results", () => {
@@ -132,7 +132,7 @@ Deno.test("atMs: different timestamps can produce different session results", ()
   const rAsia = runConfluenceAnalysis(candles, null, baseConfig, undefined, asiaTime);
   // Sessions should differ (London vs Asia)
   assert(
-    rLondon.session.name !== rAsia.session.name || rLondon.session.active !== rAsia.session.active,
+    rLondon.session.name !== rAsia.session.name || rLondon.session.isKillZone !== rAsia.session.isKillZone,
     "Different timestamps should produce different session results"
   );
 });

@@ -228,7 +228,7 @@ Deno.test("propFirmEmergencyClose: weekend skips FX positions, only closes crypt
 
   // Override the delete mock to track which positions get closed
   let closedSymbols: string[] = [];
-  supabase.from = (table: string) => {
+  (supabase as any).from = (table: string) => {
     if (table === "paper_positions") {
       return {
         delete: () => ({

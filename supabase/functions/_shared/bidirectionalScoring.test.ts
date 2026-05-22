@@ -403,8 +403,6 @@ Deno.test("Bidirectional: negative FOTSI contributes to opposingFactorCount", ()
 Deno.test("Config: conflictThresholdRaise and conflictBlockAt have correct defaults in BASE_CONFIG", async () => {
   // This test verifies the UI defaults match the expected values.
   // The actual threshold logic is in bot-scanner, but we verify the config shape here.
-  const { default: fs } = await import("https://deno.land/std@0.224.0/fs/mod.ts");
-
   // Read the BotConfigModal to verify defaults
   const modalPath = "src/components/BotConfigModal.tsx";
   try {

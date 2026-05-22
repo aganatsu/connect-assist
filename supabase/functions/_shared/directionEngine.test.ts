@@ -23,7 +23,7 @@ function makeCandles(
     const high = Math.max(open, close) + Math.random() * volatility;
     const low = Math.min(open, close) - Math.random() * volatility;
     candles.push({
-      time: Date.now() - (count - i) * 3600000,
+      datetime: new Date(Date.now() - (count - i) * 3600000).toISOString(),
       open,
       high,
       low,
@@ -62,7 +62,7 @@ function makeTrendingCandles(
     const high = Math.max(open, close) + swingSize * 0.1;
     const low = Math.min(open, close) - swingSize * 0.1;
     candles.push({
-      time: Date.now() - (count - i) * 86400000, // daily spacing
+      datetime: new Date(Date.now() - (count - i) * 86400000).toISOString(), // daily spacing
       open,
       high,
       low,
@@ -88,7 +88,7 @@ function makeRangingCandles(count: number, midPrice: number, range = 0.003): Can
     const high = Math.max(open, close) + range * 0.05;
     const low = Math.min(open, close) - range * 0.05;
     candles.push({
-      time: Date.now() - (count - i) * 3600000,
+      datetime: new Date(Date.now() - (count - i) * 3600000).toISOString(),
       open,
       high,
       low,

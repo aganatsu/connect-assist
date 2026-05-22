@@ -17,12 +17,12 @@ import type { SessionGamePlan, InstrumentGamePlan } from "./gamePlan.ts";
 
 function makeGamePlan(plans: Partial<InstrumentGamePlan>[]): SessionGamePlan {
   return {
-    session: "london",
+    session: "London",
     generatedAt: new Date().toISOString(),
     focusPairs: plans.map(p => p.symbol || ""),
     plans: plans.map(p => ({
       symbol: p.symbol || "EUR/USD",
-      session: "london",
+      session: "London",
       bias: p.bias || "bullish",
       biasConfidence: p.biasConfidence ?? 75,
       biasReasoning: ["test"],

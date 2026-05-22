@@ -326,10 +326,10 @@ Deno.test("Fix 6: P/D discount + strong bearish regime → direction null (falli
   const regimeBias = "bearish";
   const regimeConf = 0.90;
   
-  const pdDirection = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
+  const pdDirection: string | null = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
   const regimeOpposesP_D =
-    (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
-    (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
+    (pdDirection === "long" && (regimeBias as string) === "bearish" && regimeConf >= 0.75) ||
+    (pdDirection === "short" && (regimeBias as string) === "bullish" && regimeConf >= 0.75);
   
   assertEquals(regimeOpposesP_D, true, "90% bearish regime should oppose long from discount");
   // Direction should be null (no trade)
@@ -339,14 +339,14 @@ Deno.test("Fix 6: P/D discount + strong bearish regime → direction null (falli
 
 Deno.test("Fix 6: P/D premium + strong bullish regime → direction null (rocket protection)", () => {
   // Mirror case: price in premium but regime is strongly bullish — shorting = fighting a rocket
-  const pdZone = "premium";
+  const pdZone: string = "premium";
   const regimeBias = "bullish";
   const regimeConf = 0.85;
   
-  const pdDirection = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
+  const pdDirection: string | null = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
   const regimeOpposesP_D =
-    (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
-    (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
+    (pdDirection === "long" && (regimeBias as string) === "bearish" && regimeConf >= 0.75) ||
+    (pdDirection === "short" && (regimeBias as string) === "bullish" && regimeConf >= 0.75);
   
   assertEquals(regimeOpposesP_D, true, "85% bullish regime should oppose short from premium");
   const direction = regimeOpposesP_D ? null : pdDirection;
@@ -359,10 +359,10 @@ Deno.test("Fix 6: P/D discount + weak bearish regime → direction long (allowed
   const regimeBias = "bearish";
   const regimeConf = 0.60;
   
-  const pdDirection = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
+  const pdDirection: string | null = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
   const regimeOpposesP_D =
-    (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
-    (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
+    (pdDirection === "long" && (regimeBias as string) === "bearish" && regimeConf >= 0.75) ||
+    (pdDirection === "short" && (regimeBias as string) === "bullish" && regimeConf >= 0.75);
   
   assertEquals(regimeOpposesP_D, false, "60% bearish regime should NOT block discount long");
   const direction = regimeOpposesP_D ? null : pdDirection;
@@ -375,10 +375,10 @@ Deno.test("Fix 6: P/D discount + bullish regime → direction long (regime agree
   const regimeBias = "bullish";
   const regimeConf = 0.90;
   
-  const pdDirection = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
+  const pdDirection: string | null = pdZone === "discount" ? "long" : pdZone === "premium" ? "short" : null;
   const regimeOpposesP_D =
-    (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||
-    (pdDirection === "short" && regimeBias === "bullish" && regimeConf >= 0.75);
+    (pdDirection === "long" && (regimeBias as string) === "bearish" && regimeConf >= 0.75) ||
+    (pdDirection === "short" && (regimeBias as string) === "bullish" && regimeConf >= 0.75);
   
   assertEquals(regimeOpposesP_D, false, "Bullish regime should NOT oppose long from discount");
   const direction = regimeOpposesP_D ? null : pdDirection;
@@ -402,16 +402,16 @@ Deno.test("Fix 6: User's USD/JPY example — ranging, balanced fractals, discoun
   // Daily BOS ambiguous (1 bullish BOS, 1 bearish CHoCH — net 0)
   const dailyTrend = "ranging"; // no clear direction
   const hasDailyBOS = true; // has BOS but trend is still ranging
-  const dailyLean = (dailyTrend === "bullish" && hasDailyBOS) ? "long"
-    : (dailyTrend === "bearish" && hasDailyBOS) ? "short" : null;
+  const dailyLean = ((dailyTrend as string) === "bullish" && hasDailyBOS) ? "long"
+    : ((dailyTrend as string) === "bearish" && hasDailyBOS) ? "short" : null;
   assertEquals(dailyLean, null, "Daily structure is ranging — no lean");
   
   // Falls to P/D zone: discount → would be "long"
   const pdZone = "discount";
-  const pdDirection = "long";
+  const pdDirection: string = "long";
   
   // But regime is 90% bearish — falling knife guard activates
-  const regimeBias = "bearish";
+  const regimeBias: string = "bearish";
   const regimeConf = 0.90;
   const regimeOpposesP_D =
     (pdDirection === "long" && regimeBias === "bearish" && regimeConf >= 0.75) ||

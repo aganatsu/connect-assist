@@ -575,7 +575,7 @@ Deno.test("SNAPSHOT: ranging fixture produces stable output", async () => {
 Deno.test("OB aligned-only: bearish OB in long trade scores 0 points (not ×0.3 penalty)", async () => {
   // Generate a bullish fixture where the OB factor will be detected
   const candles = generateBullishFixture();
-  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
 
   // Find the OB factor
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
@@ -606,7 +606,7 @@ Deno.test("OB aligned-only: bearish OB in long trade scores 0 points (not ×0.3 
 Deno.test("OB aligned-only: bullish OB in short trade scores 0 points", async () => {
   // Generate a bearish fixture
   const candles = generateBearishFixture();
-  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
 
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
   if (!obFactor) {
@@ -628,7 +628,7 @@ Deno.test("OB aligned-only: bullish OB in short trade scores 0 points", async ()
 Deno.test("OB aligned-only: aligned OB retains full weight", async () => {
   // Generate a bullish fixture
   const candles = generateBullishFixture();
-  const result = runConfluenceAnalysis(candles, "EUR/USD", "15min", DEFAULT_FACTOR_WEIGHTS);
+  const result = runConfluenceAnalysis(candles, null, { factorWeights: DEFAULT_FACTOR_WEIGHTS });
 
   const obFactor = result.factors.find((f: any) => f.name === "Order Block");
   if (!obFactor || !obFactor.present) {

@@ -21,7 +21,7 @@ import type { Candle } from "./smcAnalysis.ts";
 function makeCandle(open: number, high: number, low: number, close: number, dayOffset: number = 0): Candle {
   const ts = Date.now() - dayOffset * 86400000;
   return {
-    time: ts / 1000,
+    datetime: new Date(ts).toISOString(),
     open,
     high,
     low,

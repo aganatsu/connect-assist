@@ -10,16 +10,17 @@
 import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { calculateSLTP } from "./smcAnalysis.ts";
 
-// Minimal fixtures
+// Minimal fixtures — include all required SwingPoint fields
 const baseSwings = [
-  { type: "low" as const, price: 0.59300, index: 10, time: "2024-01-01T00:00:00Z" },
-  { type: "high" as const, price: 0.59700, index: 20, time: "2024-01-01T04:00:00Z" },
+  { type: "low" as const, price: 0.59300, index: 10, time: "2024-01-01T00:00:00Z", datetime: "2024-01-01T00:00:00Z", state: "active" as const, testedCount: 0 },
+  { type: "high" as const, price: 0.59700, index: 20, time: "2024-01-01T04:00:00Z", datetime: "2024-01-01T04:00:00Z", state: "active" as const, testedCount: 0 },
 ];
 
+// Include all required LiquidityPool fields
 const baseLiquidityPools = [
-  { type: "sell-side" as const, price: 0.59540, strength: 3, touches: 4, swept: false },
-  { type: "sell-side" as const, price: 0.59400, strength: 4, touches: 6, swept: false },
-  { type: "sell-side" as const, price: 0.59200, strength: 5, touches: 8, swept: false },
+  { type: "sell-side" as const, price: 0.59540, strength: 3, datetime: "2024-01-01T01:00:00Z", swept: false, state: "active" as const },
+  { type: "sell-side" as const, price: 0.59400, strength: 4, datetime: "2024-01-01T02:00:00Z", swept: false, state: "active" as const },
+  { type: "sell-side" as const, price: 0.59200, strength: 5, datetime: "2024-01-01T03:00:00Z", swept: false, state: "active" as const },
 ];
 
 const basePdLevels = {
@@ -95,8 +96,8 @@ Deno.test("next_level TP: falls back to rr_ratio when ALL targets produce sub-mi
     pwl: 0.59530,  // 2 pips → R:R = 0.13
   };
   const closePools = [
-    { type: "sell-side" as const, price: 0.59545, strength: 3, touches: 4, swept: false },
-    { type: "sell-side" as const, price: 0.59535, strength: 4, touches: 6, swept: false },
+    { type: "sell-side" as const, price: 0.59545, strength: 3, datetime: "2024-01-01T01:00:00Z", swept: false, state: "active" as const },
+    { type: "sell-side" as const, price: 0.59535, strength: 4, datetime: "2024-01-01T02:00:00Z", swept: false, state: "active" as const },
   ];
 
   const result = calculateSLTP({
@@ -147,8 +148,8 @@ Deno.test("next_level TP: long direction skips close targets correctly", () => {
     swings: baseSwings,
     orderBlocks: [],
     liquidityPools: [
-      { type: "buy-side" as const, price: 0.59710, strength: 3, touches: 4, swept: false },
-      { type: "buy-side" as const, price: 0.59900, strength: 5, touches: 8, swept: false },
+      { type: "buy-side" as const, price: 0.59710, strength: 3, datetime: "2024-01-01T01:00:00Z", swept: false, state: "active" as const },
+      { type: "buy-side" as const, price: 0.59900, strength: 5, datetime: "2024-01-01T02:00:00Z", swept: false, state: "active" as const },
     ],
     pdLevels: { pdh: 0.59700, pdl: 0.59400, pwh: 0.59800, pwl: 0.59100 },
     atrValue: 0.00100, // ATR floor = 1.5 × 0.00100 = 0.00150 (15 pips)

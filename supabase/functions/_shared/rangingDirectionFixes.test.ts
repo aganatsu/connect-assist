@@ -367,11 +367,11 @@ Deno.test("Fix 5: Ranging + low-confidence regime → no HTF Tier 1 promotions",
           "Fix 5 FAILED: HTF OB should NOT be promoted to Tier 1 in ranging + low confidence"
         );
       }
-      // Check tieredScoring tier1 present names don't include HTF promotions
-      const tier1PresentNames = result.tieredScoring?.tier1PresentNames || [];
+      // Check tieredScoring tier1GateReason doesn't include HTF promotions
+      const tier1GateReason = result.tieredScoring?.tier1GateReason || "";
       assert(
-        !tier1PresentNames.includes("HTF FVG (Tier 1)") && !tier1PresentNames.includes("HTF OB (Tier 1)"),
-        `Fix 5: Tier 1 present names should not include HTF promotions, got: ${tier1PresentNames}`
+        !tier1GateReason.includes("HTF FVG (Tier 1)") && !tier1GateReason.includes("HTF OB (Tier 1)"),
+        `Fix 5: Tier 1 gate reason should not include HTF promotions, got: ${tier1GateReason}`
       );
     }
   }
