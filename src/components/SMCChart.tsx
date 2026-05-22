@@ -475,6 +475,26 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     };
   }, [compact, symbol]);
 
+  // Re-apply theme-dependent options when theme toggles
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    try {
+      chart.applyOptions({
+        layout: {
+          background: { type: ColorType.Solid, color: themedBg },
+          textColor: themedText,
+        },
+        grid: {
+          vertLines: { color: themedGrid },
+          horzLines: { color: themedGrid },
+        },
+        rightPriceScale: { borderColor: themedBorder },
+        timeScale: { borderColor: themedBorder },
+      });
+    } catch {}
+  }, [themedBg, themedText, themedGrid, themedBorder]);
+
   // Update candle data
   useEffect(() => {
     if (!candleSeriesRef.current || !chartData.length) return;
