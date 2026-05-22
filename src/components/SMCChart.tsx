@@ -471,6 +471,12 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     }
     priceLinesRef.current = [];
 
+    // Cleanup previous structure line segments (BOS/CHoCH)
+    for (const s of structureLineSeriesRef.current) {
+      try { chartRef.current?.removeSeries(s); } catch {}
+    }
+    structureLineSeriesRef.current = [];
+
     if (!overlays) return;
 
     const addLine = (opts: any) => {
