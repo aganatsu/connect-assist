@@ -1,76 +1,121 @@
-# Task: Fix Market Order Look-Ahead Bias
-## Branch: manus/fix-market-order-lookahead
+# Task: Zone Confirmation Entry
+## Branch: manus/zone-confirmation-entry
+
 ## Behavior changes
-1. **Market orders now use `analysis.lastPrice` (actual current price)** instead of zone `refinedEntry` or zone midpoint. Paper trades opened via market order path will have entry prices matching the real market price at scan time, not a future zone level.
-2. **SL sanity guard added**: Trades where the market entry price is already past the stop-loss (e.g., short where entry > SL) are rejected with status `skipped_sl_sanity` instead of being opened as instant losers.
-3. **Auto-enable limit orders when `izGateMode === "hard"`**: When the impulse zone gate is in hard mode and a zone entry price is available, limit orders are automatically enabled even if `config.limitOrderEnabled` is false. This ensures zone-price entries correctly wait for price to reach the level (via pending_orders) instead of filling at market with look-ahead bias.
-4. **Pending orders summary reflects auto-enable**: The scan result metadata now reports `pendingOrders.enabled: true` and `pendingOrders.autoEnabled: true` when limit orders are auto-enabled by hard gate mode.
-5. **Cleanup migration flags affected positions**: Existing paper positions opened before the fix with impulse zone data and entry_price != current_price are flagged with `close_reason = 'lookahead_bias_flagged'`. Pending orders from before the fix are cancelled with `cancel_reason = 'lookahead_bias_cleanup'`.
+
+1. **Pending orders no longer fill immediately when price touches the zone.** Instead, they transition to `"awaiting_confirmation"` status and wait for a 5-minute CHoCH (Change of Character) signal before entering.
+2. **Entry price is now the live price at CHoCH confirmation**, not the static zone level. This eliminates look-ahead bias entirely.
+3. **If price leaves the zone without confirming**, the order resets to `"pending"` status and `confirmation_attempts` is incremented. The bot waits for the next zone approach.
+4. **If the impulse leg is broken** (price exceeds the impulse origin), the order is cancelled with reason `"impulse_broken_during_confirmation"`.
+5. **Telegram notifications now show confirmation details**: type (bearish/bullish CHoCH), displacement strength, and supporting signals.
+6. **Scan result summary includes `awaitingConfirmation` count** in the pendingOrders object.
 
 ## Files modified
-- `supabase/functions/bot-scanner/index.ts` — (CAUTION file) Market order lastPrice fix (line 4703), SL sanity guard (lines 4706-4714), `effectiveLimitEnabled` auto-enable logic (line 4574), updated `pendingOrders` summary (lines 5285, 5302).
-- `supabase/functions/_shared/marketOrderLookahead.test.ts` — 8 unit tests for the look-ahead bias fix and SL sanity guard.
-- `supabase/functions/_shared/effectiveLimitEnabled.test.ts` — 10 unit tests for the auto-enable limit order logic and pendingOrders summary.
-- `supabase/migrations/20260522100000_flag_lookahead_paper_positions.sql` — SQL migration to flag open paper positions and cancel pending orders affected by look-ahead pricing.
-- `REPORT.md` — This report.
+
+| File | Description |
+|------|-------------|
+| `supabase/functions/_shared/zoneConfirmation.ts` | **NEW** — Core helper: `detectZoneConfirmation()`, `isPriceInZone()`, `isImpulseBroken()`, `formatConfirmationSummary()`. Uses existing `analyzeMarketStructure()` from smcAnalysis.ts to detect CHoCH on 5m candles. |
+| `supabase/functions/_shared/zoneConfirmation.test.ts` | **NEW** — 26 tests covering CHoCH detection, zone boundary logic, impulse invalidation, format helpers, and state machine integration. |
+| `supabase/functions/bot-scanner/index.ts` | **MODIFIED** — Replaced the immediate-fill logic in the pending order loop with a two-stage state machine: `pending → awaiting_confirmation → filled`. Added 5m candle fetch, CHoCH detection call, zone exit reset, and impulse invalidation. Updated Telegram notifications and signal_reason metadata. |
+| `supabase/migrations/20260522150000_add_confirmation_columns_to_pending_orders.sql` | **NEW** — Adds `zone_touch_time` (timestamptz) and `confirmation_attempts` (integer) columns to `pending_orders`. Creates index for efficient status queries. |
 
 ## Caution file explanation: bot-scanner/index.ts
-**Commit 1 (market order fix):** Removed zone-entry logic for market orders, replaced with `const marketEntryPrice = analysis.lastPrice`. Added SL sanity guard (8 lines) that rejects trades where entry is already past SL.
 
-**Commit 2 (auto-enable limit orders):** Added `effectiveLimitEnabled` variable (1 line) that OR's `config.limitOrderEnabled` with `(izGateMode === "hard" && !!limitEntry)`. Changed the limit-order-path condition from `config.limitOrderEnabled && limitEntry` to `effectiveLimitEnabled && limitEntry`. Updated pendingOrders summary to use the same condition.
+The pending order processing section (lines ~2570-2900) was substantially rewritten. The old flow was:
 
-These are **behavior changes that affect which trades get taken**: (a) trades where current price is past SL are now skipped, (b) hard-gate trades with zone entries now go through the limit order path (pending_orders) instead of market-filling at current price.
+```
+price touches zone → immediate fill at limit price
+```
+
+The new flow is:
+
+```
+price touches zone → transition to "awaiting_confirmation"
+  → fetch 5m candles → run analyzeMarketStructure → check for CHoCH
+    → if CHoCH found: fill at live price (confirmationSignal.price)
+    → if price leaves zone: reset to "pending", increment attempts
+    → if impulse broken: cancel order
+```
+
+Key design decisions:
+- `detectZoneConfirmation()` is a pure function that takes candles and returns a signal or null. It does NOT modify state.
+- The state machine lives entirely in the pending order loop. State is persisted via `status` column and `zone_touch_time`/`confirmation_attempts` columns.
+- 5m candles are fetched using the existing `cachedFetch()` infrastructure with `"5min"` interval.
+- The CHoCH detection reuses `analyzeMarketStructure()` from smcAnalysis.ts (not modified) — it just filters the structure breaks for the correct direction and recency.
 
 ## Tests added
+
 | # | Test | Assertion |
-|---|------|----------|
-| 1 | Market entry uses lastPrice, not zone refinedEntry | entryPrice === lastPrice |
-| 2 | Market entry uses lastPrice even when zone data is available | Ignores refinedEntry and midpoint |
-| 3 | SL sanity guard: short with entry above SL is rejected | entry >= SL → rejected |
-| 4 | SL sanity guard: short with entry below SL is accepted | entry < SL → accepted |
-| 5 | SL sanity guard: long with entry below SL is rejected | entry <= SL → rejected |
-| 6 | SL sanity guard: long with entry above SL is accepted | entry > SL → accepted |
-| 7 | SL sanity guard: entry exactly at SL is rejected | entry == SL → rejected both dirs |
-| 8 | Regression: XAU/USD scenario correctly rejected | entry 4545 > SL 4544.367 for short |
-| 9 | effectiveLimitEnabled: auto-enables for hard+limitEntry | true when hard gate + zone |
-| 10 | effectiveLimitEnabled: no auto-enable without limitEntry | false when hard gate + no zone |
-| 11 | effectiveLimitEnabled: no auto-enable for soft mode | false for soft gate |
-| 12 | effectiveLimitEnabled: no auto-enable for off mode | false for off gate |
-| 13 | effectiveLimitEnabled: respects explicit config=true | true regardless of gate mode |
-| 14 | effectiveLimitEnabled: false when all disabled | false for soft/off + config off |
-| 15 | pendingOrders summary: enabled for explicit config | true for config.limitOrderEnabled |
-| 16 | pendingOrders summary: enabled for hard gate | true for izGateMode=hard |
-| 17 | pendingOrders summary: disabled otherwise | false for soft/off + config off |
-| 18 | Regression: hard gate + zone → limit order path | Documents XAU/USD behavior change |
+|---|------|-----------|
+| 1 | `detectZoneConfirmation: returns bearish_choch for short direction` | Bearish CHoCH detected in bearish reversal pattern |
+| 2 | `detectZoneConfirmation: returns bullish_choch for long direction` | Bullish CHoCH detected in bullish reversal pattern |
+| 3 | `detectZoneConfirmation: returns null when no CHoCH present` | No false positives in steady uptrend |
+| 4 | `detectZoneConfirmation: returns null for wrong direction` | Bearish CHoCH not returned when looking for bullish |
+| 5 | `detectZoneConfirmation: respects zoneTouchIndex filter` | Only considers CHoCHs after zone touch |
+| 6 | `detectZoneConfirmation: returns null for insufficient candles` | Graceful handling of < 5 candles |
+| 7 | `detectZoneConfirmation: respects requireCloseBased config` | Close-based filter applied |
+| 8 | `detectZoneConfirmation: respects minDisplacement config` | Displacement threshold filter applied |
+| 9 | `isPriceInZone: returns true when price is inside zone (long)` | Zone boundary detection for longs |
+| 10 | `isPriceInZone: returns true when price is inside zone (short)` | Zone boundary detection for shorts |
+| 11 | `isPriceInZone: returns false when price is above zone (long)` | Rejects price above zone for longs |
+| 12 | `isPriceInZone: returns false when price is below zone (short)` | Rejects price below zone for shorts |
+| 13 | `isPriceInZone: returns true at zone edge (exact boundary)` | Edge case: exact boundary |
+| 14 | `isPriceInZone: includes buffer for near-zone prices` | 5% buffer zone tolerance |
+| 15 | `isPriceInZone: returns false when clearly outside buffer` | Rejects clearly outside prices |
+| 16 | `isImpulseBroken: returns false when price is within impulse range (short)` | Valid impulse for shorts |
+| 17 | `isImpulseBroken: returns true when price exceeds impulse origin (short)` | Broken impulse for shorts |
+| 18 | `isImpulseBroken: returns false when price is within impulse range (long)` | Valid impulse for longs |
+| 19 | `isImpulseBroken: returns true when price exceeds impulse origin (long)` | Broken impulse for longs |
+| 20 | `isImpulseBroken: returns false at exact impulse boundary` | Edge case: exact boundary |
+| 21 | `formatConfirmationSummary: formats bearish CHoCH correctly` | Output format verification |
+| 22 | `formatConfirmationSummary: handles empty supporting signals` | Graceful empty array handling |
+| 23 | `State machine: zone touch detection triggers confirmation hunt` | isPriceInZone + isImpulseBroken integration |
+| 24 | `State machine: price leaving zone resets to pending` | Zone exit detection |
+| 25 | `State machine: impulse broken cancels order` | Impulse invalidation |
+| 26 | `DEFAULT_ZONE_CONFIRMATION_CONFIG has sensible defaults` | Config sanity check |
 
 ## Tests run
+
 ```
-$ deno test supabase/ --no-check
-FAILED | 694 passed | 34 failed (8s)
+$ deno test --allow-all --no-check
+FAILED | 776 passed | 2 failed (12s)
 ```
-All 34 failures are pre-existing (identical to main branch). 18 new tests all pass.
+
+The 2 failures are pre-existing:
+1. `./src/test/example.test.ts` — uncaught error (test infrastructure issue, exists on main)
+2. `findImpulseLeg — ETH-like bearish impulse` — pre-existing impulseZoneEngine test failure
+
+All 26 new tests pass. No regressions introduced.
 
 ## Regression check
-- The `effectiveLimitEnabled` logic is additive: only auto-enables in hard gate + zone entry scenario. All other paths unchanged.
-- Backtest engine already uses `analysis.lastPrice` — no change needed.
-- The SQL migration uses safe WHERE clauses with date cutoff and only flags (does not auto-close).
-- The pendingOrders summary adds `autoEnabled` field — existing consumers checking `.enabled` see same value for previously-enabled configs.
+
+1. **No existing fill logic was removed** — the code path for immediate fills is now gated behind the confirmation state machine. Orders that were already in `"pending"` status will transition to `"awaiting_confirmation"` on next zone touch, then fill on CHoCH.
+2. **Existing pending order expiry/cancellation logic is preserved** — expiry checks run before the confirmation logic.
+3. **Broker mirroring is unchanged** — once a confirmed fill happens, the same broker mirror code executes as before.
+4. **The 4 pre-existing type errors** (equalHighsLowsSensitivity, liquidityPoolMinTouches) are unrelated to this change and exist on main.
+5. **smcAnalysis.ts is NOT modified** — the CHoCH detection reuses the existing `analyzeMarketStructure()` function.
 
 ## Open questions
-1. **Should flagged positions be auto-closed?** The migration flags them with `close_reason = 'lookahead_bias_flagged'` but does not close. User can review and decide.
-2. **UI indicator for auto-enabled limit orders?** Dashboard could show "Limit orders auto-enabled (hard gate mode)" in scan results.
-3. **bot-config validation?** Should the config UI show a warning or auto-check the limit order toggle when hard gate is selected?
+
+1. **Migration timing**: The `zone_touch_time` and `confirmation_attempts` columns need to be added to the production database before deploying this code. Should I apply the migration now or wait for your approval?
+2. **Existing pending orders**: Orders currently in `"pending"` status will naturally transition to the new flow on their next scan cycle. No manual intervention needed. Confirm this is acceptable?
+3. **5m candle availability**: The bot fetches 5m candles via MetaApi/TwelveData. If 5m data is unavailable for a pair, the confirmation check is skipped and the order stays in `"awaiting_confirmation"` until data becomes available. Should there be a fallback (e.g., use 15m CHoCH instead)?
+4. **requireCloseBased default**: Currently set to `true` (only close-based CHoCHs count). This is more conservative but may miss some valid entries. Want me to change to `false` (wick-based also counts)?
 
 ## Suggested PR title and description
-**Title:** fix: market order look-ahead bias + auto-enable limit orders for hard IZ gate
+
+**Title:** feat: zone-triggered confirmation entry (CHoCH on 5m before fill)
 
 **Description:**
-Fixes look-ahead bias where market orders used zone `refinedEntry` price instead of actual current price (`analysis.lastPrice`). Adds SL sanity guard that rejects trades where entry is already past the SL. Auto-enables limit orders when `izGateMode === "hard"` to ensure zone-price entries wait for price to reach the level. Includes cleanup migration to flag affected paper positions.
+Replaces immediate limit-order fills with a two-stage confirmation entry system:
 
-Changes:
-- Market orders always fill at `analysis.lastPrice` (no more free look-ahead profit)
-- SL sanity guard rejects instant-loss trades (`skipped_sl_sanity` status)
-- `effectiveLimitEnabled` auto-enables limit orders in hard IZ gate mode
-- Scan result summary reflects auto-enable state
-- SQL migration flags pre-fix positions for review
-- 18 new unit tests
+1. When price reaches the impulse zone, the pending order transitions to `"awaiting_confirmation"`
+2. The bot fetches 5m candles and watches for a CHoCH (Change of Character) in the expected direction
+3. Only when CHoCH confirms does the order fill — at the live price, not the static zone level
+4. If price leaves the zone without confirming, the order resets and waits for the next approach
+5. If the impulse leg is broken (price exceeds origin), the order is cancelled
+
+This eliminates look-ahead bias and ensures entries are backed by actual reversal confirmation on the lower timeframe.
+
+**Breaking changes:** None. Existing pending orders will naturally adopt the new flow.
+**Migration required:** `20260522150000_add_confirmation_columns_to_pending_orders.sql`
