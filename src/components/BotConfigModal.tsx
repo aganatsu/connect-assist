@@ -981,28 +981,6 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                               <span className="text-sm font-mono font-bold w-16 text-right">{config.entry?.limitOrderExpiryMinutes ?? 60}m</span>
                             </div>
                           </FieldGroup>
-                          <FieldGroup label="Max Distance (pips)" description="Skip zone setup if zone is further than this from current price — too far to reach">
-                            <div className="flex items-center gap-4">
-                              <Slider value={[config.entry?.limitOrderMaxDistancePips ?? 30]} onValueChange={v => updateField('entry', 'limitOrderMaxDistancePips', v[0])} min={5} max={100} step={1} className="flex-1" />
-                              <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMaxDistancePips ?? 30}</span>
-                            </div>
-                          </FieldGroup>
-                          <FieldGroup label="Min Distance (pips)" description="If price is already within this distance of the zone, enter confirmation hunting immediately">
-                            <div className="flex items-center gap-4">
-                              <Slider value={[config.entry?.limitOrderMinDistancePips ?? 3]} onValueChange={v => updateField('entry', 'limitOrderMinDistancePips', v[0])} min={0} max={20} step={1} className="flex-1" />
-                              <span className="text-sm font-mono font-bold w-12 text-right">{config.entry?.limitOrderMinDistancePips ?? 3}</span>
-                            </div>
-                          </FieldGroup>
-                          <FieldGroup label="Preferred Zone" description="Which zone type to target for the limit entry price">
-                            <Select value={config.entry?.limitOrderPreferZone ?? "ob"} onValueChange={v => updateField('entry', 'limitOrderPreferZone', v)}>
-                              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="ob">Order Block (OB midpoint)</SelectItem>
-                                <SelectItem value="fvg">Fair Value Gap (FVG midpoint)</SelectItem>
-                                <SelectItem value="nearest">Nearest Zone (closest to price)</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </FieldGroup>
                           <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for a 5m CHoCH confirmation before entering at live price. If hard gate mode is active, zone setups are auto-enabled for impulse zones.</p>
                         </div>
                       )}
