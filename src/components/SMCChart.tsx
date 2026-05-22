@@ -313,7 +313,7 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const priceLinesRef = useRef<any[]>([]);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const structureLineSeriesRef = useRef<any[]>([]);
+  const segmentLineSeriesRef = useRef<any[]>([]);
 
   const allLayers: OverlayLayer[] = LAYER_DEFS.map((l) => l.id);
   const [visibleLayersState, setVisibleLayers] = useState<Set<OverlayLayer>>(
@@ -437,16 +437,27 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       setTooltipData({ x: param.point.x, y: param.point.y, text });
     });
 
+    let disposed = false;
     const ro = new ResizeObserver((entries) => {
+      if (disposed) return;
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
-        chart.applyOptions({ width, height });
+        try { chart.applyOptions({ width, height }); } catch {}
       }
     });
     ro.observe(containerRef.current);
 
     return () => {
+      disposed = true;
       ro.disconnect();
+      for (const line of priceLinesRef.current) {
+        try { series.removePriceLine(line); } catch {}
+      }
+      priceLinesRef.current = [];
+      for (const s of segmentLineSeriesRef.current) {
+        try { chart.removeSeries(s); } catch {}
+      }
+      segmentLineSeriesRef.current = [];
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
