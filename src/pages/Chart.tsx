@@ -194,11 +194,13 @@ export default function Chart() {
         const range = swingHigh - swingLow;
         if (range > 0) {
           const FIB_RATIOS = [
+            { ratio: 0, label: '0%' },
             { ratio: 0.236, label: '23.6%' },
             { ratio: 0.382, label: '38.2%' },
             { ratio: 0.5, label: '50%' },
             { ratio: 0.618, label: '61.8%' },
             { ratio: 0.786, label: '78.6%' },
+            { ratio: 1, label: '100%' },
           ];
           computedFibLevels = FIB_RATIOS.map(f => ({
             level: f.ratio,
