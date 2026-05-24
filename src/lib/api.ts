@@ -489,7 +489,7 @@ export interface PendingOrder {
   entry_zone_type: string;
   entry_zone_low: number;
   entry_zone_high: number;
-  status: "pending" | "filled" | "expired" | "cancelled";
+  status: "pending" | "awaiting_confirmation" | "filled" | "expired" | "cancelled";
   expiry_minutes: number;
   expires_at: string;
   fill_reason: string | null;
