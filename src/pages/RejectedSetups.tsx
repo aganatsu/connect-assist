@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
+import { formatPipDisplay, rawPipsToDisplay, getPipLabel } from "@/lib/pipDisplay";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -84,8 +85,8 @@ function computeStats(setups: RejectedSetup[]) {
   const winners = resolved.filter(s => s.outcome_status === "would_have_won");
   const losers = resolved.filter(s => s.outcome_status === "would_have_lost");
   const winnerBlockRate = resolved.length > 0 ? (winners.length / resolved.length) * 100 : 0;
-  const avgMfe = resolved.length > 0 ? resolved.reduce((sum, s) => sum + (s.mfe_pips || 0), 0) / resolved.length : 0;
-  const avgMae = resolved.length > 0 ? resolved.reduce((sum, s) => sum + (s.mae_pips || 0), 0) / resolved.length : 0;
+  const avgMfe = resolved.length > 0 ? resolved.reduce((sum, s) => sum + rawPipsToDisplay(s.mfe_pips || 0, s.symbol), 0) / resolved.length : 0;
+  const avgMae = resolved.length > 0 ? resolved.reduce((sum, s) => sum + rawPipsToDisplay(s.mae_pips || 0, s.symbol), 0) / resolved.length : 0;
   const avgScore = setups.length > 0 ? setups.reduce((sum, s) => sum + s.confluence_score, 0) / setups.length : 0;
   const entryReachedRate = resolved.length > 0
     ? (resolved.filter(s => s.price_reached_entry).length / resolved.length) * 100
@@ -237,14 +238,14 @@ export default function RejectedSetups() {
             <CardContent className="p-3">
               <p className="text-xs text-muted-foreground">Avg MFE</p>
               <p className="text-2xl font-bold text-profit">+{stats.avgMfe.toFixed(1)}</p>
-              <p className="text-[10px] text-muted-foreground">pips</p>
+              <p className="text-[10px] text-muted-foreground">(converted)</p>
             </CardContent>
           </Card>
           <Card className="border-border/50">
             <CardContent className="p-3">
               <p className="text-xs text-muted-foreground">Avg MAE</p>
               <p className="text-2xl font-bold text-loss">-{stats.avgMae.toFixed(1)}</p>
-              <p className="text-[10px] text-muted-foreground">pips</p>
+              <p className="text-[10px] text-muted-foreground">(converted)</p>
             </CardContent>
           </Card>
           <Card className="border-border/50">
@@ -453,8 +454,8 @@ export default function RejectedSetups() {
                         )}
                         {(s.mfe_pips !== null || s.mae_pips !== null) && (
                           <div className="flex gap-3 text-[10px]">
-                            {s.mfe_pips !== null && <span className="text-profit">MFE: +{s.mfe_pips.toFixed(1)}</span>}
-                            {s.mae_pips !== null && <span className="text-loss">MAE: -{s.mae_pips.toFixed(1)}</span>}
+                            {s.mfe_pips !== null && <span className="text-profit">MFE: {formatPipDisplay(s.mfe_pips, s.symbol)}</span>}
+                            {s.mae_pips !== null && <span className="text-loss">MAE: {formatPipDisplay(-s.mae_pips, s.symbol)}</span>}
                           </div>
                         )}
                       </div>
@@ -501,8 +502,8 @@ export default function RejectedSetups() {
                               </div>
                             </td>
                             <td className="px-3 py-2 font-mono">{s.rr_ratio ? s.rr_ratio.toFixed(1) : "—"}</td>
-                            <td className="px-3 py-2 font-mono text-profit">{s.mfe_pips !== null ? `+${s.mfe_pips.toFixed(1)}` : "—"}</td>
-                            <td className="px-3 py-2 font-mono text-loss">{s.mae_pips !== null ? `-${s.mae_pips.toFixed(1)}` : "—"}</td>
+                            <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
+                            <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
                             <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
                           </tr>
                         ))}
