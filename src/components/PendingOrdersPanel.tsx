@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { scannerApi, PendingOrder } from "@/lib/api";
 import { generatePendingOrderNarrative } from "@/lib/narrative";
+import { getPipSize, formatPipDisplay } from "@/lib/pipDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, X, TrendingUp, TrendingDown, Target, ChevronDown, ChevronUp, AlertTriangle, Eye, Crosshair } from "lucide-react";
@@ -72,19 +73,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     return Math.min(100, Math.max(0, (elapsed / total) * 100));
   };
 
-  const getDistancePips = (order: PendingOrder): string => {
+  const getDistanceDisplay = (order: PendingOrder): string => {
     if (!order.current_price) return "—";
-    const specs: Record<string, number> = {
-      "EUR/USD": 0.0001, "GBP/USD": 0.0001, "AUD/USD": 0.0001, "NZD/USD": 0.0001,
-      "USD/CAD": 0.0001, "USD/CHF": 0.0001, "EUR/GBP": 0.0001, "EUR/JPY": 0.01,
-      "GBP/JPY": 0.01, "USD/JPY": 0.01, "AUD/JPY": 0.01, "NZD/JPY": 0.01,
-      "CHF/JPY": 0.01, "CAD/JPY": 0.01, "GBP/CAD": 0.0001, "EUR/AUD": 0.0001,
-      "EUR/CAD": 0.0001, "EUR/NZD": 0.0001, "GBP/AUD": 0.0001, "GBP/NZD": 0.0001,
-      "AUD/CAD": 0.0001, "AUD/NZD": 0.0001, "NZD/CAD": 0.0001, "XAU/USD": 0.01,
-    };
-    const pipSize = specs[order.symbol] || 0.0001;
-    const dist = Math.abs(Number(order.current_price) - Number(order.entry_price)) / pipSize;
-    return dist.toFixed(1);
+    const pipSize = getPipSize(order.symbol);
+    const rawPips = Math.abs(Number(order.current_price) - Number(order.entry_price)) / pipSize;
+    return formatPipDisplay(rawPips, order.symbol, { showSign: false });
   };
 
   const statusIcon = (status: string) => {
@@ -197,7 +190,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             <span>
               Current: <span className="text-foreground font-mono">{order.current_price ? Number(order.current_price).toFixed(5) : "—"}</span>
               {" · "}
-              <span className="text-info-c">{getDistancePips(order)} pips away</span>
+              <span className="text-info-c">{getDistanceDisplay(order)} away</span>
             </span>
             <span>
               SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
