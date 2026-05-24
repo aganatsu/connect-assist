@@ -11,6 +11,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
 import { formatPipDisplay, rawPipsToDisplay, getPipLabel } from "@/lib/pipDisplay";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getChartTheme } from "@/lib/chartTheme";
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, LineChart, Line, Area, AreaChart,
@@ -127,9 +130,24 @@ function computeDailyTrend(setups: RejectedSetup[]) {
   return Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
+// ── Gate label shortener (long messages → concise chart labels) ──
+function shortenGateLabel(gate: string): string {
+  if (gate.startsWith("Selling in discount zone")) return "P/D Zone Rejection";
+  if (gate.startsWith("Buying in premium zone")) return "P/D Zone Rejection";
+  if (gate.includes("SMT divergence opposite")) return "SMT Divergence";
+  if (gate.includes("threshold")) {
+    const match = gate.match(/Score ([\d.]+) < (\d+)/);
+    return match ? `Score < ${match[2]}` : "Below Threshold";
+  }
+  if (gate.length > 30) return gate.slice(0, 27) + "...";
+  return gate;
+}
+
 // ── Component ──
 export default function RejectedSetups() {
   const { user } = useAuth();
+  const { resolvedTheme } = useTheme();
+  const chartTheme = getChartTheme(resolvedTheme);
   const isMobile = useIsMobile();
   const [days, setDays] = useState(7);
   const [symbolFilter, setSymbolFilter] = useState<string>("all");
@@ -275,14 +293,27 @@ export default function RejectedSetups() {
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {outcomeDistribution.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={200}>
+                    <ChartContainer config={{ won: { label: "Won", color: "#22c55e" }, lost: { label: "Lost", color: "#ef4444" }, inconclusive: { label: "Inconclusive", color: "#6b7280" }, pending: { label: "Pending", color: "#f59e0b" } }} className="h-[200px] w-full">
                       <PieChart>
-                        <Pie data={outcomeDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, percent }) => `${name.split(" ").pop()} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={10}>
+                        <Pie
+                          data={outcomeDistribution}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={70}
+                          innerRadius={35}
+                          strokeWidth={2}
+                          stroke={chartTheme.tooltipBg}
+                          label={({ name, percent }) => `${name.split(" ").pop()} ${(percent * 100).toFixed(0)}%`}
+                          labelLine={false}
+                          fontSize={10}
+                        >
                           {outcomeDistribution.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                         </Pie>
-                        <Tooltip />
+                        <ChartTooltip content={<ChartTooltipContent hideIndicator />} />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </ChartContainer>
                   ) : (
                     <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                   )}
@@ -296,17 +327,17 @@ export default function RejectedSetups() {
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {dailyTrend.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={200}>
+                    <ChartContainer config={{ total: { label: "Total", color: "#6b7280" }, wouldWon: { label: "Would Won", color: "#22c55e" }, wouldLost: { label: "Would Lost", color: "#ef4444" } }} className="h-[200px] w-full">
                       <AreaChart data={dailyTrend}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                        <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
-                        <YAxis tick={{ fontSize: 10 }} />
-                        <Tooltip labelFormatter={(v) => `Date: ${v}`} />
-                        <Area type="monotone" dataKey="total" name="Total" stroke="#6b7280" fill="#6b728020" />
-                        <Area type="monotone" dataKey="wouldWon" name="Would Won" stroke="#22c55e" fill="#22c55e20" />
-                        <Area type="monotone" dataKey="wouldLost" name="Would Lost" stroke="#ef4444" fill="#ef444420" />
+                        <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.5} />
+                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: chartTheme.axis }} tickFormatter={(v) => v.slice(5)} axisLine={{ stroke: chartTheme.grid }} tickLine={false} />
+                        <YAxis tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={false} tickLine={false} />
+                        <ChartTooltip content={<ChartTooltipContent labelFormatter={(v) => `Date: ${v}`} />} />
+                        <Area type="monotone" dataKey="total" name="Total" stroke="#6b7280" fill="#6b728030" strokeWidth={1.5} />
+                        <Area type="monotone" dataKey="wouldWon" name="Would Won" stroke="#22c55e" fill="#22c55e20" strokeWidth={2} />
+                        <Area type="monotone" dataKey="wouldLost" name="Would Lost" stroke="#ef4444" fill="#ef444420" strokeWidth={2} />
                       </AreaChart>
-                    </ResponsiveContainer>
+                    </ChartContainer>
                   ) : (
                     <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                   )}
@@ -321,7 +352,7 @@ export default function RejectedSetups() {
               </CardHeader>
               <CardContent className="px-2 pb-3">
                 {setups.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={180}>
+                  <ChartContainer config={{ won: { label: "Would Have Won", color: "#22c55e" }, lost: { label: "Would Have Lost", color: "#ef4444" } }} className="h-[200px] w-full">
                     <BarChart data={(() => {
                       const buckets = [
                         { range: "30-40", won: 0, lost: 0 },
@@ -338,17 +369,17 @@ export default function RejectedSetups() {
                         if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
                       }
                       return buckets;
-                    })()}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis dataKey="range" tick={{ fontSize: 10 }} />
-                      <YAxis tick={{ fontSize: 10 }} />
-                      <Tooltip />
-                      <Bar dataKey="won" name="Would Have Won" fill="#22c55e" radius={[2, 2, 0, 0]} />
-                      <Bar dataKey="lost" name="Would Have Lost" fill="#ef4444" radius={[2, 2, 0, 0]} />
+                    })()} barGap={2}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.4} vertical={false} />
+                      <XAxis dataKey="range" tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={{ stroke: chartTheme.grid }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={false} tickLine={false} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Bar dataKey="won" name="Would Have Won" fill="#22c55e" radius={[3, 3, 0, 0]} />
+                      <Bar dataKey="lost" name="Would Have Lost" fill="#ef4444" radius={[3, 3, 0, 0]} />
                     </BarChart>
-                  </ResponsiveContainer>
+                  </ChartContainer>
                 ) : (
-                  <div className="h-[180px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
+                  <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">No data yet</div>
                 )}
               </CardContent>
             </Card>
@@ -358,32 +389,32 @@ export default function RejectedSetups() {
           <TabsContent value="gates" className="space-y-4 mt-3">
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-medium">Gate Effectiveness Breakdown</CardTitle>
-                <p className="text-xs text-muted-foreground">Which gates are blocking the most would-have-won setups?</p>
+                <CardTitle className="text-sm font-medium">Gate Effectiveness</CardTitle>
+                <p className="text-xs text-muted-foreground">Which gates block the most would-have-won setups? High % = gate may be too aggressive.</p>
               </CardHeader>
               <CardContent className="px-4 pb-3">
                 {gateBreakdown.length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {gateBreakdown.map((g) => (
-                      <div key={g.gate} className="flex items-center gap-3 py-1.5 border-b border-border/30 last:border-0">
+                      <div key={g.gate} className="flex items-center gap-3 py-2 border-b border-border/20 last:border-0">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">{g.gate}</p>
+                          <p className="text-xs font-medium truncate" title={g.gate}>{shortenGateLabel(g.gate)}</p>
                           <p className="text-[10px] text-muted-foreground">
-                            {g.total} blocked · {g.wouldWon} would have won · {g.wouldLost} would have lost
+                            {g.total} blocked · <span className="text-profit">{g.wouldWon} won</span> · <span className="text-loss">{g.wouldLost} lost</span>
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <div className="w-20 h-2 bg-muted rounded-full overflow-hidden">
+                          <div className="w-24 h-2.5 bg-muted/50 rounded-full overflow-hidden">
                             <div
-                              className="h-full rounded-full"
+                              className="h-full rounded-full transition-all"
                               style={{
                                 width: `${g.winRate}%`,
-                                backgroundColor: g.winRate > 50 ? "#f59e0b" : "#22c55e",
+                                backgroundColor: g.winRate > 50 ? "hsl(var(--warn))" : "hsl(var(--profit))",
                               }}
                             />
                           </div>
-                          <span className={`text-xs font-mono w-10 text-right ${g.winRate > 50 ? "text-amber-500" : "text-muted-foreground"}`}>
-                            {g.winRate.toFixed(0)}%
+                          <span className={`text-xs font-mono w-12 text-right ${g.winRate > 50 ? "text-warn" : "text-profit"}`}>
+                            {g.winRate.toFixed(0)}% WR
                           </span>
                         </div>
                       </div>
@@ -402,16 +433,16 @@ export default function RejectedSetups() {
                   <CardTitle className="text-sm font-medium">Gates by Block Count</CardTitle>
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
-                  <ResponsiveContainer width="100%" height={Math.max(150, gateBreakdown.length * 30)}>
-                    <BarChart data={gateBreakdown.slice(0, 10)} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis type="number" tick={{ fontSize: 10 }} />
-                      <YAxis dataKey="gate" type="category" tick={{ fontSize: 9 }} width={140} />
-                      <Tooltip />
+                  <ChartContainer config={{ wouldWon: { label: "Would Won", color: "#22c55e" }, wouldLost: { label: "Would Lost", color: "#ef4444" } }} className="w-full" style={{ height: `${Math.max(180, gateBreakdown.slice(0, 10).length * 40)}px` }}>
+                    <BarChart data={gateBreakdown.slice(0, 10).map(g => ({ ...g, gate: shortenGateLabel(g.gate) }))} layout="vertical" margin={{ left: 10, right: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} opacity={0.3} horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: chartTheme.axis }} axisLine={false} tickLine={false} />
+                      <YAxis dataKey="gate" type="category" tick={{ fontSize: 10, fill: chartTheme.axis }} width={120} axisLine={false} tickLine={false} />
+                      <ChartTooltip content={<ChartTooltipContent />} />
                       <Bar dataKey="wouldWon" name="Would Won" fill="#22c55e" stackId="a" radius={[0, 0, 0, 0]} />
-                      <Bar dataKey="wouldLost" name="Would Lost" fill="#ef4444" stackId="a" radius={[0, 2, 2, 0]} />
+                      <Bar dataKey="wouldLost" name="Would Lost" fill="#ef4444" stackId="a" radius={[0, 3, 3, 0]} />
                     </BarChart>
-                  </ResponsiveContainer>
+                  </ChartContainer>
                 </CardContent>
               </Card>
             )}
