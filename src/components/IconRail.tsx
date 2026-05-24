@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
   { title: "Brokers", url: "/brokers", icon: Server, shortcut: "8" },
   { title: "Trade Replay", url: "/trade-replay", icon: Play, shortcut: "0" },
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
+  { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
   { title: "Settings", url: "/settings", icon: Settings, shortcut: "9" },
 ];
 
