@@ -61,6 +61,8 @@ import {
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
+import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -2528,6 +2530,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     return { price: best.price, zoneType: best.zoneType, zoneLow: best.low, zoneHigh: best.high };
   }
 
+  // ── Thesis Validation: Load last game plan for pending order checks ──
+  // This runs BEFORE the game plan generation section (which is after management-only return).
+  // One lightweight DB query to get the most recent game plan for thesis validation.
+  let _lastGamePlanForValidation: SessionGamePlan | null = null;
+  if ((config as any).thesisValidationEnabled !== false) {
+    try {
+      const { data: recentGPLogs } = await supabase
+        .from("scan_logs")
+        .select("details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      const gpLog = (recentGPLogs || []).find((log: any) => log.details_json?.type === "game_plan");
+      if (gpLog?.details_json) {
+        const cached = gpLog.details_json;
+        _lastGamePlanForValidation = {
+          session: cached.session,
+          generatedAt: cached.generated_at,
+          plans: cached.plans || [],
+          focusPairs: cached.focus_pairs || [],
+          newsEvents: cached.newsEvents || [],
+          summary: cached.summary || "",
+        } as SessionGamePlan;
+      }
+    } catch (gpErr: any) {
+      // Fail-open: if game plan load fails, thesis validation still runs (just without GP check)
+      console.warn(`[scan ${scanCycleId}] Thesis validation: failed to load game plan: ${gpErr?.message}`);
+    }
+  }
+
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
   let pendingFilled = 0;
   let pendingExpired = 0;
@@ -2586,6 +2619,70 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           pendingCancelled++;
           console.log(`[pending] Cancelled ${pending.symbol} short — price ${currentPrice} above SL ${slLevel}`);
           continue;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ── THESIS VALIDATION: Re-check structural conditions ──
+        // Runs on every cycle (including management-only). Cancels pending
+        // orders whose original trade thesis has been invalidated.
+        // Fail-open: errors/missing data never cause cancellation.
+        // ═══════════════════════════════════════════════════════════════════
+        if ((config as any).thesisValidationEnabled !== false) {
+          try {
+            // Fetch D1/4H/1H candles for direction check (cached if full scan)
+            const [tvDaily, tvH4, tvH1] = await Promise.all([
+              cachedFetch(pending.symbol, "1d", "1y"),
+              cachedFetch(pending.symbol, "4h", "1mo"),
+              cachedFetch(pending.symbol, "1h", "5d"),
+            ]);
+            const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
+              {
+                order_id: pending.order_id,
+                symbol: pending.symbol,
+                direction: pending.direction as "long" | "short",
+                entry_price: pending.entry_price,
+                signal_reason: pending.signal_reason,
+              },
+              {
+                fotsiResult: _fotsiResult,
+                lastGamePlan: _lastGamePlanForValidation,
+                dailyCandles: tvDaily.length >= 20 ? tvDaily : null,
+                h4Candles: tvH4.length >= 20 ? tvH4 : null,
+                h1Candles: tvH1.length >= 20 ? tvH1 : null,
+              },
+            );
+            if (!thesisResult.valid) {
+              await supabase.from("pending_orders").update({
+                status: "cancelled",
+                cancel_reason: thesisResult.reason,
+                thesis_cancel_reason: thesisResult.cancelReason,
+                resolved_at: new Date().toISOString(),
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              pendingCancelled++;
+              console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
+              // Telegram notification for thesis cancellation
+              if (telegramChatIds.length > 0) {
+                const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
+                  `<b>Symbol:</b> ${pending.symbol}\n` +
+                  `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
+                  `<b>Check:</b> ${thesisResult.checkType}\n` +
+                  `<b>Reason:</b> ${thesisResult.reason}`;
+                await Promise.all(telegramChatIds.map(async (chatId: string) => {
+                  try {
+                    await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                      body: JSON.stringify({ chat_id: chatId, message: msg }),
+                    });
+                  } catch (e: any) { console.warn(`Telegram notify failed [${chatId}]:`, e?.message); }
+                }));
+              }
+              continue;
+            }
+          } catch (tvErr: any) {
+            // Fail-open: thesis validation error — keep order alive
+            console.warn(`[pending] Thesis validation error for ${pending.symbol}: ${tvErr?.message}`);
+          }
         }
 
         // ═══════════════════════════════════════════════════════════════════
@@ -5191,9 +5288,74 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         detail.status = "rejected";
         const failedGates = gates.filter(g => !g.passed);
         detail.rejectionReasons = failedGates.map(g => g.reason);
+        // ── Rejected Setup Logging: gate-blocked setup ──
+        try {
+          const _rsCurrencies = parsePairCurrencies(pair);
+          const _rsPairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+          await logRejectedSetup({
+            supabase,
+            userId,
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            rejectionType: "gate_blocked",
+            failedGates: failedGates.map(g => g.reason),
+            confluenceScore: effectiveScore,
+            tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
+            tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
+            entryPrice: analysis.lastPrice,
+            stopLoss: analysis.stopLoss,
+            takeProfit: analysis.takeProfit,
+            rrRatio: analysis.stopLoss && analysis.takeProfit
+              ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
+              : undefined,
+            sessionName: analysis.session?.name,
+            regime: (pairConfig as any)._gamePlanContext?.regime,
+            gpBias: _rsPairPlan?.bias,
+            gpBiasConfidence: _rsPairPlan?.biasConfidence,
+            fotsiBaseTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[0]] : undefined,
+            fotsiQuoteTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[1]] : undefined,
+            priceAtRejection: analysis.lastPrice,
+          });
+        } catch (rsErr: any) {
+          // Non-fatal: logging failure must never block the scanner
+          console.warn(`[rejected-setup] Logging error for ${pair}: ${rsErr?.message}`);
+        }
       }
     } else {
       if (analysis.score < adjustedMinConfluence) {
+        // ── Rejected Setup Logging: below-threshold with strong T1 ──
+        if (analysis.direction && shouldLogBelowThreshold(analysis.tieredScoring?.tier1Count ?? 0)) {
+          try {
+            const _rsCurrencies2 = parsePairCurrencies(pair);
+            const _rsPairPlan2 = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
+            await logRejectedSetup({
+              supabase,
+              userId,
+              symbol: pair,
+              direction: analysis.direction as "long" | "short",
+              rejectionType: "below_threshold_strong_t1",
+              failedGates: [],
+              confluenceScore: effectiveScore,
+              tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
+              tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
+              entryPrice: analysis.lastPrice,
+              stopLoss: analysis.stopLoss,
+              takeProfit: analysis.takeProfit,
+              rrRatio: analysis.stopLoss && analysis.takeProfit
+                ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
+                : undefined,
+              sessionName: analysis.session?.name,
+              regime: (pairConfig as any)._gamePlanContext?.regime,
+              gpBias: _rsPairPlan2?.bias,
+              gpBiasConfidence: _rsPairPlan2?.biasConfidence,
+              fotsiBaseTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[0]] : undefined,
+              fotsiQuoteTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[1]] : undefined,
+              priceAtRejection: analysis.lastPrice,
+            });
+          } catch (rsErr: any) {
+            console.warn(`[rejected-setup] Below-threshold logging error for ${pair}: ${rsErr?.message}`);
+          }
+        }
         // ── Setup Staging: Stage below-threshold setups that have potential ──
         if (stagingEnabled && analysis.direction && !isPaused
             && analysis.score >= watchThreshold
