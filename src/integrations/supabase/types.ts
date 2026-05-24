@@ -584,6 +584,7 @@ export type Database = {
           stop_loss: number
           symbol: string
           take_profit: number
+          thesis_cancel_reason: string | null
           updated_at: string
           user_id: string
           zone_touch_time: string | null
@@ -621,6 +622,7 @@ export type Database = {
           stop_loss: number
           symbol: string
           take_profit: number
+          thesis_cancel_reason?: string | null
           updated_at?: string
           user_id: string
           zone_touch_time?: string | null
@@ -658,6 +660,7 @@ export type Database = {
           stop_loss?: number
           symbol?: string
           take_profit?: number
+          thesis_cancel_reason?: string | null
           updated_at?: string
           user_id?: string
           zone_touch_time?: string | null
@@ -850,6 +853,111 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      rejected_setups: {
+        Row: {
+          bot_id: string
+          confluence_score: number
+          created_at: string
+          direction: string
+          entry_price: number
+          failed_gates: string[] | null
+          fotsi_base_tsi: number | null
+          fotsi_quote_tsi: number | null
+          gp_bias: string | null
+          gp_bias_confidence: number | null
+          id: string
+          mae_pips: number | null
+          mfe_pips: number | null
+          outcome_checked_at: string | null
+          outcome_status: string
+          price_at_rejection: number | null
+          price_reached_entry: boolean | null
+          raw_detail: Json | null
+          regime: string | null
+          rejected_at: string
+          rejection_type: string
+          rr_ratio: number | null
+          session_name: string | null
+          sl_hit: boolean | null
+          stop_loss: number | null
+          symbol: string
+          take_profit: number | null
+          tier1_count: number
+          tier1_factors: string[] | null
+          tp_hit: boolean | null
+          tp_hit_time_minutes: number | null
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          confluence_score: number
+          created_at?: string
+          direction: string
+          entry_price: number
+          failed_gates?: string[] | null
+          fotsi_base_tsi?: number | null
+          fotsi_quote_tsi?: number | null
+          gp_bias?: string | null
+          gp_bias_confidence?: number | null
+          id?: string
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_at_rejection?: number | null
+          price_reached_entry?: boolean | null
+          raw_detail?: Json | null
+          regime?: string | null
+          rejected_at?: string
+          rejection_type: string
+          rr_ratio?: number | null
+          session_name?: string | null
+          sl_hit?: boolean | null
+          stop_loss?: number | null
+          symbol: string
+          take_profit?: number | null
+          tier1_count?: number
+          tier1_factors?: string[] | null
+          tp_hit?: boolean | null
+          tp_hit_time_minutes?: number | null
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          confluence_score?: number
+          created_at?: string
+          direction?: string
+          entry_price?: number
+          failed_gates?: string[] | null
+          fotsi_base_tsi?: number | null
+          fotsi_quote_tsi?: number | null
+          gp_bias?: string | null
+          gp_bias_confidence?: number | null
+          id?: string
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_at_rejection?: number | null
+          price_reached_entry?: boolean | null
+          raw_detail?: Json | null
+          regime?: string | null
+          rejected_at?: string
+          rejection_type?: string
+          rr_ratio?: number | null
+          session_name?: string | null
+          sl_hit?: boolean | null
+          stop_loss?: number | null
+          symbol?: string
+          take_profit?: number | null
+          tier1_count?: number
+          tier1_factors?: string[] | null
+          tp_hit?: boolean | null
+          tp_hit_time_minutes?: number | null
+          user_id?: string
+        }
+        Relationships: []
       }
       scan_history: {
         Row: {
