@@ -30,6 +30,8 @@
  *   commissionPerLot?: number,
  *   walkForwardFolds?: number,
  *   researchMode?: boolean,      // enable counterfactual tracking + rich analytics
+ *   maxTradesStored?: number,     // max trades in DB result (default 500)
+ *   maxBlockedStored?: number,    // max blocked trades in research analytics (default 200)
  * }
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
@@ -1207,7 +1209,7 @@ function computeResearchAnalytics(
     regimeBreakdown,
     sessionBreakdown,
     thresholdCurve,
-    blockedTrades: blockedTrades.slice(0, 200), // Cap for response size
+    blockedTrades,
     counterfactualStats,
   };
 }
@@ -1315,6 +1317,8 @@ async function runBacktestJob(runId: string, body: any) {
       commissionPerLot = 0,
       walkForwardFolds = 0,
       researchMode = false,
+      maxTradesStored = 500,
+      maxBlockedStored = 200,
     } = body;
 
     const config = mapConfig(rawConfig || {});
@@ -2039,7 +2043,7 @@ async function runBacktestJob(runId: string, body: any) {
     await updateProgress(95, "Saving results...");
     const result = {
       stats,
-      trades: allTrades.slice(0, 500), // Cap for DB storage
+      trades: allTrades.slice(0, maxTradesStored),
       equityCurve,
       diagnostics,
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
@@ -2050,7 +2054,7 @@ async function runBacktestJob(runId: string, body: any) {
         sessionBreakdown: researchAnalytics.sessionBreakdown,
         thresholdCurve: researchAnalytics.thresholdCurve,
         blockedTradeCount: blockedTrades.length,
-        blockedTrades: researchAnalytics.blockedTrades.slice(0, 100),
+        blockedTrades: researchAnalytics.blockedTrades.slice(0, maxBlockedStored),
         counterfactualStats: researchAnalytics.counterfactualStats,
       } : null,
     };
