@@ -123,6 +123,10 @@ function simulateOutcome(
     }
   }
 
+  // Assign MFE/MAE in raw price units (caller converts to pips)
+  result.mfe_pips = maxFavorable;
+  result.mae_pips = maxAdverse;
+
   // Determine final outcome
   if (!result.price_reached_entry) {
     result.outcome_status = "inconclusive";
