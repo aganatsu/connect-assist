@@ -1,33 +1,39 @@
 /**
- * backtest-engine — Supabase Edge Function
+ * backtest-engine — Supabase Edge Function (v2 — Full Bot-Scanner Parity + Research Mode)
  * ──────────────────────────────────────────────────────────────────────
  * Faithful backtester that replicates the bot-scanner + paper-trading
- * pipeline on historical data. Uses the SAME shared SMC analysis and
- * FOTSI modules — zero re-implementation.
+ * pipeline on historical data. Uses the SAME shared SMC analysis,
+ * direction engine, impulse zone engine, and FOTSI modules.
+ *
+ * v2 additions:
+ *   - All 22 gates (matching bot-scanner exactly)
+ *   - Direction engine integration (Daily→4H→1H top-down)
+ *   - Impulse zone engine with HTF confluence data + Tier 1/2 credits
+ *   - effectiveScore = score + fotsiPenalty + impulseZonePenalty
+ *   - Bidirectional conflict counter
+ *   - H1/H4 candle fetching per instrument
+ *   - HTF POI detection (FVGs, OBs, Breakers on D/4H/1H)
+ *   - HTF Fib/PD/Liquidity on D/4H/1H
+ *   - Research mode: counterfactual tracking for blocked trades
+ *   - Rich analytics: gate effectiveness, factor edge, regime/session breakdown, threshold curves
  *
  * Endpoint: POST /functions/v1/backtest-engine
  * Body: {
- *   instruments: string[],       // e.g. ["EUR/USD","GBP/USD"]
+ *   instruments: string[],
  *   startDate: string,           // ISO date "2025-01-01"
  *   endDate: string,             // ISO date "2026-04-01"
- *   startingBalance: number,     // e.g. 10000
+ *   startingBalance: number,
  *   config: { ... },             // same shape as bot_configs.config_json
- *   tradingStyle?: string,       // "scalper" | "day_trader" | "swing_trader"
- *   slippagePips?: number,       // simulated slippage on SL fills (default 0.5)
- *   spreadPips?: number,         // simulated spread cost per entry (default 1.0)
- *   commissionPerLot?: number,    // round-trip commission per standard lot (default 0)
- *   walkForwardFolds?: number,     // number of time folds for walk-forward validation (0=disabled, 2-20)
- * }
- *
- * Returns: {
- *   trades: BacktestTrade[],
- *   equityCurve: { date: string; equity: number }[],
- *   stats: BacktestStats,
- *   factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }>,
- *   gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }>,
+ *   tradingStyle?: string,
+ *   slippagePips?: number,
+ *   spreadPips?: number,
+ *   commissionPerLot?: number,
+ *   walkForwardFolds?: number,
+ *   researchMode?: boolean,      // enable counterfactual tracking + rich analytics
+ *   maxTradesStored?: number,     // max trades in DB result (default 500)
+ *   maxBlockedStored?: number,    // max blocked trades in research analytics (default 200)
  * }
  */
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import {
   type Candle,
@@ -66,6 +72,8 @@ import {
   detectOptimalStyle,
   computeOpeningRange,
   classifyInstrumentRegime as sharedClassifyRegime,
+  detectZigZagPivots,
+  computeFibLevels,
 } from "../_shared/smcAnalysis.ts";
 import {
   runConfluenceAnalysis,
@@ -77,18 +85,21 @@ import {
   detectSession,
   normalizeSessionFilter,
   isSessionEnabled,
+  toNYTime,
   type SessionResult,
 } from "../_shared/sessions.ts";
-
+// @ts-ignore — Deno Deploy runtime global
+declare const EdgeRuntime: { waitUntil(p: Promise<any>): void } | undefined;
 import {
   type FOTSIResult,
   computeFOTSI,
   getCurrencyAlignment,
   checkOverboughtOversoldVeto,
 } from "../_shared/fotsi.ts";
-
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
+import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -96,17 +107,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// ─── Local ReasoningFactor with group support ──────────────────────
-// Extends the shared ReasoningFactor with an optional group field for 9-group scoring.
-interface BacktestReasoningFactor {
-  name: string;
-  present: boolean;
-  weight: number;
-  detail: string;
-  group?: string;
-}
-
-// ─── Types ──────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────
 interface BacktestTrade {
   id: string;
   symbol: string;
@@ -121,8 +122,27 @@ interface BacktestTrade {
   commission: number;
   closeReason: string;
   confluenceScore: number;
+  effectiveScore: number;
   factors: { name: string; present: boolean; weight: number }[];
   gatesBlocked: string[];
+  regime?: string;
+  session?: string;
+}
+
+interface BlockedTrade {
+  symbol: string;
+  direction: "long" | "short";
+  time: string;
+  score: number;
+  effectiveScore: number;
+  blockedBy: string[];
+  factors: { name: string; present: boolean; weight: number }[];
+  wouldHaveWon: boolean | null;
+  mfe: number;
+  mae: number;
+  hypotheticalPnlPips: number;
+  regime?: string;
+  session?: string;
 }
 
 interface BacktestStats {
@@ -163,15 +183,17 @@ interface OpenPosition {
   entryTime: string;
   entryBarIndex: number;
   confluenceScore: number;
+  effectiveScore: number;
   factors: { name: string; present: boolean; weight: number }[];
   exitFlags: any;
   partialTPFired: boolean;
   currentSL: number;
   structureInvalidationFired: boolean;
+  regime?: string;
+  session?: string;
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
-// Symbol mappings (duplicated from candleSource since they're not exported)
 const BT_TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "EUR/USD": "EUR/USD", "GBP/USD": "GBP/USD", "USD/JPY": "USD/JPY",
   "AUD/USD": "AUD/USD", "NZD/USD": "NZD/USD", "USD/CAD": "USD/CAD",
@@ -188,13 +210,11 @@ const BT_TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "XAU/USD": "XAU/USD", "XAG/USD": "XAG/USD", "US Oil": "WTI/USD",
   "BTC/USD": "BTC/USD", "ETH/USD": "ETH/USD",
 };
-
 const BT_TD_INTERVAL: Record<string, string> = {
   "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
   "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
 };
 
-// Fetch candles from TwelveData using date-range params (up to 5000 per request)
 async function fetchTwelveDataRange(
   symbol: string, interval: string, startDate: string, endDate: string,
 ): Promise<Candle[]> {
@@ -203,21 +223,17 @@ async function fetchTwelveDataRange(
   const tdSymbol = BT_TWELVE_DATA_SYMBOLS[symbol];
   if (!tdSymbol) return [];
   const tdInterval = BT_TD_INTERVAL[interval] || "15min";
-
-  // TwelveData supports start_date/end_date with outputsize up to 5000
   const allCandles: Candle[] = [];
   let currentStart = startDate;
   const maxPerRequest = 5000;
-
-  // Paginate: fetch chunks until we reach endDate
-  for (let page = 0; page < 20; page++) { // safety limit: 20 pages = 100k candles max
+  for (let page = 0; page < 20; page++) {
     const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&start_date=${encodeURIComponent(currentStart)}&end_date=${encodeURIComponent(endDate)}&outputsize=${maxPerRequest}&apikey=${apiKey}&order=ASC`;
     try {
       const res = await fetch(url);
       if (res.status === 429) {
         console.warn(`[backtest] TwelveData 429, waiting 10s...`);
         await new Promise(r => setTimeout(r, 10000));
-        continue; // retry same page
+        continue;
       }
       if (!res.ok) break;
       const data = await res.json();
@@ -238,11 +254,10 @@ async function fetchTwelveDataRange(
       if (chunk.length === 0) break;
       allCandles.push(...chunk);
       console.log(`[backtest] TwelveData page ${page + 1}: ${chunk.length} candles for ${symbol} ${interval} (total: ${allCandles.length})`);
-      if (chunk.length < maxPerRequest) break; // last page
-      // Move start to after last candle
+      if (chunk.length < maxPerRequest) break;
       const lastDt = chunk[chunk.length - 1].datetime;
-      currentStart = lastDt; // TwelveData handles overlap dedup
-      await new Promise(r => setTimeout(r, 1000)); // rate limit between pages
+      currentStart = lastDt;
+      await new Promise(r => setTimeout(r, 1000));
     } catch (e: any) {
       console.warn(`[backtest] TwelveData fetch error page ${page}: ${e?.message}`);
       break;
@@ -251,7 +266,6 @@ async function fetchTwelveDataRange(
   return allCandles;
 }
 
-// Polygon.io fallback with date range
 async function fetchPolygonRange(
   symbol: string, interval: string, startDate: string, endDate: string,
 ): Promise<Candle[]> {
@@ -260,21 +274,16 @@ async function fetchPolygonRange(
   const pgSym = SUPPORTED_SYMBOLS[symbol];
   if (!pgSym) return [];
   const timespanMap: Record<string, { multiplier: number; timespan: string }> = {
-    "1m": { multiplier: 1, timespan: "minute" },
-    "5m": { multiplier: 5, timespan: "minute" },
-    "15m": { multiplier: 15, timespan: "minute" },
-    "30m": { multiplier: 30, timespan: "minute" },
-    "1h": { multiplier: 1, timespan: "hour" },
-    "4h": { multiplier: 4, timespan: "hour" },
-    "1d": { multiplier: 1, timespan: "day" },
-    "1w": { multiplier: 1, timespan: "week" },
+    "1m": { multiplier: 1, timespan: "minute" }, "5m": { multiplier: 5, timespan: "minute" },
+    "15m": { multiplier: 15, timespan: "minute" }, "30m": { multiplier: 30, timespan: "minute" },
+    "1h": { multiplier: 1, timespan: "hour" }, "4h": { multiplier: 4, timespan: "hour" },
+    "1d": { multiplier: 1, timespan: "day" }, "1w": { multiplier: 1, timespan: "week" },
   };
   const ts = timespanMap[interval] || timespanMap["15m"];
   const url = `https://api.polygon.io/v2/aggs/ticker/${encodeURIComponent(pgSym)}/range/${ts.multiplier}/${ts.timespan}/${startDate}/${endDate}?adjusted=true&sort=asc&limit=50000&apiKey=${apiKey}`;
   try {
     const res = await fetch(url);
     if (res.status === 429) {
-      console.warn(`[backtest] Polygon 429 rate limited for ${symbol}, backing off 3s`);
       await new Promise(r => setTimeout(r, 3000));
       const retryRes = await fetch(url);
       if (!retryRes.ok) return [];
@@ -284,40 +293,25 @@ async function fetchPolygonRange(
         datetime: new Date(bar.t).toISOString(),
         open: Number(bar.o), high: Number(bar.h), low: Number(bar.l), close: Number(bar.c),
         volume: bar.v != null ? Number(bar.v) : undefined,
-      })).filter((c: Candle) =>
-        Number.isFinite(c.open) && Number.isFinite(c.high) &&
-        Number.isFinite(c.low) && Number.isFinite(c.close)
-      );
+      })).filter((c: Candle) => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
     }
-    if (!res.ok) {
-      console.warn(`[backtest] Polygon ${res.status} for ${symbol} ${interval}`);
-      return [];
-    }
+    if (!res.ok) return [];
     const data = await res.json();
-    if (data?.status === "ERROR" || !Array.isArray(data?.results)) {
-      if (data?.error) console.warn(`[backtest] Polygon: ${data.error}`);
-      return [];
-    }
+    if (!Array.isArray(data?.results)) return [];
     return data.results.map((bar: any) => ({
       datetime: new Date(bar.t).toISOString(),
       open: Number(bar.o), high: Number(bar.h), low: Number(bar.l), close: Number(bar.c),
       volume: bar.v != null ? Number(bar.v) : undefined,
-    })).filter((c: Candle) =>
-      Number.isFinite(c.open) && Number.isFinite(c.high) &&
-      Number.isFinite(c.low) && Number.isFinite(c.close)
-    );
+    })).filter((c: Candle) => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
   } catch (e: any) {
     console.warn(`[backtest] Polygon fetch error: ${e?.message}`);
     return [];
   }
 }
 
-// Main backtest candle fetcher: tries TwelveData date-range first, Polygon.io fallback
 async function fetchHistoricalCandles(
-  symbol: string, interval: string, range: string,
-  startDate?: string, endDate?: string,
+  symbol: string, interval: string, range: string, startDate?: string, endDate?: string,
 ): Promise<Candle[]> {
-  // Compute lookback buffer for analysis window
   const computeBufferedStart = (start: string) => {
     const startMs = new Date(start).getTime();
     const lookbackMs = interval === "1d" ? 60 * 24 * 3600 * 1000 :
@@ -326,49 +320,25 @@ async function fetchHistoricalCandles(
                        7 * 24 * 3600 * 1000;
     return new Date(startMs - lookbackMs).toISOString().slice(0, 10);
   };
-
   if (startDate && endDate) {
     const bufferedStart = computeBufferedStart(startDate);
-
-    // Try TwelveData first
     const tdCandles = await fetchTwelveDataRange(symbol, interval, bufferedStart, endDate);
-    if (tdCandles.length >= 30) {
-      console.log(`[backtest] ${symbol} ${interval}: ${tdCandles.length} candles from TwelveData (${bufferedStart} → ${endDate})`);
-      return tdCandles;
-    }
-
-    // Fallback: Polygon.io with date range
+    if (tdCandles.length >= 30) return tdCandles;
     const pgCandles = await fetchPolygonRange(symbol, interval, bufferedStart, endDate);
-    if (pgCandles.length >= 30) {
-      console.log(`[backtest] ${symbol} ${interval}: ${pgCandles.length} candles from Polygon (${bufferedStart} → ${endDate})`);
-      return pgCandles;
-    }
+    if (pgCandles.length >= 30) return pgCandles;
   } else {
-    // No date range — compute from range string
-    const rangeMs: Record<string, number> = {
-      "3mo": 90 * 86400000, "6mo": 180 * 86400000, "1y": 365 * 86400000, "2y": 730 * 86400000,
-    };
+    const rangeMs: Record<string, number> = { "3mo": 90 * 86400000, "6mo": 180 * 86400000, "1y": 365 * 86400000, "2y": 730 * 86400000 };
     const ms = rangeMs[range] || 90 * 86400000;
     const endD = new Date().toISOString().slice(0, 10);
     const startD = new Date(Date.now() - ms).toISOString().slice(0, 10);
     const bufferedStart = computeBufferedStart(startD);
-
     const pgCandles = await fetchPolygonRange(symbol, interval, bufferedStart, endD);
-    if (pgCandles.length >= 30) {
-      console.log(`[backtest] ${symbol} ${interval}: ${pgCandles.length} candles from Polygon (${bufferedStart} → ${endD})`);
-      return pgCandles;
-    }
+    if (pgCandles.length >= 30) return pgCandles;
   }
-
-  // Last resort: use the shared fetcher with a large limit
   try {
     const result = await fetchCandlesWithFallback({ symbol, interval, limit: 5000 });
-    console.log(`[backtest] ${symbol} ${interval}: ${result.candles.length} candles from shared fetcher (${result.source})`);
     return result.candles;
-  } catch (e: any) {
-    console.warn(`[backtest] All sources failed for ${symbol} ${interval}: ${e?.message}`);
-    return [];
-  }
+  } catch { return []; }
 }
 
 // ─── Config Mapping (mirrors loadConfig from bot-scanner) ───────────
@@ -383,15 +353,11 @@ function mapConfig(raw: any): any {
 
   return {
     ...DEFAULTS,
-    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
     minConfluence: (() => {
       const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence;
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
+      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) return raw_mc * 10;
       return raw_mc;
     })(),
-    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
     htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
     htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
     enableOB: strategy.useOrderBlocks ?? true,
@@ -411,6 +377,7 @@ function mapConfig(raw: any): any {
     riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
     positionSizingMethod: risk.positionSizingMethod ?? raw?.positionSizingMethod ?? "percent_risk",
     fixedLotSize: risk.fixedLotSize ?? raw?.fixedLotSize ?? 0.1,
+    atrVolatilityMultiplier: risk.atrVolatilityMultiplier ?? 1.5,
     maxDailyLoss: risk.maxDailyDrawdown ?? DEFAULTS.maxDailyLoss,
     maxOpenPositions: risk.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
     minRiskReward: risk.minRR ?? DEFAULTS.minRiskReward,
@@ -419,7 +386,6 @@ function mapConfig(raw: any): any {
     cooldownMinutes: entry.cooldownMinutes ?? 0,
     closeOnReverse: entry.closeOnReverse ?? false,
     slBufferPips: entry.slBufferPips ?? DEFAULTS.slBufferPips,
-    // Per-instrument SL buffer overrides (mirrors bot-scanner)
     instrumentBuffers: (raw?.instrumentBuffers || entry.instrumentBuffers || {}) as Record<string, { slBufferPips?: number }>,
     slMethod: exit.stopLossMethod ?? DEFAULTS.slMethod,
     fixedSLPips: exit.fixedSLPips ?? DEFAULTS.fixedSLPips,
@@ -438,13 +404,10 @@ function mapConfig(raw: any): any {
     partialTPPercent: exit.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? 1.0,
     maxHoldHours: exit.timeExitHours ?? 0,
-    // Session filter: use shared normalizeSessionFilter for consistent parsing + migration.
     enabledSessions: (
-      Array.isArray(sessions.filter)
-        ? normalizeSessionFilter(sessions.filter)
-        : Array.isArray(raw?.enabledSessions)
-          ? normalizeSessionFilter(raw.enabledSessions)
-          : [...DEFAULTS.enabledSessions]
+      Array.isArray(sessions.filter) ? normalizeSessionFilter(sessions.filter)
+        : Array.isArray(raw?.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions)
+        : [...DEFAULTS.enabledSessions]
     ),
     killZoneOnly: sessions.killZoneOnly ?? false,
     enabledDays: DEFAULTS.enabledDays,
@@ -456,40 +419,72 @@ function mapConfig(raw: any): any {
     factorWeights: raw?.factorWeights || {},
     spreadFilterEnabled: instruments.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
     maxSpreadPips: instruments.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
-    newsFilterEnabled: false, // Disabled in backtest — no live news feed
-    // --- P0: Factor toggles (mirror scanner loadConfig) ---
+    newsFilterEnabled: false, // Disabled in backtest
+    // Factor toggles
     useVolumeProfile: strategy.useVolumeProfile ?? raw?.useVolumeProfile ?? DEFAULTS.useVolumeProfile,
     useTrendDirection: strategy.useTrendDirection ?? raw?.useTrendDirection ?? DEFAULTS.useTrendDirection,
     useDailyBias: strategy.useDailyBias ?? raw?.useDailyBias ?? DEFAULTS.useDailyBias,
     useAMD: strategy.useAMD ?? raw?.useAMD ?? DEFAULTS.useAMD,
     useFOTSI: strategy.useFOTSI ?? raw?.useFOTSI ?? DEFAULTS.useFOTSI,
-    // --- P0: Regime scoring (mirror scanner loadConfig) ---
+    // Direction engine
+    useSimpleDirection: strategy.useSimpleDirection ?? raw?.useSimpleDirection ?? true,
+    simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw?.simpleDirectionH4ChochLookback ?? 10,
+    simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw?.simpleDirectionH1BosLookback ?? 8,
+    // Regime scoring
     regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw?.regimeScoringEnabled ?? DEFAULTS.regimeScoringEnabled,
     regimeScoringStrength: strategy.regimeScoringStrength ?? raw?.regimeScoringStrength ?? DEFAULTS.regimeScoringStrength,
-    // --- P1: Advanced tuning (mirror scanner loadConfig) ---
+    // Advanced tuning
     obLookbackCandles: strategy.obLookbackCandles ?? raw?.obLookbackCandles ?? DEFAULTS.obLookbackCandles,
     fvgMinSizePips: strategy.fvgMinSizePips ?? raw?.fvgMinSizePips ?? DEFAULTS.fvgMinSizePips,
     fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw?.fvgOnlyUnfilled ?? DEFAULTS.fvgOnlyUnfilled,
     structureLookback: strategy.structureLookback ?? raw?.structureLookback ?? DEFAULTS.structureLookback,
     liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw?.liquidityPoolMinTouches ?? DEFAULTS.liquidityPoolMinTouches,
+    equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw?.equalHighsLowsSensitivity ?? 3,
+    // Bidirectional conflict
+    conflictThresholdRaise: strategy.conflictThresholdRaise ?? raw?.conflictThresholdRaise ?? 4,
+    conflictBlockAt: strategy.conflictBlockAt ?? raw?.conflictBlockAt ?? 6,
+    // ATR filter
+    atrFilterEnabled: strategy.atrFilterEnabled ?? raw?.atrFilterEnabled ?? false,
+    atrFilterMin: strategy.atrFilterMin ?? raw?.atrFilterMin ?? 0,
+    atrFilterMax: strategy.atrFilterMax ?? raw?.atrFilterMax ?? 0,
+    // Impulse zone
+    impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw?.impulseZoneEnabled ?? true,
+    impulseZoneGateMode: strategy.impulseZoneGateMode ?? raw?.impulseZoneGateMode ?? "hard",
+    impulseZoneBonus: strategy.impulseZoneBonus ?? raw?.impulseZoneBonus ?? 1.0,
+    impulseZonePenalty: strategy.impulseZonePenalty ?? raw?.impulseZonePenalty ?? 2.0,
+    // Correlation filter
+    correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw?.correlationFilterEnabled ?? true,
+    maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw?.maxCorrelatedPositions ?? 2,
+    // SMT opposite veto
+    smtOppositeVeto: strategy.smtOppositeVeto ?? raw?.smtOppositeVeto ?? true,
+    // Internal state
     _currentSymbol: "",
     _smtResult: null as any,
   };
 }
 
-// ─── Confluence Analysis (mirrors runFullConfluenceAnalysis from bot-scanner) ─────
-// 20-factor, 9-group scoring engine with anti-double-count rules, Power of 3 combo,
-// and group caps. Accepts a timestamp so time-dependent factors (session, silver bullet,
-// macro, AMD) are evaluated at the candle's time, not "now".
-//
-// GROUP 1: Market Structure (cap 2.5)  — BOS/CHoCH + Trend (merged, 2.5)
-// GROUP 2: Daily Bias (cap 1.0)        — Daily Bias/HTF (1.0)
-// GROUP 3: Order Flow Zones (cap 3.0)  — OB (2.0) + FVG (2.0) + Breaker (1.0) + Unicorn (1.5)
-// GROUP 4: P/D & Fib (cap 2.5)        — P/D+Fib (2.0) + PD/PW Levels (1.0)
-// GROUP 5: Timing (cap 1.5)           — Kill Zone (1.0) + Silver Bullet (1.0) + Macro (0.5)
-// GROUP 6: Price Action (cap 2.5)     — Judas (0.5) + Reversal (1.5) + Sweep (1.0) + Displacement (1.0)
 
-// ─── Safety Gates (mirrors runSafetyGates — minus DB-dependent gates) ──
+// ─── Correlation Groups (for Gate 20) ───────────────────────────────
+const CORRELATION_GROUPS: Record<string, string[]> = {
+  "USD_MAJORS": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
+  "JPY_CROSSES": ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "CAD/JPY", "CHF/JPY", "NZD/JPY"],
+  "EUR_CROSSES": ["EUR/USD", "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/NZD"],
+  "GBP_CROSSES": ["GBP/USD", "GBP/JPY", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/NZD", "EUR/GBP"],
+  "AUD_NZD": ["AUD/USD", "NZD/USD", "AUD/NZD", "AUD/CAD", "AUD/JPY", "AUD/CHF"],
+  "CAD_CROSSES": ["USD/CAD", "EUR/CAD", "GBP/CAD", "AUD/CAD", "NZD/CAD", "CAD/JPY", "CAD/CHF"],
+  "INDICES": ["US30", "NAS100", "SPX500"],
+  "METALS": ["XAU/USD", "XAG/USD"],
+  "CRYPTO": ["BTC/USD", "ETH/USD"],
+};
+
+function getCorrelationGroup(symbol: string): string | null {
+  for (const [group, members] of Object.entries(CORRELATION_GROUPS)) {
+    if (members.includes(symbol)) return group;
+  }
+  return null;
+}
+
+// ─── Safety Gates (all 22 gates — mirrors bot-scanner runSafetyGates exactly) ──
 function runBacktestSafetyGates(
   symbol: string,
   direction: "long" | "short",
@@ -500,10 +495,13 @@ function runBacktestSafetyGates(
   dailyCandles: Candle[] | null,
   recentTrades: BacktestTrade[],
   currentCandleMs: number,
-  peakBalance?: number,
-  spreadPips = 0,
+  peakBalance: number,
+  spreadPips: number,
+  fotsiResult: FOTSIResult | null,
+  smtResult: any,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
 
   // Gate 1: Max open positions
   const openCount = openPositions.length;
@@ -519,32 +517,40 @@ function runBacktestSafetyGates(
     reason: `${symbol} positions: ${symbolCount}/${config.maxPerSymbol}`,
   });
 
-  // Gate 3: Duplicate direction
+  // Gate 3: Duplicate direction (no same-direction trade on same symbol)
   const hasSameDir = openPositions.some(p => p.symbol === symbol && p.direction === direction);
   gates.push({
     passed: !hasSameDir,
     reason: hasSameDir ? `Already ${direction} on ${symbol}` : "No duplicate direction",
   });
 
+  // Gate 3b: Bidirectional lock (no opposite-direction trade on same symbol unless closeOnReverse)
+  if (!config.closeOnReverse) {
+    const hasOpposite = openPositions.some(p => p.symbol === symbol && p.direction !== direction);
+    gates.push({
+      passed: !hasOpposite,
+      reason: hasOpposite ? `Already ${direction === "long" ? "short" : "long"} on ${symbol} (bidirectional lock)` : "No bidirectional conflict",
+    });
+  }
+
   // Gate 4: Min RR check (spread-adjusted)
   let rrOk = true;
   if (analysis.stopLoss && analysis.takeProfit) {
     const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
     const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
-    const effectiveSpread = spreadPips > 0 ? spreadPips : (pairSpec.typicalSpread ?? 1);
-    const spreadCostInPrice = effectiveSpread * pairSpec.pipSize;
+    const effectiveSpread = spreadPips > 0 ? spreadPips : (spec.typicalSpread ?? 1);
+    const spreadCostInPrice = effectiveSpread * spec.pipSize;
     const effectiveReward = Math.max(0, rawReward - spreadCostInPrice);
     const rawRR = risk > 0 ? rawReward / risk : 0;
     const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
     rrOk = effectiveRR >= config.minRiskReward;
-    gates.push({ passed: rrOk, reason: `RR: ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${pairSpec.typicalSpread}p) min: ${config.minRiskReward}` });
+    gates.push({ passed: rrOk, reason: `RR: ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${effectiveSpread.toFixed(1)}p) min: ${config.minRiskReward}` });
   } else {
     gates.push({ passed: false, reason: "No SL/TP calculated" });
   }
 
   // Gate 5: Max drawdown (circuit breaker)
-  if (peakBalance && peakBalance > 0 && config.maxDrawdown > 0) {
+  if (peakBalance > 0 && config.maxDrawdown > 0) {
     const currentDrawdownPct = ((peakBalance - balance) / peakBalance) * 100;
     gates.push({
       passed: currentDrawdownPct < config.maxDrawdown,
@@ -566,7 +572,8 @@ function runBacktestSafetyGates(
 
   // Gate 7: Portfolio heat
   const totalRisk = openPositions.reduce((s, p) => {
-    const risk = Math.abs(p.entryPrice - p.currentSL) * (SPECS[p.symbol]?.lotUnits || 100000) * p.size;
+    const pSpec = SPECS[p.symbol] || SPECS["EUR/USD"];
+    const risk = Math.abs(p.entryPrice - p.currentSL) * (pSpec.lotUnits || 100000) * p.size;
     return s + risk;
   }, 0);
   const heatPct = balance > 0 ? (totalRisk / balance) * 100 : 0;
@@ -601,15 +608,63 @@ function runBacktestSafetyGates(
     });
   }
 
-  // Gate 10: Kill zone only
-  if (config.killZoneOnly) {
+  // Gate 9b: ATR Volatility Filter
+  if (config.atrFilterEnabled && dailyCandles && dailyCandles.length >= 14) {
+    const atr14 = calculateATR(dailyCandles, 14);
+    const atrPips = atr14 / spec.pipSize;
+    const minOk = config.atrFilterMin <= 0 || atrPips >= config.atrFilterMin;
+    const maxOk = config.atrFilterMax <= 0 || atrPips <= config.atrFilterMax;
     gates.push({
-      passed: analysis.session.isKillZone,
-      reason: analysis.session.isKillZone ? "In kill zone" : "Not in kill zone (blocked)",
+      passed: minOk && maxOk,
+      reason: `ATR filter: ${atrPips.toFixed(1)} pips (min: ${config.atrFilterMin || "off"}, max: ${config.atrFilterMax || "off"})`,
     });
   }
 
-  // Gate 17: HTF Bias Alignment (migrated from old inline confluence gate)
+  // Gate 10: Kill zone only
+  if (config.killZoneOnly) {
+    gates.push({
+      passed: analysis.session?.isKillZone ?? false,
+      reason: analysis.session?.isKillZone ? "In kill zone" : "Not in kill zone (blocked)",
+    });
+  }
+
+  // Gate 11: Session filter
+  if (config.enabledSessions && config.enabledSessions.length > 0) {
+    const sessionName = analysis.session?.name || "";
+    const sessionEnabled = isSessionEnabled(sessionName, config.enabledSessions);
+    gates.push({
+      passed: sessionEnabled,
+      reason: sessionEnabled ? `Session OK: ${sessionName}` : `Session blocked: ${sessionName} not in [${config.enabledSessions.join(",")}]`,
+    });
+  }
+
+  // Gate 14: Spread filter
+  if (config.spreadFilterEnabled && spreadPips > 0 && config.maxSpreadPips > 0) {
+    gates.push({
+      passed: spreadPips <= config.maxSpreadPips,
+      reason: `Spread: ${spreadPips.toFixed(1)} pips (max: ${config.maxSpreadPips})`,
+    });
+  }
+
+  // Gate 15: Regime gate (from confluenceScoring)
+  if (config.regimeScoringEnabled && analysis.tieredScoring) {
+    const regimeGatePassed = analysis.tieredScoring.regimeGatePassed ?? true;
+    gates.push({
+      passed: regimeGatePassed,
+      reason: analysis.tieredScoring.regimeGateReason || (regimeGatePassed ? "Regime gate passed" : "Regime gate failed"),
+    });
+  }
+
+  // Gate 16: Tier 1 gate (from confluenceScoring)
+  if (analysis.tieredScoring) {
+    const tier1Passed = analysis.tieredScoring.tier1GatePassed ?? true;
+    gates.push({
+      passed: tier1Passed,
+      reason: analysis.tieredScoring.tier1GateReason || (tier1Passed ? "Tier 1 gate passed" : "Tier 1 gate failed"),
+    });
+  }
+
+  // Gate 17: HTF Bias Alignment
   if (config.htfBiasRequired && dailyCandles && dailyCandles.length >= 10) {
     const htfStructure = analyzeMarketStructure(dailyCandles);
     const htfTrend = htfStructure.trend;
@@ -633,6 +688,7 @@ function runBacktestSafetyGates(
   } else {
     gates.push({ passed: true, reason: "HTF check skipped" });
   }
+
   // Gate 18: Premium/Discount zone filter
   {
     const pdZone = analysis.pd?.currentZone || "equilibrium";
@@ -647,8 +703,8 @@ function runBacktestSafetyGates(
       gates.push({ passed: true, reason: `P/D zone OK (${pdZone}, ${pdPct.toFixed(1)}%)` });
     }
   }
+
   // Gate 19: FOTSI Overbought/Oversold Veto
-  const fotsiResult = (config as any)._fotsiResult as FOTSIResult | null;
   if (fotsiResult && config.useFOTSI) {
     const currencies = parsePairCurrencies(symbol);
     if (currencies) {
@@ -664,8 +720,46 @@ function runBacktestSafetyGates(
     }
   }
 
+  // Gate 20: Correlation filter
+  if (config.correlationFilterEnabled && config.maxCorrelatedPositions > 0) {
+    const group = getCorrelationGroup(symbol);
+    if (group) {
+      const groupMembers = CORRELATION_GROUPS[group] || [];
+      const correlatedOpen = openPositions.filter(p => groupMembers.includes(p.symbol) && p.direction === direction).length;
+      gates.push({
+        passed: correlatedOpen < config.maxCorrelatedPositions,
+        reason: `Correlation (${group}): ${correlatedOpen}/${config.maxCorrelatedPositions} same-dir open`,
+      });
+    } else {
+      gates.push({ passed: true, reason: "Correlation: no group" });
+    }
+  }
+
+  // Gate 21: Daily dollar loss limit
+  if (config.protectionMaxDailyLossDollar > 0) {
+    const todayLoss = Math.abs(Math.min(0, dailyPnl));
+    gates.push({
+      passed: todayLoss < config.protectionMaxDailyLossDollar,
+      reason: `Daily $ loss: $${todayLoss.toFixed(2)} (max: $${config.protectionMaxDailyLossDollar})`,
+    });
+  }
+
+  // Gate 22: SMT Opposite Veto
+  if (config.smtOppositeVeto && smtResult) {
+    const smtDir = smtResult.direction;
+    if (smtDir && smtDir !== direction) {
+      gates.push({
+        passed: false,
+        reason: `SMT opposes: divergence is ${smtDir} but entry is ${direction}`,
+      });
+    } else {
+      gates.push({ passed: true, reason: "SMT aligned or neutral" });
+    }
+  }
+
   return gates;
 }
+
 
 // ─── Exit Engine (improved: BE/trail before SL check, same-candle SL/TP disambiguation) ───
 function processExits(
@@ -675,7 +769,7 @@ function processExits(
   config: any,
   slippagePips: number,
   btRateMap: Record<string, number>,
-  commissionPerLot = 0,
+  commissionPerLot: number,
   allCandles?: Candle[],
 ): { closedTrades: BacktestTrade[]; updatedPositions: OpenPosition[] } {
   const closedTrades: BacktestTrade[] = [];
@@ -689,16 +783,14 @@ function processExits(
     const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
 
     // ── Step 1: Move SL up via Break Even (before checking SL hit) ──
-    // This mirrors live behavior: BE fires intra-candle before SL check
     if (pos.exitFlags.breakEven && pos.exitFlags.breakEvenPips > 0) {
-      // Use candle high/low to check if BE activation was reached at any point
       const bestPips = pos.direction === "long"
         ? (candle.high - pos.entryPrice) / spec.pipSize
         : (pos.entryPrice - candle.low) / spec.pipSize;
       if (bestPips >= pos.exitFlags.breakEvenPips) {
         const newSL = pos.direction === "long"
-          ? pos.entryPrice + 1 * spec.pipSize  // entry + 1 pip
-          : pos.entryPrice - 1 * spec.pipSize; // entry - 1 pip
+          ? pos.entryPrice + 1 * spec.pipSize
+          : pos.entryPrice - 1 * spec.pipSize;
         if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
           sl = newSL;
         }
@@ -715,7 +807,6 @@ function processExits(
         : pos.exitFlags.trailingStopPips * 2;
       if (bestPips >= activationPips) {
         const trailDist = pos.exitFlags.trailingStopPips * spec.pipSize;
-        // Trail from the best price the candle reached
         const bestPrice = pos.direction === "long" ? candle.high : candle.low;
         const newSL = pos.direction === "long"
           ? bestPrice - trailDist
@@ -727,8 +818,6 @@ function processExits(
     }
 
     // ── Step 2b: Structure Invalidation (mirrors live scannerManagement) ──
-    // ONE-SHOT: if trade is underwater (rMultiple < 0 but > -0.8) and structure
-    // has broken against the trade direction (CHoCH), tighten SL by 50%.
     if (config.structureInvalidationEnabled !== false && !pos.structureInvalidationFired && allCandles && barIndex >= 20) {
       const riskDist = Math.abs(pos.entryPrice - pos.stopLoss);
       const priceDiff = pos.direction === "long"
@@ -737,7 +826,6 @@ function processExits(
       const rMultiple = riskDist > 0 ? priceDiff / riskDist : 0;
 
       if (rMultiple < 0 && rMultiple > -0.8) {
-        // Use last 50 candles (or available) for structure analysis
         const lookbackStart = Math.max(0, barIndex - 50);
         const recentCandles = allCandles.slice(lookbackStart, barIndex + 1);
         if (recentCandles.length >= 20) {
@@ -750,7 +838,6 @@ function processExits(
             (pos.direction === "short" && c.type === "bullish")
           );
           if (structureAgainst && chochAgainst.length > 0) {
-            // Tighten SL 50% closer to current price (one-shot)
             const currentSLDistance = Math.abs(candle.close - sl);
             const tightenedDistance = currentSLDistance * 0.5;
             const newSL = pos.direction === "long"
@@ -771,19 +858,15 @@ function processExits(
     const tpHit = pos.direction === "long" ? candle.high >= tp : candle.low <= tp;
 
     if (slHit && tpHit) {
-      // Both SL and TP hit on same candle — disambiguate using proximity to open
-      // Whichever level is closer to the open price was likely hit first
       const slDist = Math.abs(candle.open - sl);
       const tpDist = Math.abs(candle.open - tp);
       if (slDist <= tpDist) {
-        // SL was closer to open → SL hit first
         closeReason = "sl_hit";
         const gapPrice = pos.direction === "long" ? Math.min(sl, candle.low) : Math.max(sl, candle.high);
         exitPrice = pos.direction === "long"
           ? gapPrice - slippagePips * spec.pipSize
           : gapPrice + slippagePips * spec.pipSize;
       } else {
-        // TP was closer to open → TP hit first
         closeReason = "tp_hit";
         exitPrice = tp;
       }
@@ -822,7 +905,6 @@ function processExits(
         const closeSize = pos.size * (pos.exitFlags.partialTPPercent / 100);
         const remainSize = pos.size - closeSize;
         const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol, btRateMap);
-        // Round-trip commission: lots × commissionPerLot × 2 (entry + exit)
         const partialComm = closeSize * commissionPerLot * 2;
         const pnl = rawPnl - partialComm;
         closedTrades.push({
@@ -839,8 +921,11 @@ function processExits(
           commission: partialComm,
           closeReason: "partial_tp",
           confluenceScore: pos.confluenceScore,
+          effectiveScore: pos.effectiveScore,
           factors: pos.factors,
           gatesBlocked: [],
+          regime: pos.regime,
+          session: pos.session,
         });
         pos.size = remainSize;
         pos.partialTPFired = true;
@@ -849,7 +934,6 @@ function processExits(
 
     if (closeReason) {
       const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, exitPrice, pos.size, pos.symbol, btRateMap);
-      // Round-trip commission: lots × commissionPerLot × 2 (entry + exit)
       const comm = pos.size * commissionPerLot * 2;
       const pnl = rawPnl - comm;
       closedTrades.push({
@@ -866,8 +950,11 @@ function processExits(
         commission: comm,
         closeReason,
         confluenceScore: pos.confluenceScore,
+        effectiveScore: pos.effectiveScore,
         factors: pos.factors,
         gatesBlocked: [],
+        regime: pos.regime,
+        session: pos.session,
       });
     } else {
       pos.currentSL = sl;
@@ -877,6 +964,7 @@ function processExits(
 
   return { closedTrades, updatedPositions: surviving };
 }
+
 
 // ─── Stats Calculation ──────────────────────────────────────────────
 function calculateStats(trades: BacktestTrade[], startingBalance: number, months: number): BacktestStats {
@@ -934,7 +1022,7 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
   const avgLossPips = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnlPips, 0) / losses.length) : 1;
   const avgRR = avgLossPips > 0 ? avgWinPips / avgLossPips : 0;
 
-  // Avg hold bars
+  // Avg hold hours
   const avgHoldBars = fullTrades.length > 0
     ? fullTrades.reduce((s, t) => {
         const entryMs = new Date(t.entryTime).getTime();
@@ -952,7 +1040,6 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
   const winRate = fullTrades.length > 0 ? (wins.length / fullTrades.length) * 100 : 0;
   const expectancy = fullTrades.length > 0 ? totalPnl / fullTrades.length : 0;
   const totalCommission = trades.reduce((s, t) => s + (t.commission || 0), 0);
-  const netPnl = totalPnl; // pnl already includes commission deduction
 
   return {
     totalTrades: fullTrades.length,
@@ -978,11 +1065,214 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
     consecutiveWins: maxConsWins,
     consecutiveLosses: maxConsLosses,
     totalCommission,
-    netPnl,
+    netPnl: totalPnl,
   };
 }
 
-// ─── Supabase Admin Client (for persisting results) ─────────────────
+// ─── Research Mode Analytics ────────────────────────────────────────
+interface ResearchAnalytics {
+  gateEffectiveness: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number; edgePreserved: number }>;
+  factorEdge: Record<string, { present: number; absent: number; winRateWhenPresent: number; winRateWhenAbsent: number; edge: number }>;
+  regimeBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number; profitFactor: number }>;
+  sessionBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number }>;
+  thresholdCurve: { threshold: number; trades: number; winRate: number; profitFactor: number; expectancy: number }[];
+  blockedTrades: BlockedTrade[];
+  counterfactualStats: BacktestStats | null;
+}
+
+function computeResearchAnalytics(
+  trades: BacktestTrade[],
+  blockedTrades: BlockedTrade[],
+  startingBalance: number,
+  months: number,
+): ResearchAnalytics {
+  // Gate effectiveness
+  const gateEffectiveness: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number; edgePreserved: number }> = {};
+  for (const bt of blockedTrades) {
+    for (const gate of bt.blockedBy) {
+      if (!gateEffectiveness[gate]) gateEffectiveness[gate] = { blocked: 0, wouldHaveWon: 0, wouldHaveLost: 0, edgePreserved: 0 };
+      gateEffectiveness[gate].blocked++;
+      if (bt.wouldHaveWon === true) gateEffectiveness[gate].wouldHaveWon++;
+      else if (bt.wouldHaveWon === false) gateEffectiveness[gate].wouldHaveLost++;
+    }
+  }
+  // edgePreserved = (wouldHaveLost - wouldHaveWon) / blocked
+  for (const g of Object.values(gateEffectiveness)) {
+    g.edgePreserved = g.blocked > 0 ? (g.wouldHaveLost - g.wouldHaveWon) / g.blocked : 0;
+  }
+
+  // Factor edge analysis
+  const factorEdge: Record<string, { present: number; absent: number; winRateWhenPresent: number; winRateWhenAbsent: number; edge: number }> = {};
+  const fullTrades = trades.filter(t => !t.id.includes("_partial"));
+  for (const t of fullTrades) {
+    for (const f of t.factors) {
+      if (!factorEdge[f.name]) factorEdge[f.name] = { present: 0, absent: 0, winRateWhenPresent: 0, winRateWhenAbsent: 0, edge: 0 };
+      if (f.present) {
+        factorEdge[f.name].present++;
+        if (t.pnl > 0) factorEdge[f.name].winRateWhenPresent++;
+      } else {
+        factorEdge[f.name].absent++;
+        if (t.pnl > 0) factorEdge[f.name].winRateWhenAbsent++;
+      }
+    }
+  }
+  for (const fe of Object.values(factorEdge)) {
+    const wrPresent = fe.present > 0 ? (fe.winRateWhenPresent / fe.present) * 100 : 0;
+    const wrAbsent = fe.absent > 0 ? (fe.winRateWhenAbsent / fe.absent) * 100 : 0;
+    fe.winRateWhenPresent = wrPresent;
+    fe.winRateWhenAbsent = wrAbsent;
+    fe.edge = wrPresent - wrAbsent;
+  }
+
+  // Regime breakdown
+  const regimeBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number; profitFactor: number }> = {};
+  for (const t of fullTrades) {
+    const regime = t.regime || "unknown";
+    if (!regimeBreakdown[regime]) regimeBreakdown[regime] = { trades: 0, winRate: 0, avgPnl: 0, profitFactor: 0 };
+    regimeBreakdown[regime].trades++;
+  }
+  for (const [regime, data] of Object.entries(regimeBreakdown)) {
+    const regTrades = fullTrades.filter(t => (t.regime || "unknown") === regime);
+    const regWins = regTrades.filter(t => t.pnl > 0);
+    data.winRate = regTrades.length > 0 ? (regWins.length / regTrades.length) * 100 : 0;
+    data.avgPnl = regTrades.length > 0 ? regTrades.reduce((s, t) => s + t.pnl, 0) / regTrades.length : 0;
+    const gp = regWins.reduce((s, t) => s + t.pnl, 0);
+    const gl = Math.abs(regTrades.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0));
+    data.profitFactor = gl > 0 ? gp / gl : gp > 0 ? Infinity : 0;
+  }
+
+  // Session breakdown
+  const sessionBreakdown: Record<string, { trades: number; winRate: number; avgPnl: number }> = {};
+  for (const t of fullTrades) {
+    const session = t.session || "unknown";
+    if (!sessionBreakdown[session]) sessionBreakdown[session] = { trades: 0, winRate: 0, avgPnl: 0 };
+    sessionBreakdown[session].trades++;
+  }
+  for (const [session, data] of Object.entries(sessionBreakdown)) {
+    const sesTrades = fullTrades.filter(t => (t.session || "unknown") === session);
+    const sesWins = sesTrades.filter(t => t.pnl > 0);
+    data.winRate = sesTrades.length > 0 ? (sesWins.length / sesTrades.length) * 100 : 0;
+    data.avgPnl = sesTrades.length > 0 ? sesTrades.reduce((s, t) => s + t.pnl, 0) / sesTrades.length : 0;
+  }
+
+  // Threshold curve (what-if analysis at different confluence thresholds)
+  const thresholdCurve: { threshold: number; trades: number; winRate: number; profitFactor: number; expectancy: number }[] = [];
+  for (let thresh = 20; thresh <= 90; thresh += 5) {
+    // Combine actual trades + blocked trades that would have passed at this threshold
+    const qualifiedActual = fullTrades.filter(t => t.effectiveScore >= thresh);
+    const qualifiedBlocked = blockedTrades.filter(bt => bt.effectiveScore >= thresh && bt.wouldHaveWon !== null);
+    const totalAtThresh = qualifiedActual.length + qualifiedBlocked.length;
+    const winsAtThresh = qualifiedActual.filter(t => t.pnl > 0).length + qualifiedBlocked.filter(bt => bt.wouldHaveWon).length;
+    const wr = totalAtThresh > 0 ? (winsAtThresh / totalAtThresh) * 100 : 0;
+    // Approximate PF from actual trades only
+    const gp = qualifiedActual.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+    const gl = Math.abs(qualifiedActual.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0));
+    const pf = gl > 0 ? gp / gl : gp > 0 ? Infinity : 0;
+    const exp = qualifiedActual.length > 0 ? qualifiedActual.reduce((s, t) => s + t.pnl, 0) / qualifiedActual.length : 0;
+    thresholdCurve.push({ threshold: thresh, trades: totalAtThresh, winRate: wr, profitFactor: pf, expectancy: exp });
+  }
+
+  // Counterfactual stats (what if ALL blocked trades had been taken)
+  let counterfactualStats: BacktestStats | null = null;
+  const counterfactualTrades: BacktestTrade[] = [...trades];
+  for (const bt of blockedTrades) {
+    if (bt.wouldHaveWon !== null) {
+      counterfactualTrades.push({
+        id: `cf_${bt.time}_${bt.symbol}`,
+        symbol: bt.symbol,
+        direction: bt.direction,
+        entryPrice: 0,
+        exitPrice: 0,
+        entryTime: bt.time,
+        exitTime: bt.time,
+        size: 0,
+        pnl: bt.hypotheticalPnlPips > 0 ? bt.hypotheticalPnlPips : -bt.hypotheticalPnlPips,
+        pnlPips: bt.hypotheticalPnlPips,
+        commission: 0,
+        closeReason: "counterfactual",
+        confluenceScore: bt.score,
+        effectiveScore: bt.effectiveScore,
+        factors: bt.factors,
+        gatesBlocked: bt.blockedBy,
+        regime: bt.regime,
+        session: bt.session,
+      });
+    }
+  }
+  if (counterfactualTrades.length > trades.length) {
+    counterfactualStats = calculateStats(counterfactualTrades, startingBalance, months);
+  }
+
+  return {
+    gateEffectiveness,
+    factorEdge,
+    regimeBreakdown,
+    sessionBreakdown,
+    thresholdCurve,
+    blockedTrades,
+    counterfactualStats,
+  };
+}
+
+// ─── Counterfactual MFE/MAE Tracker ─────────────────────────────────
+function computeCounterfactual(
+  symbol: string,
+  direction: "long" | "short",
+  entryPrice: number,
+  stopLoss: number,
+  takeProfit: number,
+  candles: Candle[],
+  startIdx: number,
+  maxBars: number,
+): { wouldHaveWon: boolean | null; mfe: number; mae: number; hypotheticalPnlPips: number } {
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  let mfe = 0; // Maximum Favorable Excursion (pips)
+  let mae = 0; // Maximum Adverse Excursion (pips)
+  const endIdx = Math.min(startIdx + maxBars, candles.length);
+
+  for (let i = startIdx; i < endIdx; i++) {
+    const c = candles[i];
+    const favorablePrice = direction === "long" ? c.high : c.low;
+    const adversePrice = direction === "long" ? c.low : c.high;
+    const favPips = direction === "long"
+      ? (favorablePrice - entryPrice) / spec.pipSize
+      : (entryPrice - favorablePrice) / spec.pipSize;
+    const advPips = direction === "long"
+      ? (entryPrice - adversePrice) / spec.pipSize
+      : (adversePrice - entryPrice) / spec.pipSize;
+    if (favPips > mfe) mfe = favPips;
+    if (advPips > mae) mae = advPips;
+
+    // Check if SL or TP would have been hit
+    const slHit = direction === "long" ? c.low <= stopLoss : c.high >= stopLoss;
+    const tpHit = direction === "long" ? c.high >= takeProfit : c.low <= takeProfit;
+    if (tpHit && !slHit) {
+      const tpPips = Math.abs(takeProfit - entryPrice) / spec.pipSize;
+      return { wouldHaveWon: true, mfe, mae, hypotheticalPnlPips: tpPips };
+    }
+    if (slHit && !tpHit) {
+      const slPips = Math.abs(entryPrice - stopLoss) / spec.pipSize;
+      return { wouldHaveWon: false, mfe, mae, hypotheticalPnlPips: -slPips };
+    }
+    if (slHit && tpHit) {
+      // Same-candle disambiguation
+      const slDist = Math.abs(c.open - stopLoss);
+      const tpDist = Math.abs(c.open - takeProfit);
+      if (slDist <= tpDist) {
+        const slPips = Math.abs(entryPrice - stopLoss) / spec.pipSize;
+        return { wouldHaveWon: false, mfe, mae, hypotheticalPnlPips: -slPips };
+      } else {
+        const tpPips = Math.abs(takeProfit - entryPrice) / spec.pipSize;
+        return { wouldHaveWon: true, mfe, mae, hypotheticalPnlPips: tpPips };
+      }
+    }
+  }
+  // Neither hit within maxBars
+  return { wouldHaveWon: null, mfe, mae, hypotheticalPnlPips: 0 };
+}
+
+
+// ─── Supabase Admin Client ─────────────────────────────────────────
 function getAdminClient() {
   const url = Deno.env.get("SUPABASE_URL")!;
   const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1026,6 +1316,9 @@ async function runBacktestJob(runId: string, body: any) {
       spreadPips = 0,
       commissionPerLot = 0,
       walkForwardFolds = 0,
+      researchMode = false,
+      maxTradesStored = 500,
+      maxBlockedStored = 200,
     } = body;
 
     const config = mapConfig(rawConfig || {});
@@ -1035,27 +1328,23 @@ async function runBacktestJob(runId: string, body: any) {
       config.minConfluence = userMinConf;
     }
 
-    console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}`);
+    console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}, research: ${researchMode}`);
 
     // ── Fetch Historical Data ──
     await updateProgress(10, `Fetching candles for ${instruments.length} instruments...`);
-    // Determine range based on date span
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
     const monthsSpan = Math.max(1, (endMs - startMs) / (30 * 24 * 3600 * 1000));
     const range = monthsSpan > 12 ? "2y" : monthsSpan > 6 ? "1y" : monthsSpan > 3 ? "6mo" : "3mo";
 
-    // Fetch entry TF and daily candles for each instrument
-    // Map entryTimeframe to TwelveData/Polygon interval format
-    // bot-config uses "15m", STYLE_OVERRIDES uses "15min", "5m", "1h"
     const tfMap: Record<string, string> = {
       "1m": "1m", "5m": "5m", "15m": "15m", "15min": "15m",
       "30m": "30m", "30min": "30m", "1h": "1h", "4h": "4h",
     };
     const entryInterval = tfMap[config.entryTimeframe] || "15m";
-    const candleData: Record<string, { entry: Candle[]; daily: Candle[]; smt?: Candle[] }> = {};
+    const candleData: Record<string, { entry: Candle[]; daily: Candle[]; h4: Candle[]; h1: Candle[]; smt?: Candle[] }> = {};
 
-    // Diagnostic counters (declared early because pre-loop also references them)
+    // Diagnostic counters
     const diagnostics = {
       totalCandlesFetched: 0,
       totalCandlesEvaluated: 0,
@@ -1070,14 +1359,13 @@ async function runBacktestJob(runId: string, body: any) {
       skippedNoSLTP: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
-      // ── Actionable advice fields ──
-      highestScoreSeen: 0,           // Best confluence score across ALL scored candles
-      enabledFactorCount: 0,         // How many factors are enabled in config
+      highestScoreSeen: 0,
+      enabledFactorCount: 0,
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
     };
 
-    // Compute enabledFactorCount from config toggles
+    // Compute enabledFactorCount
     const DIAG_TOGGLE_MAP: Record<string, string> = {
       marketStructure: "enableStructureBreak",
       orderBlock: "enableOB",
@@ -1102,26 +1390,26 @@ async function runBacktestJob(runId: string, body: any) {
 
     for (const symbol of instruments) {
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
-      const [entryCandles, dailyCandles] = await Promise.all([
+      const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
+        fetchHistoricalCandles(symbol, "4h", range, startDate, endDate),
+        fetchHistoricalCandles(symbol, "1h", range, startDate, endDate),
       ]);
-      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry candles, ${dailyCandles.length} daily candles`);
+      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H`);
       // Fetch SMT correlated pair
       const smtPair = SMT_PAIRS[symbol];
       let smtCandles: Candle[] | undefined;
       if (smtPair && SUPPORTED_SYMBOLS[smtPair] && config.useSMT) {
         smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, startDate, endDate);
       }
-      candleData[symbol] = { entry: entryCandles, daily: dailyCandles, smt: smtCandles };
-      // Rate limit
+      candleData[symbol] = { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, smt: smtCandles };
+      diagnostics.totalCandlesFetched += entryCandles.length + dailyCandles.length + h4Candles.length + h1Candles.length;
       await new Promise(r => setTimeout(r, 300));
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
     await updateProgress(30, "Building FOTSI currency strength timeline...");
-    // Avoids lookahead bias: each historical bar uses FOTSI computed from
-    // daily candles up to (and including) that date only.
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
     try {
@@ -1130,646 +1418,691 @@ async function runBacktestJob(runId: string, body: any) {
       for (let i = 0; i < fotsiPairs.length; i += 7) {
         const batch = fotsiPairs.slice(i, i + 7);
         const results = await Promise.all(
-          batch.map(p => fetchHistoricalCandles(p, "1d", "2y", startDate, endDate).catch(() => [] as Candle[]))
+          batch.map(p => fetchHistoricalCandles(p, "1d", "2y", startDate, endDate).catch(() => []))
         );
         for (let j = 0; j < batch.length; j++) {
-          if (results[j] && results[j].length >= 30) fotsiCandleMap[batch[j]] = results[j];
+          if (results[j].length > 0) fotsiCandleMap[batch[j]] = results[j];
         }
-        if (i + 7 < fotsiPairs.length) await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 500));
       }
-      if (Object.keys(fotsiCandleMap).length >= 20) {
-        // Collect every unique daily date across all pairs in backtest range
-        const allDates = new Set<string>();
-        for (const candles of Object.values(fotsiCandleMap)) {
-          for (const c of candles) {
-            const d = c.datetime.slice(0, 10);
-            if (d >= startDate && d <= endDate) allDates.add(d);
-          }
-        }
-        const sortedDates = [...allDates].sort();
-        for (const date of sortedDates) {
-          const snapshot: Record<string, Candle[]> = {};
-          for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
-            const upTo = candles.filter(c => c.datetime.slice(0, 10) <= date);
-            if (upTo.length >= 30) snapshot[pair] = upTo;
-          }
-          if (Object.keys(snapshot).length >= 20) {
-            try { fotsiTimeline.set(date, computeFOTSI(snapshot)); } catch {}
-          }
-        }
-        console.log(`[backtest] FOTSI timeline built: ${fotsiTimeline.size} daily snapshots from ${Object.keys(fotsiCandleMap).length}/28 pairs`);
+      // Build daily FOTSI snapshots
+      const allDates = new Set<string>();
+      for (const candles of Object.values(fotsiCandleMap)) {
+        for (const c of candles) allDates.add(c.datetime.slice(0, 10));
       }
+      const sortedDates = [...allDates].sort();
+      for (const date of sortedDates) {
+        // Build candle map up to this date (no lookahead)
+        const dailyMap: Record<string, Candle[]> = {};
+        for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
+          dailyMap[pair] = candles.filter(c => c.datetime.slice(0, 10) <= date);
+        }
+        try {
+          const result = computeFOTSI(dailyMap);
+          fotsiTimeline.set(date, result);
+        } catch { /* skip dates with insufficient data */ }
+      }
+      console.log(`[backtest] FOTSI timeline: ${fotsiTimeline.size} daily snapshots`);
     } catch (e: any) {
-      console.warn(`[backtest] FOTSI computation error: ${e?.message}`);
+      console.warn(`[backtest] FOTSI timeline build failed (non-fatal): ${e?.message}`);
     }
 
-    await updateProgress(50, "FOTSI timeline built. Building time-varying rate map...");
-    // ── Build time-varying btRateTimeline for cross-pair lot sizing & PnL conversion ──
-    // Instead of a single static snapshot, build a sorted array of daily rate snapshots
-    // so that each trade uses the exchange rate at its entry/exit date.
-    const RATE_PAIRS = ["USD/JPY", "GBP/USD", "AUD/USD", "NZD/USD", "USD/CAD", "USD/CHF"];
-
-    // Collect daily candles for each rate pair
-    const ratePairCandles: Record<string, Candle[]> = {};
-    for (const rp of RATE_PAIRS) {
-      const rpCandles = candleData[rp]?.daily || (fotsiCandleMap as any)?.[rp];
-      if (rpCandles && rpCandles.length > 0) ratePairCandles[rp] = rpCandles;
-    }
-    // Fetch any missing rate pairs
-    const missingRatePairs = RATE_PAIRS.filter(p => !ratePairCandles[p]);
-    if (missingRatePairs.length > 0) {
+    // ── Build BT Rate Map ──
+    const btRateMap: Record<string, number> = {};
+    for (const symbol of instruments) {
       try {
-        const fetched = await Promise.all(
-          missingRatePairs.map(p => fetchHistoricalCandles(p, "1d", "2y", startDate, endDate).catch(() => [] as Candle[]))
-        );
-        for (let i = 0; i < missingRatePairs.length; i++) {
-          if (fetched[i].length > 0) ratePairCandles[missingRatePairs[i]] = fetched[i];
-        }
-      } catch {}
+        const rate = await getQuoteToUSDRate(symbol);
+        btRateMap[symbol] = rate;
+      } catch { btRateMap[symbol] = 1; }
     }
 
-    // Build sorted timeline: array of { date, rates } sorted by date
-    const rateDates = new Set<string>();
-    for (const candles of Object.values(ratePairCandles)) {
-      for (const c of candles) rateDates.add(c.datetime.slice(0, 10));
-    }
-    const sortedRateDates = [...rateDates].sort();
-
-    // For each date, carry forward the last known rate for each pair
-    const btRateTimeline: { date: string; rates: Record<string, number> }[] = [];
-    const lastKnown: Record<string, number> = {};
-    for (const date of sortedRateDates) {
-      for (const [pair, candles] of Object.entries(ratePairCandles)) {
-        // Find the latest candle on or before this date
-        for (const c of candles) {
-          if (c.datetime.slice(0, 10) <= date) lastKnown[pair] = c.close;
-        }
-      }
-      btRateTimeline.push({ date, rates: { ...lastKnown } });
-    }
-
-    // Fallback static map (last snapshot) for positions that fall outside the timeline
-    const btRateMap: Record<string, number> = btRateTimeline.length > 0
-      ? { ...btRateTimeline[btRateTimeline.length - 1].rates }
-      : {};
-
-    // Lookup function: binary search for the closest date <= target
-    function getRateMapForDate(dateStr: string): Record<string, number> {
-      if (btRateTimeline.length === 0) return btRateMap;
-      const target = dateStr.slice(0, 10);
-      let lo = 0, hi = btRateTimeline.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if (btRateTimeline[mid].date <= target) lo = mid;
-        else hi = mid - 1;
-      }
-      return btRateTimeline[lo].date <= target ? btRateTimeline[lo].rates : btRateMap;
-    }
-
-    console.log(`[backtest] rateTimeline: ${btRateTimeline.length} daily snapshots, ${Object.keys(btRateMap).length} pairs, fallback: ${JSON.stringify(btRateMap)}`);
-    // Legacy btRateMap is kept as the fallback for any code paths that don't pass a date
-
-    await updateProgress(55, "Running backtest simulation...");
-    // ── Sliding Window Backtest Loop ──
-    const allTrades: BacktestTrade[] = [];
-    let openPositions: OpenPosition[] = [];
+    // ── Main Scan Loop ──
+    await updateProgress(40, "Running scan loop...");
     let balance = startingBalance;
     let peakBalance = startingBalance;
-    const equityCurve: { date: string; equity: number }[] = [];
+    const openPositions: OpenPosition[] = [];
+    const allTrades: BacktestTrade[] = [];
+    const blockedTrades: BlockedTrade[] = [];
     let tradeCounter = 0;
 
-    // Factor & gate analytics
-    const factorBreakdown: Record<string, { appeared: number; wonWhen: number; lostWhen: number }> = {};
-    const gateBreakdown: Record<string, { blocked: number; wouldHaveWon: number; wouldHaveLost: number }> = {};
+    const symbolList = instruments.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
+    const totalBars = symbolList.reduce((s: number, sym: string) => s + candleData[sym].entry.length, 0);
+    let processedBars = 0;
+    let lastProgressUpdate = Date.now();
 
-    // Minimum lookback for SMC analysis
-    const LOOKBACK = 80;
-    // Step size: evaluate every N candles (simulate scan frequency)
-    // Dynamically set based on entry timeframe to match bot-scanner's scan interval
-    const entryTF = config.entryTimeframe || "15m";
-    const tfMinutes: Record<string, number> = { "1m": 1, "5m": 5, "15m": 15, "15min": 15, "30m": 30, "30min": 30, "1h": 60, "4h": 240, "1d": 1440 };
-    const candleMinutes = tfMinutes[entryTF] || 15;
-    const scanIntervalMinutes = config.scanIntervalMinutes || 15;
-    const STEP = Math.max(1, Math.round(scanIntervalMinutes / candleMinutes));
+    for (const symbol of symbolList) {
+      const { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, smt: smtCandles } = candleData[symbol];
+      if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; continue; }
 
-    for (const symbol of instruments) {
-      const data = candleData[symbol];
-      if (!data || data.entry.length < LOOKBACK) {
-        console.log(`[backtest] Skipping ${symbol}: insufficient data (${data?.entry.length || 0} candles)`);
-        diagnostics.skippedInsufficientData++;
-        continue;
-      }
+      const spec = SPECS[symbol] || SPECS["EUR/USD"];
+      const lookback = config.structureLookback || 100;
 
-      const entryCandles = data.entry;
-      const dailyCandles = data.daily;
-      const smtCandles = data.smt;
+      // Find the start index (first candle >= startDate)
+      const startIdx = entryCandles.findIndex(c => {
+        const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
+        return cMs >= startMs;
+      });
+      const effectiveStart = Math.max(startIdx, lookback);
 
-      // Filter to date range
-      const filteredStart = entryCandles.findIndex(c => c.datetime >= startDate);
-      const startIdx = Math.max(LOOKBACK, filteredStart >= 0 ? filteredStart : LOOKBACK);
-
-      for (let i = startIdx; i < entryCandles.length; i += STEP) {
+      for (let i = effectiveStart; i < entryCandles.length; i++) {
         const candle = entryCandles[i];
-        const candleTime = candle.datetime;
-
-        // Skip if outside date range
-        if (candleTime < startDate || candleTime > endDate) continue;
-        diagnostics.totalCandlesFetched++;
-
-        // ── Process exits on every candle for open positions on this symbol ──
-        const symbolPositions = openPositions.filter(p => p.symbol === symbol);
-        if (symbolPositions.length > 0) {
-          // Process exits on intermediate candles too
-          for (let j = Math.max(startIdx, i - STEP + 1); j <= i; j++) {
-            const exitCandle = entryCandles[j];
-            const { closedTrades, updatedPositions } = processExits(
-              openPositions.filter(p => p.symbol === symbol),
-              exitCandle, j, config, slippagePips, getRateMapForDate(exitCandle.datetime), commissionPerLot, entryCandles,
-            );
-            for (const trade of closedTrades) {
-              balance += trade.pnl;
-              if (balance > peakBalance) peakBalance = balance;
-              allTrades.push(trade);
-
-              // Track factor analytics
-              for (const f of trade.factors) {
-                if (!factorBreakdown[f.name]) factorBreakdown[f.name] = { appeared: 0, wonWhen: 0, lostWhen: 0 };
-                if (f.present) {
-                  factorBreakdown[f.name].appeared++;
-                  if (trade.pnl > 0) factorBreakdown[f.name].wonWhen++;
-                  else factorBreakdown[f.name].lostWhen++;
-                }
-              }
-
-              equityCurve.push({ date: trade.exitTime, equity: balance });
-            }
-            // Update open positions
-            openPositions = [
-              ...openPositions.filter(p => p.symbol !== symbol),
-              ...updatedPositions,
-            ];
-          }
-        }
-
-        // ── Entry Analysis (sliding window) ──
-        const window = entryCandles.slice(Math.max(0, i - LOOKBACK), i + 1);
-        if (window.length < 30) continue;
-
-        // Find daily candles up to this point
-        const dailyWindow = dailyCandles.filter(d => d.datetime <= candleTime);
-
-        // Timestamp for time-dependent factors
-        const candleMs = new Date(candleTime.endsWith("Z") ? candleTime : candleTime + "Z").getTime();
-
-        // Weekend gap detection — skip FX/index weekend candles (matches bot-scanner behavior)
-        const candleDate = new Date(candleMs);
-        const dow = candleDate.getUTCDay();
-        const isFX = SPECS[symbol]?.type !== "crypto";
-        if (isFX && (dow === 0 || dow === 6)) { diagnostics.skippedWeekend++; continue; }
-
-        // Session/day filter — uses shared sessions module
-        const session = detectSession(candleMs);
-        const assetProfile = getAssetProfile(symbol);
-        if (!assetProfile.skipSessionGate && !isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
-
-        // Day of week filter (user-configured active days)
-        if (!config.enabledDays.includes(dow) && isFX) { diagnostics.skippedDay++; continue; }
+        const candleMs = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z").getTime();
+        if (candleMs > endMs) break;
+        processedBars++;
         diagnostics.totalCandlesEvaluated++;
 
-        // Set per-instrument config
-        config._currentSymbol = symbol;
-        // SMT: align correlated-pair window to current candle time (no lookahead)
-        let smtAligned: Candle[] | null = null;
-        if (smtCandles && smtCandles.length >= 30) {
-          const smtUpToNow = smtCandles.filter(c => c.datetime <= candleTime);
-          if (smtUpToNow.length >= 30) {
-            smtAligned = smtUpToNow.slice(Math.max(0, smtUpToNow.length - window.length));
-          }
-        }
-        config._smtResult = smtAligned ? detectSMTDivergence(symbol, window, smtAligned) : null;
-        // FOTSI: look up snapshot for this candle's date (no lookahead)
-        const candleDateStr = candleTime.slice(0, 10);
-        let fotsiForBar: FOTSIResult | null = fotsiTimeline.get(candleDateStr) ?? null;
-        if (!fotsiForBar && fotsiTimeline.size > 0) {
-          // Fall back to most recent prior snapshot (weekend / missing day)
-          const priorDates = [...fotsiTimeline.keys()].filter(d => d <= candleDateStr).sort();
-          if (priorDates.length > 0) fotsiForBar = fotsiTimeline.get(priorDates[priorDates.length - 1]) ?? null;
-        }
-        (config as any)._fotsiResult = fotsiForBar;
-
-        const analysis = runConfluenceAnalysis(window, dailyWindow.length >= 10 ? dailyWindow : null, config, undefined, candleMs);
-
-        // ── Track score diagnostics (even for rejected candles) ──
-        if (analysis.direction) {
-          if (analysis.score > diagnostics.highestScoreSeen) diagnostics.highestScoreSeen = analysis.score;
-          if (analysis.score < 20) diagnostics.scoreDistribution.below20++;
-          else if (analysis.score < 40) diagnostics.scoreDistribution.below40++;
-          else if (analysis.score < 60) diagnostics.scoreDistribution.below60++;
-          else if (analysis.score < 80) diagnostics.scoreDistribution.below80++;
-          else diagnostics.scoreDistribution.above80++;
+        // Progress update (throttled)
+        if (Date.now() - lastProgressUpdate > 5000) {
+          const pct = Math.min(90, 40 + Math.round((processedBars / totalBars) * 50));
+          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length}...`);
+          lastProgressUpdate = Date.now();
         }
 
-        // Single percentage threshold gate (minFactorCount and minStrongFactors collapsed)
-        if (!analysis.direction) { diagnostics.skippedNoDirection++; continue; }
-        if (analysis.score < config.minConfluence) { diagnostics.skippedBelowThreshold++; continue; }
-        diagnostics.signalsGenerated++;
-
-        // ── Safety Gates ──
-        const gates = runBacktestSafetyGates(
-          symbol, analysis.direction, analysis, config,
-          balance, openPositions, dailyWindow.length >= 10 ? dailyWindow : null, allTrades, candleMs,
-          peakBalance, spreadPips,
-        );
-        const blockedGates = gates.filter(g => !g.passed);
-        const allPassed = blockedGates.length === 0;
-
-        // Track gate analytics
-        for (const g of blockedGates) {
-          const gName = g.reason.split(":")[0].trim();
-          if (!gateBreakdown[gName]) gateBreakdown[gName] = { blocked: 0, wouldHaveWon: 0, wouldHaveLost: 0 };
-          gateBreakdown[gName].blocked++;
-        }
-
-        if (!allPassed) { diagnostics.skippedGateBlocked++; continue; }
-        if (!analysis.stopLoss || !analysis.takeProfit) { diagnostics.skippedNoSLTP++; continue; }
-        diagnostics.tradesOpened++;
-
-        // ── Close on Reverse (apply spread cost to exit, mirrors entry) ──
-        if (config.closeOnReverse) {
-          const oppositeDir = analysis.direction === "long" ? "short" : "long";
-          const toClose = openPositions.filter(p => p.symbol === symbol && p.direction === oppositeDir);
-          for (const pos of toClose) {
-            const posSpec = SPECS[pos.symbol] || SPECS["EUR/USD"];
-            const reverseEffectiveSpread = spreadPips > 0 ? spreadPips : (posSpec.typicalSpread ?? 1);
-            const reverseSpread = reverseEffectiveSpread * posSpec.pipSize;
-            // Closing a long pays the bid (lower); closing a short pays the ask (higher)
-            const reverseExitPrice = pos.direction === "long"
-              ? analysis.lastPrice - reverseSpread / 2
-              : analysis.lastPrice + reverseSpread / 2;
-            const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, reverseExitPrice, pos.size, pos.symbol, getRateMapForDate(candleTime));
-            const revComm = pos.size * commissionPerLot * 2;
-            const pnl = rawPnl - revComm;
-            balance += pnl;
+        // ── Process exits first ──
+        const symbolPositions = openPositions.filter(p => p.symbol === symbol);
+        if (symbolPositions.length > 0) {
+          const { closedTrades, updatedPositions } = processExits(
+            symbolPositions, candle, i, config, slippagePips, btRateMap, commissionPerLot, entryCandles,
+          );
+          // Remove old positions for this symbol, add updated
+          const otherPositions = openPositions.filter(p => p.symbol !== symbol);
+          openPositions.length = 0;
+          openPositions.push(...otherPositions, ...updatedPositions);
+          for (const ct of closedTrades) {
+            allTrades.push(ct);
+            balance += ct.pnl;
             if (balance > peakBalance) peakBalance = balance;
-            allTrades.push({
-              id: pos.id,
-              symbol: pos.symbol,
-              direction: pos.direction,
-              entryPrice: pos.entryPrice,
-              exitPrice: reverseExitPrice,
-              entryTime: pos.entryTime,
-              exitTime: candleTime,
-              size: pos.size,
-              pnl,
-              pnlPips,
-              commission: revComm,
-              closeReason: "reverse_signal",
-              confluenceScore: pos.confluenceScore,
-              factors: pos.factors,
-              gatesBlocked: [],
-            });
-            equityCurve.push({ date: candleTime, equity: balance });
-          }
-          openPositions = openPositions.filter(p => !(p.symbol === symbol && p.direction === oppositeDir));
-        }
-
-        // ── Recalculate SL with asset-adjusted buffer (mirrors bot-scanner) ──
-        const spec = SPECS[symbol] || SPECS["EUR/USD"];
-        // Per-instrument SL buffer override: if set, use it directly (no multiplier).
-        const symbolBufferOverride = config.instrumentBuffers?.[symbol]?.slBufferPips;
-        const adjustedSlBuffer = symbolBufferOverride != null
-          ? symbolBufferOverride
-          : config.slBufferPips * assetProfile.slBufferMultiplier;
-        let sl = analysis.stopLoss;
-        let tp = analysis.takeProfit;
-
-        if (analysis.direction === "long") {
-          const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
-          if (swingLows.length > 0) {
-            sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
-            const risk = analysis.lastPrice - sl;
-            tp = analysis.lastPrice + risk * config.tpRatio;
-          }
-        } else {
-          const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
-          if (swingHighs.length > 0) {
-            sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
-            const risk = sl - analysis.lastPrice;
-            tp = analysis.lastPrice - risk * config.tpRatio;
           }
         }
 
-        // ── Spread cost simulation (per-instrument from SPECS, user override if > 0) ──
-        const effectiveSpreadPips = spreadPips > 0 ? spreadPips : (spec.typicalSpread ?? 1);
-        const spreadCost = effectiveSpreadPips * spec.pipSize;
-        const entryPrice = analysis.direction === "long"
-          ? analysis.lastPrice + spreadCost / 2
-          : analysis.lastPrice - spreadCost / 2;
+        // ── Skip weekends ──
+        const candleDow = new Date(candleMs).getUTCDay();
+        if (candleDow === 0 || candleDow === 6) { diagnostics.skippedWeekend++; continue; }
 
-        // ── Position Sizing ── (H1: supports percent_risk, fixed_lot, volatility_adjusted)
-        const size = calculatePositionSize(balance, config.riskPerTrade, entryPrice, sl, symbol, {
-          positionSizingMethod: config.positionSizingMethod,
-          fixedLotSize: config.fixedLotSize,
-          atrValue: (analysis as any).atrValue ?? calculateATR(entryCandles.slice(Math.max(0, entryCandles.length - 100)), config.slATRPeriod || 14),
-          atrVolatilityMultiplier: config.atrVolatilityMultiplier,
-        }, getRateMapForDate(candleTime));
+        // ── Session detection ──
+        const session: SessionResult = detectSession(candleMs);
+        if (config.enabledSessions && config.enabledSessions.length > 0) {
+          if (!isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
+        }
 
-        // ── Open Position ──
-        const posId = `bt_${++tradeCounter}`;
-        const exitFlags = {
-          trailingStop: config.trailingStopEnabled,
-          trailingStopPips: config.trailingStopPips,
-          trailingStopActivation: config.trailingStopActivation,
-          breakEven: config.breakEvenEnabled,
-          breakEvenPips: config.breakEvenPips,
-          partialTP: config.partialTPEnabled,
-          partialTPPercent: config.partialTPPercent,
-          partialTPLevel: config.partialTPLevel,
-          maxHoldHours: config.maxHoldHours,
-          tpRatio: config.tpRatio,
-        };
+        // ── Get relevant daily candles up to this date (no lookahead) ──
+        const candleDateStr = new Date(candleMs).toISOString().slice(0, 10);
+        const relevantDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
+        if (relevantDaily.length < 10) continue;
 
-        openPositions.push({
-          id: posId,
-          symbol,
-          direction: analysis.direction,
-          entryPrice,
-          stopLoss: sl,
-          takeProfit: tp,
-          size,
-          entryTime: candleTime,
-          entryBarIndex: i,
-          confluenceScore: analysis.score,
-          factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
-          exitFlags,
-          partialTPFired: false,
-          currentSL: sl,
-          structureInvalidationFired: false,
+        // ── Get relevant H4/H1 candles up to this candle time ──
+        const relevantH4 = h4Candles.filter(c => {
+          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
+          return cMs < candleMs;
         });
-      }
-    }
+        const relevantH1 = h1Candles.filter(c => {
+          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
+          return cMs < candleMs;
+        });
 
-    await updateProgress(85, `Closing remaining positions... (${allTrades.length} trades so far)`);
-    // ── Close any remaining open positions at last candle ──
-    for (const pos of openPositions) {
-      const data = candleData[pos.symbol];
-      if (!data || data.entry.length === 0) continue;
-      const lastCandle = data.entry[data.entry.length - 1];
-      const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, getRateMapForDate(lastCandle.datetime));
-      const endComm = pos.size * commissionPerLot * 2;
-      const pnl = rawPnl - endComm;
-      balance += pnl;
-      allTrades.push({
-        id: pos.id,
-        symbol: pos.symbol,
-        direction: pos.direction,
-        entryPrice: pos.entryPrice,
-        exitPrice: lastCandle.close,
-        entryTime: pos.entryTime,
-        exitTime: lastCandle.datetime,
-        size: pos.size,
-        pnl,
-        pnlPips,
-        commission: endComm,
-        closeReason: "backtest_end",
-        confluenceScore: pos.confluenceScore,
-        factors: pos.factors,
-        gatesBlocked: [],
-      });
-      equityCurve.push({ date: lastCandle.datetime, equity: balance });
-    }
+        // ── Direction Engine (top-down: Daily → 4H → 1H) ──
+        let directionResult: DirectionResult | null = null;
+        if (config.useSimpleDirection) {
+          try {
+            directionResult = determineDirection(
+              relevantDaily.length >= 20 ? relevantDaily : null,
+              relevantH4.length >= 20 ? relevantH4 : null,
+              relevantH1.length >= 20 ? relevantH1 : null,
+              {
+                h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
+                h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
+              },
+            );
+          } catch { directionResult = null; }
+        }
 
-    // ── Calculate Stats ──
-    const stats = calculateStats(allTrades, startingBalance, monthsSpan);
+        // ── Build analysis window ──
+        const windowStart = Math.max(0, i - lookback);
+        const analysisCandles = entryCandles.slice(windowStart, i + 1);
+        if (analysisCandles.length < 50) continue;
 
-    await updateProgress(90, "Calculating statistics...");
+        // ── HTF POI Detection (4H OBs, FVGs, Breakers) ──
+        let h4OBs: any[] = [];
+        let h4FVGs: any[] = [];
+        let h4Breakers: any[] = [];
+        let htfFibLevels4H: any = null;
+        let htfPD4H: any = null;
+        if (relevantH4.length >= 30) {
+          try {
+            const h4Structure = analyzeMarketStructure(relevantH4.slice(-60));
+            const h4StructureBreaks = [...h4Structure.bos, ...h4Structure.choch].map(b => ({ index: b.index, type: b.type }));
+            h4OBs = detectOrderBlocks(relevantH4.slice(-60), h4StructureBreaks);
+            h4FVGs = detectFVGs(relevantH4.slice(-60), h4StructureBreaks);
+            h4Breakers = detectBreakerBlocks(h4OBs, relevantH4.slice(-60), h4StructureBreaks);
+            const h4PivotResult = detectZigZagPivots(relevantH4.slice(-60));
+            if (h4PivotResult.lastTwo) {
+              htfFibLevels4H = computeFibLevels(h4PivotResult.lastTwo[0], h4PivotResult.lastTwo[1]);
+            }
+            htfPD4H = calculatePremiumDiscount(relevantH4.slice(-60));
+          } catch { /* non-fatal */ }
+        }
 
-    console.log(`[backtest:${runId}] Complete: ${allTrades.length} trades, PnL: $${stats.totalPnl.toFixed(2)}, WR: ${stats.winRate.toFixed(1)}%, PF: ${stats.profitFactor.toFixed(2)}, MaxDD: ${stats.maxDrawdownPct.toFixed(1)}%`);
-    console.log(`[backtest:${runId}] Diagnostics: ${JSON.stringify(diagnostics)}`);
+        // ── Build config for confluenceScoring ──
+        const pairConfig = { ...config };
+        pairConfig._currentSymbol = symbol;
+        // Inject direction override
+        if (directionResult) {
+          if (directionResult.direction !== null) {
+            (pairConfig as any)._overrideDirection = directionResult.direction;
+          } else {
+            (pairConfig as any)._overrideDirection = null;
+          }
+        }
+        // Inject HTF data
+        (pairConfig as any)._htfPOIs = (h4OBs.length > 0 || h4FVGs.length > 0 || h4Breakers.length > 0)
+          ? { h4OBs, h4FVGs, h4Breakers } : null;
+        (pairConfig as any)._htfFibLevels = htfFibLevels4H;
+        (pairConfig as any)._htfPD = htfPD4H;
+        (pairConfig as any)._h4Candles = relevantH4.length >= 20 ? relevantH4.slice(-60) : null;
 
-    // Build data coverage metadata
-    const dataCoverage: Record<string, { entryCandles: number; dailyCandles: number; dateRange: string }> = {};
-    for (const symbol of instruments) {
-      const data = candleData[symbol];
-      if (data) {
-        const firstDate = data.entry[0]?.datetime?.slice(0, 10) || "?";
-        const lastDate = data.entry[data.entry.length - 1]?.datetime?.slice(0, 10) || "?";
-        dataCoverage[symbol] = {
-          entryCandles: data.entry.length,
-          dailyCandles: data.daily.length,
-          dateRange: `${firstDate} to ${lastDate}`,
-        };
-      }
-    }
+        // Inject FOTSI for this date
+        const fotsiForDate = fotsiTimeline.get(candleDateStr) || null;
+        (pairConfig as any)._fotsiResult = fotsiForDate;
 
-    // ── Walk-Forward Validation ──
-    // Split trades into N equal-time folds and calculate per-fold stats
-    // to validate strategy consistency across different time periods.
-    let walkForward: any = null;
-    const numFolds = Math.max(0, Math.min(20, Math.floor(walkForwardFolds)));
-    if (numFolds >= 2 && allTrades.length >= numFolds * 2) {
-      const foldDurationMs = (endMs - startMs) / numFolds;
-      const folds: {
-        fold: number; startDate: string; endDate: string;
-        trades: number; wins: number; losses: number; winRate: number;
-        totalPnl: number; profitFactor: number; maxDrawdownPct: number;
-        sharpeRatio: number; avgRR: number;
-      }[] = [];
+        // SMT data
+        let smtResult: any = null;
+        if (smtCandles && config.useSMT) {
+          const smtSlice = smtCandles.filter(c => {
+            const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
+            return cMs <= candleMs;
+          }).slice(-lookback);
+          if (smtSlice.length >= 30) {
+            try {
+              smtResult = detectSMTDivergence(symbol, analysisCandles, smtSlice);
+              pairConfig._smtResult = smtResult;
+            } catch { /* non-fatal */ }
+          }
+        }
 
-      for (let f = 0; f < numFolds; f++) {
-        const foldStart = new Date(startMs + f * foldDurationMs).toISOString().slice(0, 10);
-        const foldEnd = new Date(startMs + (f + 1) * foldDurationMs).toISOString().slice(0, 10);
-        const foldTrades = allTrades.filter(t => t.exitTime.slice(0, 10) >= foldStart && t.exitTime.slice(0, 10) < foldEnd);
-
-        if (foldTrades.length === 0) {
-          folds.push({
-            fold: f + 1, startDate: foldStart, endDate: foldEnd,
-            trades: 0, wins: 0, losses: 0, winRate: 0,
-            totalPnl: 0, profitFactor: 0, maxDrawdownPct: 0,
-            sharpeRatio: 0, avgRR: 0,
-          });
+        // ── Run Confluence Analysis ──
+        let analysis: any;
+        try {
+          analysis = runConfluenceAnalysis(analysisCandles, pairConfig, relevantDaily);
+        } catch (e: any) {
           continue;
         }
 
-        const foldMonths = Math.max(1, foldDurationMs / (30 * 24 * 3600 * 1000));
-        const foldStats = calculateStats(foldTrades, startingBalance, foldMonths);
-        folds.push({
-          fold: f + 1, startDate: foldStart, endDate: foldEnd,
-          trades: foldStats.totalTrades,
-          wins: foldStats.wins,
-          losses: foldStats.losses,
-          winRate: foldStats.winRate,
-          totalPnl: foldStats.totalPnl,
-          profitFactor: foldStats.profitFactor,
-          maxDrawdownPct: foldStats.maxDrawdownPct,
-          sharpeRatio: foldStats.sharpeRatio,
-          avgRR: foldStats.avgRR,
-        });
+        if (!analysis || !analysis.direction) {
+          diagnostics.skippedNoDirection++;
+          continue;
+        }
+
+        // ── Impulse Zone Engine ──
+        let izData: any = null;
+        if (analysis.direction && relevantH1.length >= 20) {
+          try {
+            const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
+            const htfConfluenceData: HTFConfluenceData = {
+              h4OBs: h4OBs ?? [],
+              h4FVGs: h4FVGs ?? [],
+              h4Breakers: h4Breakers ?? [],
+              htfFibLevels: htfFibLevels4H ?? null,
+              htfPD: htfPD4H ?? null,
+              direction: zoneDirection as "bullish" | "bearish",
+            };
+            const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
+              relevantH1.slice(-120), relevantH4.slice(-60), analysisCandles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData,
+            );
+            izData = {
+              hasZone: !!zoneResult.bestZone,
+              selectedTF: zoneResult.selectedTF,
+              reason: zoneResult.reason,
+              impulse: zoneResult.bestZone?.impulse ? {
+                high: zoneResult.bestZone.impulse.high,
+                low: zoneResult.bestZone.impulse.low,
+                direction: zoneResult.bestZone.impulse.direction,
+              } : null,
+              bestZone: zoneResult.bestZone ? {
+                type: zoneResult.bestZone.zone.poi.type,
+                high: zoneResult.bestZone.zone.poi.high,
+                low: zoneResult.bestZone.zone.poi.low,
+                fibLevel: zoneResult.bestZone.zone.fibLevel,
+                fibDepth: zoneResult.bestZone.zone.fibDepth,
+                totalScore: zoneResult.bestZone.zone.totalScore,
+                srConfirmed: zoneResult.bestZone.zone.srConfirmed,
+                ltfRefined: zoneResult.bestZone.zone.ltfRefined,
+                htfConfluenceScore: zoneResult.bestZone.zone.htfConfluenceScore,
+                htfLayers: zoneResult.bestZone.zone.htfLayers,
+                priceAtZone: zoneResult.bestZone.priceAtZone,
+                distanceToZone: zoneResult.bestZone.distanceToZone,
+                refinedEntry: zoneResult.bestZone.zone.refinedEntry || null,
+              } : null,
+              allZonesCount: zoneResult.allZones.length,
+            };
+          } catch { /* non-fatal */ }
+        }
+
+        // ── Impulse Zone Gate + Credits (mirrors bot-scanner exactly) ──
+        const izGateMode = config.impulseZoneGateMode || "hard";
+        let impulseZonePenaltyVal = 0;
+
+        if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
+          if (!izData || !izData.hasZone) {
+            // No valid impulse zone — skip (hard gate)
+            diagnostics.skippedNoDirection++;
+            continue;
+          }
+          if (!izData.bestZone?.priceAtZone) {
+            // Zone exists but price not there yet — skip
+            continue;
+          }
+          // Price IS at zone — apply bonus
+          impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
+
+          // ── Impulse Zone → Tier 1 Credit ──
+          if (analysis.tieredScoring && izData?.bestZone && !analysis.tieredScoring.tier1GatePassed) {
+            const ts = analysis.tieredScoring;
+            const zonePOIType = izData.bestZone.type;
+            const htfLayers = izData.bestZone.htfLayers || [];
+            const izTier1Credits: string[] = [];
+
+            if (zonePOIType === "fvg") {
+              const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
+              if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+                fvgFactor.present = true;
+                fvgFactor.weight = 1.0;
+                (fvgFactor as any).tier = 1;
+                fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is FVG`;
+                izTier1Credits.push("FVG (impulse-zone-confirmed)");
+              }
+            } else if (zonePOIType === "ob") {
+              const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
+              if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+                obFactor.present = true;
+                obFactor.weight = 1.0;
+                (obFactor as any).tier = 1;
+                obFactor.detail += ` | IMPULSE-ZONE CREDIT: zone POI type is OB`;
+                izTier1Credits.push("OB (impulse-zone-confirmed)");
+              }
+            }
+
+            // HTF layer credits
+            if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) {
+              const obFactor = analysis.factors?.find((f: any) => f.name === "Order Block");
+              if (obFactor && (!obFactor.present || obFactor.weight <= 0 || (obFactor as any).tier !== 1)) {
+                obFactor.present = true;
+                obFactor.weight = 1.0;
+                (obFactor as any).tier = 1;
+                obFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains OB`;
+                if (!izTier1Credits.includes("OB (impulse-zone-confirmed)")) izTier1Credits.push("OB (HTF-zone-layer)");
+              }
+            }
+            if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) {
+              const fvgFactor = analysis.factors?.find((f: any) => f.name === "Fair Value Gap");
+              if (fvgFactor && (!fvgFactor.present || fvgFactor.weight <= 0 || (fvgFactor as any).tier !== 1)) {
+                fvgFactor.present = true;
+                fvgFactor.weight = 1.0;
+                (fvgFactor as any).tier = 1;
+                fvgFactor.detail += ` | IMPULSE-ZONE CREDIT: HTF layer contains FVG`;
+                if (!izTier1Credits.includes("FVG (impulse-zone-confirmed)")) izTier1Credits.push("FVG (HTF-zone-layer)");
+              }
+            }
+
+            if (izTier1Credits.length > 0) {
+              const newTier1Count = ts.tier1Count + izTier1Credits.length;
+              const newPassed = newTier1Count >= 3;
+              const creditPts = izTier1Credits.length * 1.0;
+              const newTieredScore = ts.tieredScore + creditPts;
+              const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
+              analysis.tieredScoring = {
+                ...ts,
+                tier1Count: newTier1Count,
+                tier1GatePassed: newPassed,
+                tier1GateReason: newPassed
+                  ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors`
+                  : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`,
+                tieredScore: newTieredScore,
+              };
+              analysis.score = newScore;
+            }
+          }
+
+          // ── Impulse Zone → P/D & Fib Credit (Tier 1) ──
+          if (analysis.tieredScoring && izData?.bestZone) {
+            const pdFactor = analysis.factors?.find((f: any) => f.name === "Premium/Discount & Fib");
+            const fibDepth = izData.bestZone.fibDepth ?? 0;
+            if (pdFactor && (!pdFactor.present || pdFactor.weight <= 0) && fibDepth >= 0.5) {
+              pdFactor.present = true;
+              pdFactor.weight = fibDepth >= 0.71 ? 2.0 : fibDepth >= 0.618 ? 1.5 : 1.0;
+              (pdFactor as any).tier = 1;
+              pdFactor.detail += ` | IMPULSE-ZONE CREDIT: zone at ${(fibDepth * 100).toFixed(1)}% Fib depth`;
+              const ts = analysis.tieredScoring;
+              if (ts && ts.tier1Count !== undefined) {
+                const newCount = ts.tier1Count + 1;
+                const newPassed = newCount >= 3;
+                const newTieredScore = ts.tieredScore + pdFactor.weight;
+                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
+                analysis.tieredScoring = { ...ts, tier1Count: newCount, tier1GatePassed: newPassed,
+                  tier1GateReason: newPassed ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors` : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
+                  tieredScore: newTieredScore };
+                analysis.score = newScore;
+              }
+            }
+          }
+
+          // ── Impulse Zone → Confluence Stack Credit (Tier 2) ──
+          if (analysis.tieredScoring && izData?.bestZone) {
+            const stackFactor = analysis.factors?.find((f: any) => f.name === "Confluence Stack");
+            const srConfirmed = izData.bestZone.srConfirmed ?? false;
+            const htfLayers = izData.bestZone.htfLayers || [];
+            const stackLayers = (srConfirmed ? 1 : 0) + htfLayers.length;
+            if (stackFactor && (!stackFactor.present || stackFactor.weight <= 0) && stackLayers >= 2) {
+              stackFactor.present = true;
+              stackFactor.weight = stackLayers >= 3 ? 1.5 : 1.0;
+              stackFactor.detail += ` | IMPULSE-ZONE CREDIT: ${stackLayers}-layer confluence`;
+              const ts = analysis.tieredScoring;
+              if (ts && ts.tier2Count !== undefined) {
+                const newTieredScore = ts.tieredScore + stackFactor.weight;
+                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
+                analysis.tieredScoring = { ...ts, tier2Count: ts.tier2Count + 1, tieredScore: newTieredScore };
+                analysis.score = newScore;
+              }
+            }
+          }
+
+          // ── Impulse Zone → HTF POI Alignment Credit (Tier 2) ──
+          if (analysis.tieredScoring && izData?.bestZone && izData.bestZone.priceAtZone) {
+            const htfPoiFactor = analysis.factors?.find((f: any) => f.name === "HTF POI Alignment");
+            const htfLayers = izData.bestZone.htfLayers || [];
+            const hasHTFOBorFVG = htfLayers.some((l: string) => l.toLowerCase().includes("ob") || l.toLowerCase().includes("fvg"));
+            if (htfPoiFactor && (!htfPoiFactor.present || htfPoiFactor.weight <= 0) && hasHTFOBorFVG) {
+              let boost = 0;
+              if (htfLayers.some((l: string) => l.toLowerCase().includes("fvg"))) boost += 0.8;
+              if (htfLayers.some((l: string) => l.toLowerCase().includes("ob"))) boost += 0.7;
+              boost = Math.min(2.0, boost);
+              htfPoiFactor.present = true;
+              htfPoiFactor.weight = boost;
+              htfPoiFactor.detail += ` | IMPULSE-ZONE CREDIT: zone overlaps ${htfLayers.join(", ")}`;
+              const ts = analysis.tieredScoring;
+              if (ts && ts.tier2Count !== undefined) {
+                const newTieredScore = ts.tieredScore + boost;
+                const newScore = ts.tieredMax > 0 ? Math.round((newTieredScore / ts.tieredMax) * 1000) / 10 : analysis.score;
+                analysis.tieredScoring = { ...ts, tier2Count: ts.tier2Count + 1, tieredScore: newTieredScore };
+                analysis.score = newScore;
+              }
+            }
+          }
+        } else if (config.impulseZoneEnabled !== false && izGateMode === "soft") {
+          // SOFT MODE: penalty/bonus
+          if (izData) {
+            if (!izData.hasZone) {
+              impulseZonePenaltyVal = -(config.impulseZonePenalty ?? 2.0);
+            } else if (izData.bestZone?.priceAtZone) {
+              impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
+            }
+          }
+        }
+
+        // ── FOTSI Penalty (soft — not a hard block, just score reduction) ──
+        let fotsiPenalty = 0;
+        if (fotsiForDate && config.useFOTSI !== false && analysis.direction) {
+          const currencies = parsePairCurrencies(symbol);
+          if (currencies) {
+            const [base, quote] = currencies;
+            const dir = analysis.direction === "long" ? "BUY" : "SELL";
+            const veto = checkOverboughtOversoldVeto(base, quote, dir as "BUY" | "SELL", fotsiForDate.strengths, fotsiForDate.series);
+            if (veto.vetoed) fotsiPenalty = -2.0;
+          }
+        }
+
+        // ── Effective Score ──
+        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
+
+        // ── Bidirectional Conflict Counter ──
+        const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+        let conflictAdjustedMinConfluence = config.minConfluence;
+        let conflictHardBlock = false;
+        if (opposingCount >= config.conflictBlockAt) {
+          conflictHardBlock = true;
+        } else if (opposingCount >= config.conflictThresholdRaise) {
+          conflictAdjustedMinConfluence = config.minConfluence + 10;
+        }
+
+        // ── Score distribution tracking ──
+        if (effectiveScore < 20) diagnostics.scoreDistribution.below20++;
+        else if (effectiveScore < 40) diagnostics.scoreDistribution.below40++;
+        else if (effectiveScore < 60) diagnostics.scoreDistribution.below60++;
+        else if (effectiveScore < 80) diagnostics.scoreDistribution.below80++;
+        else diagnostics.scoreDistribution.above80++;
+        if (effectiveScore > diagnostics.highestScoreSeen) diagnostics.highestScoreSeen = effectiveScore;
+
+        // ── Conflict hard block ──
+        if (conflictHardBlock) {
+          diagnostics.skippedGateBlocked++;
+          if (researchMode && analysis.stopLoss && analysis.takeProfit) {
+            const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
+            blockedTrades.push({
+              symbol, direction: analysis.direction, time: candle.datetime,
+              score: analysis.score, effectiveScore,
+              blockedBy: [`Conflict block: ${opposingCount} opposing factors`],
+              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+              ...cf,
+              regime: analysis.regimeInfo?.regime || "unknown",
+              session: session.name,
+            });
+          }
+          continue;
+        }
+
+        // ── Threshold check ──
+        if (effectiveScore < conflictAdjustedMinConfluence) {
+          diagnostics.skippedBelowThreshold++;
+          continue;
+        }
+
+        // ── SL/TP check ──
+        if (!analysis.stopLoss || !analysis.takeProfit) {
+          diagnostics.skippedNoSLTP++;
+          continue;
+        }
+
+        diagnostics.signalsGenerated++;
+
+        // ── Run Safety Gates ──
+        const gates = runBacktestSafetyGates(
+          symbol, analysis.direction, analysis, config, balance,
+          openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
+          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult,
+        );
+
+        const failedGates = gates.filter(g => !g.passed);
+        const allPassed = failedGates.length === 0;
+
+        if (!allPassed) {
+          diagnostics.skippedGateBlocked++;
+          // Research mode: track what would have happened
+          if (researchMode) {
+            const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
+            blockedTrades.push({
+              symbol, direction: analysis.direction, time: candle.datetime,
+              score: analysis.score, effectiveScore,
+              blockedBy: failedGates.map(g => g.reason),
+              factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+              ...cf,
+              regime: analysis.regimeInfo?.regime || "unknown",
+              session: session.name,
+            });
+          }
+          continue;
+        }
+
+        // ── Position Sizing ──
+        const risk = Math.abs(candle.close - analysis.stopLoss);
+        let posSize: number;
+        if (config.positionSizingMethod === "fixed_lot") {
+          posSize = config.fixedLotSize;
+        } else {
+          const riskAmount = balance * (config.riskPerTrade / 100);
+          const pipsRisk = risk / spec.pipSize;
+          const pipValue = spec.pipSize * (spec.lotUnits || 100000) * (btRateMap[symbol] || 1);
+          posSize = pipsRisk > 0 && pipValue > 0 ? riskAmount / (pipsRisk * pipValue) : 0.01;
+          posSize = Math.max(0.01, Math.min(posSize, 10));
+        }
+
+        // ── Open Position ──
+        tradeCounter++;
+        const posId = `bt_${runId.slice(0, 8)}_${tradeCounter}`;
+        const newPos: OpenPosition = {
+          id: posId,
+          symbol,
+          direction: analysis.direction,
+          entryPrice: candle.close,
+          stopLoss: analysis.stopLoss,
+          takeProfit: analysis.takeProfit,
+          size: posSize,
+          entryTime: candle.datetime,
+          entryBarIndex: i,
+          confluenceScore: analysis.score,
+          effectiveScore,
+          factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
+          exitFlags: {
+            breakEven: config.breakEvenEnabled,
+            breakEvenPips: config.breakEvenPips,
+            trailingStop: config.trailingStopEnabled,
+            trailingStopPips: config.trailingStopPips,
+            trailingStopActivation: config.trailingStopActivation,
+            tpRatio: config.tpRatio,
+            partialTP: config.partialTPEnabled,
+            partialTPPercent: config.partialTPPercent,
+            partialTPLevel: config.partialTPLevel,
+            maxHoldHours: config.maxHoldHours,
+          },
+          partialTPFired: false,
+          currentSL: analysis.stopLoss,
+          structureInvalidationFired: false,
+          regime: analysis.regimeInfo?.regime || "unknown",
+          session: session.name,
+        };
+        openPositions.push(newPos);
+        diagnostics.tradesOpened++;
       }
-
-      // Aggregate walk-forward metrics
-      const profitableFolds = folds.filter(f => f.totalPnl > 0).length;
-      const consistencyScore = profitableFolds / Math.max(1, folds.filter(f => f.trades > 0).length);
-      const activeFolds = folds.filter(f => f.trades > 0);
-      const winRates = activeFolds.map(f => f.winRate);
-      const winRateStdDev = winRates.length >= 2
-        ? Math.sqrt(winRates.reduce((s, w) => s + Math.pow(w - (winRates.reduce((a, b) => a + b, 0) / winRates.length), 2), 0) / winRates.length)
-        : 0;
-      const bestFold = activeFolds.reduce((best, f) => f.totalPnl > best.totalPnl ? f : best, activeFolds[0]);
-      const worstFold = activeFolds.reduce((worst, f) => f.totalPnl < worst.totalPnl ? f : worst, activeFolds[0]);
-
-      walkForward = {
-        folds,
-        summary: {
-          totalFolds: numFolds,
-          activeFolds: activeFolds.length,
-          profitableFolds,
-          consistencyScore: Math.round(consistencyScore * 100),  // percentage
-          winRateStdDev: Math.round(winRateStdDev * 10) / 10,
-          bestFold: bestFold ? { fold: bestFold.fold, pnl: bestFold.totalPnl, winRate: bestFold.winRate } : null,
-          worstFold: worstFold ? { fold: worstFold.fold, pnl: worstFold.totalPnl, winRate: worstFold.winRate } : null,
-          verdict: consistencyScore >= 0.75 ? "robust" : consistencyScore >= 0.5 ? "moderate" : "fragile",
-        },
-      };
-      console.log(`[backtest:${runId}] Walk-forward: ${numFolds} folds, consistency ${walkForward.summary.consistencyScore}%, verdict: ${walkForward.summary.verdict}`);
     }
 
-    const resultPayload = {
-      trades: allTrades,
-      equityCurve,
+    // ── Close remaining open positions at last candle close ──
+    for (const pos of [...openPositions]) {
+      const lastCandle = candleData[pos.symbol]?.entry.slice(-1)[0];
+      if (lastCandle) {
+        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, btRateMap);
+        const comm = pos.size * commissionPerLot * 2;
+        allTrades.push({
+          id: pos.id,
+          symbol: pos.symbol,
+          direction: pos.direction,
+          entryPrice: pos.entryPrice,
+          exitPrice: lastCandle.close,
+          entryTime: pos.entryTime,
+          exitTime: lastCandle.datetime,
+          size: pos.size,
+          pnl: rawPnl - comm,
+          pnlPips,
+          commission: comm,
+          closeReason: "end_of_test",
+          confluenceScore: pos.confluenceScore,
+          effectiveScore: pos.effectiveScore,
+          factors: pos.factors,
+          gatesBlocked: [],
+          regime: pos.regime,
+          session: pos.session,
+        });
+        balance += rawPnl - comm;
+      }
+    }
+    openPositions.length = 0;
+
+    // ── Calculate Stats ──
+    await updateProgress(92, "Calculating statistics...");
+    const stats = calculateStats(allTrades, startingBalance, monthsSpan);
+
+    // ── Research Analytics ──
+    let researchAnalytics: ResearchAnalytics | null = null;
+    if (researchMode) {
+      researchAnalytics = computeResearchAnalytics(allTrades, blockedTrades, startingBalance, monthsSpan);
+    }
+
+    // ── Build equity curve ──
+    const equityCurve: { date: string; equity: number }[] = [];
+    let eqBalance = startingBalance;
+    let lastEqDate = "";
+    for (const t of allTrades) {
+      const d = t.exitTime.slice(0, 10);
+      eqBalance += t.pnl;
+      if (d !== lastEqDate) {
+        equityCurve.push({ date: d, equity: eqBalance });
+        lastEqDate = d;
+      } else {
+        equityCurve[equityCurve.length - 1].equity = eqBalance;
+      }
+    }
+
+    // ── Persist Results ──
+    await updateProgress(95, "Saving results...");
+    const result = {
       stats,
-      factorBreakdown,
-      gateBreakdown,
-      dataCoverage,
+      trades: allTrades.slice(0, maxTradesStored),
+      equityCurve,
       diagnostics,
-      ...(walkForward ? { walkForward } : {}),
-      config: {
-        minConfluence: config.minConfluence,
-        enabledSessions: config.enabledSessions,
-        enabledDays: config.enabledDays,
-        entryTimeframe: config.entryTimeframe,
-        scanIntervalMinutes: config.scanIntervalMinutes,
-      },
+      config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
+      researchAnalytics: researchAnalytics ? {
+        gateEffectiveness: researchAnalytics.gateEffectiveness,
+        factorEdge: researchAnalytics.factorEdge,
+        regimeBreakdown: researchAnalytics.regimeBreakdown,
+        sessionBreakdown: researchAnalytics.sessionBreakdown,
+        thresholdCurve: researchAnalytics.thresholdCurve,
+        blockedTradeCount: blockedTrades.length,
+        blockedTrades: researchAnalytics.blockedTrades.slice(0, maxBlockedStored),
+        counterfactualStats: researchAnalytics.counterfactualStats,
+      } : null,
     };
 
     await db.from("backtest_runs").update({
       status: "completed",
-      progress: 100,
-      progress_message: `Done — ${allTrades.length} trades`,
-      results: resultPayload,
       completed_at: new Date().toISOString(),
+      progress: 100,
+      progress_message: `Done: ${stats.totalTrades} trades, ${stats.winRate.toFixed(1)}% WR, PF ${stats.profitFactor.toFixed(2)}`,
+      results: result,
     }).eq("id", runId);
 
-    console.log(`[backtest:${runId}] Results persisted to backtest_runs`);
-  } catch (error: any) {
-    console.error(`[backtest:${runId}] Error: ${error?.message}`, error?.stack);
-    const db = getAdminClient();
+    console.log(`[backtest:${runId}] Completed: ${stats.totalTrades} trades, WR ${stats.winRate.toFixed(1)}%, PF ${stats.profitFactor.toFixed(2)}, DD ${stats.maxDrawdownPct.toFixed(1)}%`);
+
+  } catch (err: any) {
+    console.error(`[backtest:${runId}] FATAL:`, err);
     await db.from("backtest_runs").update({
       status: "failed",
-      progress: 0,
-      progress_message: "Failed",
-      error_message: error?.message || "Backtest failed",
       completed_at: new Date().toISOString(),
-    }).eq("id", runId).then(() => {});
+      progress_message: `Error: ${err?.message || "Unknown error"}`,
+      results: { error: err?.message, stack: err?.stack?.slice(0, 500) },
+    }).eq("id", runId);
   }
 }
 
-// ─── Main Handler (action-based routing) ────────────────────────────
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+// ─── HTTP Handler ───────────────────────────────────────────────────
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const body = await req.json().catch(() => ({}));
-    const action = body.action || "start";
-    const db = getAdminClient();
+    const body = await req.json();
+    const { runId } = body;
 
-    // ── Auth: extract user ID from JWT ──
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const authHeader = req.headers.get("Authorization");
-    let userId: string | null = null;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.replace("Bearer ", "");
-      if (token !== Deno.env.get("SUPABASE_ANON_KEY")) {
-        const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const { data, error } = await userClient.auth.getUser(token);
-        if (!error && data?.user?.id) {
-          userId = data.user.id;
-        }
-      }
+    if (!runId) {
+      return respond({ error: "runId is required" }, 400);
     }
 
-    // ── Action: start — kick off a new backtest in the background ──
-    if (action === "start") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-
-      // Insert a pending run
-      const { data: run, error: insertErr } = await db.from("backtest_runs").insert({
-        user_id: userId,
-        status: "pending",
-        progress: 0,
-        progress_message: "Queued...",
-        config: body,
-      }).select("id").single();
-
-      if (insertErr || !run) {
-        console.error("[backtest] Failed to create run:", insertErr);
-        return respond({ error: "Failed to create backtest run" }, 500);
-      }
-
-      const runId = run.id;
-      console.log(`[backtest] Created run ${runId} for user ${userId}`);
-
-      // Fire and forget — the heavy work runs in the background
-      const jobPromise = runBacktestJob(runId, body).catch((e) => {
-        console.error(`[backtest:${runId}] background error`, e);
-      });
-      // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
-        // @ts-ignore
-        EdgeRuntime.waitUntil(jobPromise);
-      }
-
-      return respond({ runId, status: "pending", message: "Backtest started in background" });
+    // Fire-and-forget background execution
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      EdgeRuntime.waitUntil(runBacktestJob(runId, body));
+    } else {
+      // Fallback: run inline (for local dev)
+      runBacktestJob(runId, body).catch(e => console.error("[backtest] Background job error:", e));
     }
 
-    // ── Action: status — poll a specific run ──
-    if (action === "status") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const runId = body.runId;
-      if (!runId) return respond({ error: "runId required" }, 400);
-
-      const { data: run, error: fetchErr } = await db.from("backtest_runs")
-        .select("id, status, progress, progress_message, results, error_message, created_at, started_at, completed_at")
-        .eq("id", runId)
-        .eq("user_id", userId)
-        .single();
-
-      if (fetchErr || !run) return respond({ error: "Run not found" }, 404);
-      return respond(run);
-    }
-
-    // ── Action: list — recent runs for the user ──
-    if (action === "list") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const limit = body.limit || 10;
-
-      const { data: runs, error: listErr } = await db.from("backtest_runs")
-        .select("id, status, progress, progress_message, error_message, created_at, started_at, completed_at, config")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-      if (listErr) return respond({ error: "Failed to list runs" }, 500);
-      return respond(runs || []);
-    }
-
-    return respond({ error: "Unknown action. Use: start, status, list" }, 400);
-  } catch (error: any) {
-    console.error(`[backtest] Handler error: ${error?.message}`, error?.stack);
-    return respond({ error: error?.message || "Backtest failed" }, 500);
+    return respond({ status: "started", runId });
+  } catch (err: any) {
+    console.error("[backtest] Handler error:", err);
+    return respond({ error: err?.message || "Internal error" }, 500);
   }
 });
