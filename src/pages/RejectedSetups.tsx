@@ -23,6 +23,7 @@ import {
   RefreshCw, Filter, ArrowUpDown, Sparkles,
 } from "lucide-react";
 import { StrategyAdvisor } from "@/components/StrategyAdvisor";
+import { TradeDetailCard } from "@/components/TradeDetailCard";
 
 // ── Types ──
 interface RejectedSetup {
@@ -153,6 +154,7 @@ export default function RejectedSetups() {
   const [days, setDays] = useState(7);
   const [symbolFilter, setSymbolFilter] = useState<string>("all");
   const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const { data: rawSetups = [], isLoading, refetch } = useQuery({
     queryKey: ["rejected-setups", user?.id, days],
@@ -522,30 +524,61 @@ export default function RejectedSetups() {
                       </thead>
                       <tbody>
                         {setups.slice(0, 100).map((s) => (
-                          <tr key={s.id} className="border-b border-border/20 hover:bg-muted/20">
-                            <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatBrokerTime(s.rejected_at)}</td>
-                            <td className="px-3 py-2 font-medium">{s.symbol}</td>
-                            <td className="px-3 py-2">
-                              <span className={s.direction === "long" ? "text-profit" : "text-loss"}>
-                                {s.direction === "long" ? "▲" : "▼"} {s.direction.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2">{REJECTION_TYPE_LABELS[s.rejection_type] || s.rejection_type}</td>
-                            <td className="px-3 py-2 font-mono">{s.confluence_score.toFixed(1)}</td>
-                            <td className="px-3 py-2">{s.tier1_count}</td>
-                            <td className="px-3 py-2 max-w-[200px]">
-                              <div className="flex flex-wrap gap-0.5">
-                                {(s.failed_gates || []).slice(0, 2).map((g, i) => (
-                                  <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
-                                ))}
-                                {(s.failed_gates || []).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{(s.failed_gates || []).length - 2}</Badge>}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2 font-mono">{s.rr_ratio ? s.rr_ratio.toFixed(1) : "—"}</td>
-                            <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
-                            <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
-                            <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
-                          </tr>
+                          <React.Fragment key={s.id}>
+                            <tr 
+                              className={`border-b border-border/20 hover:bg-muted/20 cursor-pointer transition-colors ${expandedRow === s.id ? 'bg-muted/30' : ''}`}
+                              onClick={() => setExpandedRow(expandedRow === s.id ? null : s.id)}
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatBrokerTime(s.rejected_at)}</td>
+                              <td className="px-3 py-2 font-medium">{s.symbol}</td>
+                              <td className="px-3 py-2">
+                                <span className={s.direction === "long" ? "text-profit" : "text-loss"}>
+                                  {s.direction === "long" ? "▲" : "▼"} {s.direction.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2">{REJECTION_TYPE_LABELS[s.rejection_type] || s.rejection_type}</td>
+                              <td className="px-3 py-2 font-mono">{s.confluence_score.toFixed(1)}</td>
+                              <td className="px-3 py-2">{s.tier1_count}</td>
+                              <td className="px-3 py-2 max-w-[200px]">
+                                <div className="flex flex-wrap gap-0.5">
+                                  {(s.failed_gates || []).slice(0, 2).map((g, i) => (
+                                    <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
+                                  ))}
+                                  {(s.failed_gates || []).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{(s.failed_gates || []).length - 2}</Badge>}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 font-mono">{s.rr_ratio ? s.rr_ratio.toFixed(1) : "—"}</td>
+                              <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
+                              <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
+                              <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
+                            </tr>
+                            {expandedRow === s.id && (
+                              <tr>
+                                <td colSpan={11} className="px-3 py-0">
+                                  <TradeDetailCard
+                                    symbol={s.symbol}
+                                    direction={s.direction}
+                                    entryPrice={s.entry_price}
+                                    stopLoss={s.stop_loss}
+                                    takeProfit={s.take_profit}
+                                    mfePips={s.mfe_pips}
+                                    maePips={s.mae_pips}
+                                    rrRatio={s.rr_ratio}
+                                    outcomeStatus={s.outcome_status}
+                                    tpHit={s.tp_hit}
+                                    slHit={s.sl_hit}
+                                    tpHitTimeMinutes={s.tp_hit_time_minutes}
+                                    priceReachedEntry={s.price_reached_entry}
+                                    confluenceScore={s.confluence_score}
+                                    tier1Count={s.tier1_count}
+                                    failedGates={s.failed_gates}
+                                    sessionName={s.session_name}
+                                    regime={s.regime}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>
