@@ -86,12 +86,9 @@ function downloadFile(filename: string, content: string, mime: string) {
 
 function toCSV(rows: Record<string, any>[]): string {
   if (rows.length === 0) return "";
-  const headers = Array.from(
-    rows.reduce((set, r) => {
-      Object.keys(r).forEach((k) => set.add(k));
-      return set;
-    }, new Set<string>())
-  );
+  const headerSet = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) headerSet.add(k);
+  const headers = Array.from(headerSet);
   const escape = (v: any) => {
     if (v === null || v === undefined) return "";
     if (Array.isArray(v)) v = v.join("; ");
