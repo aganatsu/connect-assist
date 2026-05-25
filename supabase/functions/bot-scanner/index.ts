@@ -787,6 +787,11 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
+    // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
+    structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
+    structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? DEFAULTS.structuralConvictionS2FShort,
+    structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? DEFAULTS.structuralConvictionOppositeLong,
+    structuralConvictionOppositeShort: strategy.structuralConvictionOppositeShort ?? raw.structuralConvictionOppositeShort ?? DEFAULTS.structuralConvictionOppositeShort,
     // ── Regime-Adaptive Exit Engine ──
     regimeAdaptiveTPEnabled: strategy.regimeAdaptiveTPEnabled ?? raw.regimeAdaptiveTPEnabled ?? false,
     trendingRRMultiplier: strategy.trendingRRMultiplier ?? raw.trendingRRMultiplier ?? 1.5,
