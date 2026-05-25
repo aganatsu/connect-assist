@@ -4888,6 +4888,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.error(`[pending] INSERT failed for ${pair}: ${pendingInsertErr.message}`);
             detail.status = "zone_setup_insert_failed";
             detail.error = pendingInsertErr.message;
+            detail.skipReason = /duplicate key/i.test(pendingInsertErr.message)
+              ? "Zone setup already active (see Zone Setups panel)"
+              : `Zone setup insert failed: ${pendingInsertErr.message}`;
+            scanDetails.push(detail);
             continue;
           }
 
