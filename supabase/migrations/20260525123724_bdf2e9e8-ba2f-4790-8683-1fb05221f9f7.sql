@@ -1,0 +1,1 @@
+DELETE FROM public.scan_logs WHERE scanned_at < now() - interval '7 days';
