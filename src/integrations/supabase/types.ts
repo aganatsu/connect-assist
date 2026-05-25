@@ -1019,6 +1019,66 @@ export type Database = {
         }
         Relationships: []
       }
+      scheduled_tasks: {
+        Row: {
+          action: string
+          category: string | null
+          created_at: string | null
+          cron_expression: string | null
+          default_interval_minutes: number
+          description: string | null
+          display_name: string
+          enabled: boolean | null
+          function_name: string
+          id: string
+          interval_minutes: number
+          last_error: string | null
+          last_run_at: string | null
+          last_status: string | null
+          run_count: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          action: string
+          category?: string | null
+          created_at?: string | null
+          cron_expression?: string | null
+          default_interval_minutes: number
+          description?: string | null
+          display_name: string
+          enabled?: boolean | null
+          function_name: string
+          id?: string
+          interval_minutes: number
+          last_error?: string | null
+          last_run_at?: string | null
+          last_status?: string | null
+          run_count?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          action?: string
+          category?: string | null
+          created_at?: string | null
+          cron_expression?: string | null
+          default_interval_minutes?: number
+          description?: string | null
+          display_name?: string
+          enabled?: boolean | null
+          function_name?: string
+          id?: string
+          interval_minutes?: number
+          last_error?: string | null
+          last_run_at?: string | null
+          last_status?: string | null
+          run_count?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       staged_setups: {
         Row: {
           analysis_snapshot: Json | null
