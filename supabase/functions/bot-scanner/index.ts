@@ -1049,13 +1049,13 @@ async function runSafetyGates(
     const directionRate = direction === "long" ? bullRate : bearRate;
     const oppositeRate = direction === "long" ? bearRate : bullRate;
     // Block condition: 0% fractals in entry direction AND S2F < threshold (chaotic) AND opposite has activity.
-    // Asymmetric thresholds per weekly advisor: shorts loosened to <20% (was 35%) to capture mean-reversion
-    // shorts where bear fractals haven't formed yet but structure still permits it.
-    const s2fBlockThreshold = direction === "short" ? 0.20 : 0.35;
+    // Thresholds are configurable per direction in bot config (Structural Conviction Gate).
+    const s2fBlockThreshold = direction === "short" ? config.structuralConvictionS2FShort : config.structuralConvictionS2FLong;
+    const oppositeBlockThreshold = direction === "short" ? config.structuralConvictionOppositeShort : config.structuralConvictionOppositeLong;
     if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
       gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
-    } else if (directionRate === 0 && oppositeRate > (direction === "short" ? 0.45 : 0.3)) {
-      // Softer block: 0% in direction + strong opposite. Shorts get a higher opposite threshold (45% vs 30%).
+    } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
+      // Softer block: 0% in direction + strong opposite (configurable per direction).
       gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
     } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
       // Bidirectional enhancement: block when opposing fractals are 2.5× or more than supporting.
