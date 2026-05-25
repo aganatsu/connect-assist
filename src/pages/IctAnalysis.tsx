@@ -6,6 +6,8 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Clock, Target, Calendar, BarChart3, Grid3X3 } from "lucide-react";
 import { smcApi, marketApi } from "@/lib/api";
 import { INSTRUMENTS, SESSIONS, KILL_ZONES } from "@/lib/marketData";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getChartTheme } from "@/lib/chartTheme";
 import {
   BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
@@ -19,6 +21,8 @@ const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.t
 export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
   const currentHour = new Date().getUTCHours();
+  const { resolvedTheme } = useTheme();
+  const ct = getChartTheme(resolvedTheme);
 
   // Listen for global symbol change
   useEffect(() => {
@@ -255,15 +259,15 @@ export default function IctAnalysis() {
                       <div className="h-[220px]">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={strengthData} layout="vertical" barSize={16}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                            <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: "hsl(var(--muted-foreground))" }} stroke="hsl(var(--border))" />
-                            <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: "hsl(var(--foreground))" }} stroke="hsl(var(--border))" width={40} />
+                            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.4} />
+                            <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
+                            <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} width={40} />
                             <Tooltip
-                              contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "4px", fontSize: "12px", color: "hsl(var(--foreground))" }}
-                              labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
+                              contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "12px", color: ct.axis }}
+                              labelStyle={{ color: ct.axis, fontWeight: 600 }}
                               formatter={(value: number) => [`${value.toFixed(2)}%`, "Strength"]}
                             />
-                            <Bar dataKey="score">{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
+                            <Bar dataKey="score" radius={[0, 3, 3, 0]}>{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
                           </BarChart>
                         </ResponsiveContainer>
                       </div>

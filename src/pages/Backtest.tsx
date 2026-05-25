@@ -22,6 +22,8 @@ import {
 } from "recharts";
 import { INSTRUMENTS, formatMoney } from "@/lib/marketData";
 import { botConfigApi, backtestApi } from "@/lib/api";
+import { useTheme } from "@/contexts/ThemeContext";
+import { getChartTheme } from "@/lib/chartTheme";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface BacktestTrade {
@@ -178,6 +180,9 @@ function Toggle({ label, description, checked, onChange }: { label: string; desc
 
 // ── Main Component ─────────────────────────────────────────────────────
 export default function Backtest() {
+  const { resolvedTheme } = useTheme();
+  const ct = getChartTheme(resolvedTheme);
+
   // Config state — C4: initialized from live config, falls back to canonical defaults
   const [config, setConfig] = useState<any>(null);
   const [canonicalDefaults, setCanonicalDefaults] = useState<any>(null);
@@ -1294,11 +1299,11 @@ export default function Backtest() {
                     <div className="h-[280px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={equityCurveWithDD}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 16%, 18%)" />
-                          <XAxis dataKey="date" tick={{ fontSize: 8 }} stroke="hsl(215, 15%, 55%)" />
-                          <YAxis yAxisId="equity" tick={{ fontSize: 9 }} stroke="hsl(215, 15%, 55%)" tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
-                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9 }} stroke="hsl(0, 72%, 51%)" tickFormatter={v => `${v.toFixed(0)}%`} />
-                          <Tooltip contentStyle={{ backgroundColor: 'hsl(220, 18%, 10%)', border: '1px solid hsl(220, 16%, 18%)', borderRadius: '8px', fontSize: '11px' }}
+                          <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
+                          <XAxis dataKey="date" tick={{ fontSize: 8, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
+                          <YAxis yAxisId="equity" tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
+                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: 'hsl(0, 72%, 51%)' }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: '6px', fontSize: '11px', color: ct.axis }} labelStyle={{ color: ct.axis }}
                             formatter={(value: number, name: string) => name === "equity" ? [`$${value.toFixed(2)}`, "Equity"] : [`${value.toFixed(1)}%`, "Drawdown"]} />
                           <Area yAxisId="equity" type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.08} strokeWidth={2} />
                           <Line yAxisId="dd" type="monotone" dataKey="drawdown" stroke="hsl(0, 72%, 51%)" strokeWidth={1} dot={false} strokeDasharray="3 3" />
@@ -1314,10 +1319,10 @@ export default function Backtest() {
                     <div className="h-[280px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={monthlyPnl}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 16%, 18%)" />
-                          <XAxis dataKey="month" tick={{ fontSize: 8 }} stroke="hsl(215, 15%, 55%)" />
-                          <YAxis tick={{ fontSize: 9 }} stroke="hsl(215, 15%, 55%)" tickFormatter={v => `$${v.toFixed(0)}`} />
-                          <Tooltip contentStyle={{ backgroundColor: 'hsl(220, 18%, 10%)', border: '1px solid hsl(220, 16%, 18%)', borderRadius: '8px', fontSize: '11px' }}
+                          <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
+                          <XAxis dataKey="month" tick={{ fontSize: 8, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `$${v.toFixed(0)}`} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: '6px', fontSize: '11px', color: ct.axis }} labelStyle={{ color: ct.axis }}
                             formatter={(value: number) => [formatMoney(value, true), "P&L"]} />
                           <Bar dataKey="pnl" radius={[2, 2, 0, 0]}>
                             {monthlyPnl.map((entry, i) => (
@@ -1492,8 +1497,8 @@ export default function Backtest() {
                       <div className="h-[350px]">
                         <ResponsiveContainer width="100%" height="100%">
                           <RadarChart data={factorRadar}>
-                            <PolarGrid stroke="hsl(220, 16%, 18%)" />
-                            <PolarAngleAxis dataKey="name" tick={{ fontSize: 8, fill: "hsl(215, 15%, 55%)" }} />
+                            <PolarGrid stroke={ct.grid} />
+                            <PolarAngleAxis dataKey="name" tick={{ fontSize: 8, fill: ct.axis }} />
                             <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fontSize: 8 }} />
                             <Radar name="Win Rate %" dataKey="winRate" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.2} />
                           </RadarChart>
