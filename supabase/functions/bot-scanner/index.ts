@@ -788,6 +788,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
     // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
+    structuralConvictionEnabled: strategy.structuralConvictionEnabled !== false,
     structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
     structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? DEFAULTS.structuralConvictionS2FShort,
     structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? DEFAULTS.structuralConvictionOppositeLong,
@@ -1041,7 +1042,9 @@ async function runSafetyGates(
   // Gate 3: Structural Conviction — block when entry-TF has 0% fractals in entry direction + chaotic structure
   // This prevents the bot from taking trades where price action has ZERO evidence supporting the direction.
   // Structure (leading) has veto power over regime (lagging) and P/D zone positioning.
-  {
+  if (!config.structuralConvictionEnabled) {
+    gates.push({ passed: true, reason: `Structural Conviction: DISABLED by config` });
+  } else {
     const s2f = analysis.structure?.structureToFractal;
     const s2fOverall = s2f?.overallRate ?? 1; // default to 1 (pass) if unavailable
     const bullRate = s2f?.bullishRate ?? 0.5; // default to 0.5 (neutral) if unavailable
