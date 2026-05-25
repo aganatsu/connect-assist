@@ -969,6 +969,7 @@ async function runSafetyGates(
   analysis: any, config: typeof DEFAULTS, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
+  convictionCandles?: Candle[] | null,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
@@ -1039,13 +1040,26 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 3: Structural Conviction — block when entry-TF has 0% fractals in entry direction + chaotic structure
-  // This prevents the bot from taking trades where price action has ZERO evidence supporting the direction.
-  // Structure (leading) has veto power over regime (lagging) and P/D zone positioning.
+  // Gate 3: Structural Conviction — uses CONVICTION timeframe (one TF above entry) for fractal analysis.
+  // Style-aware: scalper → 15m, day_trader → 1H, swing_trader → 4H.
+  // This prevents the bot from taking trades where the CONVICTION timeframe shows zero structural support.
+  // Previously used entry-TF which was too noisy and over-filtered valid trades on forex.
   if (!config.structuralConvictionEnabled) {
     gates.push({ passed: true, reason: `Structural Conviction: DISABLED by config` });
   } else {
-    const s2f = analysis.structure?.structureToFractal;
+    // Use conviction-TF candles if provided, otherwise fall back to entry-TF analysis
+    let s2f: { overallRate: number; bullishRate: number; bearishRate: number } | undefined;
+    let convictionTFLabel = "entry";
+    if (convictionCandles && convictionCandles.length >= 20) {
+      const convictionStructure = analyzeMarketStructure(convictionCandles);
+      s2f = convictionStructure.structureToFractal;
+      // Determine label based on style for logging
+      const style = config.tradingStyle?.mode || "day_trader";
+      convictionTFLabel = style === "scalper" ? "15m" : style === "swing_trader" ? "4H" : "1H";
+    } else {
+      // Fallback: use entry-TF structure (original behavior)
+      s2f = analysis.structure?.structureToFractal;
+    }
     const s2fOverall = s2f?.overallRate ?? 1; // default to 1 (pass) if unavailable
     const bullRate = s2f?.bullishRate ?? 0.5; // default to 0.5 (neutral) if unavailable
     const bearRate = s2f?.bearishRate ?? 0.5;
@@ -1056,16 +1070,15 @@ async function runSafetyGates(
     const s2fBlockThreshold = direction === "short" ? config.structuralConvictionS2FShort : config.structuralConvictionS2FLong;
     const oppositeBlockThreshold = direction === "short" ? config.structuralConvictionOppositeShort : config.structuralConvictionOppositeLong;
     if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
     } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
       // Softer block: 0% in direction + strong opposite (configurable per direction).
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
     } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
       // Bidirectional enhancement: block when opposing fractals are 2.5× or more than supporting.
-      // E.g. Bull 20% / Bear 50% = 2.5× — structure is actively breaking against the trade.
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${convictionTFLabel}]: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
     } else {
-      gates.push({ passed: true, reason: `Structural Conviction: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
+      gates.push({ passed: true, reason: `Structural Conviction [${convictionTFLabel}]: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
     }
   }
 
@@ -4477,10 +4490,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       signalsFound++;
 
       // Run safety gates
+      // Conviction-TF candles: one timeframe above entry for structural conviction gate.
+      // scalper (entry 5m) → conviction 15m (entry candles are 5m, but we use hourly as closest available above)
+      // day_trader (entry 15m) → conviction 1H (hourlyCandles)
+      // swing_trader (entry 1H) → conviction 4H (h4Candles)
+      const convictionCandles = resolvedStyle === "swing_trader"
+        ? (h4Candles.length >= 20 ? h4Candles : null)
+        : (hourlyCandles.length >= 20 ? hourlyCandles : null);
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
-        rateMap,
+        rateMap, convictionCandles,
       );
       // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
       // Previously a binary veto that blocked trades opposing the game plan bias.
