@@ -173,6 +173,14 @@ const DEFAULTS = {
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
   simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
+  // ── Structural Conviction Gate (Gate 3) ──
+  // S2F (Structure-to-Fractal) thresholds: block trade when directionRate=0% AND S2F < threshold.
+  // Asymmetric defaults: longs strict (35%), shorts loose (20%) per weekly advisor recommendation.
+  structuralConvictionS2FLong: 0.35,
+  structuralConvictionS2FShort: 0.20,
+  // Opposite-fractal soft-block thresholds (used when directionRate=0% but S2F passes).
+  structuralConvictionOppositeLong: 0.30,
+  structuralConvictionOppositeShort: 0.45,
   // ── Regime-Adaptive Exit Engine ──
   regimeAdaptiveTPEnabled: false,  // When true, adjust TP based on market regime (trending → extend, ranging → tighten)
   trendingRRMultiplier: 1.5,      // R:R multiplier in trending regimes
