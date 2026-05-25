@@ -173,6 +173,14 @@ const DEFAULTS = {
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
   simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
+  // ── Structural Conviction Gate (Gate 3) ──
+  // S2F (Structure-to-Fractal) thresholds: block trade when directionRate=0% AND S2F < threshold.
+  // Asymmetric defaults: longs strict (35%), shorts loose (20%) per weekly advisor recommendation.
+  structuralConvictionS2FLong: 0.35,
+  structuralConvictionS2FShort: 0.20,
+  // Opposite-fractal soft-block thresholds (used when directionRate=0% but S2F passes).
+  structuralConvictionOppositeLong: 0.30,
+  structuralConvictionOppositeShort: 0.45,
   // ── Regime-Adaptive Exit Engine ──
   regimeAdaptiveTPEnabled: false,  // When true, adjust TP based on market regime (trending → extend, ranging → tighten)
   trendingRRMultiplier: 1.5,      // R:R multiplier in trending regimes
@@ -779,6 +787,11 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
+    // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
+    structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
+    structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? DEFAULTS.structuralConvictionS2FShort,
+    structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? DEFAULTS.structuralConvictionOppositeLong,
+    structuralConvictionOppositeShort: strategy.structuralConvictionOppositeShort ?? raw.structuralConvictionOppositeShort ?? DEFAULTS.structuralConvictionOppositeShort,
     // ── Regime-Adaptive Exit Engine ──
     regimeAdaptiveTPEnabled: strategy.regimeAdaptiveTPEnabled ?? raw.regimeAdaptiveTPEnabled ?? false,
     trendingRRMultiplier: strategy.trendingRRMultiplier ?? raw.trendingRRMultiplier ?? 1.5,
@@ -1036,13 +1049,13 @@ async function runSafetyGates(
     const directionRate = direction === "long" ? bullRate : bearRate;
     const oppositeRate = direction === "long" ? bearRate : bullRate;
     // Block condition: 0% fractals in entry direction AND S2F < threshold (chaotic) AND opposite has activity.
-    // Asymmetric thresholds per weekly advisor: shorts loosened to <20% (was 35%) to capture mean-reversion
-    // shorts where bear fractals haven't formed yet but structure still permits it.
-    const s2fBlockThreshold = direction === "short" ? 0.20 : 0.35;
+    // Thresholds are configurable per direction in bot config (Structural Conviction Gate).
+    const s2fBlockThreshold = direction === "short" ? config.structuralConvictionS2FShort : config.structuralConvictionS2FLong;
+    const oppositeBlockThreshold = direction === "short" ? config.structuralConvictionOppositeShort : config.structuralConvictionOppositeLong;
     if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
       gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
-    } else if (directionRate === 0 && oppositeRate > (direction === "short" ? 0.45 : 0.3)) {
-      // Softer block: 0% in direction + strong opposite. Shorts get a higher opposite threshold (45% vs 30%).
+    } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
+      // Softer block: 0% in direction + strong opposite (configurable per direction).
       gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
     } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
       // Bidirectional enhancement: block when opposing fractals are 2.5× or more than supporting.

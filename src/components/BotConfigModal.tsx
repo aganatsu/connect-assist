@@ -676,6 +676,36 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                     <ToggleField label="Require HTF Bias Alignment" description="Only trade in the direction of higher timeframe bias" checked={config.strategy?.requireHTFBias ?? true} onChange={v => updateField('strategy', 'requireHTFBias', v)} />
                     <ToggleField label="HTF Bias Hard Veto" description="Block longs unless daily is bullish, shorts unless daily is bearish (no ranging exception, no score override)" checked={config.strategy?.htfBiasHardVeto ?? false} onChange={v => updateField('strategy', 'htfBiasHardVeto', v)} />
                     <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Structural Conviction Gate</p>
+                      <p className="text-[11px] text-muted-foreground -mt-2">Blocks trades when entry-timeframe fractals offer zero support for the direction. Lower thresholds = less restrictive (more trades allowed).</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="Long S2F Block Threshold" description="Block longs when Bull fractals 0% AND S2F below this %. Default 35%.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[(config.strategy?.structuralConvictionS2FLong ?? 0.35) * 100]} onValueChange={v => updateField('strategy', 'structuralConvictionS2FLong', v[0] / 100)} min={0} max={60} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{Math.round((config.strategy?.structuralConvictionS2FLong ?? 0.35) * 100)}%</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Short S2F Block Threshold" description="Block shorts when Bear fractals 0% AND S2F below this %. Default 20%.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[(config.strategy?.structuralConvictionS2FShort ?? 0.20) * 100]} onValueChange={v => updateField('strategy', 'structuralConvictionS2FShort', v[0] / 100)} min={0} max={60} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{Math.round((config.strategy?.structuralConvictionS2FShort ?? 0.20) * 100)}%</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Long Opposite Block" description="Soft block: 0% bulls + bears above this %. Default 30%.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[(config.strategy?.structuralConvictionOppositeLong ?? 0.30) * 100]} onValueChange={v => updateField('strategy', 'structuralConvictionOppositeLong', v[0] / 100)} min={10} max={70} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{Math.round((config.strategy?.structuralConvictionOppositeLong ?? 0.30) * 100)}%</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Short Opposite Block" description="Soft block: 0% bears + bulls above this %. Default 45%.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[(config.strategy?.structuralConvictionOppositeShort ?? 0.45) * 100]} onValueChange={v => updateField('strategy', 'structuralConvictionOppositeShort', v[0] / 100)} min={10} max={70} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold text-primary w-14 text-right">{Math.round((config.strategy?.structuralConvictionOppositeShort ?? 0.45) * 100)}%</span>
+                          </div>
+                        </FieldGroup>
+                      </div>
+                    </div>
+                    <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Premium / Discount Filters</p>
                       <div className="grid grid-cols-2 gap-4">
                         <ToggleField label="Only Buy in Discount" description="Only enter longs when price is in discount zone" checked={config.strategy?.onlyBuyInDiscount ?? true} onChange={v => updateField('strategy', 'onlyBuyInDiscount', v)} />
