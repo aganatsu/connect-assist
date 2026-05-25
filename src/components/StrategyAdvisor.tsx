@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -64,8 +64,37 @@ interface StrategyAdvisorProps {
 }
 
 export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
-  const [result, setResult] = useState<AdvisorResponse | null>(null);
+  const STORAGE_KEY = "strategyAdvisor:lastResult";
+  const [result, setResult] = useState<AdvisorResponse | null>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed?.data ?? null;
+    } catch {
+      return null;
+    }
+  });
+  const [savedAt, setSavedAt] = useState<number | null>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw)?.savedAt ?? null;
+    } catch {
+      return null;
+    }
+  });
   const [expandedRecs, setExpandedRecs] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (result) {
+      try {
+        const savedAt = Date.now();
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ data: result, savedAt }));
+        setSavedAt(savedAt);
+      } catch {}
+    }
+  }, [result]);
 
   const advisorMutation = useMutation({
     mutationFn: async () => {
