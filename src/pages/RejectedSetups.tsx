@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,8 +20,9 @@ import {
 } from "recharts";
 import {
   ShieldX, ShieldCheck, TrendingUp, TrendingDown, Target, AlertTriangle,
-  RefreshCw, Filter, ArrowUpDown,
+  RefreshCw, Filter, ArrowUpDown, Sparkles,
 } from "lucide-react";
+import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 
 // ── Types ──
 interface RejectedSetup {
@@ -280,6 +281,9 @@ export default function RejectedSetups() {
           <TabsList className="h-8">
             <TabsTrigger value="overview" className="text-xs h-7">Overview</TabsTrigger>
             <TabsTrigger value="gates" className="text-xs h-7">Gate Analysis</TabsTrigger>
+            <TabsTrigger value="advisor" className="text-xs h-7 gap-1">
+              <Sparkles className="h-3 w-3" /> Advisor
+            </TabsTrigger>
             <TabsTrigger value="table" className="text-xs h-7">All Setups</TabsTrigger>
           </TabsList>
 
@@ -449,6 +453,11 @@ export default function RejectedSetups() {
           </TabsContent>
 
           {/* Table Tab */}
+          {/* Strategy Advisor Tab */}
+          <TabsContent value="advisor" className="mt-3">
+            <StrategyAdvisor days={days} />
+          </TabsContent>
+
           <TabsContent value="table" className="mt-3">
             <Card className="border-border/50">
               <CardContent className="p-0">
