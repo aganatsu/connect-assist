@@ -23,6 +23,7 @@ import Fundamentals from "./pages/Fundamentals";
 import GamePlan from "./pages/GamePlan";
 import PropFirm from "./pages/PropFirm";
 import RejectedSetups from "./pages/RejectedSetups";
+import ScheduledTasks from "./pages/ScheduledTasks";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const queryClient = new QueryClient();
@@ -53,6 +54,7 @@ const App = () => (
                 <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
                 <Route path="/prop-firm" element={<ProtectedRoute><PropFirm /></ProtectedRoute>} />
                 <Route path="/rejected-setups" element={<ProtectedRoute><RejectedSetups /></ProtectedRoute>} />
+                <Route path="/scheduled-tasks" element={<ProtectedRoute><ScheduledTasks /></ProtectedRoute>} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </ErrorBoundary>
