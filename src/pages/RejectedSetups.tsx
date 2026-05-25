@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -20,7 +21,7 @@ import {
 } from "recharts";
 import {
   ShieldX, ShieldCheck, TrendingUp, TrendingDown, Target, AlertTriangle,
-  RefreshCw, Filter, ArrowUpDown, Sparkles,
+  RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
 } from "lucide-react";
 import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
@@ -69,6 +70,37 @@ const REJECTION_TYPE_LABELS: Record<string, string> = {
   gate_blocked: "Gate Blocked",
   below_threshold_strong_t1: "Below Threshold (Strong T1)",
 };
+
+// ── CSV/Download helpers ──
+function downloadFile(filename: string, content: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function toCSV(rows: Record<string, any>[]): string {
+  if (rows.length === 0) return "";
+  const headerSet = new Set<string>();
+  for (const r of rows) for (const k of Object.keys(r)) headerSet.add(k);
+  const headers = Array.from(headerSet);
+  const escape = (v: any) => {
+    if (v === null || v === undefined) return "";
+    if (Array.isArray(v)) v = v.join("; ");
+    const s = String(v).replace(/"/g, '""');
+    return /[",\n]/.test(s) ? `"${s}"` : s;
+  };
+  const lines = [headers.join(",")];
+  for (const r of rows) lines.push(headers.map((h) => escape(r[h])).join(","));
+  return lines.join("\n");
+}
+
+const tsStamp = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 
 // ── Data Fetching ──
 async function fetchRejectedSetups(userId: string, days: number): Promise<RejectedSetup[]> {
@@ -176,6 +208,114 @@ export default function RejectedSetups() {
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
   const dailyTrend = useMemo(() => computeDailyTrend(setups), [setups]);
 
+  // ── Download handlers ──
+  const downloadSummary = () => {
+    const rows = [
+      { metric: "Range (days)", value: days },
+      { metric: "Symbol Filter", value: symbolFilter },
+      { metric: "Outcome Filter", value: outcomeFilter },
+      { metric: "Total Rejected", value: stats.total },
+      { metric: "Resolved", value: stats.resolved },
+      { metric: "Would Have Won", value: stats.winners },
+      { metric: "Would Have Lost", value: stats.losers },
+      { metric: "Winner-Block Rate (%)", value: stats.winnerBlockRate.toFixed(2) },
+      { metric: "Avg MFE (pips)", value: stats.avgMfe.toFixed(2) },
+      { metric: "Avg MAE (pips)", value: stats.avgMae.toFixed(2) },
+      { metric: "Avg Confluence Score", value: stats.avgScore.toFixed(2) },
+      { metric: "Entry Reached Rate (%)", value: stats.entryReachedRate.toFixed(2) },
+    ];
+    downloadFile(`rejected-summary-${tsStamp()}.csv`, toCSV(rows), "text/csv");
+  };
+
+  const downloadOverview = () => {
+    const outcome = outcomeDistribution.map((o) => ({ section: "outcome_distribution", name: o.name, value: o.value }));
+    const daily = dailyTrend.map((d) => ({ section: "daily_trend", date: d.date, total: d.total, would_won: d.wouldWon, would_lost: d.wouldLost }));
+    const scoreBuckets = (() => {
+      const buckets = [
+        { range: "30-40", won: 0, lost: 0 },
+        { range: "40-50", won: 0, lost: 0 },
+        { range: "50-60", won: 0, lost: 0 },
+        { range: "60-70", won: 0, lost: 0 },
+        { range: "70-80", won: 0, lost: 0 },
+        { range: "80+", won: 0, lost: 0 },
+      ];
+      for (const s of setups) {
+        const score = s.confluence_score;
+        const idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
+        if (s.outcome_status === "would_have_won") buckets[idx].won++;
+        if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
+      }
+      return buckets.map((b) => ({ section: "score_distribution", range: b.range, won: b.won, lost: b.lost }));
+    })();
+    downloadFile(`rejected-overview-${tsStamp()}.csv`, toCSV([...outcome, ...daily, ...scoreBuckets]), "text/csv");
+  };
+
+  const downloadGates = () => {
+    const rows = gateBreakdown.map((g) => ({
+      gate: g.gate,
+      total_blocked: g.total,
+      would_won: g.wouldWon,
+      would_lost: g.wouldLost,
+      win_rate_pct: g.winRate.toFixed(2),
+    }));
+    downloadFile(`rejected-gates-${tsStamp()}.csv`, toCSV(rows), "text/csv");
+  };
+
+  const downloadSetups = () => {
+    const rows = setups.map((s) => ({
+      rejected_at: s.rejected_at,
+      symbol: s.symbol,
+      direction: s.direction,
+      rejection_type: s.rejection_type,
+      confluence_score: s.confluence_score,
+      tier1_count: s.tier1_count,
+      tier1_factors: s.tier1_factors,
+      failed_gates: s.failed_gates,
+      entry_price: s.entry_price,
+      stop_loss: s.stop_loss,
+      take_profit: s.take_profit,
+      rr_ratio: s.rr_ratio,
+      session_name: s.session_name,
+      regime: s.regime,
+      gp_bias: s.gp_bias,
+      gp_bias_confidence: s.gp_bias_confidence,
+      fotsi_base_tsi: s.fotsi_base_tsi,
+      fotsi_quote_tsi: s.fotsi_quote_tsi,
+      price_at_rejection: s.price_at_rejection,
+      outcome_status: s.outcome_status,
+      mfe_pips: s.mfe_pips,
+      mae_pips: s.mae_pips,
+      tp_hit: s.tp_hit,
+      sl_hit: s.sl_hit,
+      tp_hit_time_minutes: s.tp_hit_time_minutes,
+      price_reached_entry: s.price_reached_entry,
+      outcome_checked_at: s.outcome_checked_at,
+    }));
+    downloadFile(`rejected-setups-${tsStamp()}.csv`, toCSV(rows), "text/csv");
+  };
+
+  const downloadAdvisor = () => {
+    try {
+      const raw = localStorage.getItem("strategyAdvisor:lastResult");
+      if (!raw) {
+        downloadFile(`advisor-${tsStamp()}.json`, JSON.stringify({ error: "No advisor analysis saved. Run analysis first." }, null, 2), "application/json");
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      downloadFile(`advisor-${tsStamp()}.json`, JSON.stringify(parsed, null, 2), "application/json");
+    } catch (e: any) {
+      downloadFile(`advisor-${tsStamp()}.json`, JSON.stringify({ error: e?.message || "Failed" }, null, 2), "application/json");
+    }
+  };
+
+  const downloadAll = () => {
+    downloadSummary();
+    downloadOverview();
+    downloadGates();
+    downloadSetups();
+    downloadAdvisor();
+  };
+
   // Pie chart data
   const outcomeDistribution = useMemo(() => [
     { name: "Would Have Won", value: stats.winners, color: OUTCOME_COLORS.would_have_won },
@@ -208,6 +348,24 @@ export default function RejectedSetups() {
             <Button variant="ghost" size="sm" onClick={() => refetch()} className="h-8 w-8 p-0">
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+                  <Download className="h-3.5 w-3.5" /> Download
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuLabel className="text-xs">Export current view</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={downloadSummary} className="text-xs">Summary Analytics (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadOverview} className="text-xs">Overview Charts (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadGates} className="text-xs">Gate Analysis (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadSetups} className="text-xs">All Setups (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">AI Advisor (JSON)</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={downloadAll} className="text-xs font-medium">Download All</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
