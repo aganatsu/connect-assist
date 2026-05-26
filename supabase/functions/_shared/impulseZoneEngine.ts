@@ -57,8 +57,12 @@ export interface RankedPOI {
 export interface BestZone {
   zone: RankedPOI;
   impulse: ImpulseLeg;
-  priceAtZone: boolean;   // Is current price within or near the zone?
-  distanceToZone: number; // Distance in price units (0 if at zone)
+  priceAtZone: boolean;       // Loose: within 1.5×ATR of zone (for watchlist/awareness)
+  priceInsideZone: boolean;   // Strict: price is literally inside zone bounds [low, high]
+  priceAtZoneStrict: boolean; // Strict: within 0.3×ATR AND on structurally correct side
+  sideOk: boolean;            // Is price on the correct side for the direction?
+  distanceToZone: number;     // Distance in price units (0 if inside zone)
+  distancePips: number;       // Distance in pips (approximate, using 5th decimal)
 }
 
 export interface HTFConfluenceData {
@@ -100,8 +104,11 @@ const SR_MIN_TOUCHES = 2;
 /** Lookback for S/R detection (candles before the impulse) */
 const SR_LOOKBACK = 100;
 
-/** Proximity threshold for "price at zone" (as fraction of ATR) */
+/** Proximity threshold for "price at zone" — LOOSE (watchlist/awareness) */
 const PRICE_AT_ZONE_ATR_MULT = 1.5;
+
+/** Proximity threshold for "price at zone" — STRICT (market fill decisions) */
+const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
 
 // ─── 1. findImpulseLeg ────────────────────────────────────────────────────────
 
@@ -827,28 +834,78 @@ export function findBestEntryZone(
 
   // Step 7: Check if current price is at the zone
   const atr = calculateATR(htfCandles);
-  const proximityThreshold = atr * PRICE_AT_ZONE_ATR_MULT;
+  const looseThreshold = atr * PRICE_AT_ZONE_ATR_MULT;       // 1.5×ATR (watchlist)
+  const strictThreshold = atr * PRICE_AT_ZONE_STRICT_ATR_MULT; // 0.3×ATR (market fill)
   const zoneHigh = bestZonePOI.poi.high;
   const zoneLow = bestZonePOI.poi.low;
 
-  let priceAtZone = false;
+  // ── Distance calculation ──
   let distanceToZone = 0;
+  const priceInsideZone = currentPrice >= zoneLow && currentPrice <= zoneHigh;
 
-  if (currentPrice >= zoneLow && currentPrice <= zoneHigh) {
+  if (!priceInsideZone) {
+    if (currentPrice > zoneHigh) {
+      distanceToZone = currentPrice - zoneHigh;
+    } else {
+      distanceToZone = zoneLow - currentPrice;
+    }
+  }
+
+  // Approximate pips (works for 5-digit pairs; gold uses 2-digit so this is rough)
+  const distancePips = distanceToZone * 10000; // Good enough for display
+
+  // ── Loose proximity (existing behavior — for watchlist/awareness) ──
+  let priceAtZone = false;
+  if (priceInsideZone) {
     priceAtZone = true;
-    distanceToZone = 0;
-  } else if (direction === "bullish") {
-    // For longs, price should be approaching from above (retracing down to zone)
-    distanceToZone = currentPrice - zoneHigh; // Positive = above zone, negative = below
-    if (distanceToZone < 0) distanceToZone = zoneLow - currentPrice; // Below zone
-    priceAtZone = Math.abs(currentPrice - zoneHigh) <= proximityThreshold
-      || Math.abs(currentPrice - zoneLow) <= proximityThreshold;
   } else {
-    // For shorts, price should be approaching from below (retracing up to zone)
-    distanceToZone = zoneLow - currentPrice; // Positive = below zone, negative = above
-    if (distanceToZone < 0) distanceToZone = currentPrice - zoneHigh; // Above zone
-    priceAtZone = Math.abs(currentPrice - zoneHigh) <= proximityThreshold
-      || Math.abs(currentPrice - zoneLow) <= proximityThreshold;
+    priceAtZone = Math.abs(currentPrice - zoneHigh) <= looseThreshold
+      || Math.abs(currentPrice - zoneLow) <= looseThreshold;
+  }
+
+  // ── Directional side check ──
+  // For LONG (demand zone): price should be AT or BELOW the zone (approaching from above during retrace)
+  //   - Price above zone is acceptable only if very close (within strict threshold)
+  // For SHORT (supply zone): price should be AT or ABOVE the zone (approaching from below during retrace)
+  //   - Price below zone is acceptable only if very close (within strict threshold)
+  let sideOk = true;
+  if (direction === "bullish") {
+    // For longs: price above zone top is wrong side (already moved away from demand)
+    // Allow only if within strict threshold above the zone
+    if (currentPrice > zoneHigh) {
+      sideOk = (currentPrice - zoneHigh) <= strictThreshold;
+    }
+    // Price at or below zone is always correct side for longs
+  } else {
+    // For shorts: price below zone bottom is wrong side (already moved away from supply)
+    // Allow only if within strict threshold below the zone
+    if (currentPrice < zoneLow) {
+      sideOk = (zoneLow - currentPrice) <= strictThreshold;
+    }
+    // Price at or above zone is always correct side for shorts
+  }
+
+  // ── Strict proximity (for market fill decisions) ──
+  // Must be within 0.3×ATR of the zone AND on the correct side
+  let priceAtZoneStrict = false;
+  if (priceInsideZone) {
+    priceAtZoneStrict = true;
+  } else {
+    const nearZoneStrict = Math.abs(currentPrice - zoneHigh) <= strictThreshold
+      || Math.abs(currentPrice - zoneLow) <= strictThreshold;
+    priceAtZoneStrict = nearZoneStrict && sideOk;
+  }
+
+  // ── Build reason string ──
+  let proximityLabel: string;
+  if (priceInsideZone) {
+    proximityLabel = "price INSIDE zone";
+  } else if (priceAtZoneStrict) {
+    proximityLabel = `price NEAR zone (${distancePips.toFixed(1)} pips, strict)`;
+  } else if (priceAtZone) {
+    proximityLabel = `price NEAR zone (${distancePips.toFixed(1)} pips, loose only${!sideOk ? ", wrong side" : ""})`;
+  } else {
+    proximityLabel = `price ${distancePips.toFixed(1)} pips away`;
   }
 
   return {
@@ -856,13 +913,15 @@ export function findBestEntryZone(
       zone: bestZonePOI,
       impulse,
       priceAtZone,
+      priceInsideZone,
+      priceAtZoneStrict,
+      sideOk,
       distanceToZone,
+      distancePips,
     },
     impulse,
     allZones: rankedZones,
-    reason: priceAtZone
-      ? `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — price AT zone`
-      : `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — price ${distanceToZone.toFixed(5)} away`,
+    reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
   };
 }
 
