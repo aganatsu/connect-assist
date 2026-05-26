@@ -6,6 +6,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Clock, Target, Calendar, BarChart3, Grid3X3 } from "lucide-react";
 import { smcApi, marketApi } from "@/lib/api";
 import { INSTRUMENTS, SESSIONS, KILL_ZONES } from "@/lib/marketData";
+import { formatPrice } from "@/lib/formatTime";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 import {
@@ -14,9 +15,6 @@ import {
 
 const SYMBOLS = INSTRUMENTS.map(i => i.symbol);
 const CURRENCIES = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "NZD", "CHF"];
-
-// Safe formatter — guards against undefined/null/NaN
-const fx = (n: any, d = 5) => (typeof n === "number" && Number.isFinite(n) ? n.toFixed(d) : "—");
 
 export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
