@@ -318,18 +318,20 @@ Deno.serve(async (req) => {
           pending.direction as "long" | "short",
           DEFAULT_ZONE_CONFIRMATION_CONFIG,
           zoneTouchIdx,
+          pending.symbol,
         );
 
         if (!confirmationSignal) {
           stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no CHoCH yet`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
           continue;
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // CHoCH CONFIRMED! Enter the trade.
-        // ═══════════════════════════════════════════════════════════════════
+        // CONFIRMED! Enter the trade (tiered confirmation passed).
+        // ═══════════════════════════════════════════════════════════════
         console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
+        console.log(`[zone-confirm] Tier: ${confirmationSignal.tier}, Type: ${confirmationSignal.type}`);
 
         // Check max positions gate
         const maxOpenPositions = parseInt(String(config.risk?.maxOpenPositions || config.maxOpenPositions || 3), 10);
@@ -375,6 +377,7 @@ Deno.serve(async (req) => {
           fastConfirmScanner: true, // Flag that this was filled by the fast-confirm scanner
           confirmation: {
             type: confirmationSignal.type,
+            tier: confirmationSignal.tier,
             price: confirmationSignal.price,
             displacement: confirmationSignal.displacement,
             significance: confirmationSignal.significance,

@@ -1,12 +1,27 @@
 /**
- * Zone Confirmation Entry Module
+ * Zone Confirmation Entry Module — Tiered Confirmation
+ * ═══════════════════════════════════════════════════════
  * 
- * Implements the ICT 2022 confirmation entry model:
- * When price enters an impulse zone, instead of immediately filling,
- * the bot waits for a 5-minute CHoCH (Change of Character) confirming
- * that price is actually reversing at the zone before entering.
+ * Implements a TIERED confirmation model for zone entries:
+ * Instead of requiring a single binary CHoCH check, the system evaluates
+ * multiple confirmation paths with different strength levels.
  * 
- * Flow: Zone touch → Confirmation hunt (5m CHoCH) → Entry at live price
+ * Confirmation Tiers (any ONE tier passing = confirmed fill):
+ * 
+ *   Tier 1 — CHoCH (Gold Standard):
+ *     Close-based CHoCH in the correct direction → instant fill
+ * 
+ *   Tier 2 — CHoCH + Supporting (Relaxed CHoCH):
+ *     Wick-based CHoCH (not close) + at least 1 supporting signal
+ *     (engulfing, rejection wick, FVG, or volume spike)
+ * 
+ *   Tier 3 — Reversal Pattern (No CHoCH Required):
+ *     Engulfing pattern + rejection wick + displacement above instrument threshold
+ *     This IS a reversal — it just hasn't broken structure on 5m yet.
+ * 
+ * Instrument-Aware Thresholds:
+ *   XAU/USD and metals have larger wicks relative to bodies due to volatility.
+ *   Displacement thresholds are lowered for these instruments.
  * 
  * References:
  * - ICT 2022 Mentorship Model (MSS on LTF as entry trigger)
@@ -20,47 +35,168 @@ import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
 
 export type { Candle };
 
+export type ConfirmationType =
+  | "bearish_choch"
+  | "bullish_choch"
+  | "bearish_choch_relaxed"
+  | "bullish_choch_relaxed"
+  | "bearish_reversal_pattern"
+  | "bullish_reversal_pattern";
+
 export interface ConfirmationSignal {
-  type: "bearish_choch" | "bullish_choch" | "bearish_engulfing" | "bullish_engulfing" | "rejection_wick";
-  price: number;              // price at confirmation (candle close)
-  candleIndex: number;        // index in the candle array
-  displacement: number;       // body/range ratio (0-1), higher = stronger
+  type: ConfirmationType;
+  tier: 1 | 2 | 3;             // which confirmation tier triggered
+  price: number;                // price at confirmation (candle close)
+  candleIndex: number;          // index in the candle array
+  displacement: number;         // body/range ratio (0-1), higher = stronger
   significance: "internal" | "external" | undefined;
-  closeBased: boolean;        // true = candle body closed through (strong)
-  supportingSignals: string[]; // additional confirmation factors
+  closeBased: boolean;          // true = candle body closed through (strong)
+  supportingSignals: string[];  // additional confirmation factors
 }
 
 export interface ZoneConfirmationConfig {
   enabled: boolean;                    // default: true (when izGateMode === "hard")
   confirmationTimeframe: string;       // default: "5m"
-  minDisplacement: number;             // default: 0.5 (50% body ratio)
-  requireCloseBased: boolean;          // default: true
-  maxLookbackCandles: number;          // default: 6 (30 min on 5m = only recent CHoCH)
+  minDisplacement: number;             // default: 0.4 (40% body ratio — lowered from 0.5)
+  requireCloseBased: boolean;          // default: true (for Tier 1 only now)
+  maxLookbackCandles: number;          // default: 10 (50 min on 5m — expanded from 6)
   resetOnZoneExit: boolean;            // default: true
+  // Tier control — allow disabling individual tiers
+  tier1Enabled: boolean;               // default: true (CHoCH close-based)
+  tier2Enabled: boolean;               // default: true (CHoCH wick + supporting)
+  tier3Enabled: boolean;               // default: true (reversal pattern, no CHoCH)
+  // Instrument-specific displacement override (optional)
+  instrumentDisplacements?: Record<string, number>;
 }
 
 export const DEFAULT_ZONE_CONFIRMATION_CONFIG: ZoneConfirmationConfig = {
   enabled: true,
   confirmationTimeframe: "5m",
-  minDisplacement: 0.5,
+  minDisplacement: 0.4,
   requireCloseBased: true,
-  maxLookbackCandles: 6,
+  maxLookbackCandles: 10,
   resetOnZoneExit: true,
+  tier1Enabled: true,
+  tier2Enabled: true,
+  tier3Enabled: true,
 };
 
-// ─── Main Detection Function ─────────────────────────────────────────────────
+/**
+ * Instrument-specific displacement thresholds.
+ * Metals and crypto have larger wicks relative to bodies, so we lower the bar.
+ * Forex majors keep the standard threshold.
+ */
+const INSTRUMENT_DISPLACEMENT: Record<string, number> = {
+  "XAU/USD": 0.30,   // Gold: huge wicks, 30% body is already meaningful
+  "XAG/USD": 0.30,   // Silver: same as gold
+  "US Oil":  0.35,   // Oil: moderate volatility
+  "BTC/USD": 0.30,   // Bitcoin: extreme wicks
+  "ETH/USD": 0.30,   // Ethereum: same as BTC
+  // Forex majors/crosses: use default (0.4)
+};
+
+// ─── Helper: Get effective displacement threshold for an instrument ──────────
+
+function getMinDisplacement(config: ZoneConfirmationConfig, symbol?: string): number {
+  // User-configured per-instrument overrides take priority
+  if (symbol && config.instrumentDisplacements?.[symbol] !== undefined) {
+    return config.instrumentDisplacements[symbol];
+  }
+  // Built-in instrument-aware thresholds
+  if (symbol && INSTRUMENT_DISPLACEMENT[symbol] !== undefined) {
+    return INSTRUMENT_DISPLACEMENT[symbol];
+  }
+  return config.minDisplacement;
+}
+
+// ─── Supporting Signal Detection ─────────────────────────────────────────────
+
+interface SupportingSignalResult {
+  signals: string[];
+  hasEngulfing: boolean;
+  hasRejectionWick: boolean;
+  hasFVG: boolean;
+  hasVolumeSpike: boolean;
+}
 
 /**
- * Detect zone confirmation signal on 5-minute candles.
+ * Detect supporting signals around a specific candle.
+ * Used by all tiers to annotate and qualify confirmation.
+ */
+function detectSupportingSignals(
+  candles: Candle[],
+  candleIndex: number,
+  direction: "long" | "short",
+): SupportingSignalResult {
+  const signals: string[] = [];
+  const candle = candles[candleIndex];
+  if (!candle) return { signals, hasEngulfing: false, hasRejectionWick: false, hasFVG: false, hasVolumeSpike: false };
+
+  const candleRange = candle.high - candle.low;
+  if (candleRange === 0) return { signals, hasEngulfing: false, hasRejectionWick: false, hasFVG: false, hasVolumeSpike: false };
+
+  let hasEngulfing = false;
+  let hasRejectionWick = false;
+  let hasFVG = false;
+  let hasVolumeSpike = false;
+
+  // 1. Engulfing pattern (candle engulfs previous candle body)
+  if (candleIndex > 0) {
+    const prev = candles[candleIndex - 1];
+    if (prev) {
+      const engulfs = direction === "short"
+        ? (candle.open >= prev.close && candle.close <= prev.open)
+        : (candle.open <= prev.close && candle.close >= prev.open);
+      if (engulfs) { signals.push("engulfing"); hasEngulfing = true; }
+    }
+  }
+
+  // 2. Rejection wick (>30% of range on the rejection side)
+  if (direction === "short") {
+    const upperWick = candle.high - Math.max(candle.open, candle.close);
+    if (upperWick / candleRange > 0.3) { signals.push("rejection_wick"); hasRejectionWick = true; }
+  } else {
+    const lowerWick = Math.min(candle.open, candle.close) - candle.low;
+    if (lowerWick / candleRange > 0.3) { signals.push("rejection_wick"); hasRejectionWick = true; }
+  }
+
+  // 3. FVG creation (gap between candle before and candle after)
+  if (candleIndex > 0 && candleIndex < candles.length - 1) {
+    const candleBefore = candles[candleIndex - 1];
+    const candleAfter = candles[candleIndex + 1];
+    if (candleBefore && candleAfter) {
+      const gap = direction === "short"
+        ? candleBefore.low > candleAfter.high  // bearish FVG
+        : candleBefore.high < candleAfter.low; // bullish FVG
+      if (gap) { signals.push("fvg_created"); hasFVG = true; }
+    }
+  }
+
+  // 4. Volume spike (1.5× average of last 5 candles)
+  if (candle.volume && candleIndex >= 5) {
+    const recentVolumes = candles.slice(candleIndex - 5, candleIndex).map(c => c.volume || 0);
+    const avgVolume = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
+    if (avgVolume > 0 && candle.volume > avgVolume * 1.5) {
+      signals.push("volume_spike"); hasVolumeSpike = true;
+    }
+  }
+
+  return { signals, hasEngulfing, hasRejectionWick, hasFVG, hasVolumeSpike };
+}
+
+// ─── Main Detection Function (Tiered) ───────────────────────────────────────
+
+/**
+ * Detect zone confirmation signal using tiered confirmation paths.
  * 
- * For a SELL setup: looks for bearish CHoCH (price was making HH/HL, then breaks below recent HL)
- * For a BUY setup: looks for bullish CHoCH (price was making LL/LH, then breaks above recent LH)
+ * Returns the FIRST (strongest) confirmation found:
+ *   Tier 1 → Tier 2 → Tier 3 (checked in order of strength)
  * 
  * @param candles5m - 5-minute candles (at least 20-30 for structure detection)
  * @param direction - "long" or "short" (the trade direction we want to confirm)
  * @param config - confirmation configuration
  * @param zoneTouchIndex - optional: the candle index when price first touched the zone
- *                         (only CHoCHs AFTER this index are valid)
+ * @param symbol - optional: instrument symbol for instrument-aware thresholds
  * @returns ConfirmationSignal if found, null otherwise
  */
 export function detectZoneConfirmation(
@@ -68,110 +204,148 @@ export function detectZoneConfirmation(
   direction: "long" | "short",
   config: ZoneConfirmationConfig = DEFAULT_ZONE_CONFIRMATION_CONFIG,
   zoneTouchIndex?: number,
+  symbol?: string,
 ): ConfirmationSignal | null {
-  if (candles5m.length < 10) return null; // need enough candles for structure detection
+  if (candles5m.length < 10) return null;
+
+  const effectiveDisplacement = getMinDisplacement(config, symbol);
+  const requiredChochType = direction === "short" ? "bearish" : "bullish";
+  const minIndex = candles5m.length - 1 - config.maxLookbackCandles;
+  const afterZoneTouch = zoneTouchIndex !== undefined ? zoneTouchIndex : 0;
 
   // Run market structure analysis on the 5m candles
   const structure = analyzeMarketStructure(candles5m);
 
-  // Determine which CHoCH type we need based on trade direction
-  const requiredChochType = direction === "short" ? "bearish" : "bullish";
-
-  // StructureBreak fields from smcAnalysis.ts:
-  //   index, type ("bullish"|"bearish"), price, datetime, closeBased, level, significance?
-  // Filter CHoCHs by:
-  // 1. Correct direction (bearish for short, bullish for long)
-  // 2. Close-based (if required) — strong confirmation
-  // 3. Recency (within maxLookbackCandles from the end)
-  const minIndex = candles5m.length - 1 - config.maxLookbackCandles;
-  const afterZoneTouch = zoneTouchIndex !== undefined ? zoneTouchIndex : 0;
-
-  const validChochs = (structure.choch as Array<{
+  // Get all CHoCHs in the correct direction within the lookback window
+  const allChochs = (structure.choch as Array<{
     index: number; type: "bullish" | "bearish"; price: number;
     closeBased: boolean; significance?: "internal" | "external";
   }>)
     .filter(c => c.type === requiredChochType)
-    .filter(c => !config.requireCloseBased || c.closeBased)
-    .filter(c => c.index >= minIndex)  // recent enough
-    .filter(c => c.index >= afterZoneTouch)  // after zone touch
+    .filter(c => c.index >= minIndex)
+    .filter(c => c.index >= afterZoneTouch)
     .sort((a, b) => b.index - a.index); // most recent first
 
-  if (validChochs.length === 0) return null;
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIER 1: Close-based CHoCH with sufficient displacement
+  // The gold standard — candle body closes through structure level.
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (config.tier1Enabled) {
+    const closeBasedChochs = allChochs.filter(c => c.closeBased);
+    for (const choch of closeBasedChochs) {
+      const candle = candles5m[choch.index];
+      if (!candle) continue;
+      const range = candle.high - candle.low;
+      if (range === 0) continue;
+      const displacement = Math.abs(candle.close - candle.open) / range;
+      if (displacement < effectiveDisplacement) continue;
 
-  // Take the most recent valid CHoCH
-  const choch = validChochs[0];
-  const chochCandle = candles5m[choch.index];
+      const supporting = detectSupportingSignals(candles5m, choch.index, direction);
+      const significance = (choch as any).significance;
+      if (significance === "external") supporting.signals.push("external_significance");
 
-  if (!chochCandle) return null;
-
-  // Calculate displacement (body ratio)
-  const candleRange = chochCandle.high - chochCandle.low;
-  if (candleRange === 0) return null; // doji, skip
-  const bodySize = Math.abs(chochCandle.close - chochCandle.open);
-  const displacement = bodySize / candleRange;
-
-  // Apply displacement filter
-  if (displacement < config.minDisplacement) return null;
-
-  // Check for supporting signals
-  const supportingSignals: string[] = [];
-
-  // Check for engulfing pattern (CHoCH candle engulfs previous candle)
-  if (choch.index > 0) {
-    const prevCandle = candles5m[choch.index - 1];
-    if (prevCandle) {
-      const engulfs = direction === "short"
-        ? (chochCandle.open >= prevCandle.close && chochCandle.close <= prevCandle.open)
-        : (chochCandle.open <= prevCandle.close && chochCandle.close >= prevCandle.open);
-      if (engulfs) supportingSignals.push("engulfing");
+      return {
+        type: requiredChochType === "bearish" ? "bearish_choch" : "bullish_choch",
+        tier: 1,
+        price: candle.close,
+        candleIndex: choch.index,
+        displacement,
+        significance,
+        closeBased: true,
+        supportingSignals: supporting.signals,
+      };
     }
   }
 
-  // Check for FVG creation (gap between candle before CHoCH and candle after)
-  if (choch.index > 0 && choch.index < candles5m.length - 1) {
-    const candleBefore = candles5m[choch.index - 1];
-    const candleAfter = candles5m[choch.index + 1];
-    if (candleBefore && candleAfter) {
-      const hasFVG = direction === "short"
-        ? candleBefore.low > candleAfter.high  // bearish FVG
-        : candleBefore.high < candleAfter.low; // bullish FVG
-      if (hasFVG) supportingSignals.push("fvg_created");
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIER 2: Wick-based CHoCH + at least 1 supporting signal
+  // CHoCH happened (price broke structure) but only via wick, not body close.
+  // Requires additional evidence that the reversal is real.
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (config.tier2Enabled) {
+    const wickChochs = allChochs.filter(c => !c.closeBased);
+    for (const choch of wickChochs) {
+      const candle = candles5m[choch.index];
+      if (!candle) continue;
+      const range = candle.high - candle.low;
+      if (range === 0) continue;
+      const displacement = Math.abs(candle.close - candle.open) / range;
+      // Tier 2 uses a slightly lower displacement bar (80% of effective)
+      if (displacement < effectiveDisplacement * 0.8) continue;
+
+      const supporting = detectSupportingSignals(candles5m, choch.index, direction);
+      const significance = (choch as any).significance;
+      if (significance === "external") supporting.signals.push("external_significance");
+
+      // Must have at least 1 supporting signal to qualify
+      const supportCount = (supporting.hasEngulfing ? 1 : 0) +
+        (supporting.hasRejectionWick ? 1 : 0) +
+        (supporting.hasFVG ? 1 : 0) +
+        (supporting.hasVolumeSpike ? 1 : 0);
+
+      if (supportCount < 1) continue;
+
+      return {
+        type: requiredChochType === "bearish" ? "bearish_choch_relaxed" : "bullish_choch_relaxed",
+        tier: 2,
+        price: candle.close,
+        candleIndex: choch.index,
+        displacement,
+        significance,
+        closeBased: false,
+        supportingSignals: supporting.signals,
+      };
     }
   }
 
-  // Check for rejection wick on the CHoCH candle
-  if (direction === "short") {
-    const upperWick = chochCandle.high - Math.max(chochCandle.open, chochCandle.close);
-    if (upperWick / candleRange > 0.3) supportingSignals.push("rejection_wick");
-  } else {
-    const lowerWick = Math.min(chochCandle.open, chochCandle.close) - chochCandle.low;
-    if (lowerWick / candleRange > 0.3) supportingSignals.push("rejection_wick");
-  }
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TIER 3: Reversal Pattern (no CHoCH required)
+  // Strong reversal evidence without a structural break on 5m.
+  // Requires: engulfing + rejection wick + displacement above threshold.
+  // This IS a reversal — it just hasn't broken the 5m swing yet.
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (config.tier3Enabled) {
+    // Scan recent candles (within lookback window, after zone touch)
+    const scanStart = Math.max(minIndex, afterZoneTouch);
+    const scanEnd = candles5m.length;
 
-  // Check for volume spike (if volume data available)
-  if (chochCandle.volume && choch.index >= 5) {
-    const recentVolumes = candles5m.slice(choch.index - 5, choch.index).map(c => c.volume || 0);
-    const avgVolume = recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length;
-    if (avgVolume > 0 && chochCandle.volume > avgVolume * 1.5) {
-      supportingSignals.push("volume_spike");
+    for (let i = scanEnd - 1; i >= scanStart; i--) {
+      const candle = candles5m[i];
+      if (!candle) continue;
+      const range = candle.high - candle.low;
+      if (range === 0) continue;
+      const displacement = Math.abs(candle.close - candle.open) / range;
+
+      // Tier 3 requires stronger displacement than Tier 1/2 to compensate
+      // for the lack of structural break
+      if (displacement < effectiveDisplacement) continue;
+
+      // Must be a candle in the correct direction
+      const isBearishCandle = candle.close < candle.open;
+      const isBullishCandle = candle.close > candle.open;
+      if (direction === "short" && !isBearishCandle) continue;
+      if (direction === "long" && !isBullishCandle) continue;
+
+      const supporting = detectSupportingSignals(candles5m, i, direction);
+
+      // Tier 3 requires BOTH engulfing AND rejection wick
+      if (!supporting.hasEngulfing || !supporting.hasRejectionWick) continue;
+
+      return {
+        type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",
+        tier: 3,
+        price: candle.close,
+        candleIndex: i,
+        displacement,
+        significance: undefined,
+        closeBased: false, // no structural break
+        supportingSignals: supporting.signals,
+      };
     }
   }
 
-  // Check significance (external CHoCH is stronger than internal)
-  const chochSignificance = (choch as any).significance;
-  if (chochSignificance === "external") {
-    supportingSignals.push("external_significance");
-  }
-
-  return {
-    type: requiredChochType === "bearish" ? "bearish_choch" : "bullish_choch",
-    price: chochCandle.close,
-    candleIndex: choch.index,
-    displacement,
-    significance: chochSignificance,
-    closeBased: choch.closeBased,
-    supportingSignals,
-  };
+  // No confirmation found at any tier
+  return null;
 }
 
 // ─── Zone Boundary Check ─────────────────────────────────────────────────────
@@ -200,11 +374,8 @@ export function isPriceInZone(
   const buffer = atr ? atr * 0.2 : zoneWidth * 0.1;
 
   if (direction === "short") {
-    // For shorts, price should be near/in the supply zone (above)
-    // Price is "in zone" if it's between zoneLow - buffer and zoneHigh + buffer
     return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
   } else {
-    // For longs, price should be near/in the demand zone (below)
     return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
   }
 }
@@ -228,12 +399,8 @@ export function isImpulseBroken(
   direction: "long" | "short",
 ): boolean {
   if (direction === "short") {
-    // For shorts, the impulse was bearish. Origin = impulse high.
-    // If price goes ABOVE the impulse high, the impulse is broken.
     return currentPrice > impulseHigh;
   } else {
-    // For longs, the impulse was bullish. Origin = impulse low.
-    // If price goes BELOW the impulse low, the impulse is broken.
     return currentPrice < impulseLow;
   }
 }
@@ -244,10 +411,27 @@ export function isImpulseBroken(
  * Generate a human-readable summary of the confirmation signal.
  */
 export function formatConfirmationSummary(signal: ConfirmationSignal): string {
-  const typeLabel = signal.type === "bearish_choch" ? "Bearish CHoCH" : "Bullish CHoCH";
-  const strengthLabel = signal.displacement >= 0.7 ? "strong" : signal.displacement >= 0.5 ? "moderate" : "weak";
+  const tierLabels: Record<number, string> = { 1: "T1:CHoCH", 2: "T2:CHoCH+", 3: "T3:Reversal" };
+  const tierLabel = tierLabels[signal.tier] || "T?";
+
+  const typeLabels: Record<string, string> = {
+    "bearish_choch": "Bearish CHoCH",
+    "bullish_choch": "Bullish CHoCH",
+    "bearish_choch_relaxed": "Bearish CHoCH (wick)",
+    "bullish_choch_relaxed": "Bullish CHoCH (wick)",
+    "bearish_reversal_pattern": "Bearish Reversal",
+    "bullish_reversal_pattern": "Bullish Reversal",
+  };
+  const typeLabel = typeLabels[signal.type] || signal.type;
+
+  const strengthLabel = signal.displacement >= 0.7 ? "strong"
+    : signal.displacement >= 0.5 ? "moderate"
+    : signal.displacement >= 0.35 ? "adequate"
+    : "minimal";
+
   const extras = signal.supportingSignals.length > 0
-    ? ` | Supporting: ${signal.supportingSignals.join(", ")}`
+    ? ` | ${signal.supportingSignals.join(", ")}`
     : "";
-  return `${typeLabel} @ ${signal.price.toFixed(5)} (${strengthLabel}, displacement: ${(signal.displacement * 100).toFixed(0)}%${signal.significance === "external" ? ", EXTERNAL" : ""}${extras})`;
+
+  return `[${tierLabel}] ${typeLabel} @ ${signal.price.toFixed(5)} (${strengthLabel}, disp: ${(signal.displacement * 100).toFixed(0)}%${signal.significance === "external" ? ", EXTERNAL" : ""}${extras})`;
 }
