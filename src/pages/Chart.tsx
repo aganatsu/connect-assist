@@ -8,15 +8,13 @@ import { ChartContextPanel } from "@/components/ChartContextPanel";
 import { INSTRUMENTS, TIMEFRAMES, getCurrentSession, isInKillzone, type Timeframe } from "@/lib/marketData";
 import { marketApi, smcApi, paperApi, type CandleSource } from "@/lib/api";
 import { DataSourceBadge } from "@/components/DataSourceBadge";
+import { formatPrice } from "@/lib/formatTime";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Accordion, AccordionContent, AccordionItem, AccordionTrigger,
 } from "@/components/ui/accordion";
 import { TrendingUp, TrendingDown, Target, Shield, Activity, Clock, CheckCircle, XCircle, Zap, Radio, ChevronRight, PanelRightOpen, PanelRightClose, ChevronDown, ChevronUp } from "lucide-react";
 import { unifyConfluence } from "@/lib/confluenceUnify";
-
-const fx = (n: unknown, digits = 5) =>
-  typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
 
 // Timeframe-aware refresh intervals
 function getRefreshInterval(tf: Timeframe): number {
