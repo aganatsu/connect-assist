@@ -1,114 +1,145 @@
-# Task: Market Fill at Zone (Option C)
+# Task: Directional Zone Guard — Prevent Chasing Entries
 
-## Branch: manus/market-fill-at-zone
+## Branch: manus/fix-zone-directional-guard
 
 ## Behavior changes
 
-1. **When `izGateMode="hard"` AND price IS at a validated impulse zone AND `marketFillAtZone=true` (new default), the bot now places a MARKET ORDER immediately** instead of a pending limit order that waits for 5m CHoCH confirmation. This is the primary user-visible change — trades that previously sat at "awaiting_confirmation" forever will now fill immediately when the zone is validated and all gates pass.
+1. **Market fill at zone is now blocked when price has already moved away from the zone** (chasing). Previously, `priceAtZone` used a generous 1.5×ATR proximity check that did not verify which SIDE of the zone price was on. A LONG trade could fill at market even when price was 44+ pips ABOVE the demand zone (buying the move, not the zone).
 
-2. **Pending orders with CHoCH confirmation are now reserved for the "watching_zone" path only** — when the impulse zone exists but price hasn't reached it yet. The tiered CHoCH system (from the previous branch) still applies to these watching-zone orders.
+2. **When the directional guard blocks a market fill, the bot falls back to the limit order path** (pending order with tiered CHoCH confirmation). This is the safe path — the trade waits for price to return to the zone rather than chasing.
 
-3. **New Telegram notification tag** — market-fill-at-zone trades include a "🎯 Market Fill at Zone" section showing the zone boundaries.
+3. **No change when price is genuinely at/near the zone on the correct side.** The guard uses a buffer of 2× zone width, which is instrument-adaptive: wider zones (gold) get wider buffers automatically.
 
-4. **New detail status** — `"trade_placed_at_zone"` distinguishes zone fills from regular market fills in scan logs.
+## Real-world trigger
 
-5. **Fully backwards-compatible** — setting `marketFillAtZone: false` in config restores the old behavior exactly (regression test proves this).
+EUR/AUD LONG filled at 1.62166 when the demand zone was 1.61607–1.61719. That's 44.7 pips ABOVE the zone — the bot was chasing. The `priceAtZone` flag was `true` because 1.5×ATR proximity was satisfied, but the directional check was missing.
+
+## Fix logic (lines 4865–4892 in bot-scanner/index.ts)
+
+```
+LONG (demand zone):  price must be ≤ zoneHigh + (2 × zoneWidth)
+SHORT (supply zone): price must be ≥ zoneLow  - (2 × zoneWidth)
+```
+
+- Buffer = 2× zone width (instrument-adaptive: gold zones are wider → wider buffer)
+- When blocked: logs `⚠️ MARKET FILL BLOCKED — price X is on wrong side of zone`
+- Falls back to `effectiveLimitEnabled = true` → pending order path
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Added `marketFillAtZone` config (default: true), entry decision logic that bypasses pending orders when price is at a validated zone, market-fill logging, detail metadata, and Telegram notification tag |
-| `supabase/functions/bot-scanner/market-fill-at-zone.test.ts` | 11 new tests covering entry decision logic, config defaults, metadata, and regression verification |
+| `supabase/functions/bot-scanner/index.ts` | Added directional guard (lines 4865–4892): `priceOnCorrectSide` check before allowing `useMarketFillAtZone`. Logs warning when blocked. |
+| `supabase/functions/bot-scanner/market-fill-at-zone.test.ts` | Added 10 new directional guard tests covering LONG/SHORT scenarios, the exact EUR/AUD case, XAU/USD wider zones, and full integration fallback logic. |
+| `REPORT.md` | This file. |
 
 ## What was changed in bot-scanner/index.ts (extra caution file)
 
-Three surgical changes were made:
+One surgical addition at lines 4865–4892, between the existing `priceIsAtValidatedZone` calculation and the `useMarketFillAtZone` assignment:
 
-1. **Line 204** — Added `marketFillAtZone: true` to DEFAULTS (new config option).
+```typescript
+// ── Directional Guard ──────────────────────────────────────────────
+let priceOnCorrectSide = true;
+if (priceIsAtValidatedZone && izData?.bestZone) {
+  const zoneHigh = izData.bestZone.high;
+  const zoneLow = izData.bestZone.low;
+  const zoneWidth = zoneHigh - zoneLow;
+  const buffer = zoneWidth * 2;
+  const currentPrice = analysis.lastPrice;
+  if (analysis.direction === "long") {
+    priceOnCorrectSide = currentPrice <= zoneHigh + buffer;
+  } else {
+    priceOnCorrectSide = currentPrice >= zoneLow - buffer;
+  }
+  if (!priceOnCorrectSide) {
+    console.log(`⚠️ MARKET FILL BLOCKED — price on wrong side of zone`);
+  }
+}
+const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide;
+```
 
-2. **Line 961** — Added `marketFillAtZone` to the config resolution function so it's read from `bot_configs` DB table.
-
-3. **Lines 4856-4869** — The entry decision logic. Previously:
-   ```ts
-   const effectiveLimitEnabled = config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry);
-   ```
-   Now:
-   ```ts
-   const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
-   const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone;
-   const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
-   ```
-   When `useMarketFillAtZone` is true, `effectiveLimitEnabled` becomes false, so the code falls through to the market order path below.
-
-4. **Lines 5004-5006** — Added console log for market-fill-at-zone trades.
-
-5. **Lines 5052-5057** — Added detail metadata (`entryMethod`, `zoneConfirmation`, `impulseZoneEntry`).
-
-6. **Line 5083-5084** — Added zone info to Telegram notification.
+The `&& priceOnCorrectSide` is the only change to the `useMarketFillAtZone` assignment. Everything else (the limit order path, the market order path, metadata, notifications) is untouched.
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `priceAtZone + marketFillAtZone=true → effectiveLimitEnabled=false` | Market fill at zone disables limit orders |
-| `priceAtZone + marketFillAtZone=false → effectiveLimitEnabled=true` | Old behavior preserved when config disabled |
-| `price NOT at zone → effectiveLimitEnabled=true` | Watching path still uses limit orders |
-| `izGateMode=soft → no market fill at zone` | Feature only activates with hard gate |
-| `limitOrderEnabled=true + NOT at zone → limit orders` | Explicit limit config respected |
-| `config default is true` | Feature enabled by default |
-| `status is 'trade_placed_at_zone'` | Correct status metadata |
-| `promoted from staging takes priority` | Staging promotion status not overwritten |
-| `entryMethod is 'market_fill_at_zone'` | Correct entry method metadata |
-| `marketFillAtZone=false → identical to pre-change` | Full regression: all 6 config combos produce same result as old code |
-| `marketFillAtZone=true → ONLY priceAtZone+hard changes` | Proves only the intended case diverges |
+| Directional Guard — LONG: price inside zone → allows market fill | `priceOnCorrectSide = true` when price is within zone bounds |
+| Directional Guard — LONG: price slightly above zone (within buffer) → allows | Allows when within 2× zone width above zone top |
+| Directional Guard — LONG: price far above zone (beyond buffer) → BLOCKS | EUR/AUD scenario: 1.62166 vs zone 1.61607–1.61719 → blocked |
+| Directional Guard — LONG: price below zone → allows (approaching) | Price below demand zone is fine for longs |
+| Directional Guard — SHORT: price inside zone → allows market fill | `priceOnCorrectSide = true` when price is within zone bounds |
+| Directional Guard — SHORT: price slightly below zone (within buffer) → allows | Allows when within 2× zone width below zone bottom |
+| Directional Guard — SHORT: price far below zone (beyond buffer) → BLOCKS | Mirror of EUR/AUD: 30 pips below supply zone → blocked |
+| Directional Guard — SHORT: price above zone → allows (approaching) | Price above supply zone is fine for shorts |
+| Directional Guard — full integration: blocks chasing, falls back to limit | Full decision logic: priceAtZone=true but directional guard blocks → effectiveLimitEnabled=true |
+| Directional Guard — XAU/USD wider zones: 50-pip zone allows 100-pip buffer | Instrument-adaptive: gold's wider zones get proportionally wider buffers |
 
 ## Tests run
 
 ```
-$ deno test --allow-all supabase/functions/bot-scanner/market-fill-at-zone.test.ts
-ok | 11 passed | 0 failed (16ms)
+running 21 tests from ./supabase/functions/bot-scanner/market-fill-at-zone.test.ts
+Market Fill at Zone — entry decision: priceAtZone + marketFillAtZone=true → effectiveLimitEnabled=false ... ok
+Market Fill at Zone — entry decision: priceAtZone + marketFillAtZone=false → effectiveLimitEnabled=true (old behavior) ... ok
+Market Fill at Zone — entry decision: price NOT at zone → effectiveLimitEnabled=true (watching path) ... ok
+Market Fill at Zone — entry decision: izGateMode=soft → effectiveLimitEnabled depends on limitOrderEnabled only ... ok
+Market Fill at Zone — entry decision: limitOrderEnabled=true overrides marketFillAtZone when NOT at zone ... ok
+Market Fill at Zone — config: default is true (enabled by default) ... ok
+Market Fill at Zone — metadata: status is 'trade_placed_at_zone' for zone fills ... ok
+Market Fill at Zone — metadata: promoted from staging takes priority over zone fill status ... ok
+Market Fill at Zone — metadata: entryMethod is 'market_fill_at_zone' ... ok
+Market Fill at Zone — regression: with marketFillAtZone=false, behavior is identical to pre-change ... ok
+Directional Guard — LONG: price inside zone → allows market fill ... ok
+Directional Guard — LONG: price slightly above zone (within buffer) → allows market fill ... ok
+Directional Guard — LONG: price far above zone (beyond buffer) → BLOCKS market fill ... ok
+Directional Guard — LONG: price below zone → allows market fill (approaching zone) ... ok
+Directional Guard — SHORT: price inside zone → allows market fill ... ok
+Directional Guard — SHORT: price slightly below zone (within buffer) → allows market fill ... ok
+Directional Guard — SHORT: price far below zone (beyond buffer) → BLOCKS market fill ... ok
+Directional Guard — SHORT: price above zone → allows market fill (approaching zone) ... ok
+Directional Guard — full integration: blocks market fill when chasing, falls back to limit order ... ok
+Directional Guard — XAU/USD wider zones: 50-pip zone allows up to 100-pip buffer ... ok
+Market Fill at Zone — regression: with marketFillAtZone=true, ONLY priceAtZone+hard changes behavior ... ok
 
-$ deno test --allow-all supabase/functions/
-ok | 840 passed | 0 failed (12s)
+ok | 21 passed | 0 failed (16ms)
 ```
 
 Type checking:
 ```
-$ deno check supabase/functions/bot-scanner/index.ts -> 9 pre-existing errors (verified on base branch, none from our changes)
+$ deno check supabase/functions/bot-scanner/index.ts
+9 pre-existing errors (lines 1049, 3294, 3619, 3621) — none from our changes
 ```
 
 ## Regression check
 
-Two dedicated regression tests verify:
-1. With `marketFillAtZone=false`, the new code produces **identical results** to the old code for all 6 tested config combinations (izGateMode × priceAtZone × limitOrderEnabled × limitEntry).
-2. With `marketFillAtZone=true`, **only one specific case** changes behavior: `izGateMode="hard" + priceAtZone=true`. All other combinations remain unchanged.
-
-Additionally, the type checker confirms 9 errors — all pre-existing (lines 1049, 3294, 3619, 3621, 5373, 5409, 5410), none from our changes.
+1. **Existing 10 market-fill-at-zone tests still pass** — the directional guard only adds an additional check; when price IS on the correct side, behavior is identical to before.
+2. **The regression test (test #10)** explicitly verifies that with `marketFillAtZone=false`, the new code produces identical results to the pre-change logic for all input combinations.
+3. **Type check**: 9 pre-existing TS errors (lines 1049, 3294, 3619, 3621) — none introduced by this change.
+4. **The guard only affects the `useMarketFillAtZone` path** — if `marketFillAtZone` is disabled in config, or if `izGateMode` is not "hard", or if `priceAtZone` is false, the directional guard is never evaluated.
 
 ## Open questions
 
-1. **Should `marketFillAtZone` be per-pair configurable?** Currently it's a global config. Some pairs (e.g., XAU/USD with wider zones) might benefit from still using CHoCH confirmation even when at zone.
-
-2. **Spread filter timing** — The spread check happens AFTER the entry decision. If spread is too wide at the moment of zone touch, the trade is rejected. Should we add a retry mechanism (check spread again on next scan cycle)?
-
-3. **Zone-confirmation-scanner deployment** — For the "watching_zone" path (pending orders), the zone-confirmation-scanner still needs to be deployed with a pg_cron job. Want me to create the migration?
+1. **Should the buffer be configurable?** Currently hardcoded at 2× zone width. Could be a `marketFillMaxOvershoot` config parameter (multiplier of zone width). For now, 2× is conservative and instrument-adaptive.
+2. **Should we log to the `trade_signals` table when a market fill is blocked?** This would help audit how often the guard fires in production. Currently only logs to console (visible in Supabase function logs).
+3. **Should the `priceAtZone` flag itself be tightened?** The 1.5×ATR proximity is still generous. The directional guard patches the worst case (wrong side), but we could also reduce the ATR multiplier from 1.5 to 1.0 for a tighter overall check.
 
 ## Suggested PR title and description
 
-**Title:** feat: market fill at zone — immediate entry when price is at validated impulse zone
+**Title:** `fix: add directional guard to prevent chasing entries at zone`
 
 **Description:**
-Previously, with `izGateMode="hard"`, ALL trades went through the pending order path requiring 5m CHoCH confirmation before filling. This caused trades to sit at "awaiting_confirmation" indefinitely when a textbook CHoCH never formed — even though the impulse zone engine had already validated the zone and all 22 safety gates passed.
+```
+Fixes the EUR/AUD chasing issue where a LONG trade filled 44.7 pips ABOVE
+the demand zone because priceAtZone uses 1.5×ATR proximity without checking
+which side of the zone price is on.
 
-This PR adds a `marketFillAtZone` config (default: `true`) that fills at market price immediately when:
-- `izGateMode="hard"` (zone is validated)
-- Price IS at the zone (confirmed by impulse zone engine)
-- All safety gates pass
-- Score threshold met
+Adds a directional guard:
+- LONG: price must be ≤ zoneHigh + (2 × zone width)
+- SHORT: price must be ≥ zoneLow - (2 × zone width)
 
-The pending order path with CHoCH confirmation is now reserved for the "watching_zone" scenario — when a valid zone exists but price hasn't arrived yet.
+When blocked, falls back to limit order path (pending order with CHoCH confirmation).
+Buffer is instrument-adaptive: wider zones get wider buffers automatically.
 
-**Backwards compatible:** Set `marketFillAtZone: false` in bot_configs to restore old behavior.
-
-**840 tests passing, 11 new tests added.**
+10 new tests covering the exact EUR/AUD scenario, both directions, XAU/USD
+wider zones, and full integration fallback logic. All 21 tests passing.
+```

@@ -4862,7 +4862,34 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Pending orders (with CHoCH confirmation) are reserved for the "watching_zone"
         // path where price hasn't reached the zone yet.
         const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
-        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone;
+        // ── Directional Guard ──────────────────────────────────────────────
+        // The priceAtZone check uses 1.5×ATR proximity which can be too generous.
+        // For market fills, we add a DIRECTIONAL check: price must be on the correct
+        // side of the zone (at/approaching), not already moved away from it.
+        //   LONG (demand zone): price must be AT or BELOW zone top + buffer
+        //   SHORT (supply zone): price must be AT or ABOVE zone bottom - buffer
+        // Buffer = 2× zone width to allow slight overshoot but reject chasing.
+        let priceOnCorrectSide = true;
+        if (priceIsAtValidatedZone && izData?.bestZone) {
+          const zoneHigh = izData.bestZone.high;
+          const zoneLow = izData.bestZone.low;
+          const zoneWidth = zoneHigh - zoneLow;
+          const buffer = zoneWidth * 2; // Allow up to 2× zone width beyond the zone edge
+          const currentPrice = analysis.lastPrice;
+          if (analysis.direction === "long") {
+            // For longs: price should be at or below the zone top (+ buffer)
+            // If price is far above the zone, we're chasing — don't market fill
+            priceOnCorrectSide = currentPrice <= zoneHigh + buffer;
+          } else {
+            // For shorts: price should be at or above the zone bottom (- buffer)
+            // If price is far below the zone, we're chasing — don't market fill
+            priceOnCorrectSide = currentPrice >= zoneLow - buffer;
+          }
+          if (!priceOnCorrectSide) {
+            console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: MARKET FILL BLOCKED — price ${currentPrice.toFixed(5)} is on wrong side of zone [${zoneLow.toFixed(5)}-${zoneHigh.toFixed(5)}] for ${analysis.direction}. Would be chasing.`);
+          }
+        }
+        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide;
 
         // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
         // or when marketFillAtZone is explicitly disabled.
