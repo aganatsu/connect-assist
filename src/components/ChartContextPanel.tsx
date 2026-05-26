@@ -101,6 +101,9 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
       )}
 
       {/* ─── 1. Bias Header ─── */}
+      {/* Phase-1 cleanup: hide the bias header entirely when there is no signal
+          (NEUTRAL + zero score). Empty/neutral badges are visual noise. */}
+      {!(direction === 'NEUTRAL' && score === 0) && (
       <div className="px-3 py-3 border-b border-border/50">
         <div className="flex items-center gap-2">
           {direction === 'BUY' ? (
@@ -123,6 +126,7 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
           </div>
         </div>
       </div>
+      )}
 
       {/* ─── 2. Top Confluence Factors ─── */}
       {top3.length > 0 && (

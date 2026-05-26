@@ -1455,7 +1455,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                     <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.h4.confidence || 0) * 100)}%)</span>
                                   </div>
                                 )}
-                                {sr.regimeData.multiTFAlignment && (
+                                {/* Phase-1 cleanup: only render alignment badge when meaningful (agree/disagree). */}
+                                {sr.regimeData.multiTFAlignment && sr.regimeData.multiTFAlignment !== "mixed" && (
                                   <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
                                     sr.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
                                     : sr.regimeData.multiTFAlignment === "disagree" ? "bg-badge-loss text-loss"
@@ -2119,8 +2120,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                 )}
               </div>
             )}
-            {/* Multi-TF Alignment */}
-            {d.regimeData.multiTFAlignment && (
+            {/* Multi-TF Alignment — Phase-1: hide neutral "mixed" state */}
+            {d.regimeData.multiTFAlignment && d.regimeData.multiTFAlignment !== "mixed" && (
               <div className="flex items-center gap-1">
                 <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
                   d.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
