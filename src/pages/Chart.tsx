@@ -486,7 +486,7 @@ export default function Chart() {
                               <span className="text-[10px] text-destructive font-medium">PREMIUM</span>
                             </div>
                             <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                              <span className="text-[10px] text-muted-foreground font-mono">{fx(analysis.premiumDiscount.equilibrium)}</span>
+                              <span className="text-[10px] text-muted-foreground font-mono">{formatPrice(analysis.premiumDiscount.equilibrium)}</span>
                             </div>
                             <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2">
                               <span className="text-[10px] text-success font-medium">DISCOUNT</span>
@@ -497,9 +497,9 @@ export default function Chart() {
                             />
                           </div>
                           <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                            <span>H: {fx(analysis.premiumDiscount.swingHigh)}</span>
-                            <span className="text-primary">{fx(analysis.premiumDiscount.zonePercent, 0)}%</span>
-                            <span>L: {fx(analysis.premiumDiscount.swingLow)}</span>
+                            <span>H: {formatPrice(analysis.premiumDiscount.swingHigh)}</span>
+                            <span className="text-primary">{formatPrice(analysis.premiumDiscount.zonePercent, 0)}%</span>
+                            <span>L: {formatPrice(analysis.premiumDiscount.swingLow)}</span>
                           </div>
                           {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
                         </div>
@@ -519,7 +519,7 @@ export default function Chart() {
                       <AccordionContent className="px-3 pb-2">
                         <div className="bg-primary/5 border border-primary/20 p-2 text-[11px]">
                           <p>{analysis.judasSwing.description}</p>
-                          <p className="mt-1 text-muted-foreground font-mono">Midnight Open: {fx(analysis.judasSwing.midnightOpen)}</p>
+                          <p className="mt-1 text-muted-foreground font-mono">Midnight Open: {formatPrice(analysis.judasSwing.midnightOpen)}</p>
                         </div>
                       </AccordionContent>
                     </AccordionItem>
