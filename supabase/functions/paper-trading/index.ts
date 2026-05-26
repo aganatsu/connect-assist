@@ -737,9 +737,23 @@ Deno.serve(async (req) => {
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
       global: { headers: { Authorization: authHeader } },
     });
-    // Use getClaims() for local JWT verification — no network call, prevents 150s hang on expired tokens
+    // Use getClaims() for local JWT verification (JWKS-based). The JWKS fetch
+    // can transiently fail with "Connection reset by peer" on cold boots — retry
+    // a couple of times before returning 401 so a flaky network hop doesn't
+    // surface as a fake "invalid_jwt" to the user.
     const token = authHeader.replace("Bearer ", "");
-    const { data: claimsData, error: authError } = await supabase.auth.getClaims(token);
+    let claimsData: any = null;
+    let authError: any = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await supabase.auth.getClaims(token);
+      claimsData = res.data;
+      authError = res.error;
+      if (!authError && claimsData?.claims?.sub) break;
+      const msg = String(authError?.message ?? "");
+      const transient = /Connection reset|jwks|ECONNRESET|fetch failed|network|timeout/i.test(msg);
+      if (!transient) break;
+      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+    }
     if (authError || !claimsData?.claims?.sub) {
       return new Response(JSON.stringify({ error: "Unauthorized", code: "invalid_jwt", details: authError?.message }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
