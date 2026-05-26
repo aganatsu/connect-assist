@@ -356,42 +356,10 @@ export default function BotView() {
     return t.closedAt?.startsWith(today);
   });
 
-  // ── Header strip metrics ─────────────────────────────────────────────────
-  const unrealizedPnl = (d.equity ?? 0) - (d.balance ?? 0);
-  const todayPnl = d.dailyPnl ?? 0;
-  const todayPnlPct = (d.balance && d.balance !== 0) ? (todayPnl / d.balance) * 100 : 0;
-
-  // Next-scan countdown
-  const intervalMin = botConfig?.entry?.scanIntervalMinutes ?? 15;
-  const lastScanAt = logs[0]?.scanned_at ? new Date(logs[0].scanned_at).getTime() : null;
-  const nextScanAt = lastScanAt ? lastScanAt + intervalMin * 60_000 : null;
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const nextScanLabel = (() => {
-    if (!d.isRunning) return "Engine off";
-    if (scanPolling || scanMut.isPending) return "Scanning…";
-    if (!nextScanAt) return "—";
-    const diff = Math.max(0, nextScanAt - now);
-    const m = Math.floor(diff / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  })();
-
-  const engineLabel = d.killSwitchActive
-    ? "KILL SWITCH"
-    : d.isRunning
-      ? (d.isPaused ? "Paused" : "Bot Active")
-      : "Bot Stopped";
-  const engineDotClass = d.killSwitchActive
-    ? "bg-destructive shadow-[0_0_8px_hsl(var(--destructive)/0.6)]"
-    : d.isRunning && !d.isPaused
-      ? "bg-success shadow-[0_0_8px_hsl(var(--success)/0.5)]"
-      : d.isRunning && d.isPaused
-        ? "bg-warning shadow-[0_0_8px_hsl(var(--warning)/0.5)]"
-        : "bg-muted-foreground";
+  // Phase-1 cleanup: header-strip metrics (engineLabel, engineDotClass,
+  // nextScanLabel, todayPnl, todayPnlPct, unrealizedPnl) lived here only for
+  // the desktop stats strip that was removed. StatusBar + Account drawer cover
+  // the same data. Variables removed to keep the component lean.
 
   return (
     <AppShell>
