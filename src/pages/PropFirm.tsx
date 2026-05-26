@@ -257,7 +257,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
                 ${dailyLossAbs.toFixed(2)} / ${dailyLossLimit.toFixed(2)}
               </span>
             </div>
-            <Progress value={Math.min(100, dailyLossPct)} className={dailyLossPct > 80 ? "[&>div]:bg-red-500" : dailyLossPct > 60 ? "[&>div]:bg-yellow-500" : ""} />
+            <Progress value={Math.min(100, dailyLossPct)} className={dailyLossPct > 80 ? "[&>div]:bg-destructive" : dailyLossPct > 60 ? "[&>div]:bg-warning" : ""} />
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>{dailyLossPct.toFixed(1)}% of limit</span>
               <span>Limit: {(config.max_daily_loss_pct * 100).toFixed(0)}%</span>
@@ -282,7 +282,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
                 ${currentDrawdown.toFixed(2)} / ${totalDrawdownAllowed.toFixed(2)}
               </span>
             </div>
-            <Progress value={Math.min(100, drawdownPct)} className={drawdownPct > 80 ? "[&>div]:bg-red-500" : drawdownPct > 60 ? "[&>div]:bg-orange-500" : ""} />
+            <Progress value={Math.min(100, drawdownPct)} className={drawdownPct > 80 ? "[&>div]:bg-destructive" : drawdownPct > 60 ? "[&>div]:bg-warning" : ""} />
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>{drawdownPct.toFixed(1)}% of limit</span>
               <span>Floor: ${drawdownFloor.toFixed(0)}</span>
@@ -292,7 +292,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
       </Card>
 
       {/* Profit Target */}
-      <Card className={profitProgress >= 100 ? "border-green-500" : ""}>
+      <Card className={profitProgress >= 100 ? "border-success" : ""}>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <Target className="w-4 h-4 text-profit" />
@@ -307,7 +307,7 @@ function ComplianceMeters({ config, dailyState, derived }: { config: PropFirmCon
                 ${(currentBalance - config.initial_balance).toFixed(2)} / ${profitTarget ? (profitTarget - config.initial_balance).toFixed(2) : "N/A"}
               </span>
             </div>
-            <Progress value={Math.min(100, profitProgress)} className="[&>div]:bg-green-500" />
+            <Progress value={Math.min(100, profitProgress)} className="[&>div]:bg-success" />
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>{profitProgress.toFixed(1)}%</span>
               <span>Target: ${profitTarget?.toFixed(0) ?? "N/A"}</span>

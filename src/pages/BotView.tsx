@@ -1556,7 +1556,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
                             <div className={`rounded border px-2 py-1.5 space-y-1 ${
                               sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-                              : sr.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
+                              : sr.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
                               : "border-slate-500/30 bg-slate-500/5"
                             }`}>
                               <p className={`text-[8px] uppercase tracking-wider font-bold ${
@@ -2287,7 +2287,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {d.pullbackHealth && d.pullbackHealth.trend !== "insufficient_data" && (
         <div className={`rounded border px-2 py-1.5 space-y-1 ${
           d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-          : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
+          : d.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
           : "border-slate-500/30 bg-slate-500/5"
         }`}>
           <p className={`text-[11px] uppercase tracking-wider font-bold ${

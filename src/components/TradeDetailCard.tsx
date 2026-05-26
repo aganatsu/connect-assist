@@ -69,7 +69,7 @@ export function TradeDetailCard({
   const levels: LevelItem[] = [];
   
   levels.push({ label: "Entry", price: entryPrice, color: "text-blue-400", icon: "●" });
-  if (stopLoss !== null) levels.push({ label: "Stop Loss", price: stopLoss, color: "text-red-400", icon: "✕" });
+  if (stopLoss !== null) levels.push({ label: "Stop Loss", price: stopLoss, color: "text-destructive", icon: "✕" });
   if (takeProfit !== null) levels.push({ label: "Take Profit", price: takeProfit, color: "text-emerald-400", icon: "◎" });
   if (mfePrice !== null) levels.push({ label: "MFE Reached", price: mfePrice, color: "text-green-300", icon: "▲" });
   if (maePrice !== null) levels.push({ label: "MAE Reached", price: maePrice, color: "text-orange-400", icon: "▼" });
@@ -90,7 +90,7 @@ export function TradeDetailCard({
     : "Inconclusive";
   
   const outcomeColor = outcomeStatus === "would_have_won" ? "text-emerald-400"
-    : outcomeStatus === "would_have_lost" ? "text-red-400"
+    : outcomeStatus === "would_have_lost" ? "text-destructive"
     : "text-muted-foreground";
 
   return (
@@ -98,7 +98,7 @@ export function TradeDetailCard({
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <Badge variant="outline" className={isLong ? "border-emerald-500/50 text-emerald-400" : "border-red-500/50 text-red-400"}>
+          <Badge variant="outline" className={isLong ? "border-emerald-500/50 text-emerald-400" : "border-destructive/50 text-destructive"}>
             {isLong ? "▲ LONG" : "▼ SHORT"} {symbol}
           </Badge>
           <span className="text-xs text-muted-foreground">
@@ -125,7 +125,7 @@ export function TradeDetailCard({
           {/* Risk zone (SL to Entry) */}
           {stopLoss !== null && (
             <div 
-              className="absolute left-[56px] w-[9px] bg-red-500/15 rounded-sm"
+              className="absolute left-[56px] w-[9px] bg-destructive/15 rounded-sm"
               style={{
                 top: `${((maxPrice - Math.max(entryPrice, stopLoss)) / range) * 100}%`,
                 height: `${(Math.abs(entryPrice - stopLoss) / range) * 100}%`,
@@ -162,7 +162,7 @@ export function TradeDetailCard({
                   level.label === "Stop Loss" ? "border-red-400 bg-red-400/30" :
                   level.label === "Take Profit" ? "border-emerald-400 bg-emerald-400/30" :
                   level.label === "MFE Reached" ? "border-green-300 bg-green-300/30" :
-                  "border-orange-400 bg-orange-400/30"
+                  "border-orange-400 bg-warning/30"
                 }`} />
                 <span className={`text-xs font-medium ${level.color}`}>
                   {level.label}
@@ -184,7 +184,7 @@ export function TradeDetailCard({
             </div>
             <div className="flex justify-between gap-4">
               <span className="text-muted-foreground">Stop Loss</span>
-              <span className="font-mono text-red-400">{formatPrice(stopLoss, symbol)}</span>
+              <span className="font-mono text-destructive">{formatPrice(stopLoss, symbol)}</span>
             </div>
             <div className="flex justify-between gap-4">
               <span className="text-muted-foreground">Take Profit</span>

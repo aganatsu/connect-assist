@@ -118,7 +118,7 @@ const categoryIcons: Record<string, React.ReactNode> = {
 };
 
 const confidenceColors: Record<string, string> = {
-  high: "bg-badge-profit text-profit border-green-500/30",
+  high: "bg-badge-profit text-profit border-success/30",
   medium: "bg-badge-warn text-highlight border-yellow-500/30",
   low: "bg-muted text-muted-foreground border-border",
 };
@@ -326,7 +326,7 @@ function RegimeIndicator({ regime }: { regime: PerformanceSummary["regimeAnalysi
     strong_trend: { label: "Strong Trend", color: "text-profit", bg: "bg-green-400/10" },
     mild_trend: { label: "Mild Trend", color: "text-info-c", bg: "bg-badge-info" },
     transitional: { label: "Transitional", color: "text-highlight", bg: "bg-badge-warn" },
-    mild_range: { label: "Mild Range", color: "text-warn", bg: "bg-orange-400/10" },
+    mild_range: { label: "Mild Range", color: "text-warn", bg: "bg-warning/10" },
     choppy_range: { label: "Choppy Range", color: "text-loss", bg: "bg-badge-loss" },
     unknown: { label: "Unknown", color: "text-muted-foreground", bg: "bg-muted/30" },
   };
@@ -1023,10 +1023,10 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
         if (!regime || regime.currentRegime === "unknown") return null;
 
         const regimeStyles: Record<string, { bg: string; border: string; icon: string; label: string }> = {
-          strong_trend: { bg: "bg-badge-profit", border: "border-green-500/30", icon: "↑↑", label: "Strong Trend" },
-          mild_trend: { bg: "bg-green-500/5", border: "border-green-500/20", icon: "↑", label: "Mild Trend" },
-          choppy_range: { bg: "bg-badge-loss", border: "border-red-500/30", icon: "⇆", label: "Choppy / Range" },
-          mild_range: { bg: "bg-yellow-500/10", border: "border-yellow-500/30", icon: "↔", label: "Mild Range" },
+          strong_trend: { bg: "bg-badge-profit", border: "border-success/30", icon: "↑↑", label: "Strong Trend" },
+          mild_trend: { bg: "bg-success/5", border: "border-success/20", icon: "↑", label: "Mild Trend" },
+          choppy_range: { bg: "bg-badge-loss", border: "border-destructive/30", icon: "⇆", label: "Choppy / Range" },
+          mild_range: { bg: "bg-warning/10", border: "border-yellow-500/30", icon: "↔", label: "Mild Range" },
           transitional: { bg: "bg-badge-warn", border: "border-orange-500/30", icon: "?", label: "Transitional" },
         };
         const style = regimeStyles[regime.currentRegime] || regimeStyles.transitional;
@@ -1161,7 +1161,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
                               <div className="absolute top-2 right-7 z-10 pointer-events-none">
                                 <Badge variant="outline" className={`text-[8px] px-1 py-0 h-3.5 ${
                                   recStatus === "approved"
-                                    ? "bg-badge-profit text-profit border-green-500/30"
+                                    ? "bg-badge-profit text-profit border-success/30"
                                     : "bg-muted text-muted-foreground border-border"
                                 }`}>
                                   {recStatus.toUpperCase()}
@@ -1228,7 +1228,7 @@ export function RecommendationsDashboard({ botId }: RecommendationsDashboardProp
           {resolved.map(review => {
             const assessment = assessmentConfig[review.overall_assessment] || assessmentConfig.insufficient_data;
             const statusBadge = review.status === "approved"
-              ? { color: "bg-badge-profit text-profit border-green-500/30", label: "APPROVED" }
+              ? { color: "bg-badge-profit text-profit border-success/30", label: "APPROVED" }
               : { color: "bg-muted text-muted-foreground border-border", label: "DISMISSED" };
             const isExpanded = expandedReview === review.id;
 

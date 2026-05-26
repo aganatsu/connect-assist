@@ -52,7 +52,7 @@ interface AdvisorResponse {
 
 // ─── Priority Config ─────────────────────────────────────────
 const PRIORITY_CONFIG: Record<string, { color: string; bgColor: string; borderColor: string; icon: React.ReactNode }> = {
-  critical: { color: "text-red-400", bgColor: "bg-red-500/10", borderColor: "border-red-500/30", icon: <XCircle className="h-4 w-4 text-red-400" /> },
+  critical: { color: "text-destructive", bgColor: "bg-destructive/10", borderColor: "border-destructive/30", icon: <XCircle className="h-4 w-4 text-destructive" /> },
   high: { color: "text-amber-400", bgColor: "bg-amber-500/10", borderColor: "border-amber-500/30", icon: <AlertTriangle className="h-4 w-4 text-amber-400" /> },
   medium: { color: "text-blue-400", bgColor: "bg-blue-500/10", borderColor: "border-blue-500/30", icon: <ArrowRight className="h-4 w-4 text-blue-400" /> },
   low: { color: "text-muted-foreground", bgColor: "bg-muted/50", borderColor: "border-border/50", icon: <CheckCircle2 className="h-4 w-4 text-muted-foreground" /> },
@@ -130,7 +130,7 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
   const getScoreColor = (score: number) => {
     if (score >= 7) return "text-emerald-400";
     if (score >= 5) return "text-amber-400";
-    return "text-red-400";
+    return "text-destructive";
   };
 
   const getScoreLabel = (score: number) => {
@@ -271,10 +271,10 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
                             <p className="text-xs text-muted-foreground font-medium mb-1">Reasoning:</p>
                             <p className="text-xs text-foreground/80">{rec.reasoning}</p>
                           </div>
-                          <div className="flex items-start gap-2 p-2 rounded bg-red-500/10 border border-red-500/20">
-                            <AlertTriangle className="h-3 w-3 text-red-400 mt-0.5 shrink-0" />
+                          <div className="flex items-start gap-2 p-2 rounded bg-destructive/10 border border-destructive/20">
+                            <AlertTriangle className="h-3 w-3 text-destructive mt-0.5 shrink-0" />
                             <div>
-                              <p className="text-[10px] text-red-400 font-medium">Risk Warning</p>
+                              <p className="text-[10px] text-destructive font-medium">Risk Warning</p>
                               <p className="text-xs text-red-300/80">{rec.risk_warning}</p>
                             </div>
                           </div>
@@ -300,7 +300,7 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
                 <div className="flex items-center gap-4 mb-2">
                   <div className="text-center">
                     <p className="text-xs text-muted-foreground">Current</p>
-                    <p className="text-lg font-bold text-red-400">{result.threshold_recommendation.current_effective}</p>
+                    <p className="text-lg font-bold text-destructive">{result.threshold_recommendation.current_effective}</p>
                   </div>
                   <ArrowRight className="h-5 w-5 text-muted-foreground" />
                   <div className="text-center">
@@ -339,12 +339,12 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
                 )}
                 {result.gates_verdict.over_filtering?.length > 0 && (
                   <div>
-                    <p className="text-xs font-medium text-red-400 mb-1 flex items-center gap-1">
+                    <p className="text-xs font-medium text-destructive mb-1 flex items-center gap-1">
                       <XCircle className="h-3 w-3" /> Over-filtering (blocking winners)
                     </p>
                     <div className="flex flex-wrap gap-1">
                       {result.gates_verdict.over_filtering.map((g, i) => (
-                        <Badge key={i} variant="outline" className="text-[10px] text-red-400 border-red-500/30 bg-red-500/10">
+                        <Badge key={i} variant="outline" className="text-[10px] text-destructive border-destructive/30 bg-destructive/10">
                           {g}
                         </Badge>
                       ))}
