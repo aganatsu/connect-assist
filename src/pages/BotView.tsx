@@ -396,48 +396,9 @@ export default function BotView() {
   return (
     <AppShell>
       <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
-        {/* ─── Bloomberg-style command strip ────────────────────────────── */}
-        {!isMobile && (
-          <div className="grid grid-cols-6 border border-border bg-card divide-x divide-border mb-1">
-            <div className="p-2 flex flex-col gap-0.5 min-w-0">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">System Status</span>
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${engineDotClass}`} />
-                <span className="text-foreground font-bold uppercase tracking-tight text-[11px] truncate">
-                  {engineLabel} <span className="text-muted-foreground font-normal">[SMC]</span>
-                </span>
-              </div>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Next Scan In</span>
-              <span className="text-primary font-mono font-medium text-[12px]">{nextScanLabel}</span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5 min-w-0">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Balance / Equity</span>
-              <span className="text-foreground font-mono font-medium text-[12px] truncate">
-                {formatMoney(d.balance || 0)} <span className="text-muted-foreground text-[10px]">/ {formatMoney(d.equity || 0)}</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Today P&amp;L</span>
-              <span className={`font-mono font-bold text-[12px] ${todayPnl >= 0 ? "text-success" : "text-destructive"}`}>
-                {todayPnl >= 0 ? "+" : ""}{formatMoney(todayPnl)} <span className="text-[10px] font-medium">({todayPnl >= 0 ? "+" : ""}{todayPnlPct.toFixed(2)}%)</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Open Positions</span>
-              <span className="text-foreground font-mono font-medium text-[12px]">
-                {botPositions.length} <span className="text-muted-foreground text-[10px]">({(d.drawdown || 0).toFixed(2)}% DD)</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Win Rate</span>
-              <span className="text-foreground font-mono font-medium text-[12px]">
-                {(d.winRate || 0).toFixed(1)}% <span className="text-muted-foreground text-[10px]">{d.wins ?? 0}W / {d.losses ?? 0}L</span>
-              </span>
-            </div>
-          </div>
-        )}
+        {/* Phase-1 cleanup: removed duplicate desktop stats strip.
+            StatusBar (bottom of app shell) and the Account drawer already cover
+            balance, equity, P&L, win rate, open positions, and engine status. */}
 
         {/* Live mode alert (compact, only when live) */}
         {d.executionMode === "live" && (
