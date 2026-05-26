@@ -498,7 +498,7 @@ export default function Chart() {
                           </div>
                           <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
                             <span>H: {formatPrice(analysis.premiumDiscount.swingHigh)}</span>
-                            <span className="text-primary">{formatPrice(analysis.premiumDiscount.zonePercent, 0)}%</span>
+                            <span className="text-primary">{formatPrice(analysis.premiumDiscount.zonePercent, undefined, 0)}%</span>
                             <span>L: {formatPrice(analysis.premiumDiscount.swingLow)}</span>
                           </div>
                           {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
