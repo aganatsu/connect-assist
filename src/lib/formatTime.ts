@@ -54,3 +54,71 @@ export function formatFullDateTime(dateStr: string | Date): string {
   const ss = String(d.getSeconds()).padStart(2, "0");
   return `${month}/${day}/${year}, ${hh}:${mm}:${ss} ${ampm}`;
 }
+
+/* ─── Price / Percentage formatters ──────────────────────────────────────
+ * Centralized so every page formats numbers the same way.
+ * Respects instrument digit conventions:
+ *   - JPY pairs → 3 digits
+ *   - Indices / BTC / large-value → 2 digits
+ *   - Forex / commodities default → 5 digits
+ * Accepts either an instrument object (with `symbol` and `pipSize`) or a
+ * bare symbol string; falls back to a safe default when neither is provided.
+ */
+
+type InstrumentLike =
+  | { symbol?: string; pipSize?: number; type?: string }
+  | string
+  | null
+  | undefined;
+
+function resolveDigits(instrument: InstrumentLike, fallback = 5): number {
+  if (!instrument) return fallback;
+  if (typeof instrument === "string") {
+    const sym = instrument.toUpperCase();
+    if (sym.includes("JPY")) return 3;
+    if (/(US30|NAS100|SPX500|BTC|ETH|OIL|XAU)/.test(sym)) return 2;
+    return 5;
+  }
+  const sym = (instrument.symbol || "").toUpperCase();
+  if (sym.includes("JPY")) return 3;
+  if (instrument.type === "index" || instrument.type === "crypto") return 2;
+  if (sym.includes("XAU") || sym.includes("OIL")) return 2;
+  if (typeof instrument.pipSize === "number") {
+    // Derive digits from pip size (0.0001 → 5, 0.01 → 3, 1 → 2)
+    if (instrument.pipSize >= 1) return 2;
+    if (instrument.pipSize >= 0.01) return 3;
+    return 5;
+  }
+  return fallback;
+}
+
+/**
+ * Format a price using the correct number of decimals for the instrument.
+ * Returns "—" when value is not a finite number.
+ */
+export function formatPrice(
+  value: unknown,
+  instrument?: InstrumentLike,
+  digitsOverride?: number,
+): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const digits = digitsOverride ?? resolveDigits(instrument);
+  return value.toFixed(digits);
+}
+
+/**
+ * Format a percentage. Accepts either a fraction (0.42 → "42.0%") when
+ * `fromFraction` is true, or an already-scaled value (42 → "42.0%").
+ * Returns "—" when value is not finite.
+ */
+export function formatPct(
+  value: unknown,
+  digits = 1,
+  opts: { fromFraction?: boolean; sign?: boolean } = {},
+): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const scaled = opts.fromFraction ? value * 100 : value;
+  const str = `${scaled.toFixed(digits)}%`;
+  if (opts.sign && scaled > 0) return `+${str}`;
+  return str;
+}
