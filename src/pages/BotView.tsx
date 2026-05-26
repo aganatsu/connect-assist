@@ -1420,8 +1420,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {hasRichData ? (
                         <>
-                          {/* ── Impulse Zone ── */}
-                          {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
+                          {/* Phase-1 cleanup: ImpulseZonePanel removed here — it now renders
+                              only inside the position detail drawer (ScanSignalDetail) to
+                              avoid showing the same zone data 3 times. */}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1487,10 +1488,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Tier-Grouped Factor Breakdown ── */}
-                          {sr.factorScores && sr.factorScores.length > 0 && (
-                            <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
-                          )}
+                          {/* Phase-1 cleanup: TierFactorBreakdown removed here — it now renders
+                              only inside the position detail drawer to avoid duplication. */}
                           {/* ── Risk Gates ── */}
                           {sr.gates && sr.gates.length > 0 && (
                             <div className="space-y-0.5">
@@ -2006,8 +2005,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
-      {/* Impulse Zone Panel — PRIMARY gate, shown first */}
-      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+      {/* Phase-1 cleanup: duplicate ImpulseZonePanel removed — the collapsible
+          scan row (ScanSignalDetail) already renders it once. */}
 
       {/* Tier score summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
@@ -2174,10 +2173,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Tier-Grouped Factors */}
-      {d.factors && (
-        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} />
-      )}
+      {/* Phase-1 cleanup: duplicate TierFactorBreakdown removed — the
+          collapsible scan row (ScanSignalDetail) already renders it once. */}
 
       {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
       {d.gates && (
