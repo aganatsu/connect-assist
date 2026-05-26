@@ -2825,17 +2825,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
-          // Run zone confirmation detection
+          // Run zone confirmation detection (tiered: T1=CHoCH, T2=CHoCH+support, T3=reversal pattern)
           const confirmationSignal = detectZoneConfirmation(
             confirm5mCandles,
             pending.direction as "long" | "short",
             DEFAULT_ZONE_CONFIRMATION_CONFIG,
             zoneTouchIdx,
+            pending.symbol,
           );
 
           if (!confirmationSignal) {
-            // No confirmation yet — keep hunting
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no CHoCH yet)`);
+            // No confirmation yet — keep hunting (all 3 tiers checked)
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no tier passed)`);
             continue;
           }
 
@@ -2843,6 +2844,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // CHoCH CONFIRMED! Enter the trade at live price.
           // ═══════════════════════════════════════════════════════════════
           console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
+          console.log(`[pending] Confirmation tier: ${confirmationSignal.tier}, type: ${confirmationSignal.type}`);
 
           // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
           const currentOpenCount = openPosArr.length;
@@ -2887,6 +2889,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             confirmationEntry: true,
             confirmation: {
               type: confirmationSignal.type,
+              tier: confirmationSignal.tier,
               price: confirmationSignal.price,
               displacement: confirmationSignal.displacement,
               significance: confirmationSignal.significance,
