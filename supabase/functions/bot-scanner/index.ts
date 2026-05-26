@@ -4004,7 +4004,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             htfConfluenceScore: zoneResult.bestZone.zone.htfConfluenceScore,
             htfLayers: zoneResult.bestZone.zone.htfLayers,
             priceAtZone: zoneResult.bestZone.priceAtZone,
+            priceInsideZone: zoneResult.bestZone.priceInsideZone,
+            priceAtZoneStrict: zoneResult.bestZone.priceAtZoneStrict,
+            sideOk: zoneResult.bestZone.sideOk,
             distanceToZone: zoneResult.bestZone.distanceToZone,
+            distancePips: zoneResult.bestZone.distancePips,
           } : null,
           allZonesCount: zoneResult.allZones.length,
           h1HasZone: !!zoneResult.h1Result.bestZone,
@@ -4854,15 +4858,50 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
         // ── Market Fill at Zone (Option C) ──────────────────────────────────
-        // When izGateMode="hard" AND price IS at the zone AND marketFillAtZone is enabled,
-        // skip the pending order path entirely and fill at market price immediately.
-        // Rationale: The hard gate already validated (1) a valid impulse zone exists,
+        // When izGateMode="hard" AND price IS at the zone (STRICT) AND marketFillAtZone
+        // is enabled, skip the pending order path and fill at market price immediately.
+        // Rationale: The hard gate validated (1) a valid impulse zone exists,
         // (2) price has arrived at the zone, (3) all 22 safety gates passed, (4) score
         // threshold met. The zone touch IS the confirmation — no CHoCH wait needed.
         // Pending orders (with CHoCH confirmation) are reserved for the "watching_zone"
         // path where price hasn't reached the zone yet.
-        const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
-        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone;
+        //
+        // THREE layers of protection:
+        //   Layer 1: priceAtZoneStrict (engine) — 0.3×ATR + correct side
+        //   Layer 2: sideOk (engine) — directional awareness
+        //   Layer 3: priceOnCorrectSide (below) — 2× zone width buffer fallback
+        //
+        // The strict flag from the engine is the PRIMARY gate. The old loose
+        // priceAtZone (1.5×ATR) is kept for watchlist/awareness only.
+        const strictZone = izData?.bestZone?.priceAtZoneStrict === true;
+        const sideOk = izData?.bestZone?.sideOk === true;
+        const priceIsAtValidatedZone = izGateMode === "hard" && strictZone && sideOk;
+        // ── Directional Guard (Layer 3 — fallback safety net) ─────────────
+        // Even if the engine's strict check passes, apply a hard buffer guard:
+        //   LONG (demand zone): price must be ≤ zoneHigh + 2× zone width
+        //   SHORT (supply zone): price must be ≥ zoneLow - 2× zone width
+        // This catches edge cases where ATR is abnormally low.
+        let priceOnCorrectSide = true;
+        if (priceIsAtValidatedZone && izData?.bestZone) {
+          const zoneHigh = izData.bestZone.high;
+          const zoneLow = izData.bestZone.low;
+          const zoneWidth = zoneHigh - zoneLow;
+          const buffer = zoneWidth * 2;
+          const currentPrice = analysis.lastPrice;
+          if (analysis.direction === "long") {
+            priceOnCorrectSide = currentPrice <= zoneHigh + buffer;
+          } else {
+            priceOnCorrectSide = currentPrice >= zoneLow - buffer;
+          }
+          if (!priceOnCorrectSide) {
+            console.log(`[scan ${scanCycleId}] ⚠️ ${pair}: MARKET FILL BLOCKED (Layer 3) — price ${currentPrice.toFixed(5)} is beyond buffer of zone [${zoneLow.toFixed(5)}-${zoneHigh.toFixed(5)}] for ${analysis.direction}.`);
+          }
+        }
+        // Log when loose flag is true but strict is false (would have been a bad fill before this fix)
+        if (izGateMode === "hard" && izData?.bestZone?.priceAtZone && !strictZone) {
+          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: priceAtZone(loose)=true but priceAtZoneStrict=false — routing to pending/CHoCH path. Distance: ${izData.bestZone.distancePips?.toFixed(1) ?? "?"}p, sideOk=${sideOk}`);
+        }
+        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide;
 
         // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
         // or when marketFillAtZone is explicitly disabled.
@@ -5081,7 +5120,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}` +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
-            (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\nZone: [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]` : "");
+            (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\nZone: [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? "" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {

@@ -30,8 +30,12 @@ interface ImpulseZoneData {
     ltfType: "ob" | "fvg" | null;
     refinedEntry: number | null;
     refinedSL: number | null;
-    priceAtZone: boolean;
+    priceAtZone: boolean;        // Loose (1.5×ATR)
+    priceInsideZone?: boolean;   // Strict: literally inside zone bounds
+    priceAtZoneStrict?: boolean; // Strict: 0.3×ATR + correct side
+    sideOk?: boolean;            // Directional check passed
     distanceToZone: number;
+    distancePips?: number;
   } | null;
   allZonesCount: number;
   h1HasZone: boolean;
@@ -108,12 +112,16 @@ export function ImpulseZonePanel({ data }: Props) {
         {/* Status badge */}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ml-auto ${
           hasZone
-            ? bestZone?.priceAtZone
+            ? bestZone?.priceInsideZone
               ? "bg-badge-profit text-profit"
-              : "bg-badge-info text-tier3"
+              : bestZone?.priceAtZoneStrict
+                ? "bg-badge-profit text-profit"
+                : bestZone?.priceAtZone
+                  ? "bg-amber-500/20 text-amber-300"
+                  : "bg-badge-info text-tier3"
             : "bg-zinc-500/15 text-muted-foreground"
         }`}>
-          {hasZone ? (bestZone?.priceAtZone ? "AT ZONE" : "ZONE FOUND") : "NO ZONE"}
+          {hasZone ? (bestZone?.priceInsideZone ? "AT ZONE" : bestZone?.priceAtZoneStrict ? "NEAR ZONE" : bestZone?.priceAtZone ? "NEAR (LOOSE)" : "ZONE FOUND") : "NO ZONE"}
         </span>
       </div>
 
@@ -176,9 +184,14 @@ export function ImpulseZonePanel({ data }: Props) {
                 SL: {fmt(bestZone.refinedSL)}
               </span>
             )}
-            {bestZone.priceAtZone && (
+            {(bestZone.priceInsideZone || bestZone.priceAtZoneStrict) && (
               <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded bg-badge-warn text-warn animate-pulse">
                 ⏳ Hunting 5m CHoCH
+              </span>
+            )}
+            {bestZone.priceAtZone && !bestZone.priceAtZoneStrict && !bestZone.priceInsideZone && (
+              <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-amber-500/10 text-amber-300">
+                ⚠️ {bestZone.distancePips?.toFixed(0) ?? "?"}p away{!bestZone.sideOk ? " (wrong side)" : ""}
               </span>
             )}
           </div>

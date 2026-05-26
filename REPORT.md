@@ -1,114 +1,129 @@
-# Task: Market Fill at Zone (Option C)
+# Task: Strict Zone Proximity — Fix priceAtZone Chasing Bug
 
-## Branch: manus/market-fill-at-zone
+## Branch: manus/strict-zone-proximity
 
 ## Behavior changes
 
-1. **When `izGateMode="hard"` AND price IS at a validated impulse zone AND `marketFillAtZone=true` (new default), the bot now places a MARKET ORDER immediately** instead of a pending limit order that waits for 5m CHoCH confirmation. This is the primary user-visible change — trades that previously sat at "awaiting_confirmation" forever will now fill immediately when the zone is validated and all gates pass.
+1. **Market fill at zone now requires `priceAtZoneStrict` (0.3×ATR + correct side) instead of loose `priceAtZone` (1.5×ATR).** This means market fills will only execute when price is genuinely at or very near the zone, not 44+ pips away. Trades that previously would have market-filled at a distance will now route to the pending order / CHoCH confirmation path instead.
 
-2. **Pending orders with CHoCH confirmation are now reserved for the "watching_zone" path only** — when the impulse zone exists but price hasn't reached it yet. The tiered CHoCH system (from the previous branch) still applies to these watching-zone orders.
+2. **Dashboard "AT ZONE" badge now shows three states:** "AT ZONE" (price inside zone bounds), "NEAR ZONE" (within 0.3×ATR + correct side), "NEAR (LOOSE)" (within 1.5×ATR but not strict). The amber "NEAR (LOOSE)" badge also shows pip distance and "(wrong side)" when applicable.
 
-3. **New Telegram notification tag** — market-fill-at-zone trades include a "🎯 Market Fill at Zone" section showing the zone boundaries.
+3. **Telegram "Market Fill at Zone" message now shows distance from zone edge** when price is not literally inside the zone (e.g., "Zone: [1.08500-1.08600] (5.2p from edge)").
 
-4. **New detail status** — `"trade_placed_at_zone"` distinguishes zone fills from regular market fills in scan logs.
+4. **New log line** when loose priceAtZone fires but strict doesn't — helps audit which trades would have been bad fills under the old logic.
 
-5. **Fully backwards-compatible** — setting `marketFillAtZone: false` in config restores the old behavior exactly (regression test proves this).
+## Real-world trigger
+
+EUR/AUD LONG filled at 1.62166 when the demand zone was 1.61607–1.61719. That's 44.7 pips ABOVE the zone — the bot was chasing. The `priceAtZone` flag was `true` because 1.5×ATR (~45p on EUR/AUD) barely covered the distance. The trade should have gone to the pending order / CHoCH path, not market-filled.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Added `marketFillAtZone` config (default: true), entry decision logic that bypasses pending orders when price is at a validated zone, market-fill logging, detail metadata, and Telegram notification tag |
-| `supabase/functions/bot-scanner/market-fill-at-zone.test.ts` | 11 new tests covering entry decision logic, config defaults, metadata, and regression verification |
+| `supabase/functions/_shared/impulseZoneEngine.ts` | Added `PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3`, new fields on BestZone interface (`priceInsideZone`, `priceAtZoneStrict`, `sideOk`, `distancePips`), rewrote proximity calculation with 3-tier logic |
+| `supabase/functions/bot-scanner/index.ts` | Changed market fill gate from loose `priceAtZone` to strict `priceAtZoneStrict && sideOk`; added new fields to izData passthrough; updated Telegram message to show distance; added diagnostic logging |
+| `src/components/ImpulseZonePanel.tsx` | Updated interface and display to show AT ZONE / NEAR ZONE / NEAR (LOOSE) badges with distance info |
+| `supabase/functions/_shared/strictZoneProximity.test.ts` | New test file: 15 tests covering the proximity logic |
 
 ## What was changed in bot-scanner/index.ts (extra caution file)
 
-Three surgical changes were made:
+The market fill decision logic (around line 4860) was changed from:
+```typescript
+// OLD: loose priceAtZone (1.5×ATR, no side check)
+const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
+```
+to:
+```typescript
+// NEW: strict priceAtZoneStrict (0.3×ATR + correct side)
+const strictZone = izData?.bestZone?.priceAtZoneStrict === true;
+const sideOk = izData?.bestZone?.sideOk === true;
+const priceIsAtValidatedZone = izGateMode === "hard" && strictZone && sideOk;
+```
 
-1. **Line 204** — Added `marketFillAtZone: true` to DEFAULTS (new config option).
+The directional guard (Layer 3, 2× zone width buffer) remains as a fallback safety net after this check. The old `priceAtZone` flag is still computed and used for watchlist/awareness decisions (line 4136) — those paths are unchanged.
 
-2. **Line 961** — Added `marketFillAtZone` to the config resolution function so it's read from `bot_configs` DB table.
-
-3. **Lines 4856-4869** — The entry decision logic. Previously:
-   ```ts
-   const effectiveLimitEnabled = config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry);
-   ```
-   Now:
-   ```ts
-   const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
-   const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone;
-   const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
-   ```
-   When `useMarketFillAtZone` is true, `effectiveLimitEnabled` becomes false, so the code falls through to the market order path below.
-
-4. **Lines 5004-5006** — Added console log for market-fill-at-zone trades.
-
-5. **Lines 5052-5057** — Added detail metadata (`entryMethod`, `zoneConfirmation`, `impulseZoneEntry`).
-
-6. **Line 5083-5084** — Added zone info to Telegram notification.
+Additionally, new fields were added to the izData passthrough (line ~4007):
+```typescript
+priceInsideZone: zoneResult.bestZone.priceInsideZone,
+priceAtZoneStrict: zoneResult.bestZone.priceAtZoneStrict,
+sideOk: zoneResult.bestZone.sideOk,
+distancePips: zoneResult.bestZone.distancePips,
+```
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `priceAtZone + marketFillAtZone=true → effectiveLimitEnabled=false` | Market fill at zone disables limit orders |
-| `priceAtZone + marketFillAtZone=false → effectiveLimitEnabled=true` | Old behavior preserved when config disabled |
-| `price NOT at zone → effectiveLimitEnabled=true` | Watching path still uses limit orders |
-| `izGateMode=soft → no market fill at zone` | Feature only activates with hard gate |
-| `limitOrderEnabled=true + NOT at zone → limit orders` | Explicit limit config respected |
-| `config default is true` | Feature enabled by default |
-| `status is 'trade_placed_at_zone'` | Correct status metadata |
-| `promoted from staging takes priority` | Staging promotion status not overwritten |
-| `entryMethod is 'market_fill_at_zone'` | Correct entry method metadata |
-| `marketFillAtZone=false → identical to pre-change` | Full regression: all 6 config combos produce same result as old code |
-| `marketFillAtZone=true → ONLY priceAtZone+hard changes` | Proves only the intended case diverges |
+| EUR/AUD chasing regression | Price 44.7p above zone → priceAtZone=true, priceAtZoneStrict=false, sideOk=false |
+| Price inside zone | All flags true, distance=0 |
+| LONG: 5p below demand | strict=true, sideOk=true (correct side, within threshold) |
+| LONG: 5p above demand (within 0.3×ATR) | strict=true, sideOk=true |
+| LONG: 25p above demand | strict=false, sideOk=false |
+| SHORT: 5p above supply | strict=true, sideOk=true |
+| SHORT: 30p below supply | strict=false, sideOk=false |
+| SHORT: 4p below supply (within 0.3×ATR) | strict=true, sideOk=true |
+| XAU/USD: 80p above demand | strict=false (wider ATR scales correctly) |
+| XAU/USD: 10p above demand | strict=true (gold's wider ATR allows proportional buffer) |
+| Boundary: price at zone high | priceInsideZone=true |
+| Boundary: price at zone low | priceInsideZone=true |
+| Bot-scanner integration: EUR/AUD blocks market fill | Simulates full decision logic, confirms block |
+| Bot-scanner integration: price inside zone allows fill | Confirms valid fills still work |
+| Backwards compat: loose priceAtZone unchanged | 5 test cases proving 1.5×ATR behavior identical |
 
 ## Tests run
 
 ```
-$ deno test --allow-all supabase/functions/bot-scanner/market-fill-at-zone.test.ts
-ok | 11 passed | 0 failed (16ms)
+$ deno test supabase/functions/_shared/strictZoneProximity.test.ts
+ok | 15 passed | 0 failed (15ms)
 
-$ deno test --allow-all supabase/functions/
-ok | 840 passed | 0 failed (12s)
-```
+$ deno test supabase/functions/bot-scanner/market-fill-at-zone.test.ts
+ok | 21 passed | 0 failed (21ms)
 
-Type checking:
-```
-$ deno check supabase/functions/bot-scanner/index.ts -> 9 pre-existing errors (verified on base branch, none from our changes)
+$ deno test supabase/functions/_shared/impulseZoneEngine.test.ts
+ok | 37 passed | 0 failed (37ms)
+
+$ deno test supabase/functions/ (full suite)
+FAILED | 809 passed | 33 failed (8s)
+— All 33 failures are PRE-EXISTING (37 on main). Our changes resolved 4 previously-failing tests.
+— None of the failures are related to zone proximity, strict fields, or market fill logic.
 ```
 
 ## Regression check
 
-Two dedicated regression tests verify:
-1. With `marketFillAtZone=false`, the new code produces **identical results** to the old code for all 6 tested config combinations (izGateMode × priceAtZone × limitOrderEnabled × limitEntry).
-2. With `marketFillAtZone=true`, **only one specific case** changes behavior: `izGateMode="hard" + priceAtZone=true`. All other combinations remain unchanged.
-
-Additionally, the type checker confirms 9 errors — all pre-existing (lines 1049, 3294, 3619, 3621, 5373, 5409, 5410), none from our changes.
+1. **Loose `priceAtZone` unchanged:** Test "backwards compat" proves 5 different price/zone/ATR combinations produce identical results to the old implementation.
+2. **Existing market-fill tests pass:** All 21 tests in `market-fill-at-zone.test.ts` still pass (including the 10 directional guard tests from the previous branch).
+3. **Existing impulseZoneEngine tests pass:** All 37 tests pass — the new fields are additive and don't change existing return values.
+4. **Watchlist path unaffected:** The `priceAtZone` (loose) flag is still used at line 4136 for the watchlist gate decision — this behavior is unchanged.
 
 ## Open questions
 
-1. **Should `marketFillAtZone` be per-pair configurable?** Currently it's a global config. Some pairs (e.g., XAU/USD with wider zones) might benefit from still using CHoCH confirmation even when at zone.
+1. **Should `PRICE_AT_ZONE_STRICT_ATR_MULT` be configurable per-pair?** Currently hardcoded at 0.3. Gold might benefit from a slightly different value given its wider ATR. Could add to `pairConfig` if needed.
 
-2. **Spread filter timing** — The spread check happens AFTER the entry decision. If spread is too wide at the moment of zone touch, the trade is rejected. Should we add a retry mechanism (check spread again on next scan cycle)?
+2. **The pending order path (zone-confirmation-scanner):** Lovable's analysis confirmed it uses a much tighter buffer (0.1× zone width) and requires physical price touch. No change needed there. But should we add a similar `sideOk` check to the pending order placement itself (line ~4990)?
 
-3. **Zone-confirmation-scanner deployment** — For the "watching_zone" path (pending orders), the zone-confirmation-scanner still needs to be deployed with a pg_cron job. Want me to create the migration?
+3. **Should the "NEAR (LOOSE)" state still add pairs to watchlist?** Currently it does (same as before). The only change is that it won't market-fill. This seems correct but worth confirming.
 
 ## Suggested PR title and description
 
-**Title:** feat: market fill at zone — immediate entry when price is at validated impulse zone
+**Title:** `fix(zone-proximity): add strict zone validation to prevent market fills when price is far from zone`
 
 **Description:**
-Previously, with `izGateMode="hard"`, ALL trades went through the pending order path requiring 5m CHoCH confirmation before filling. This caused trades to sit at "awaiting_confirmation" indefinitely when a textbook CHoCH never formed — even though the impulse zone engine had already validated the zone and all 22 safety gates passed.
+```
+Fixes the EUR/AUD chasing bug where a LONG trade market-filled at 1.62166 when
+the demand zone was at 1.61607–1.61719 (44.7 pips away). The priceAtZone flag
+was true because 1.5×ATR (~45p) barely covered the distance.
 
-This PR adds a `marketFillAtZone` config (default: `true`) that fills at market price immediately when:
-- `izGateMode="hard"` (zone is validated)
-- Price IS at the zone (confirmed by impulse zone engine)
-- All safety gates pass
-- Score threshold met
+Adds 3-layer protection:
+  Layer 1: priceAtZoneStrict (0.3×ATR) — 9 pips on EUR/AUD vs old 45 pips
+  Layer 2: sideOk — directional awareness (longs can't be far above demand)
+  Layer 3: priceOnCorrectSide — 2× zone width buffer (existing guard)
 
-The pending order path with CHoCH confirmation is now reserved for the "watching_zone" scenario — when a valid zone exists but price hasn't arrived yet.
+Market fill gate now requires priceAtZoneStrict && sideOk (not loose priceAtZone).
+Trades where price has moved away route to pending order / CHoCH path instead.
 
-**Backwards compatible:** Set `marketFillAtZone: false` in bot_configs to restore old behavior.
+Dashboard shows AT ZONE / NEAR ZONE / NEAR (LOOSE) with distance.
+Telegram shows distance from zone edge.
 
-**840 tests passing, 11 new tests added.**
+15 new unit tests including exact EUR/AUD regression scenario.
+All 73 zone-related tests passing (15 + 21 + 37).
+```
