@@ -22,6 +22,7 @@
 | `supabase/functions/bot-scanner/index.ts` | Updated `detectZoneConfirmation` call to pass `pending.symbol` for instrument-aware thresholds; added tier logging; added `tier` field to stored confirmation data |
 | `supabase/functions/zone-confirmation-scanner/index.ts` | Same updates as bot-scanner: pass symbol, add tier logging, store tier in confirmation data |
 | `supabase/functions/_shared/zoneConfirmation.test.ts` | Rewritten with 41 tests covering all 3 tiers, instrument-aware displacement, tier priority, config flags, and regression check |
+| `supabase/functions/bot-scanner/e2e-pipeline.test.ts` | **NEW** — End-to-end integration test: 11 tests exercising the full signal-to-trade pipeline (scoring → direction → gates → SL/TP → sizing → trade output) with deterministic candle fixtures |
 
 ## Tests added
 
@@ -55,11 +56,33 @@
 
 Plus all existing isPriceInZone, isImpulseBroken, and state machine tests preserved (41 total).
 
+### E2E Pipeline Integration Test (`bot-scanner/e2e-pipeline.test.ts`)
+
+| Test | Assertion |
+|------|-----------|
+| Stage 1: Confluence scoring produces valid analysis | Score 0-100, factors present, structure detected, session identified |
+| Stage 2: Direction engine determines bias | Deterministic bearish candles → direction=short, bias=bearish |
+| Stage 3: Safety gates run without crashes | Manual gate simulation (HTF bias, max positions, heat, R:R) all pass |
+| Stage 4: SL/TP calculation produces valid levels | Structure-based SL above entry (short), TP below, R:R ≥ 1.5 |
+| Stage 5: Position sizing calculates valid lot size | $10k @ 1% risk, 20p SL → 0.5 lots |
+| Stage 6: SL sanity guard rejects bad entries | Short with SL below entry = rejected; long with SL above entry = rejected |
+| Stage 7: Full pipeline produces trade-ready output | All stages chained → valid trade object with direction, SL, TP, size, score |
+| Zone Confirmation: Tiered confirmation triggers fill | Verifies detectZoneConfirmation runs without crash on synthetic data |
+| Regression: Position sizing is deterministic | Same inputs → same outputs across EUR/USD, XAU/USD, GBP/JPY |
+| Regression: Confluence scoring is deterministic | Two runs with same candles → identical score and factor count |
+| Regression: Direction engine is deterministic | Two runs with same candles → identical direction and bias |
+
 ## Tests run
 
 ```
 $ deno test supabase/functions/_shared/zoneConfirmation.test.ts --allow-all
-ok | 41 passed | 0 failed (23ms)
+ok | 41 passed | 0 failed (26ms)
+
+$ deno test supabase/functions/bot-scanner/e2e-pipeline.test.ts --allow-all
+ok | 11 passed | 0 failed (49ms)
+
+$ deno test supabase/functions/ --allow-all
+ok | 829 passed | 0 failed (12s)
 ```
 
 Type checking:
