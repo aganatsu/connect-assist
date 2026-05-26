@@ -2972,6 +2972,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>Score:</b> ${pending.signal_score}\n` +
               `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
               `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+              (() => {
+                const zL = parseFloat(pending.entry_zone_low || "0");
+                const zH = parseFloat(pending.entry_zone_high || "0");
+                if (actualFillPrice > zH) {
+                  const distPips = ((actualFillPrice - zH) * (pending.symbol?.includes("JPY") ? 100 : 10000)).toFixed(1);
+                  return `\n⚠️ Fill ${distPips}p above zone`;
+                } else if (actualFillPrice < zL) {
+                  const distPips = ((zL - actualFillPrice) * (pending.symbol?.includes("JPY") ? 100 : 10000)).toFixed(1);
+                  return `\n⚠️ Fill ${distPips}p below zone`;
+                }
+                return "";
+              })() +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
@@ -4994,6 +5006,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (telegramChatIds.length > 0) {
             const emoji = analysis.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            // Build zone shift info for watchlist-promoted setups
+            let zoneShiftLine = "";
+            if (isPromotedFromStaging && existingStaged?.analysis_snapshot?.impulseZone) {
+              const origZone = existingStaged.analysis_snapshot.impulseZone;
+              const origLow = origZone.zoneLow;
+              const origHigh = origZone.zoneHigh;
+              const currentLow = limitEntry.zoneLow;
+              const currentHigh = limitEntry.zoneHigh;
+              // Show zone shift if it moved by more than 1 pip
+              const shifted = Math.abs(origLow - currentLow) > 0.0001 || Math.abs(origHigh - currentHigh) > 0.0001;
+              if (shifted) {
+                zoneShiftLine = `\n⚠️ <b>Zone shifted</b>: was [${origLow?.toFixed(5)}-${origHigh?.toFixed(5)}] → now [${currentLow?.toFixed(5)}-${currentHigh?.toFixed(5)}]`;
+              }
+            }
             const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
 
 ` +
@@ -5002,6 +5028,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>Direction:</b> ${analysis.direction.toUpperCase()}
 ` +
               `<b>Zone Trigger:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
+` +
+              `<b>Zone:</b> [${limitEntry.zoneLow?.toFixed(5)}-${limitEntry.zoneHigh?.toFixed(5)}]
 ` +
               `<b>Current Price:</b> ${analysis.lastPrice}
 ` +
@@ -5016,9 +5044,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>Confirmation:</b> Waiting for 5m CHoCH at zone
 ` +
               `<b>Expires:</b> ${expiryMinutes}min` +
-              (isPromotedFromStaging && existingStaged ? `
-
-📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
+              (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)${zoneShiftLine}` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
                 await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -5119,7 +5145,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}` +
-            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
+            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%${(() => { const snap = existingStaged?.analysis_snapshot?.impulseZone; if (!snap) return ""; const oL = snap.zoneLow; const oH = snap.zoneHigh; const cL = izData?.bestZone?.low; const cH = izData?.bestZone?.high; if (!oL || !cL) return ""; const shifted = Math.abs(oL - cL) > 0.0001 || Math.abs(oH - cH) > 0.0001; return shifted ? `\n⚠️ Zone shifted: was [${oL?.toFixed(5)}-${oH?.toFixed(5)}] → now [${cL?.toFixed(5)}-${cH?.toFixed(5)}]` : ""; })()}` : "") +
             (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\nZone: [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? "" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
