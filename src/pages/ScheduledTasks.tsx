@@ -217,7 +217,7 @@ export default function ScheduledTasks() {
                                   <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
                                 )}
                                 {task.last_status === "error" && (
-                                  <XCircle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                                  <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
                                 )}
                                 {!task.last_status && (
                                   <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -306,7 +306,7 @@ export default function ScheduledTasks() {
                                 <span className="text-xs">{formatTimeAgo(task.last_run_at)}</span>
                               </div>
                               {task.last_error && (
-                                <div className="text-xs text-red-400 bg-red-500/10 p-2 rounded">
+                                <div className="text-xs text-destructive bg-destructive/10 p-2 rounded">
                                   {task.last_error}
                                 </div>
                               )}

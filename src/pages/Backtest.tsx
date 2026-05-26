@@ -1047,10 +1047,10 @@ export default function Backtest() {
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Score Distribution</p>
                   <div className="grid grid-cols-5 gap-1">
                     {[
-                      { label: "0–20%", value: dist.below20, color: "bg-red-500/70" },
-                      { label: "20–40%", value: dist.below40, color: "bg-orange-500/70" },
-                      { label: "40–60%", value: dist.below60, color: "bg-yellow-500/70" },
-                      { label: "60–80%", value: dist.below80, color: "bg-green-500/70" },
+                      { label: "0–20%", value: dist.below20, color: "bg-destructive/70" },
+                      { label: "20–40%", value: dist.below40, color: "bg-warning/70" },
+                      { label: "40–60%", value: dist.below60, color: "bg-warning/70" },
+                      { label: "60–80%", value: dist.below80, color: "bg-success/70" },
                       { label: "80%+", value: dist.above80, color: "bg-cyan/70" },
                     ].map(bucket => {
                       const maxBucket = Math.max(dist.below20, dist.below40, dist.below60, dist.below80, dist.above80, 1);

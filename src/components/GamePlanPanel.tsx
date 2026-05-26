@@ -108,7 +108,7 @@ function getBiasColor(bias: string) {
 
 function getBiasBg(bias: string) {
   if (bias === "bullish") return "bg-badge-profit border-emerald-500/30";
-  if (bias === "bearish") return "bg-badge-loss border-red-500/30";
+  if (bias === "bearish") return "bg-badge-loss border-destructive/30";
   return "bg-zinc-500/10 border-zinc-500/30";
 }
 
@@ -139,9 +139,9 @@ function getLevelTypeBadge(type: string) {
     ob: "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
     fvg: "bg-purple-500/15 text-tier3 border-purple-500/30",
     liquidity: "bg-badge-warn text-warn border-orange-500/30",
-    pd_level: "bg-yellow-500/15 text-highlight border-yellow-500/30",
+    pd_level: "bg-warning/15 text-highlight border-yellow-500/30",
     support: "bg-badge-profit text-profit border-emerald-500/30",
-    resistance: "bg-badge-loss text-loss border-red-500/30",
+    resistance: "bg-badge-loss text-loss border-destructive/30",
   };
   return colors[type] || "bg-zinc-500/15 text-muted-foreground border-zinc-500/30";
 }
@@ -262,7 +262,7 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
                         className={`text-[9px] h-4 ${
                           scenario.direction === "long"
                             ? "bg-badge-profit text-profit border-emerald-500/30"
-                            : "bg-badge-loss text-loss border-red-500/30"
+                            : "bg-badge-loss text-loss border-destructive/30"
                         }`}
                       >
                         {scenario.direction.toUpperCase()}
@@ -341,7 +341,7 @@ function NewsTimeline({ events }: { events: NewsEvent[] }) {
         return (
           <div key={i} className={`flex items-center gap-2 ${isPast ? "opacity-50" : ""}`}>
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              ev.impact === "high" ? "bg-red-500" : ev.impact === "medium" ? "bg-orange-400" : "bg-zinc-500"
+              ev.impact === "high" ? "bg-destructive" : ev.impact === "medium" ? "bg-warning" : "bg-zinc-500"
             }`} />
             <span className="text-[10px] font-mono text-muted-foreground w-16 shrink-0">
               {formatTime(ev.time)} ET
@@ -350,7 +350,7 @@ function NewsTimeline({ events }: { events: NewsEvent[] }) {
               variant="outline"
               className={`text-[8px] h-3.5 px-1 shrink-0 ${
                 ev.impact === "high"
-                  ? "bg-badge-loss text-loss border-red-500/30"
+                  ? "bg-badge-loss text-loss border-destructive/30"
                   : "bg-badge-warn text-warn border-orange-500/30"
               }`}
             >
@@ -509,7 +509,7 @@ export function GamePlanPanel() {
 
           {/* News Events */}
           {currentPlan.newsEvents && currentPlan.newsEvents.length > 0 && (
-            <Card className="border-orange-500/20 bg-orange-500/5">
+            <Card className="border-orange-500/20 bg-warning/5">
               <CardHeader className="pb-1.5 pt-2.5 px-3">
                 <CardTitle className="text-[11px] font-mono flex items-center gap-1.5">
                   <Newspaper className="h-3.5 w-3.5 text-warn" />

@@ -356,88 +356,17 @@ export default function BotView() {
     return t.closedAt?.startsWith(today);
   });
 
-  // ── Header strip metrics ─────────────────────────────────────────────────
-  const unrealizedPnl = (d.equity ?? 0) - (d.balance ?? 0);
-  const todayPnl = d.dailyPnl ?? 0;
-  const todayPnlPct = (d.balance && d.balance !== 0) ? (todayPnl / d.balance) * 100 : 0;
-
-  // Next-scan countdown
-  const intervalMin = botConfig?.entry?.scanIntervalMinutes ?? 15;
-  const lastScanAt = logs[0]?.scanned_at ? new Date(logs[0].scanned_at).getTime() : null;
-  const nextScanAt = lastScanAt ? lastScanAt + intervalMin * 60_000 : null;
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  const nextScanLabel = (() => {
-    if (!d.isRunning) return "Engine off";
-    if (scanPolling || scanMut.isPending) return "Scanning…";
-    if (!nextScanAt) return "—";
-    const diff = Math.max(0, nextScanAt - now);
-    const m = Math.floor(diff / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  })();
-
-  const engineLabel = d.killSwitchActive
-    ? "KILL SWITCH"
-    : d.isRunning
-      ? (d.isPaused ? "Paused" : "Bot Active")
-      : "Bot Stopped";
-  const engineDotClass = d.killSwitchActive
-    ? "bg-destructive shadow-[0_0_8px_hsl(var(--destructive)/0.6)]"
-    : d.isRunning && !d.isPaused
-      ? "bg-success shadow-[0_0_8px_hsl(var(--success)/0.5)]"
-      : d.isRunning && d.isPaused
-        ? "bg-warning shadow-[0_0_8px_hsl(var(--warning)/0.5)]"
-        : "bg-muted-foreground";
+  // Phase-1 cleanup: header-strip metrics (engineLabel, engineDotClass,
+  // nextScanLabel, todayPnl, todayPnlPct, unrealizedPnl) lived here only for
+  // the desktop stats strip that was removed. StatusBar + Account drawer cover
+  // the same data. Variables removed to keep the component lean.
 
   return (
     <AppShell>
       <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
-        {/* ─── Bloomberg-style command strip ────────────────────────────── */}
-        {!isMobile && (
-          <div className="grid grid-cols-6 border border-border bg-card divide-x divide-border mb-1">
-            <div className="p-2 flex flex-col gap-0.5 min-w-0">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">System Status</span>
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${engineDotClass}`} />
-                <span className="text-foreground font-bold uppercase tracking-tight text-[11px] truncate">
-                  {engineLabel} <span className="text-muted-foreground font-normal">[SMC]</span>
-                </span>
-              </div>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Next Scan In</span>
-              <span className="text-primary font-mono font-medium text-[12px]">{nextScanLabel}</span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5 min-w-0">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Balance / Equity</span>
-              <span className="text-foreground font-mono font-medium text-[12px] truncate">
-                {formatMoney(d.balance || 0)} <span className="text-muted-foreground text-[10px]">/ {formatMoney(d.equity || 0)}</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Today P&amp;L</span>
-              <span className={`font-mono font-bold text-[12px] ${todayPnl >= 0 ? "text-success" : "text-destructive"}`}>
-                {todayPnl >= 0 ? "+" : ""}{formatMoney(todayPnl)} <span className="text-[10px] font-medium">({todayPnl >= 0 ? "+" : ""}{todayPnlPct.toFixed(2)}%)</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Open Positions</span>
-              <span className="text-foreground font-mono font-medium text-[12px]">
-                {botPositions.length} <span className="text-muted-foreground text-[10px]">({(d.drawdown || 0).toFixed(2)}% DD)</span>
-              </span>
-            </div>
-            <div className="p-2 flex flex-col gap-0.5">
-              <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-semibold">Win Rate</span>
-              <span className="text-foreground font-mono font-medium text-[12px]">
-                {(d.winRate || 0).toFixed(1)}% <span className="text-muted-foreground text-[10px]">{d.wins ?? 0}W / {d.losses ?? 0}L</span>
-              </span>
-            </div>
-          </div>
-        )}
+        {/* Phase-1 cleanup: removed duplicate desktop stats strip.
+            StatusBar (bottom of app shell) and the Account drawer already cover
+            balance, equity, P&L, win rate, open positions, and engine status. */}
 
         {/* Live mode alert (compact, only when live) */}
         {d.executionMode === "live" && (
@@ -1459,8 +1388,9 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {hasRichData ? (
                         <>
-                          {/* ── Impulse Zone ── */}
-                          {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
+                          {/* Phase-1 cleanup: ImpulseZonePanel removed here — it now renders
+                              only inside the position detail drawer (ScanSignalDetail) to
+                              avoid showing the same zone data 3 times. */}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1493,7 +1423,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                     <span className="text-[8px] text-muted-foreground">({Math.round((sr.regimeData.h4.confidence || 0) * 100)}%)</span>
                                   </div>
                                 )}
-                                {sr.regimeData.multiTFAlignment && (
+                                {/* Phase-1 cleanup: only render alignment badge when meaningful (agree/disagree). */}
+                                {sr.regimeData.multiTFAlignment && sr.regimeData.multiTFAlignment !== "mixed" && (
                                   <span className={`text-[9px] font-bold px-1 py-0.5 rounded ${
                                     sr.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
                                     : sr.regimeData.multiTFAlignment === "disagree" ? "bg-badge-loss text-loss"
@@ -1526,10 +1457,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Tier-Grouped Factor Breakdown ── */}
-                          {sr.factorScores && sr.factorScores.length > 0 && (
-                            <TierFactorBreakdown factors={sr.factorScores} tieredScoring={sr.tieredScoring} />
-                          )}
+                          {/* Phase-1 cleanup: TierFactorBreakdown removed here — it now renders
+                              only inside the position detail drawer to avoid duplication. */}
                           {/* ── Risk Gates ── */}
                           {sr.gates && sr.gates.length > 0 && (
                             <div className="space-y-0.5">
@@ -1595,7 +1524,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
                             <div className={`rounded border px-2 py-1.5 space-y-1 ${
                               sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-                              : sr.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
+                              : sr.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
                               : "border-slate-500/30 bg-slate-500/5"
                             }`}>
                               <p className={`text-[8px] uppercase tracking-wider font-bold ${
@@ -2045,8 +1974,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
-      {/* Impulse Zone Panel — PRIMARY gate, shown first */}
-      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+      {/* Phase-1 cleanup: duplicate ImpulseZonePanel removed — the collapsible
+          scan row (ScanSignalDetail) already renders it once. */}
 
       {/* Tier score summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
@@ -2159,8 +2088,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                 )}
               </div>
             )}
-            {/* Multi-TF Alignment */}
-            {d.regimeData.multiTFAlignment && (
+            {/* Multi-TF Alignment — Phase-1: hide neutral "mixed" state */}
+            {d.regimeData.multiTFAlignment && d.regimeData.multiTFAlignment !== "mixed" && (
               <div className="flex items-center gap-1">
                 <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
                   d.regimeData.multiTFAlignment === "agree" ? "bg-badge-profit text-profit"
@@ -2213,10 +2142,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Tier-Grouped Factors */}
-      {d.factors && (
-        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} />
-      )}
+      {/* Phase-1 cleanup: duplicate TierFactorBreakdown removed — the
+          collapsible scan row (ScanSignalDetail) already renders it once. */}
 
       {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
       {d.gates && (
@@ -2328,7 +2255,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {d.pullbackHealth && d.pullbackHealth.trend !== "insufficient_data" && (
         <div className={`rounded border px-2 py-1.5 space-y-1 ${
           d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-          : d.pullbackHealth.trend === "exhausting" ? "border-red-500/30 bg-badge-loss"
+          : d.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
           : "border-slate-500/30 bg-slate-500/5"
         }`}>
           <p className={`text-[11px] uppercase tracking-wider font-bold ${

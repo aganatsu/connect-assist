@@ -633,7 +633,7 @@ export default function RejectedSetups() {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-medium">{s.symbol}</span>
-                            <Badge variant="outline" className={`text-[10px] px-1 py-0 ${s.direction === "long" ? "text-profit border-emerald-500/30" : "text-loss border-red-500/30"}`}>
+                            <Badge variant="outline" className={`text-[10px] px-1 py-0 ${s.direction === "long" ? "text-profit border-emerald-500/30" : "text-loss border-destructive/30"}`}>
                               {s.direction.toUpperCase()}
                             </Badge>
                           </div>
@@ -755,7 +755,7 @@ export default function RejectedSetups() {
 function OutcomeBadge({ status }: { status: string }) {
   const config: Record<string, { label: string; className: string }> = {
     would_have_won: { label: "Won ✓", className: "bg-emerald-500/10 text-profit border-emerald-500/30" },
-    would_have_lost: { label: "Lost ✗", className: "bg-red-500/10 text-loss border-red-500/30" },
+    would_have_lost: { label: "Lost ✗", className: "bg-destructive/10 text-loss border-destructive/30" },
     inconclusive: { label: "Inconclusive", className: "bg-muted text-muted-foreground border-border/50" },
     pending: { label: "Pending", className: "bg-amber-500/10 text-amber-500 border-amber-500/30" },
   };

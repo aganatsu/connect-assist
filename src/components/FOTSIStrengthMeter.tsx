@@ -25,7 +25,7 @@ const BEAR_THRESHOLD = -25;
 const OS_THRESHOLD = -50;
 
 function getZone(value: number): { label: string; color: string; barColor: string; textColor: string } {
-  if (value >= OB_THRESHOLD) return { label: "OB", color: "border-red-500 text-loss", barColor: "bg-red-500", textColor: "text-loss" };
+  if (value >= OB_THRESHOLD) return { label: "OB", color: "border-destructive text-loss", barColor: "bg-destructive", textColor: "text-loss" };
   if (value > BULL_THRESHOLD) return { label: "BULL", color: "border-cyan text-cyan", barColor: "bg-cyan-500", textColor: "text-cyan" };
   if (value > BEAR_THRESHOLD) return { label: "", color: "", barColor: "bg-zinc-400 dark:bg-zinc-500", textColor: "text-foreground" };
   if (value > OS_THRESHOLD) return { label: "BEAR", color: "border-warn text-warn", barColor: "bg-warn", textColor: "text-warn" };
@@ -162,7 +162,7 @@ export function FOTSIStrengthMeter({ strengths, lastScanTime, onRefresh, isRefre
             <>
               {/* Legend */}
               <div className="flex flex-wrap gap-x-3 gap-y-1 mb-3">
-                <LegendItem color="bg-red-500" label="OB ≥50" />
+                <LegendItem color="bg-destructive" label="OB ≥50" />
                 <LegendItem color="bg-cyan-500" label="Bull >25" />
                 <LegendItem color="bg-zinc-400 dark:bg-zinc-500" label="Neutral" />
                 <LegendItem color="bg-warn" label="Bear <-25" />

@@ -129,8 +129,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               variant="outline"
               className={`text-[10px] px-1.5 py-0 ${
                 order.direction === "long"
-                  ? "border-green-500/50 text-profit bg-badge-profit"
-                  : "border-red-500/50 text-loss bg-badge-loss"
+                  ? "border-success/50 text-profit bg-badge-profit"
+                  : "border-destructive/50 text-loss bg-badge-loss"
               }`}
             >
               {order.direction.toUpperCase()}
@@ -346,8 +346,8 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                       variant="outline"
                       className={`text-[9px] px-1 py-0 ${
                         order.direction === "long"
-                          ? "border-green-500/30 text-profit"
-                          : "border-red-500/30 text-loss"
+                          ? "border-success/30 text-profit"
+                          : "border-destructive/30 text-loss"
                       }`}
                     >
                       {order.direction.toUpperCase()}

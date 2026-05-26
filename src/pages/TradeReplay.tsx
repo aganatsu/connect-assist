@@ -510,11 +510,11 @@ export default function TradeReplay() {
               <div className="absolute top-3 right-3 bg-card/90 backdrop-blur-sm border border-border rounded-lg p-2 shadow-lg">
                 <div className="space-y-0.5 text-[9px]">
                   <div className="flex items-center gap-1.5">
-                    <div className="w-3 h-0.5 bg-green-500" />
+                    <div className="w-3 h-0.5 bg-success" />
                     <span className="text-muted-foreground">Entry / TP</span>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <div className="w-3 h-0.5 bg-red-500 border-dashed" style={{ borderTop: "1px dashed #ef4444" }} />
+                    <div className="w-3 h-0.5 bg-destructive border-dashed" style={{ borderTop: "1px dashed #ef4444" }} />
                     <span className="text-muted-foreground">Original SL</span>
                   </div>
                   <div className="flex items-center gap-1.5">

@@ -37,7 +37,7 @@ const LAYERS: LayerInfo[] = [
   { key: 'ob', label: 'OB', color: 'border-orange-500/40 text-warn', activeColor: 'bg-badge-warn border-orange-400 text-warn', tooltip: 'Order Blocks — institutional supply/demand zones' },
   { key: 'fvg', label: 'FVG', color: 'border-purple-500/40 text-tier3', activeColor: 'bg-purple-500/20 border-purple-400 text-tier3', tooltip: 'Fair Value Gaps — imbalance zones' },
   { key: 'sp', label: 'SP', color: 'border-yellow-500/40 text-highlight', activeColor: 'bg-badge-warn border-yellow-400 text-highlight', tooltip: 'Swing Points — HH/HL/LH/LL structure' },
-  { key: 'liq', label: 'LIQ', color: 'border-red-500/40 text-loss', activeColor: 'bg-badge-loss border-red-400 text-loss', tooltip: 'Liquidity Pools — equal highs/lows' },
+  { key: 'liq', label: 'LIQ', color: 'border-destructive/40 text-loss', activeColor: 'bg-badge-loss border-red-400 text-loss', tooltip: 'Liquidity Pools — equal highs/lows' },
   { key: 'fib', label: 'FIB', color: 'border-blue-500/40 text-info-c', activeColor: 'bg-badge-info border-blue-400 text-info-c', tooltip: 'Fibonacci Levels — retracement zones' },
   { key: 'sr', label: 'S/R', color: 'border-emerald-500/40 text-profit', activeColor: 'bg-badge-profit border-emerald-400 text-profit', tooltip: 'Support / Resistance levels' },
   { key: 'bos', label: 'BOS', color: 'border-sky-500/40 text-tier2', activeColor: 'bg-sky-500/20 border-sky-400 text-tier2', tooltip: 'BOS/CHoCH — structure break & change of character' },
@@ -62,7 +62,7 @@ export function ChartOverlayHUD({ visibility, onToggle, confluenceScore, directi
   const scoreColor = confluenceScore != null
     ? confluenceScore >= 6.5 ? 'text-profit bg-badge-profit border-emerald-500/40'
       : confluenceScore >= 4 ? 'text-warn bg-badge-warn border-amber-500/40'
-      : 'text-loss bg-badge-loss border-red-500/40'
+      : 'text-loss bg-badge-loss border-destructive/40'
     : 'text-muted-foreground bg-muted/30 border-border';
 
   const dirColor = direction === 'bullish' ? 'text-profit' : direction === 'bearish' ? 'text-loss' : 'text-muted-foreground';
