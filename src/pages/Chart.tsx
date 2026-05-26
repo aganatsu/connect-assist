@@ -375,7 +375,9 @@ export default function Chart() {
             {/* Detail mode — full accordion breakdown */}
             {panelMode === 'detail' && (
               <div className="flex-1 overflow-y-auto">
-                <Accordion type="multiple" defaultValue={["confluence", "structure", "levels", "premium", "risk", "botscan"]}>
+                {/* Phase-1 cleanup: only the two most-used sections are open by default.
+                    Users can expand the others on demand. */}
+                <Accordion type="multiple" defaultValue={["confluence", "botscan"]}>
                   {/* Unified Confluence */}
                   <AccordionItem value="confluence">
                     <AccordionTrigger className="text-xs px-3 py-2">

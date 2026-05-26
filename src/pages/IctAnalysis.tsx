@@ -163,7 +163,8 @@ export default function IctAnalysis() {
             </div>
           </div>
 
-          <Accordion type="multiple" defaultValue={["session", "structure", "strength", "premium", "pdpw", "correlation"]}>
+          {/* Phase-1 cleanup: only the three most-used sections are open by default. */}
+          <Accordion type="multiple" defaultValue={["session", "structure", "strength"]}>
             {/* Session Map */}
             <AccordionItem value="session">
               <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Session Map & Kill Zones</span></AccordionTrigger>
