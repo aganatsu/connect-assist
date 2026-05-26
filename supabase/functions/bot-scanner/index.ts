@@ -201,6 +201,7 @@ const DEFAULTS = {
   limitOrderMaxDistancePips: 30, // Max distance from current price to limit price (skip if too far)
   limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
+  marketFillAtZone: true,        // When true + izGateMode="hard" + price IS at zone → market fill immediately (no CHoCH wait)
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -957,6 +958,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
+    marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
   };
 
   return merged;
@@ -4851,9 +4853,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
-        // Auto-enable limit orders when izGateMode is "hard" and a zone entry is available.
-        // This ensures zone-price entries wait for price to actually reach the level (no look-ahead).
-        const effectiveLimitEnabled = config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry);
+        // ── Market Fill at Zone (Option C) ──────────────────────────────────
+        // When izGateMode="hard" AND price IS at the zone AND marketFillAtZone is enabled,
+        // skip the pending order path entirely and fill at market price immediately.
+        // Rationale: The hard gate already validated (1) a valid impulse zone exists,
+        // (2) price has arrived at the zone, (3) all 22 safety gates passed, (4) score
+        // threshold met. The zone touch IS the confirmation — no CHoCH wait needed.
+        // Pending orders (with CHoCH confirmation) are reserved for the "watching_zone"
+        // path where price hasn't reached the zone yet.
+        const priceIsAtValidatedZone = izGateMode === "hard" && izData?.bestZone?.priceAtZone;
+        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone;
+
+        // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
+        // or when marketFillAtZone is explicitly disabled.
+        const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
         if (effectiveLimitEnabled && limitEntry) {
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
@@ -4982,13 +4995,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue; // Skip the market order path below
         }
 
-        // Place position (market order — fallback when limit orders disabled or no zone found)
-        // FIX: Market orders ALWAYS fill at current price (analysis.lastPrice).
-        // Using zone refinedEntry for market orders was look-ahead bias — the bot recorded
-        // fills at prices that hadn't been reached yet, inflating paper P&L.
-        // Zone-price entries should use LIMIT ORDERS (limitOrderEnabled: true) which correctly
-        // wait for price to touch the level before filling.
+        // Place position (market order)
+        // Two scenarios reach here:
+        // 1. marketFillAtZone=true + price IS at validated impulse zone (primary path)
+        // 2. Limit orders disabled and no zone entry found (legacy fallback)
+        // Market orders ALWAYS fill at current price (analysis.lastPrice).
         const marketEntryPrice = analysis.lastPrice;
+        if (useMarketFillAtZone) {
+          console.log(`[scan ${scanCycleId}] 🎯 ${pair}: MARKET FILL AT ZONE — price ${marketEntryPrice.toFixed(5)} is at validated impulse zone [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]. No CHoCH wait.`);
+        }
         // SL sanity guard: reject if current price is already past the SL
         // (e.g., for shorts: if price > SL, the trade is already a loser at entry)
         const slSanityFailed = analysis.direction === "long"
@@ -5034,7 +5049,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         });
 
         tradesPlaced++;
-        detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : "trade_placed";
+        detail.status = isPromotedFromStaging ? "trade_placed_from_watchlist" : (useMarketFillAtZone ? "trade_placed_at_zone" : "trade_placed");
+        if (useMarketFillAtZone) {
+          detail.entryMethod = "market_fill_at_zone";
+          detail.zoneConfirmation = "zone_touch_is_confirmation";
+          detail.impulseZoneEntry = { zoneLow: izData?.bestZone?.low, zoneHigh: izData?.bestZone?.high, zoneType: izData?.bestZone?.type, refinedEntry: izData?.bestZone?.refinedEntry };
+        }
         if (isPromotedFromStaging && existingStaged) {
           detail.staging = { action: "promoted_and_traded", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
         }
@@ -5060,7 +5080,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}` +
-            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "");
+            (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
+            (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\nZone: [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
