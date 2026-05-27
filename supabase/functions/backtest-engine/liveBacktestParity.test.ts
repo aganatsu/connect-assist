@@ -191,9 +191,9 @@ Deno.test("Config parity: factor toggles can be overridden via strategy", () => 
 // ═══════════════════════════════════════════════════════════════════════
 
 Deno.test("Weight parity: DEFAULT_FACTOR_WEIGHTS has 22 factors", () => {
-  // Updated: added htfPoiAlignment, htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel
+  // Updated: added htfPoiAlignment, htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
   const keys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  assertEquals(keys.length, 22);
+  assertEquals(keys.length, 23);
 });
 
 Deno.test("Weight parity: resolveWeightScale returns 1.0 for default config", () => {

@@ -1,19 +1,19 @@
 {
-  "score": 23.6,
+  "score": 23.1,
   "rawScore": 5.55,
   "direction": "long",
   "bias": "bullish",
   "strongFactorCount": 3,
-  "enabledMax": 23.5,
+  "enabledMax": 24,
   "tieredScoring": {
     "tier1Count": 2,
     "tier1Max": 4,
     "tier2Count": 1,
     "tier2Max": 10,
     "tier3Count": 3,
-    "tier3Max": 9,
+    "tier3Max": 10,
     "tieredScore": 5.55,
-    "tieredMax": 23.5,
+    "tieredMax": 24,
     "tier1GatePassed": false,
     "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": true,
@@ -154,6 +154,12 @@
       "present": false,
       "weight": 0,
       "tier": 2
+    },
+    {
+      "name": "Session Affinity",
+      "present": false,
+      "weight": 0,
+      "tier": 3
     },
     {
       "name": "Power of 3 Combo",

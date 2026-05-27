@@ -50,6 +50,11 @@ import {
   getCurrencyAlignment,
   parsePairCurrencies,
 } from "./fotsi.ts";
+import {
+  getSessionAffinity,
+  affinityToScoringPoints,
+  type SessionAffinityResult,
+} from "./sessionAffinity.ts";
 
 // ─── Default Factor Weights ─────────────────────────────────────────────────
 export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
@@ -77,6 +82,8 @@ export const DEFAULT_FACTOR_WEIGHTS: Record<string, number> = {
   pullbackHealth: 0.5,
   // ── Game Plan Integration factors ──
   gamePlanKeyLevel: 1.0,
+  // ── Session-Pair Affinity ──
+  sessionAffinity: 1.5,
 };
 
 // ─── Volume Profile (Time-at-Price / TPO) ────────────────────────────
@@ -2066,6 +2073,38 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     factors.push({ name: "GP Key Level Alignment", present: pts > 0, weight: pts, detail, group: "Multi-Timeframe" }); }
   }
 
+  // ── Factor 26: Session-Pair Affinity (max 1.5) ───────────────────────────────
+  // Scores how well the current instrument trades during the active session.
+  // Uses empirical pip-range data + ICT session methodology + institutional flow.
+  // Prime pairs get a bonus, avoid-tier pairs get a penalty.
+  // This complements Factor 5 (Session Quality) which scores WHEN to trade;
+  // Factor 26 scores WHICH pair to trade during that session.
+  {
+    let pts = 0;
+    let detail = "";
+    const symbol = (config as any)._currentSymbol || "";
+    if (symbol && session) {
+      const atrTrend = regimeInfo?.atrTrend as "expanding" | "contracting" | "stable" | undefined;
+      const affinity = getSessionAffinity(symbol, session, {
+        atMs,
+        atrTrend,
+      });
+      pts = affinityToScoringPoints(affinity);
+      const tierEmoji = affinity.tier === "prime" ? "⭐" : affinity.tier === "good" ? "✅" : affinity.tier === "marginal" ? "⚠️" : "❌";
+      detail = `${tierEmoji} ${symbol} in ${session.name}: ${affinity.tier} (score ${affinity.score.toFixed(2)}) — ${affinity.detail}`;
+      if (affinity.isOverlap) {
+        detail += ` | London-NY overlap active (+${affinity.overlapBonus.toFixed(2)} bonus)`;
+      }
+      if (affinity.isPrimarySession) {
+        detail += " | PRIMARY session for this pair";
+      }
+    } else {
+      detail = "No symbol or session available for affinity scoring";
+    }
+    { const s = applyWeightScale(pts, "sessionAffinity", 1.5, config); pts = s.pts; score += pts;
+    factors.push({ name: "Session Affinity", present: pts !== 0, weight: pts, detail, group: "Timing" }); }
+  }
+
   // ─── Anti-Double-Count Adjustment Pass ──────────────────────────────────────
   // Corrects overlapping scores where sub-factors are subsets of parent factors.
   // Applied AFTER all individual scoring, BEFORE final clamp.
@@ -2432,6 +2471,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     "Pullback Health": 0.5,
     "HTF POI Alignment": 2.0,
     "HTF Fib + PD + Liquidity": 2.5,
+    "Session Affinity": 1.5,
   };
 
   // Count tier 1 factors present (for the minimum gate)
