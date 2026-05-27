@@ -769,6 +769,7 @@ export function findBestEntryZone(
   direction: "bullish" | "bearish",
   currentPrice: number,
   htfData?: HTFConfluenceData,
+  options?: ZoneEngineOptions,
 ): ZoneEngineResult {
   // Step 1: Find impulse leg
   const impulse = findImpulseLeg(htfCandles, direction);
@@ -835,7 +836,8 @@ export function findBestEntryZone(
   // Step 7: Check if current price is at the zone
   const atr = calculateATR(htfCandles);
   const looseThreshold = atr * PRICE_AT_ZONE_ATR_MULT;       // 1.5×ATR (watchlist)
-  const strictThreshold = atr * PRICE_AT_ZONE_STRICT_ATR_MULT; // 0.3×ATR (market fill)
+  const effectiveStrictMult = options?.strictATRMult ?? PRICE_AT_ZONE_STRICT_ATR_MULT;
+  const strictThreshold = atr * effectiveStrictMult; // configurable (default 0.3×ATR)
   const zoneHigh = bestZonePOI.poi.high;
   const zoneLow = bestZonePOI.poi.low;
 
@@ -926,6 +928,13 @@ export function findBestEntryZone(
 }
 
 
+// ─── Options ─────────────────────────────────────────────────────────────────
+/** Options to override engine constants at runtime (config-driven). */
+export interface ZoneEngineOptions {
+  /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
+  strictATRMult?: number;
+}
+
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
 /**
  * Result from the multi-TF zone engine.
@@ -966,14 +975,15 @@ export function findBestEntryZoneMultiTF(
   direction: "bullish" | "bearish",
   currentPrice: number,
   htfData?: HTFConfluenceData,
+  options?: ZoneEngineOptions,
 ): MultiTFZoneResult {
   // Always run 1H
-  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData);
+  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options);
 
   // Run 4H only if sufficient candles
   let h4Result: ZoneEngineResult | null = null;
   if (h4Candles.length >= 20) {
-    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData);
+    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options);
   }
 
   // Combine all zones from both TFs for transparency

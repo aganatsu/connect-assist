@@ -58,7 +58,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
@@ -202,6 +202,7 @@ const DEFAULTS = {
   limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
   marketFillAtZone: true,        // When true + izGateMode="hard" + price IS at zone → market fill immediately (no CHoCH wait)
+  marketFillStrictATRMult: 0.3,   // ATR multiplier for strict zone proximity (market fill). Range: 0.1-1.0
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -959,6 +960,7 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
+    marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? DEFAULTS.marketFillStrictATRMult,
   };
 
   return merged;
@@ -3977,8 +3979,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           htfPD: htfPD4H ?? null,
           direction: zoneDirection as "bullish" | "bearish",
         };
+        const zoneEngineOpts: ZoneEngineOptions = { strictATRMult: pairConfig.marketFillStrictATRMult };
         const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
-          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData,
+          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData, zoneEngineOpts,
         );
         (detail as any).impulseZone = {
           hasZone: !!zoneResult.bestZone,
