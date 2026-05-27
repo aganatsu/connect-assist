@@ -30,6 +30,13 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
   const kz = isInKillzone();
   const sig = botScanSignal?.signal;
 
+  // Staleness check: scan data older than 2 minutes is considered stale
+  const isScanFresh = (() => {
+    if (!botScanSignal?.scannedAt) return false;
+    const scannedMs = new Date(botScanSignal.scannedAt).getTime();
+    return Date.now() - scannedMs < 2 * 60 * 1000;
+  })();
+
   if (!analysis && !sig) {
     return (
       <div className={`flex items-center justify-center h-full text-muted-foreground text-xs ${className}`}>
@@ -232,8 +239,11 @@ export function ChartContextPanel({ analysis, unified, botScanSignal, currentPri
                   <span className="text-muted-foreground">Fib Depth</span>
                   <span className="font-mono">{(iz.bestZone.fibDepth * 100).toFixed(0)}%</span>
                 </div>
-                {iz.bestZone.priceAtZone && (
+                {iz.bestZone.priceAtZone && isScanFresh && (
                   <p className="text-[9px] text-cyan-300 font-bold mt-1">⚡ PRICE AT ZONE</p>
+                )}
+                {iz.bestZone.priceAtZone && !isScanFresh && (
+                  <p className="text-[9px] text-muted-foreground mt-1">Was at zone (scan stale)</p>
                 )}
                 {!iz.bestZone.priceAtZone && iz.bestZone.distanceToZone != null && (
                   <div className="flex justify-between">

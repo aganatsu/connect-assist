@@ -1668,7 +1668,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
           {/* Impulse Zone Panel — PRIMARY gate, shown first */}
-          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
 
           {/* Tier-Grouped Factors */}
           {d.factors && (
@@ -1834,7 +1834,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* 4. Impulse Zone Panel — PRIMARY gate info */}
-      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
 
       {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
       {d.factors && (
