@@ -572,6 +572,8 @@ export type Database = {
           order_id: string
           order_type: string
           placed_at: string
+          refined_zone_high: number | null
+          refined_zone_low: number | null
           resolved_at: string | null
           setup_confidence: number | null
           setup_type: string | null
@@ -610,6 +612,8 @@ export type Database = {
           order_id: string
           order_type?: string
           placed_at?: string
+          refined_zone_high?: number | null
+          refined_zone_low?: number | null
           resolved_at?: string | null
           setup_confidence?: number | null
           setup_type?: string | null
@@ -648,6 +652,8 @@ export type Database = {
           order_id?: string
           order_type?: string
           placed_at?: string
+          refined_zone_high?: number | null
+          refined_zone_low?: number | null
           resolved_at?: string | null
           setup_confidence?: number | null
           setup_type?: string | null
