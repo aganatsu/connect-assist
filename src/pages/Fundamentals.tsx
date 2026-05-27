@@ -49,7 +49,7 @@ export default function Fundamentals() {
     staleTime: 300000,
   });
 
-  const events: any[] = Array.isArray(data?.events) ? data.events : Array.isArray(data) ? data : [];
+  const events: any[] = data?.upcomingEvents || data?.thisWeekEvents || [];
 
   const filtered = events.filter((e: any) => {
     if (filterImpact !== "all" && e.impact !== filterImpact) return false;
@@ -93,7 +93,7 @@ export default function Fundamentals() {
           <div className="space-y-2">
             {filtered.map((event: any, i: number) => {
               const affectedPairs = PAIRS_FOR_CURRENCY[event.currency] || [];
-              const countdown = event.datetime ? getCountdown(event.datetime) : "";
+              const countdown = event.scheduledTime ? getCountdown(event.scheduledTime) : "";
               return (
                 <Card key={i}>
                   <CardContent className="pt-3 pb-3">
@@ -105,9 +105,9 @@ export default function Fundamentals() {
                             {event.impact?.toUpperCase()}
                           </Badge>
                           <span className="text-xs font-bold">{event.currency}</span>
-                          <span className="text-xs text-muted-foreground">{event.datetime?.split('T')[0]}</span>
+                          <span className="text-xs text-muted-foreground">{event.scheduledTime?.split('T')[0]}</span>
                         </div>
-                        <p className="text-sm font-medium truncate">{event.title || event.event}</p>
+                        <p className="text-sm font-medium truncate">{event.name || event.title || event.event}</p>
                         <div className="flex items-center gap-3 mt-1 text-[10px] text-muted-foreground">
                           {event.forecast != null && <span>Forecast: {event.forecast}</span>}
                           {event.previous != null && <span>Previous: {event.previous}</span>}
