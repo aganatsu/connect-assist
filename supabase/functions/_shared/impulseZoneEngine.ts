@@ -86,11 +86,11 @@ export interface ZoneEngineResult {
 /** Fib levels to check (from deepest to shallowest) */
 const FIB_LEVELS = [0.786, 0.71, 0.618, 0.5, 0.382] as const;
 
-/** Score assigned to each Fib depth tier */
+/** Score assigned to each Fib depth tier (flattened so other confluences carry more weight) */
 const FIB_SCORES: Record<number, number> = {
-  0.786: 4,
-  0.71: 3,
-  0.618: 2,
+  0.786: 2,
+  0.71: 2,
+  0.618: 1.5,
   0.5: 1,
   0.382: 0, // Too shallow — no score but still tracked
 };
@@ -373,7 +373,7 @@ export function overlayFibOnPOIs(
     if (!nearFib && !inOTE) continue; // POI not at a meaningful Fib level
 
     // Assign score based on depth
-    const fibScore = FIB_SCORES[nearestFib] ?? (fibDepth >= 0.71 ? 3 : fibDepth >= 0.618 ? 2 : fibDepth >= 0.5 ? 1 : 0);
+    const fibScore = FIB_SCORES[nearestFib] ?? (fibDepth >= 0.71 ? 2 : fibDepth >= 0.618 ? 1.5 : fibDepth >= 0.5 ? 1 : 0);
 
     ranked.push({
       poi,
@@ -719,11 +719,11 @@ export function refineLowerTF(
  * Rank all zones and select the best one.
  *
  * Scoring:
- *   - Fib depth: 78.6% = 4, 71% = 3, 61.8% = 2, 50% = 1
+ *   - Fib depth: 78.6% = 2, 71% = 2, 61.8% = 1.5, 50% = 1
  *   - HTF confluence: up to +5 (4H OB +1, FVG +1, Breaker +1, HTF Fib +1.5, P/D +0.5)
  *   - S/R confirmed: +1
  *   - LTF refined: +1
- *   - Maximum possible score: 11
+ *   - Maximum possible score: 9
  *
  * @param zones - All ranked POIs after S/R check and LTF refinement
  * @returns The highest-scoring zone, or null if none qualify
@@ -923,7 +923,7 @@ export function findBestEntryZone(
     },
     impulse,
     allZones: rankedZones,
-    reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/11${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
+    reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/9${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
   };
 }
 
