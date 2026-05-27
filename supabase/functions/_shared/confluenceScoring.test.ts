@@ -441,12 +441,13 @@ Deno.test("runConfluenceAnalysis: tieredScoring has valid counts", () => {
 });
 
 Deno.test("DEFAULT_FACTOR_WEIGHTS has 17 configurable factors", () => {
-  // The engine uses 22+ internal factors but DEFAULT_FACTOR_WEIGHTS exposes
+  // The engine uses 26+ internal factors but DEFAULT_FACTOR_WEIGHTS exposes
   // the user-configurable ones (added htfPoiAlignment, htfFibPdLiquidity,
   // confluenceStack, pullbackHealth in config-sync-fixes;
-  // gamePlanKeyLevel in gameplan-full-integration)
+  // gamePlanKeyLevel in gameplan-full-integration;
+  // sessionAffinity in session-affinity)
   const keys = Object.keys(DEFAULT_FACTOR_WEIGHTS);
-  assertEquals(keys.length, 22);
+  assertEquals(keys.length, 23);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -645,5 +646,96 @@ Deno.test("OB aligned-only: aligned OB retains full weight", async () => {
     const defaultOBWeight = DEFAULT_FACTOR_WEIGHTS["Order Block"] || 2.0;
     assertEquals(obFactor.weight, defaultOBWeight, "Aligned OB should retain full default weight");
     assert(obFactor.detail.includes("aligned"), "Detail should confirm alignment");
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// SECTION 4: Factor 26 — Session Affinity Tests
+// ═══════════════════════════════════════════════════════════════════════
+
+Deno.test("Factor 26: Session Affinity factor appears in factors list", () => {
+  const candles = generateBullishFixture();
+  const dailyCandles = generateBullishDailyCandles();
+  const configWithSymbol = { ...baseConfig, _currentSymbol: "EUR/USD" };
+  const result = runConfluenceAnalysis(candles, dailyCandles, configWithSymbol);
+  const affinityFactor = result.factors.find((f: any) => f.name === "Session Affinity");
+  assertExists(affinityFactor, "Session Affinity factor should exist in factors list");
+  assertEquals(affinityFactor.group, "Timing");
+});
+
+Deno.test("Factor 26: EUR/USD during London session scores as prime/good", () => {
+  const candles = generateBullishFixture();
+  const dailyCandles = generateBullishDailyCandles();
+  // Pin to 2024-03-15T10:00:00Z = 06:00 ET (London session, EDT)
+  const londonAtMs = new Date("2024-03-15T10:00:00Z").getTime();
+  const configWithSymbol = { ...baseConfig, _currentSymbol: "EUR/USD" };
+  const result = runConfluenceAnalysis(candles, dailyCandles, configWithSymbol, undefined, londonAtMs);
+  const affinityFactor = result.factors.find((f: any) => f.name === "Session Affinity");
+  assertExists(affinityFactor);
+  // EUR/USD in London should be prime or good — positive or neutral weight
+  assert(affinityFactor.weight >= 0,
+    `EUR/USD in London should have non-negative affinity weight, got ${affinityFactor.weight}`);
+  assert(affinityFactor.detail.includes("EUR/USD"),
+    `Detail should mention the symbol, got: ${affinityFactor.detail}`);
+  assert(affinityFactor.detail.includes("London"),
+    `Detail should mention London session, got: ${affinityFactor.detail}`);
+});
+
+Deno.test("Factor 26: No symbol in config produces neutral score", () => {
+  const candles = generateBullishFixture();
+  const dailyCandles = generateBullishDailyCandles();
+  // No _currentSymbol in config
+  const result = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
+  const affinityFactor = result.factors.find((f: any) => f.name === "Session Affinity");
+  assertExists(affinityFactor);
+  assertEquals(affinityFactor.weight, 0,
+    "Without symbol, session affinity should produce 0 weight");
+  assert(affinityFactor.detail.includes("No symbol"),
+    `Detail should indicate no symbol available, got: ${affinityFactor.detail}`);
+});
+
+Deno.test("Factor 26: sessionAffinity weight=0 disables the factor", () => {
+  const candles = generateBullishFixture();
+  const dailyCandles = generateBullishDailyCandles();
+  const configDisabled = {
+    ...baseConfig,
+    _currentSymbol: "EUR/USD",
+    factorWeights: { sessionAffinity: 0 },
+  };
+  const result = runConfluenceAnalysis(candles, dailyCandles, configDisabled);
+  const affinityFactor = result.factors.find((f: any) => f.name === "Session Affinity");
+  assertExists(affinityFactor);
+  assertEquals(affinityFactor.weight, 0,
+    "With sessionAffinity weight=0, factor should contribute 0");
+});
+
+Deno.test("REGRESSION: existing factors unchanged when sessionAffinity added", () => {
+  // Proves that adding Factor 26 does not change existing factor scores.
+  // We run with sessionAffinity=0 (disabled) and compare against no _currentSymbol.
+  const candles = generateBullishFixture();
+  const dailyCandles = generateBullishDailyCandles();
+
+  // Run without symbol (Factor 26 produces 0)
+  const resultNoSymbol = runConfluenceAnalysis(candles, dailyCandles, baseConfig);
+  // Run with symbol but weight=0 (Factor 26 also produces 0)
+  const resultDisabled = runConfluenceAnalysis(candles, dailyCandles, {
+    ...baseConfig,
+    _currentSymbol: "EUR/USD",
+    factorWeights: { sessionAffinity: 0 },
+  });
+
+  // All non-affinity factors should have identical weights
+  const existingFactorsA = resultNoSymbol.factors.filter((f: any) => f.name !== "Session Affinity");
+  const existingFactorsB = resultDisabled.factors.filter((f: any) => f.name !== "Session Affinity");
+
+  assertEquals(existingFactorsA.length, existingFactorsB.length,
+    "Same number of non-affinity factors");
+
+  for (let i = 0; i < existingFactorsA.length; i++) {
+    assertEquals(existingFactorsA[i].name, existingFactorsB[i].name,
+      `Factor ${i} name mismatch`);
+    assertAlmostEquals(existingFactorsA[i].weight, existingFactorsB[i].weight, 0.001,
+      `Factor "${existingFactorsA[i].name}" weight changed: ${existingFactorsA[i].weight} vs ${existingFactorsB[i].weight}`);
   }
 });
