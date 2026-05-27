@@ -1471,111 +1471,6 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Confluence Stacking ── */}
-                          {sr.confluenceStacking && (
-                            <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
-                              {sr.confluenceStacking.bestStack && (
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    sr.confluenceStacking.bestStack.layerCount >= 3
-                                      ? "bg-cyan-500/25 text-cyan-300 border border-cyan-400/40"
-                                      : "bg-cyan-500/15 text-cyan-400"
-                                  }`}>
-                                    {sr.confluenceStacking.bestStack.layerCount >= 3 ? "⚡ TRIPLE" : "◆ DOUBLE"} CONFLUENCE
-                                  </span>
-                                  <span className="text-[9px] text-foreground font-medium">{sr.confluenceStacking.bestStack.label}</span>
-                                  {sr.confluenceStacking.bestStack.alignment && (
-                                    <span className={`text-[8px] px-1 py-0.5 rounded ${
-                                      sr.confluenceStacking.bestStack.alignment === "aligned" ? "bg-badge-profit text-profit"
-                                      : sr.confluenceStacking.bestStack.alignment === "counter" ? "bg-badge-loss text-loss"
-                                      : "bg-muted text-muted-foreground"
-                                    }`}>
-                                      {sr.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : sr.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              {sr.confluenceStacking.bestStack?.overlapZone && (
-                                <p className="text-[8px] text-muted-foreground">
-                                  Zone: {sr.confluenceStacking.bestStack.overlapZone[0]?.toFixed(5)} — {sr.confluenceStacking.bestStack.overlapZone[1]?.toFixed(5)}
-                                  {sr.confluenceStacking.bestStack.fibLevels?.length > 0 && (
-                                    <span className="text-cyan-400"> | Fib: {sr.confluenceStacking.bestStack.fibLevels.map((f: number) => `${f}%`).join(", ")}</span>
-                                  )}
-                                </p>
-                              )}
-                              {sr.confluenceStacking.totalStacks > 1 && (
-                                <p className="text-[8px] text-muted-foreground">{sr.confluenceStacking.totalStacks} total confluence zones found</p>
-                              )}
-                              {sr.confluenceStacking.stacks?.length > 1 && (
-                                <div className="mt-1 space-y-0.5">
-                                  {sr.confluenceStacking.stacks.slice(1, 4).map((s: any, si: number) => (
-                                    <p key={si} className="text-[8px] text-muted-foreground">
-                                      #{si + 2}: {s.label} ({s.layerCount} layers{s.fibLevels?.length > 0 ? `, Fib ${s.fibLevels.join("/")}%` : ""})
-                                    </p>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* ── Pullback Health ── */}
-                          {sr.pullbackHealth && sr.pullbackHealth.trend !== "insufficient_data" && (
-                            <div className={`rounded border px-2 py-1.5 space-y-1 ${
-                              sr.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-                              : sr.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
-                              : "border-slate-500/30 bg-slate-500/5"
-                            }`}>
-                              <p className={`text-[8px] uppercase tracking-wider font-bold ${
-                                sr.pullbackHealth.trend === "healthy" ? "text-profit" : sr.pullbackHealth.trend === "exhausting" ? "text-loss" : "text-muted-foreground"
-                              }`}>Pullback Health</p>
-                              <div className="flex items-center gap-1">
-                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                  sr.pullbackHealth.trend === "healthy" ? "bg-badge-profit text-profit"
-                                  : sr.pullbackHealth.trend === "exhausting" ? "bg-badge-loss text-loss"
-                                  : "bg-slate-500/20 text-muted-foreground"
-                                }`}>
-                                  {sr.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : sr.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
-                                </span>
-                                <span className="text-[8px] text-muted-foreground">
-                                  (decay rate: {sr.pullbackHealth.decayRate > 0 ? "+" : ""}{sr.pullbackHealth.decayRate?.toFixed(1)}%/swing)
-                                </span>
-                              </div>
-                              {sr.pullbackHealth.measurements?.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap">
-                                  <span className="text-[8px] text-muted-foreground">Depths:</span>
-                                  {sr.pullbackHealth.measurements.map((m: any, mi: number) => (
-                                    <span key={mi} className="text-[8px] text-foreground">
-                                      {m.depthPercent?.toFixed(1)}%
-                                      <span className="text-muted-foreground"> (~{m.nearestFibLevel}%)</span>
-                                      {mi < sr.pullbackHealth.measurements.length - 1 && <span className="text-muted-foreground"> →</span>}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* ── Sweep Reclaim ── */}
-                          {sr.sweepReclaim && sr.sweepReclaim.reclaimedCount > 0 && (
-                            <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
-                              <p className="text-[8px] text-warn uppercase tracking-wider font-bold">Sweep Reclaim</p>
-                              {sr.sweepReclaim.sweeps?.filter((sw: any) => sw.reclaimed).slice(0, 3).map((sw: any, si: number) => (
-                                <div key={si} className="flex flex-wrap items-center gap-1">
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    sw.createdFVG ? "bg-amber-500/25 text-warn border border-warn/40"
-                                    : sw.createdDisplacement ? "bg-badge-warn text-warn"
-                                    : "bg-badge-warn text-warn"
-                                  }`}>
-                                    {sw.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM{sw.createdFVG ? " + FVG" : sw.createdDisplacement ? " + DISP" : ""}
-                                  </span>
-                                  <span className="text-[8px] text-foreground">at {sw.sweptLevel?.toFixed(5)}</span>
-                                  <span className="text-[8px] text-muted-foreground">(strength: {Math.round((sw.reclaimStrength || 0) * 100)}%)</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
                           {/* ── Structure Intelligence ── */}
                           {sr.structureIntel && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1626,66 +1521,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                             </div>
                           )}
 
-                          {/* ── Entity Lifecycles ── */}
-                          {sr.entityLifecycles && (() => {
-                            const lc = sr.entityLifecycles;
-                            const stateColor = (state: string) => {
-                              if (state === "active" || state === "open") return "bg-badge-profit text-profit";
-                              if (state === "tested" || state === "respected" || state === "retested") return "bg-badge-info text-info-c";
-                              if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-badge-warn text-warn";
-                              if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-badge-loss text-loss";
-                              return "bg-muted/30 text-muted-foreground";
-                            };
-                            const renderStates = (byState: Record<string, number>) => (
-                              <div className="flex flex-wrap gap-1">
-                                {Object.entries(byState).filter(([_, v]) => v > 0).map(([state, count]) => (
-                                  <span key={state} className={`text-[8px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
-                                    {count} {state.replace("_", " ")}
-                                  </span>
-                                ))}
-                              </div>
-                            );
-                            const hasAny = (lc.orderBlocks?.total > 0) || (lc.fvgs?.total > 0) || (lc.swingPoints?.total > 0) || (lc.liquidityPools?.total > 0) || (lc.breakerBlocks?.total > 0) || (lc.unicornSetups?.total > 0);
-                            if (!hasAny) return null;
-                            return (
-                              <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1.5">
-                                <p className="text-[8px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
-                                {lc.orderBlocks?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>{renderStates(lc.orderBlocks.byState)}</div>}
-                                {lc.fvgs?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>{renderStates(lc.fvgs.byState)}</div>}
-                                {lc.swingPoints?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>{renderStates(lc.swingPoints.byState)}</div>}
-                                {lc.liquidityPools?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>{renderStates(lc.liquidityPools.byState)}</div>}
-                                {lc.breakerBlocks?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>{renderStates(lc.breakerBlocks.byState)}</div>}
-                                {lc.unicornSetups?.total > 0 && <div className="space-y-0.5"><p className="text-[8px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>{renderStates(lc.unicornSetups.byState)}</div>}
-                              </div>
-                            );
-                          })()}
 
-                          {/* ── Fib Levels ── */}
-                          {sr.fibLevels && (
-                            <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
-                              <div className="flex items-center gap-2">
-                                <p className="text-[8px] text-warn uppercase tracking-wider font-bold">Fib Levels</p>
-                                <span className="text-[7px] font-mono text-muted-foreground">({sr.fibLevels.direction === "up" ? "↑" : "↓"} {sr.fibLevels.swingLow?.toFixed(sr.fibLevels.swingLow > 10 ? 3 : 5)} – {sr.fibLevels.swingHigh?.toFixed(sr.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
-                              </div>
-                              <div className="flex flex-wrap gap-1">
-                                {(sr.fibLevels.retracements || []).map((r: any, i: number) => (
-                                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-badge-warn text-warn">
-                                    {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
-                                  </span>
-                                ))}
-                              </div>
-                              {sr.fibLevels.extensions?.length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-0.5">
-                                  <span className="text-[7px] text-muted-foreground">Ext:</span>
-                                  {sr.fibLevels.extensions.map((e: any, i: number) => (
-                                    <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-badge-profit text-profit">
-                                      {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
                           {/* ── Exit Strategy + Filters (inline for rich data) ── */}
                           {(() => {
                             const exitFlags = sr.exitFlags ?? null;
@@ -1860,8 +1696,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
 
-          {/* Summary */}
-          {d.summary && <p className="text-[9px] text-muted-foreground italic mt-1">{d.summary}</p>}
+
         </div>
       )}
     </div>
@@ -1963,9 +1798,12 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
   const statusLabel = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "🔍📋 ZONE+WL" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "🔍 ZONE SETUP" : d.status === "trade_placed_from_watchlist" ? "📋 WATCHLIST" : d.status === "trade_placed" ? "PLACED" : d.status === "rejected" ? "REJECTED" : d.status === "below_threshold" ? "SKIP" : d.status?.toUpperCase() || "—";
   const statusColor = d.status === "limit_order_from_watchlist" || d.status === "zone_setup_from_watchlist" ? "text-tier3" : d.status === "limit_order_placed" || d.status === "zone_setup_active" ? "text-info-c" : d.status === "trade_placed_from_watchlist" ? "text-cyan-400" : d.status === "trade_placed" ? "text-success" : d.status === "rejected" ? "text-destructive" : "text-muted-foreground";
 
+  // Only show failed gates
+  const failedGates = d.gates?.filter((g: any) => !g.passed) || [];
+
   return (
     <div className="space-y-2">
-      {/* Header */}
+      {/* 1. Header — Pair + Status + Score */}
       <div className="flex items-center gap-2">
         {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
         <span className="text-[12px] font-bold">{d.pair}</span>
@@ -1973,13 +1811,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
 
-      {/* Phase-1 cleanup: duplicate ImpulseZonePanel removed — the collapsible
-          scan row (ScanSignalDetail) already renders it once. */}
-
-      {/* Tier score summary */}
+      {/* 2. Tier Score Summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
 
-      {/* Narrative sentence — plain-English thesis */}
+      {/* 3. Narrative — plain-English thesis */}
       {d.direction && d.direction !== "none" && (
         <p className="text-[11px] text-muted-foreground/80 italic leading-tight">
           {generateDetailNarrative({
@@ -1998,51 +1833,15 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </p>
       )}
 
-      {/* Trade Entry Thesis — shown for placed trades */}
-      {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
-        <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
-          <p className="text-[11px] text-success/90 leading-tight">
-            {generateTradeEntryNarrative({
-              pair: d.pair,
-              direction: d.direction,
-              score: d.score,
-              factors: d.factors,
-              tieredScoring: d.tieredScoring,
-              regimeData: d.regimeData,
-              staging: d.staging,
-              limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
-            })}
-          </p>
-        </div>
+      {/* 4. Impulse Zone Panel — PRIMARY gate info */}
+      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} />}
+
+      {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
+      {d.factors && (
+        <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring} compact />
       )}
 
-      {/* Watchlist Origin Banner */}
-      {d.staging?.action === "promoted_and_traded" && (
-        <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
-          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
-          <p className="mt-1 text-[12px] text-cyan-300">
-            Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
-          </p>
-        </div>
-      )}
-
-      {/* Zone Setup Banner */}
-      {d.limitOrder && (
-        <div className="rounded border border-blue-500/30 bg-badge-info px-2 py-1.5">
-          <p className="text-[11px] text-info-c uppercase tracking-wider font-bold">🔍 Zone Setup Active</p>
-          <p className="mt-1 text-[12px] text-info-c">
-            Trigger: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
-          </p>
-          <p className="text-[12px] text-info-c/70">
-            Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </p>
-          <p className="text-[10px] text-warn/80 mt-1 italic">
-            Will hunt for 5m CHoCH confirmation when price reaches zone
-          </p>
-        </div>
-      )}
-
-      {/* Regime Detection Panel — shows Daily + 4H regime, transition state, multi-TF alignment */}
+      {/* 6. Regime Detection */}
       {d.regimeData && (
         <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
           <p className="text-[11px] text-tier3 uppercase tracking-wider font-bold">Regime Detection</p>
@@ -2087,7 +1886,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
                 )}
               </div>
             )}
-            {/* Multi-TF Alignment — Phase-1: hide neutral "mixed" state */}
+            {/* Multi-TF Alignment */}
             {d.regimeData.multiTFAlignment && d.regimeData.multiTFAlignment !== "mixed" && (
               <div className="flex items-center gap-1">
                 <span className={`text-[11px] font-bold px-1 py-0.5 rounded ${
@@ -2141,23 +1940,22 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Phase-1 cleanup: duplicate TierFactorBreakdown removed — the
-          collapsible scan row (ScanSignalDetail) already renders it once. */}
-
-      {/* Risk Gates (legacy gates — tier gates shown inside TierFactorBreakdown) */}
+      {/* 7. Failed Gates Only */}
       {d.gates && (
         <div className="space-y-0.5">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">Risk Gates</p>
-          {d.gates.map((g: any, gi: number) => (
-            <div key={gi} className={`flex items-center gap-1 text-[11px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
-              <span>{g.passed ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldX className="h-2.5 w-2.5" />}</span>
+          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">
+            {failedGates.length > 0 ? `Failed Gates (${failedGates.length})` : "✓ All gates passed"}
+          </p>
+          {failedGates.map((g: any, gi: number) => (
+            <div key={gi} className="flex items-center gap-1 text-[11px] text-destructive">
+              <span><ShieldX className="h-2.5 w-2.5" /></span>
               <span>{g.reason}</span>
             </div>
           ))}
         </div>
       )}
 
-      {/* Rejection Reasons */}
+      {/* 8. Rejection Reasons (conditional) */}
       {d.rejectionReasons && d.rejectionReasons.length > 0 && (
         <div className="space-y-0.5">
           <p className="text-[11px] text-destructive uppercase tracking-wider font-bold">Rejection Reasons</p>
@@ -2167,133 +1965,10 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Confluence Stacking Panel — shows FVG/OB + S/R + Fib overlap zones */}
-      {d.confluenceStacking && (
-        <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
-          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">Confluence Stacking</p>
-          {d.confluenceStacking.bestStack && (
-            <div className="flex flex-wrap items-center gap-1">
-              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-                d.confluenceStacking.bestStack.layerCount >= 3
-                  ? "bg-cyan-500/25 text-cyan-300 border border-cyan-400/40"
-                  : "bg-cyan-500/15 text-cyan-400"
-              }`}>
-                {d.confluenceStacking.bestStack.layerCount >= 3 ? "⚡ TRIPLE" : "◆ DOUBLE"} CONFLUENCE
-              </span>
-              <span className="text-[11px] text-foreground font-medium">
-                {d.confluenceStacking.bestStack.label}
-              </span>
-              {d.confluenceStacking.bestStack.alignment && (
-                <span className={`text-[11px] px-1 py-0.5 rounded ${
-                  d.confluenceStacking.bestStack.alignment === "aligned" ? "bg-badge-profit text-profit"
-                  : d.confluenceStacking.bestStack.alignment === "counter" ? "bg-badge-loss text-loss"
-                  : "bg-muted text-muted-foreground"
-                }`}>
-                  {d.confluenceStacking.bestStack.alignment === "aligned" ? "✓ ALIGNED" : d.confluenceStacking.bestStack.alignment === "counter" ? "✗ COUNTER" : "NEUTRAL"}
-                </span>
-              )}
-            </div>
-          )}
-          {d.confluenceStacking.bestStack?.overlapZone && (
-            <p className="text-[11px] text-muted-foreground">
-              Zone: {d.confluenceStacking.bestStack.overlapZone[0]?.toFixed(5)} — {d.confluenceStacking.bestStack.overlapZone[1]?.toFixed(5)}
-              {d.confluenceStacking.bestStack.fibLevels?.length > 0 && (
-                <span className="text-cyan-400"> | Fib: {d.confluenceStacking.bestStack.fibLevels.map((f: number) => `${f}%`).join(", ")}</span>
-              )}
-            </p>
-          )}
-          {d.confluenceStacking.totalStacks > 1 && (
-            <p className="text-[11px] text-muted-foreground">
-              {d.confluenceStacking.totalStacks} total confluence zones found
-            </p>
-          )}
-          {/* Additional stacks (collapsed) */}
-          {d.confluenceStacking.stacks?.length > 1 && (
-            <div className="mt-1 space-y-0.5">
-              {d.confluenceStacking.stacks.slice(1, 4).map((s: any, i: number) => (
-                <p key={i} className="text-[11px] text-muted-foreground">
-                  #{i + 2}: {s.label} ({s.layerCount} layers{s.fibLevels?.length > 0 ? `, Fib ${s.fibLevels.join("/")}%` : ""})
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Sweep Reclaim Panel — shows liquidity sweep + reclaim confirmation */}
-      {d.sweepReclaim && d.sweepReclaim.reclaimedCount > 0 && (
-        <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
-          <p className="text-[11px] text-warn uppercase tracking-wider font-bold">Sweep Reclaim</p>
-          {d.sweepReclaim.sweeps?.filter((sr: any) => sr.reclaimed).slice(0, 3).map((sr: any, i: number) => (
-            <div key={i} className="flex flex-wrap items-center gap-1">
-              <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-                sr.createdFVG ? "bg-amber-500/25 text-warn border border-warn/40"
-                : sr.createdDisplacement ? "bg-badge-warn text-warn"
-                : "bg-badge-warn text-warn"
-              }`}>
-                {sr.type === "bullish" ? "↑" : "↓"} SWEEP + RECLAIM
-                {sr.createdFVG ? " + FVG" : sr.createdDisplacement ? " + DISP" : ""}
-              </span>
-              <span className="text-[11px] text-foreground">
-                at {sr.sweptLevel?.toFixed(5)}
-              </span>
-              <span className="text-[11px] text-muted-foreground">
-                (strength: {Math.round((sr.reclaimStrength || 0) * 100)}%)
-              </span>
-            </div>
-          ))}
-          {d.sweepReclaim.totalSweeps > d.sweepReclaim.reclaimedCount && (
-            <p className="text-[11px] text-muted-foreground">
-              {d.sweepReclaim.totalSweeps - d.sweepReclaim.reclaimedCount} additional sweep(s) without reclaim
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Pullback Health Panel — shows trend health via retracement depth progression */}
-      {d.pullbackHealth && d.pullbackHealth.trend !== "insufficient_data" && (
-        <div className={`rounded border px-2 py-1.5 space-y-1 ${
-          d.pullbackHealth.trend === "healthy" ? "border-emerald-500/30 bg-badge-profit"
-          : d.pullbackHealth.trend === "exhausting" ? "border-destructive/30 bg-badge-loss"
-          : "border-slate-500/30 bg-slate-500/5"
-        }`}>
-          <p className={`text-[11px] uppercase tracking-wider font-bold ${
-            d.pullbackHealth.trend === "healthy" ? "text-profit"
-            : d.pullbackHealth.trend === "exhausting" ? "text-loss"
-            : "text-muted-foreground"
-          }`}>Pullback Health</p>
-          <div className="flex items-center gap-1">
-            <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${
-              d.pullbackHealth.trend === "healthy" ? "bg-badge-profit text-profit"
-              : d.pullbackHealth.trend === "exhausting" ? "bg-badge-loss text-loss"
-              : "bg-slate-500/20 text-muted-foreground"
-            }`}>
-              {d.pullbackHealth.trend === "healthy" ? "✓ HEALTHY" : d.pullbackHealth.trend === "exhausting" ? "⚠ EXHAUSTING" : "— STABLE"}
-            </span>
-            <span className="text-[11px] text-muted-foreground">
-              (decay rate: {d.pullbackHealth.decayRate > 0 ? "+" : ""}{d.pullbackHealth.decayRate?.toFixed(1)}%/swing)
-            </span>
-          </div>
-          {d.pullbackHealth.measurements?.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap">
-              <span className="text-[11px] text-muted-foreground">Depths:</span>
-              {d.pullbackHealth.measurements.map((m: any, i: number) => (
-                <span key={i} className="text-[11px] text-foreground">
-                  {m.depthPercent?.toFixed(1)}%
-                  <span className="text-muted-foreground"> (~{m.nearestFibLevel}%)</span>
-                  {i < d.pullbackHealth.measurements.length - 1 && <span className="text-muted-foreground"> →</span>}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Structure Intelligence Panel — Internal/External BOS, S2F rate, derived S/R */}
+      {/* 9. Structure Intelligence — compact */}
       {d.structureIntel && (
         <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
           <p className="text-[11px] uppercase tracking-wider font-bold text-tier3">Structure Intelligence</p>
-          {/* BOS / CHoCH counts by significance */}
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
             <div className="flex items-center gap-1">
               <span className="text-[11px] text-muted-foreground">Internal BOS:</span>
@@ -2312,7 +1987,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               <span className="text-[11px] font-mono text-foreground">{d.structureIntel.counts?.externalCHoCH ?? 0}</span>
             </div>
           </div>
-          {/* Structure-to-Fractal conversion rate */}
+          {/* S2F Rate */}
           {d.structureIntel.s2f && (
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-[11px] text-muted-foreground">S2F Rate:</span>
@@ -2328,136 +2003,15 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
               </span>
             </div>
           )}
-          {/* BOS-derived S/R levels */}
-          {d.structureIntel.derivedSR && (
-            <div className="space-y-0.5 mt-0.5">
-              {d.structureIntel.derivedSR.active?.length > 0 && (
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[11px] text-profit font-semibold">Active S/R:</span>
-                  {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
-                    <span key={i} className={`text-[11px] font-mono px-1 py-0.5 rounded ${
-                      sr.type === "support" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"
-                    }`}>
-                      {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {d.structureIntel.derivedSR.broken?.length > 0 && (
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[11px] text-muted-foreground">Broken:</span>
-                  {d.structureIntel.derivedSR.broken.map((sr: any, i: number) => (
-                    <span key={i} className="text-[11px] font-mono text-muted-foreground line-through px-1 py-0.5">
-                      {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Entity Lifecycle Summary Panel */}
-      {d.analysis_snapshot?.entityLifecycles && (() => {
-        const lc = d.analysis_snapshot.entityLifecycles;
-        const stateColor = (state: string) => {
-          if (state === "active" || state === "open") return "bg-badge-profit text-profit";
-          if (state === "tested" || state === "respected" || state === "retested") return "bg-badge-info text-info-c";
-          if (state === "swept" || state === "swept_rejected" || state === "partially_filled" || state === "mitigating") return "bg-badge-warn text-warn";
-          if (state === "broken" || state === "filled" || state === "swept_absorbed" || state === "invalidated") return "bg-badge-loss text-loss";
-          return "bg-muted/30 text-muted-foreground";
-        };
-        const renderStates = (byState: Record<string, number>) => (
-          <div className="flex flex-wrap gap-1">
-            {Object.entries(byState).filter(([_, v]) => v > 0).map(([state, count]) => (
-              <span key={state} className={`text-[11px] font-mono px-1.5 py-0.5 rounded ${stateColor(state)}`}>
-                {count} {state.replace("_", " ")}
-              </span>
-            ))}
-          </div>
-        );
-        return (
-          <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1.5">
-            <p className="text-[11px] uppercase tracking-wider font-bold text-cyan-400">Entity Lifecycles</p>
-            {/* Order Blocks */}
-            {lc.orderBlocks?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">Order Blocks ({lc.orderBlocks.total})</p>
-                {renderStates(lc.orderBlocks.byState)}
-              </div>
-            )}
-            {/* FVGs */}
-            {lc.fvgs?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">FVGs ({lc.fvgs.total}) — avg fill: {lc.fvgs.avgFillPercent?.toFixed(0) || 0}%</p>
-                {renderStates(lc.fvgs.byState)}
-              </div>
-            )}
-            {/* Swing Points */}
-            {lc.swingPoints?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">Swing Points ({lc.swingPoints.total})</p>
-                {renderStates(lc.swingPoints.byState)}
-              </div>
-            )}
-            {/* Liquidity Pools */}
-            {lc.liquidityPools?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">Liquidity Pools ({lc.liquidityPools.total})</p>
-                {renderStates(lc.liquidityPools.byState)}
-              </div>
-            )}
-            {/* Breaker Blocks */}
-            {lc.breakerBlocks?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">Breaker Blocks ({lc.breakerBlocks.total})</p>
-                {renderStates(lc.breakerBlocks.byState)}
-              </div>
-            )}
-            {/* Unicorn Setups */}
-            {lc.unicornSetups?.total > 0 && (
-              <div className="space-y-0.5">
-                <p className="text-[11px] text-muted-foreground font-semibold">Unicorn Setups ({lc.unicornSetups.total})</p>
-                {renderStates(lc.unicornSetups.byState)}
-                {lc.unicornSetups.invalidationReasons?.length > 0 && (
-                  <p className="text-[10px] text-loss/70">Invalidated: {lc.unicornSetups.invalidationReasons.join(", ")}</p>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {d.reason && (
-        <div className="rounded border border-border bg-muted/20 px-2 py-1.5">
-          <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">Why it was skipped</p>
-          <p className="mt-1 text-[12px] text-foreground">{d.reason}</p>
-        </div>
-      )}
-
-      {/* Fib Levels Panel — shows ZigZag-based retracement + extension levels */}
-      {d.fibLevels && (
-        <div className="rounded border border-amber-500/30 bg-badge-warn px-2 py-1.5 space-y-1">
-          <div className="flex items-center gap-2">
-            <p className="text-[11px] text-warn uppercase tracking-wider font-bold">Fib Levels</p>
-            <span className="text-[10px] font-mono text-muted-foreground">({d.fibLevels.direction === "up" ? "↑" : "↓"} {d.fibLevels.swingLow?.toFixed(d.fibLevels.swingLow > 10 ? 3 : 5)} – {d.fibLevels.swingHigh?.toFixed(d.fibLevels.swingHigh > 10 ? 3 : 5)})</span>
-          </div>
-          {/* Retracement levels */}
-          <div className="flex flex-wrap gap-1">
-            {(d.fibLevels.retracements || []).map((r: any, i: number) => (
-              <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-badge-warn text-warn">
-                {r.label}: {r.price?.toFixed(r.price > 10 ? 3 : 5)}
-              </span>
-            ))}
-          </div>
-          {/* Extension levels */}
-          {d.fibLevels.extensions?.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-0.5">
-              <span className="text-[10px] text-muted-foreground">Ext:</span>
-              {d.fibLevels.extensions.map((e: any, i: number) => (
-                <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-badge-profit text-profit">
-                  {e.label}: {e.price?.toFixed(e.price > 10 ? 3 : 5)}
+          {/* Active S/R only */}
+          {d.structureIntel.derivedSR?.active?.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap mt-0.5">
+              <span className="text-[11px] text-profit font-semibold">Active S/R:</span>
+              {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
+                <span key={i} className={`text-[11px] font-mono px-1 py-0.5 rounded ${
+                  sr.type === "support" ? "bg-badge-profit text-profit" : "bg-badge-loss text-loss"
+                }`}>
+                  {sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}
                 </span>
               ))}
             </div>
@@ -2465,8 +2019,49 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </div>
       )}
 
-      {/* Summary */}
-      {d.summary && <p className="text-[11px] text-muted-foreground italic mt-1">{d.summary}</p>}
+      {/* Trade Entry Thesis — shown for placed trades */}
+      {(d.status === "trade_placed" || d.status === "trade_placed_from_watchlist") && d.factors && (
+        <div className="rounded border border-success/30 bg-success/5 px-2 py-1">
+          <p className="text-[11px] text-success/90 leading-tight">
+            {generateTradeEntryNarrative({
+              pair: d.pair,
+              direction: d.direction,
+              score: d.score,
+              factors: d.factors,
+              tieredScoring: d.tieredScoring,
+              regimeData: d.regimeData,
+              staging: d.staging,
+              limitOrder: d.limitOrder ? { entry_price: d.limitOrder.entryPrice, zone_type: d.limitOrder.zoneType } : undefined,
+            })}
+          </p>
+        </div>
+      )}
+
+      {/* Watchlist Origin Banner */}
+      {d.staging?.action === "promoted_and_traded" && (
+        <div className="rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1.5">
+          <p className="text-[11px] text-cyan-400 uppercase tracking-wider font-bold">📋 Promoted from Watchlist</p>
+          <p className="mt-1 text-[12px] text-cyan-300">
+            Watched for {d.staging.cycles} cycle{d.staging.cycles !== 1 ? "s" : ""} · Started at {d.staging.initialScore?.toFixed(1)}% → {d.score?.toFixed(1)}%
+          </p>
+        </div>
+      )}
+
+      {/* Zone Setup Banner */}
+      {d.limitOrder && (
+        <div className="rounded border border-blue-500/30 bg-badge-info px-2 py-1.5">
+          <p className="text-[11px] text-info-c uppercase tracking-wider font-bold">🔍 Zone Setup Active</p>
+          <p className="mt-1 text-[12px] text-info-c">
+            Trigger: {Number(d.limitOrder.entryPrice).toFixed(5)} ({d.limitOrder.zoneType} zone) · {d.limitOrder.distancePips} pips from current
+          </p>
+          <p className="text-[12px] text-info-c/70">
+            Zone: [{Number(d.limitOrder.zoneLow).toFixed(5)} – {Number(d.limitOrder.zoneHigh).toFixed(5)}] · Expires: {new Date(d.limitOrder.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </p>
+          <p className="text-[10px] text-warn/80 mt-1 italic">
+            Will hunt for 5m CHoCH confirmation when price reaches zone
+          </p>
+        </div>
+      )}
     </div>
   );
 }
