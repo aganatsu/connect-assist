@@ -2796,9 +2796,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
-          // Check if price left the zone (reset to pending)
-          const zoneLow = parseFloat(pending.entry_zone_low || "0");
-          const zoneHigh = parseFloat(pending.entry_zone_high || "0");
+          // Check if price left the zone (use refined zone bounds when available)
+          const rawRefLow = parseFloat(pending.refined_zone_low || "0");
+          const rawRefHigh = parseFloat(pending.refined_zone_high || "0");
+          const hasRefZone = rawRefLow > 0 && rawRefHigh > 0;
+          const zoneLow = hasRefZone ? rawRefLow : parseFloat(pending.entry_zone_low || "0");
+          const zoneHigh = hasRefZone ? rawRefHigh : parseFloat(pending.entry_zone_high || "0");
           if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
             // Price left zone without confirming — reset to pending, wait for next approach
             const attempts = (pending.confirmation_attempts || 0) + 1;
@@ -2844,6 +2847,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
+          // ── Tier gate: require Tier 1 when no refined zone is available ──
+          // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
+          // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
+          // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
+          // enough evidence that the level is holding.
+          if (!hasRefZone && confirmationSignal.tier !== 1) {
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
+            continue;
+          }
+
           // ═══════════════════════════════════════════════════════════════
           // CHoCH CONFIRMED! Enter the trade at live price.
           // ═══════════════════════════════════════════════════════════════
@@ -2874,9 +2887,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
-          // Entry at live price (the 5m candle close where CHoCH was confirmed)
-          const actualFillPrice = confirmationSignal.price;
-          console.log(`[pending] CONFIRMED FILL ${pending.symbol} ${pending.direction} — CHoCH @ ${actualFillPrice} (zone entry was ${entryPrice})`);
+          // Confirmation is go/no-go — fill at current market price (already inside refined zone)
+          const actualFillPrice = currentPrice;
+          console.log(`[pending] CONFIRMED FILL ${pending.symbol} ${pending.direction} — confirmed @ refined zone, fill at ${actualFillPrice} (zone entry was ${entryPrice})`);
 
 
           const positionId = pending.order_id;
@@ -4948,6 +4961,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             entry_zone_type: limitEntry.zoneType,
             entry_zone_low: limitEntry.zoneLow,
             entry_zone_high: limitEntry.zoneHigh,
+            refined_zone_low: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
+              ? Math.min(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
+            refined_zone_high: izData?.bestZone?.ltfRefined && izData.bestZone.refinedEntry != null && izData.bestZone.refinedSL != null
+              ? Math.max(izData.bestZone.refinedEntry, izData.bestZone.refinedSL) : null,
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,

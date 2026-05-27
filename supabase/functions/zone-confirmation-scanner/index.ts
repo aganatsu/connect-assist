@@ -289,8 +289,12 @@ Deno.serve(async (req) => {
         }
 
         // ── Check if price left the zone ──
-        const zoneLow = parseFloat(pending.entry_zone_low || "0");
-        const zoneHigh = parseFloat(pending.entry_zone_high || "0");
+        // Use refined zone bounds (15m OB/FVG) when available; fall back to broad HTF zone
+        const rawRefinedLow = parseFloat(pending.refined_zone_low || "0");
+        const rawRefinedHigh = parseFloat(pending.refined_zone_high || "0");
+        const hasRefinedZone = rawRefinedLow > 0 && rawRefinedHigh > 0;
+        const zoneLow = hasRefinedZone ? rawRefinedLow : parseFloat(pending.entry_zone_low || "0");
+        const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
         if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
           await supabase.from("pending_orders").update({
@@ -301,6 +305,28 @@ Deno.serve(async (req) => {
           resetToPending++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
           continue;
+        }
+
+        // ── Refined zone invalidation ──
+        // If price closes THROUGH the refined zone (not just wicks), the level has failed.
+        // For longs: a 5m candle close below refined_zone_low = invalidation
+        // For shorts: a 5m candle close above refined_zone_high = invalidation
+        if (hasRefinedZone && candles5m.length > 0) {
+          const lastCandle = candles5m[candles5m.length - 1];
+          const dir = pending.direction as "long" | "short";
+          const closedThrough = dir === "long"
+            ? lastCandle.close < rawRefinedLow
+            : lastCandle.close > rawRefinedHigh;
+          if (closedThrough) {
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `[zone-confirm] Refined zone failed — 5m close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            cancelled++;
+            console.log(`[zone-confirm] CANCELLED ${pending.symbol} ${pending.direction} — refined zone failed (close: ${lastCandle.close}, zone: ${rawRefinedLow}-${rawRefinedHigh})`);
+            continue;
+          }
         }
 
         // ── Run CHoCH detection ──
@@ -324,6 +350,17 @@ Deno.serve(async (req) => {
         if (!confirmationSignal) {
           stillHunting++;
           console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
+          continue;
+        }
+
+        // ── Tier gate: require Tier 1 when no refined zone is available ──
+        // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
+        // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
+        // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
+        // enough evidence that the level is holding.
+        if (!hasRefinedZone && confirmationSignal.tier !== 1) {
+          stillHunting++;
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
           continue;
         }
 
@@ -360,8 +397,11 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Entry at the 5m candle close where CHoCH was confirmed
-        const actualFillPrice = confirmationSignal.price;
+        // Confirmation is a go/no-go signal — fill at current market price.
+        // Since we already verified price is inside the refined zone (15m OB/FVG),
+        // the current price IS the optimal entry. The confirmation just validates
+        // that the level is holding (CHoCH/reversal/rejection observed).
+        const actualFillPrice = currentPrice;
         const entryPrice = parseFloat(pending.entry_price);
         const positionId = pending.order_id;
         const orderId = crypto.randomUUID().slice(0, 8);

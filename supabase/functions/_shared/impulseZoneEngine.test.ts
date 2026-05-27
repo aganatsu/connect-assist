@@ -318,12 +318,12 @@ Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () =
     poi: { type: "fvg", high: 1.0210, low: 1.0190, candleIndex: 55, direction: "bullish" },
     fibLevel: 0.618,
     fibDepth: 0.618,
-    fibScore: 2,
+    fibScore: 1.5,
     srConfirmed: false,
     ltfRefined: false,
     htfConfluenceScore: 0,
     htfLayers: [],
-    totalScore: 2,
+    totalScore: 1.5,
   }];
 
   const result = checkHistoricalSR(candles, zones, 50);
@@ -331,7 +331,7 @@ Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () =
   // The zone overlaps the 1.0200 S/R cluster
   if (result.length > 0) {
     assertEquals(result[0].srConfirmed, true);
-    assertEquals(result[0].totalScore, 3); // fibScore(2) + SR(1)
+    assertEquals(result[0].totalScore, 2.5); // fibScore(1.5) + SR(1)
   }
 });
 
@@ -347,21 +347,20 @@ Deno.test("checkHistoricalSR — does not confirm when no S/R at zone", () => {
     candles.push(makeCandle(1.0200, 1.0210, 1.0190, 1.0200, i));
   }
 
-  const zones: RankedPOI[] = [{
+    const zones: RankedPOI[] = [{
     poi: { type: "ob", high: 1.0210, low: 1.0190, candleIndex: 55, direction: "bullish" },
     fibLevel: 0.618,
     fibDepth: 0.618,
-    fibScore: 2,
+    fibScore: 1.5,
     srConfirmed: false,
     ltfRefined: false,
     htfConfluenceScore: 0,
     htfLayers: [],
-    totalScore: 2,
+    totalScore: 1.5,
   }];
-
   const result = checkHistoricalSR(candles, zones, 50);
   assertEquals(result[0].srConfirmed, false);
-  assertEquals(result[0].totalScore, 2); // Unchanged
+  assertEquals(result[0].totalScore, 1.5); // Unchanged
 });
 
 Deno.test("refineLowerTF — returns unchanged zone when not enough LTF candles", () => {
@@ -369,17 +368,16 @@ Deno.test("refineLowerTF — returns unchanged zone when not enough LTF candles"
     poi: { type: "fvg", high: 1.0210, low: 1.0190, candleIndex: 20, direction: "bullish" },
     fibLevel: 0.618,
     fibDepth: 0.618,
-    fibScore: 2,
+    fibScore: 1.5,
     srConfirmed: true,
     ltfRefined: false,
     htfConfluenceScore: 0,
     htfLayers: [],
-    totalScore: 3,
+    totalScore: 2.5,
   };
-
   const result = refineLowerTF([], zone);
   assertEquals(result.ltfRefined, false);
-  assertEquals(result.totalScore, 3); // Unchanged
+  assertEquals(result.totalScore, 2.5); // Unchanged
 });
 
 Deno.test("refineLowerTF — refines zone when LTF structure exists inside", () => {
@@ -387,12 +385,12 @@ Deno.test("refineLowerTF — refines zone when LTF structure exists inside", () 
     poi: { type: "fvg", high: 1.0210, low: 1.0190, candleIndex: 20, direction: "bullish" },
     fibLevel: 0.618,
     fibDepth: 0.618,
-    fibScore: 2,
+    fibScore: 1.5,
     srConfirmed: false,
     ltfRefined: false,
     htfConfluenceScore: 0,
     htfLayers: [],
-    totalScore: 2,
+    totalScore: 1.5,
   };
 
   // Create 15m candles that oscillate inside the zone
@@ -411,12 +409,12 @@ Deno.test("refineLowerTF — refines zone when LTF structure exists inside", () 
   const result = refineLowerTF(ltfCandles, zone);
   // Whether it refines depends on whether smcAnalysis detects OBs/FVGs in the sub-range
   // The test validates the function doesn't crash and returns a valid result
-  assert(result.totalScore >= 2, "Score should not decrease");
+  assert(result.totalScore >= 1.5, "Score should not decrease");
   if (result.ltfRefined) {
     assertExists(result.refinedEntry);
     assertExists(result.refinedSL);
     assertExists(result.ltfType);
-    assertEquals(result.totalScore, 3); // +1 for LTF refinement
+    assertEquals(result.totalScore, 2.5); // +1 for LTF refinement
   }
 });
 
@@ -434,20 +432,20 @@ Deno.test("rankAndSelectBestZone — selects highest-scoring zone", () => {
     },
     {
       poi: { type: "ob", high: 1.015, low: 1.01, candleIndex: 15, direction: "bullish" },
-      fibLevel: 0.786, fibDepth: 0.786, fibScore: 4,
-      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 0, htfLayers: [], totalScore: 6,
+      fibLevel: 0.786, fibDepth: 0.786, fibScore: 2,
+      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 0, htfLayers: [], totalScore: 4,
     },
     {
       poi: { type: "fvg", high: 1.025, low: 1.02, candleIndex: 25, direction: "bullish" },
-      fibLevel: 0.618, fibDepth: 0.618, fibScore: 2,
-      srConfirmed: true, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 3,
+      fibLevel: 0.618, fibDepth: 0.618, fibScore: 1.5,
+      srConfirmed: true, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2.5,
     },
   ];
 
   const best = rankAndSelectBestZone(zones);
   assertExists(best);
-  assertEquals(best.fibScore, 4); // The 78.6% zone with S/R + LTF
-  assertEquals(best.totalScore, 6);
+  assertEquals(best.fibScore, 2); // The 78.6% zone with S/R + LTF (flattened scoring)
+  assertEquals(best.totalScore, 4);
 });
 
 Deno.test("rankAndSelectBestZone — rejects zones with fibScore < 1", () => {
@@ -463,23 +461,23 @@ Deno.test("rankAndSelectBestZone — rejects zones with fibScore < 1", () => {
   assertEquals(best, null); // Rejected — fibScore < 1
 });
 
-Deno.test("rankAndSelectBestZone — uses fibDepth as tiebreaker", () => {
+Deno.test("rankAndSelectBestZone — selects higher totalScore (deeper zone wins)", () => {
   const zones: RankedPOI[] = [
     {
       poi: { type: "fvg", high: 1.02, low: 1.019, candleIndex: 20, direction: "bullish" },
-      fibLevel: 0.618, fibDepth: 0.62, fibScore: 2,
-      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+      fibLevel: 0.618, fibDepth: 0.62, fibScore: 1.5,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 1.5,
     },
     {
       poi: { type: "ob", high: 1.015, low: 1.014, candleIndex: 15, direction: "bullish" },
-      fibLevel: 0.71, fibDepth: 0.72, fibScore: 2, // Same fibScore but deeper
+      fibLevel: 0.71, fibDepth: 0.72, fibScore: 2, // Higher fibScore (71% = 2 vs 61.8% = 1.5)
       srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
     },
   ];
 
   const best = rankAndSelectBestZone(zones);
   assertExists(best);
-  // Should pick the deeper one (0.72 > 0.62)
+  // Should pick the higher-scoring one (totalScore 2 > 1.5)
   assertEquals(best.fibDepth, 0.72);
 });
 
@@ -572,8 +570,8 @@ Deno.test("checkHistoricalSR — handles short lookback gracefully", () => {
 
   const zones: RankedPOI[] = [{
     poi: { type: "fvg", high: 1.01, low: 0.99, candleIndex: 10, direction: "bullish" },
-    fibLevel: 0.618, fibDepth: 0.618, fibScore: 2,
-    srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+    fibLevel: 0.618, fibDepth: 0.618, fibScore: 1.5,
+    srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 1.5,
   }];
 
   // impulseStartIndex = 5 means only 5 candles of lookback — should handle gracefully
@@ -1087,4 +1085,73 @@ Deno.test("findBestEntryZone — regression: no options produces same result as 
   }
   assertExists(result.reason);
   assert(result.reason.length > 0);
+});
+
+// ─── Flattened Fib Scoring Tests ─────────────────────────────────────────────
+
+Deno.test("flattened fib scoring — 78.6% and 71% both score 2", () => {
+  const zones: RankedPOI[] = [
+    {
+      poi: { type: "ob", high: 1.01, low: 1.009, candleIndex: 10, direction: "bullish" },
+      fibLevel: 0.786, fibDepth: 0.786, fibScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+    },
+    {
+      poi: { type: "ob", high: 1.012, low: 1.011, candleIndex: 12, direction: "bullish" },
+      fibLevel: 0.71, fibDepth: 0.71, fibScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+    },
+  ];
+
+  // Both should have same fibScore — tiebreaker is fibDepth
+  const best = rankAndSelectBestZone(zones);
+  assertExists(best);
+  assertEquals(best.fibScore, 2);
+  assertEquals(best.fibDepth, 0.786); // Deeper wins the tiebreaker
+});
+
+Deno.test("flattened fib scoring — confluence beats depth", () => {
+  // A 61.8% zone with S/R + LTF refinement (1.5 + 1 + 1 = 3.5)
+  // should beat a naked 78.6% zone (2.0)
+  const zones: RankedPOI[] = [
+    {
+      poi: { type: "ob", high: 1.01, low: 1.009, candleIndex: 10, direction: "bullish" },
+      fibLevel: 0.786, fibDepth: 0.786, fibScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+    },
+    {
+      poi: { type: "fvg", high: 1.015, low: 1.014, candleIndex: 15, direction: "bullish" },
+      fibLevel: 0.618, fibDepth: 0.618, fibScore: 1.5,
+      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 0, htfLayers: [], totalScore: 3.5,
+    },
+  ];
+
+  const best = rankAndSelectBestZone(zones);
+  assertExists(best);
+  // The 61.8% zone with confluence should win over naked 78.6%
+  assertEquals(best.fibDepth, 0.618);
+  assertEquals(best.totalScore, 3.5);
+});
+
+Deno.test("flattened fib scoring — 50% zone with max confluence can compete", () => {
+  // 50% zone: fibScore=1, but with S/R + LTF + 4H OB + 4H FVG = 1 + 1 + 1 + 1 + 1 = 5
+  // vs 78.6% zone: fibScore=2, naked = 2
+  const zones: RankedPOI[] = [
+    {
+      poi: { type: "ob", high: 1.01, low: 1.009, candleIndex: 10, direction: "bullish" },
+      fibLevel: 0.786, fibDepth: 0.786, fibScore: 2,
+      srConfirmed: false, ltfRefined: false, htfConfluenceScore: 0, htfLayers: [], totalScore: 2,
+    },
+    {
+      poi: { type: "ob", high: 1.025, low: 1.024, candleIndex: 25, direction: "bullish" },
+      fibLevel: 0.5, fibDepth: 0.5, fibScore: 1,
+      srConfirmed: true, ltfRefined: true, htfConfluenceScore: 2, htfLayers: ["4H_OB", "4H_FVG"], totalScore: 5,
+    },
+  ];
+
+  const best = rankAndSelectBestZone(zones);
+  assertExists(best);
+  // The 50% zone with heavy confluence should dominate
+  assertEquals(best.fibDepth, 0.5);
+  assertEquals(best.totalScore, 5);
 });
