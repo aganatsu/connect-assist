@@ -52,9 +52,12 @@ interface ImpulseZoneData {
 
 interface Props {
   data: ImpulseZoneData | null | undefined;
+  /** When true, live-action badges ("Hunting 5m CHoCH") are shown.
+   *  When false/omitted, only static zone info is rendered (historical context). */
+  isLiveContext?: boolean;
 }
 
-export function ImpulseZonePanel({ data }: Props) {
+export function ImpulseZonePanel({ data, isLiveContext = false }: Props) {
   if (!data) return null;
 
   const { hasZone, selectedTF, reason, impulse, bestZone, allZonesCount, h1HasZone, h4HasZone, scoringEnabled, directionDetail } = data;
@@ -184,7 +187,7 @@ export function ImpulseZonePanel({ data }: Props) {
                 SL: {fmt(bestZone.refinedSL)}
               </span>
             )}
-            {(bestZone.priceInsideZone || bestZone.priceAtZoneStrict) && (
+            {isLiveContext && (bestZone.priceInsideZone || bestZone.priceAtZoneStrict) && (
               <span className="text-[10px] font-mono font-bold px-1 py-0.5 rounded bg-badge-warn text-warn animate-pulse">
                 ⏳ Hunting 5m CHoCH
               </span>
