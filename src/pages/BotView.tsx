@@ -1388,9 +1388,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {hasRichData ? (
                         <>
-                          {/* Phase-1 cleanup: ImpulseZonePanel removed here — it now renders
-                              only inside the position detail drawer (ScanSignalDetail) to
-                              avoid showing the same zone data 3 times. */}
+                          {/* Impulse Zone — PRIMARY gate, shown first in the trade detail breakdown */}
+                          {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
