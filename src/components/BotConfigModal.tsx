@@ -69,6 +69,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Enable Zone Setups", keywords: ["zone", "setup", "confirmation", "choch", "ob", "fvg", "entry type"] },
+  { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
+  { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
   { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
   { tab: "entry_exit", label: "Zone Setup Distance", keywords: ["zone", "distance", "pips", "max", "min"] },
   { tab: "entry_exit", label: "Zone Preference", keywords: ["zone", "ob", "fvg", "nearest", "prefer"] },
@@ -1017,6 +1019,23 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName }: 
                             </div>
                           </FieldGroup>
                           <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for a 5m CHoCH confirmation before entering at live price. If hard gate mode is active, zone setups are auto-enabled for impulse zones.</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Market Fill at Zone ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Market Fill at Zone</p>
+                      <ToggleField label="Market Fill at Zone" description="When price IS at the impulse zone and all gates pass, fill at market immediately (no CHoCH wait). Turn OFF to always require CHoCH confirmation." checked={config.entry?.marketFillAtZone ?? true} onChange={v => updateField('entry', 'marketFillAtZone', v)} />
+                      {(config.entry?.marketFillAtZone ?? true) && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Zone Proximity (ATR×)" description="How close price must be to the zone edge for a market fill. Lower = stricter (must be closer). Range: 0.1–1.0">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[(config.entry?.marketFillStrictATRMult ?? 0.3) * 100]} onValueChange={v => updateField('entry', 'marketFillStrictATRMult', v[0] / 100)} min={10} max={100} step={5} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-16 text-right">{(config.entry?.marketFillStrictATRMult ?? 0.3).toFixed(2)}×</span>
+                            </div>
+                          </FieldGroup>
+                          <p className="text-[9px] text-muted-foreground italic">Default: 0.30× ATR. At 0.10×, price must be almost touching the zone. At 1.00×, price can be up to 1×ATR away. Requires impulse zone hard gate mode to be active.</p>
                         </div>
                       )}
                     </div>
