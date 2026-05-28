@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -11,8 +12,10 @@ const TWELVE_DATA_SYMBOLS: Record<string, string> = {
   "EUR/GBP": "EUR/GBP", "EUR/JPY": "EUR/JPY", "GBP/JPY": "GBP/JPY",
   "EUR/AUD": "EUR/AUD", "EUR/CAD": "EUR/CAD", "EUR/CHF": "EUR/CHF",
   "EUR/NZD": "EUR/NZD", "GBP/AUD": "GBP/AUD", "GBP/CAD": "GBP/CAD",
-  "GBP/CHF": "GBP/CHF", "GBP/NZD": "GBP/NZD", "AUD/CAD": "AUD/CAD",
-  "AUD/JPY": "AUD/JPY", "CAD/JPY": "CAD/JPY",
+  "GBP/CHF": "GBP/CHF", "GBP/NZD": "GBP/NZD",   "AUD/CAD": "AUD/CAD", "AUD/JPY": "AUD/JPY", "CAD/JPY": "CAD/JPY",
+  "AUD/CHF": "AUD/CHF", "AUD/NZD": "AUD/NZD", "CAD/CHF": "CAD/CHF",
+  "CHF/JPY": "CHF/JPY", "NZD/CAD": "NZD/CAD", "NZD/CHF": "NZD/CHF",
+  "NZD/JPY": "NZD/JPY",
   // Indices
   "US30": "DJI", "NAS100": "IXIC", "SPX500": "SPX",
   // Commodities
@@ -35,6 +38,35 @@ async function fetchLivePrice(symbol: string): Promise<number | null> {
     return Number(data.price);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Fetch recent 15-minute candles from TwelveData and compute ATR(14).
+ * Returns 0 if data is unavailable (graceful degradation to static floor only).
+ */
+async function fetchATR(symbol: string): Promise<number> {
+  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
+  if (!apiKey) return 0;
+  const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
+  if (!tdSymbol) return 0;
+  try {
+    // Fetch 20 candles (need at least 15 for ATR-14)
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=15min&outputsize=20&apikey=${apiKey}&order=ASC`;
+    const res = await fetch(url);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    if (data?.status === "error" || !Array.isArray(data?.values)) return 0;
+    const candles: Candle[] = data.values.map((v: any) => ({
+      datetime: `${v.datetime.replace(" ", "T")}Z`,
+      open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close),
+    })).filter((c: Candle) =>
+      Number.isFinite(c.open) && Number.isFinite(c.high) &&
+      Number.isFinite(c.low) && Number.isFinite(c.close)
+    );
+    return calculateATR(candles, 14);
+  } catch {
+    return 0;
   }
 }
 
@@ -79,6 +111,13 @@ const SPECS: Record<string, { pipSize: number; lotUnits: number; marginPerLot: n
   "AUD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
   "AUD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 800 },
   "CAD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
+  "AUD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
+  "AUD/NZD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 800 },
+  "CAD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 1000 },
+  "CHF/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 1000 },
+  "NZD/CAD": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
+  "NZD/CHF": { pipSize: 0.0001, lotUnits: 100000, marginPerLot: 700 },
+  "NZD/JPY": { pipSize: 0.01, lotUnits: 100000, marginPerLot: 700 },
   // Indices
   "US30": { pipSize: 1.0, lotUnits: 1, marginPerLot: 5000 },
   "NAS100": { pipSize: 0.25, lotUnits: 1, marginPerLot: 3000 },
@@ -1226,10 +1265,48 @@ Deno.serve(async (req) => {
         }
       }
 
+      // ── Enforce minimum SL distance (two-layer floor, matching bot-scanner) ──
+      // Layer 1: Per-instrument static floor (MIN_SL_PIPS)
+      // Layer 2: Dynamic ATR-based floor (adapts to current volatility)
+      let adjustedSL = stopLoss;
+      let adjustedTP = takeProfit;
+      if (adjustedSL != null && entryPrice > 0) {
+        const spec = SPECS[symbol];
+        if (spec) {
+          const staticMinSlPips = MIN_SL_PIPS[symbol] ?? 15;
+          // Fetch ATR for dynamic floor (returns 0 if unavailable — graceful degradation)
+          const atrVal = await fetchATR(symbol);
+          const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
+          // Use whichever floor is larger
+          const effectiveMinSlPips = Math.max(staticMinSlPips, atrFloorPips);
+          const minSlDistance = effectiveMinSlPips * spec.pipSize;
+          const actualSlDistance = Math.abs(entryPrice - adjustedSL);
+          if (actualSlDistance < minSlDistance) {
+            const floorSource = atrFloorPips > staticMinSlPips ? `ATR(${atrFloorPips.toFixed(1)}p)` : `static(${staticMinSlPips}p)`;
+            console.log(`[paper-trading][${symbol}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${effectiveMinSlPips.toFixed(1)} pips [${floorSource}]. Widening SL.`);
+            if (direction === "long") {
+              adjustedSL = entryPrice - minSlDistance;
+            } else {
+              adjustedSL = entryPrice + minSlDistance;
+            }
+            // Recalculate TP based on widened SL if TP exists (preserve original R:R)
+            if (adjustedTP != null) {
+              const newRisk = Math.abs(entryPrice - adjustedSL);
+              const originalRR = takeProfit != null && stopLoss != null && Math.abs(entryPrice - stopLoss) > 0
+                ? Math.abs(takeProfit - entryPrice) / Math.abs(entryPrice - stopLoss)
+                : 2.0; // default 2:1 R:R
+              adjustedTP = direction === "long"
+                ? entryPrice + newRisk * originalRR
+                : entryPrice - newRisk * originalRR;
+            }
+          }
+        }
+      }
+
       await supabase.from("paper_positions").insert({
         user_id: user.id, position_id: positionId, symbol, direction, size: size.toString(),
         entry_price: entryPrice.toString(), current_price: entryPrice.toString(),
-        stop_loss: stopLoss?.toString() || null, take_profit: takeProfit?.toString() || null,
+        stop_loss: adjustedSL?.toString() || null, take_profit: adjustedTP?.toString() || null,
         open_time: now, signal_reason: signalReason || "", signal_score: (signalScore || 0).toString(),
         order_id: orderId, position_status: "open",
       });
@@ -1239,7 +1316,7 @@ Deno.serve(async (req) => {
       const { data: acctForMode } = await supabase.from("paper_accounts").select("execution_mode").eq("user_id", user.id).maybeSingle();
       if (acctForMode?.execution_mode === "live") {
         mt5Mirror = await mirrorToMT5(supabase, user.id, {
-          action: "open", symbol, direction, size, stopLoss, takeProfit, positionId,
+          action: "open", symbol, direction, size, stopLoss: adjustedSL, takeProfit: adjustedTP, positionId,
         });
         if (mt5Mirror.success) {
           const mirroredIds = mt5Mirror.connectionIds || (mt5Mirror.connectionId ? [mt5Mirror.connectionId] : []);

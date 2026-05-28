@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
+import { formatPrice } from "@/lib/formatTime";
 import { paperApi } from "@/lib/api";
 import { toast } from "sonner";
 import { TierFactorBreakdown, TierScoreSummary, type TieredScoringMeta } from "./TierFactorBreakdown";
@@ -36,12 +37,7 @@ function getPipSize(symbol: string): number {
   return inst?.pipSize ?? 0.0001;
 }
 
-function formatPrice(price: number, symbol: string): string {
-  const s = symbol.toUpperCase();
-  if (s.includes("JPY")) return price.toFixed(3);
-  if (s.includes("XAU") || s.includes("GOLD")) return price.toFixed(2);
-  return price.toFixed(5);
-}
+// formatPrice is now imported from @/lib/formatTime (single source of truth)
 
 // ─── Management Card (ROW 2) ────────────────────────────────────────
 

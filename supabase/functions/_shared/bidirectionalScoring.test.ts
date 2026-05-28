@@ -126,9 +126,14 @@ const BASE_CONFIG = {
   factorWeights: { ...DEFAULT_FACTOR_WEIGHTS },
 };
 
+// Use a fixed London Kill Zone timestamp (Wed 10:00 UTC) so tests are
+// deterministic regardless of when they run. Without this, Session Affinity
+// returns -1 during off-hours and the regression test fails.
+const LONDON_KZ_MS = new Date("2024-03-13T10:00:00Z").getTime();
+
 // Helper to call with correct signature
 function analyze(candles: Candle[], daily: Candle[] | null, configOverrides: Record<string, any> = {}) {
-  return runConfluenceAnalysis(candles, daily, { ...BASE_CONFIG, ...configOverrides });
+  return runConfluenceAnalysis(candles, daily, { ...BASE_CONFIG, ...configOverrides }, undefined, LONDON_KZ_MS);
 }
 
 // ═══════════════════════════════════════════════════════════════════════

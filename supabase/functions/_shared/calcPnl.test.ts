@@ -242,23 +242,21 @@ Deno.test("NZD cross: Long EUR/NZD 0.1 lot, 35 pip win, NZD/USD at 0.6000 → $2
 // SECTION 5: Edge cases
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("Edge: btRateMap missing required rate → falls back to quoteToUSD=1.0", () => {
-  // When rateMap doesn't have the needed pair, getQuoteToUSDRate returns 1.0
-  // This is documented "safe fallback" behavior
+Deno.test("Edge: btRateMap missing required rate → uses FALLBACK_RATES", () => {
+  // When rateMap doesn't have the needed pair, getQuoteToUSDRate uses FALLBACK_RATES
+  // FALLBACK_RATES["USD/JPY"] = 142.0 → quoteToUSD = 1/142 ≈ 0.00704
   const rateMap = {}; // empty — no USD/JPY
   const result = calcPnl("long", 150.00, 150.50, 0.1, "USD/JPY", rateMap);
-  // With fallback quoteToUSD=1.0: pnl = 0.50 × 100000 × 0.1 × 1.0 = $5000 (WRONG but safe)
-  // This proves the fallback behavior — it doesn't crash
-  assertAlmostEquals(result.pnl, 5000.00, 0.001);
+  // pnl = 0.50 × 100000 × 0.1 × (1/142) ≈ $35.21
+  assertAlmostEquals(result.pnl, 0.50 * 100000 * 0.1 * (1 / 142.0), 0.01);
   assertAlmostEquals(result.pnlPips, 50, 0.001);
 });
 
-Deno.test("Edge: btRateMap is undefined → falls back to quoteToUSD=1.0", () => {
-  // No rateMap at all — legacy behavior
+Deno.test("Edge: btRateMap is undefined → uses FALLBACK_RATES", () => {
+  // No rateMap at all — FALLBACK_RATES["USD/JPY"] = 142.0 → quoteToUSD = 1/142
   const result = calcPnl("long", 162.00, 162.50, 0.1, "EUR/JPY");
-  // Without rateMap: quoteToUSD=1.0 (legacy)
-  // pnl = 0.50 × 100000 × 0.1 × 1.0 = $5000 (uncorrected)
-  assertAlmostEquals(result.pnl, 5000.00, 0.001);
+  // pnl = 0.50 × 100000 × 0.1 × (1/142) ≈ $35.21
+  assertAlmostEquals(result.pnl, 0.50 * 100000 * 0.1 * (1 / 142.0), 0.01);
 });
 
 Deno.test("Edge: Zero pip movement → exactly $0.00", () => {
@@ -285,18 +283,20 @@ Deno.test("Edge: 1-pip USD/JPY at price 150 → $0.6667 per lot", () => {
   assertAlmostEquals(result.pnlPips, 1, 0.001);
 });
 
-Deno.test("Edge: Rate map with zero rate → falls back to 1.0", () => {
+Deno.test("Edge: Rate map with zero rate → uses FALLBACK_RATES", () => {
   const rateMap = { "USD/JPY": 0 }; // invalid zero rate
   const result = calcPnl("long", 150.00, 150.50, 0.1, "USD/JPY", rateMap);
-  // Fallback: quoteToUSD=1.0
-  assertAlmostEquals(result.pnl, 5000.00, 0.001);
+  // Zero rate is invalid → falls through to FALLBACK_RATES["USD/JPY"] = 142.0
+  // quoteToUSD = 1/142 ≈ 0.00704
+  assertAlmostEquals(result.pnl, 0.50 * 100000 * 0.1 * (1 / 142.0), 0.01);
 });
 
-Deno.test("Edge: Rate map with negative rate → falls back to 1.0", () => {
+Deno.test("Edge: Rate map with negative rate → uses FALLBACK_RATES", () => {
   const rateMap = { "USD/JPY": -150.00 }; // invalid negative rate
   const result = calcPnl("long", 150.00, 150.50, 0.1, "USD/JPY", rateMap);
-  // Fallback: quoteToUSD=1.0
-  assertAlmostEquals(result.pnl, 5000.00, 0.001);
+  // Negative rate is invalid → falls through to FALLBACK_RATES["USD/JPY"] = 142.0
+  // quoteToUSD = 1/142 ≈ 0.00704
+  assertAlmostEquals(result.pnl, 0.50 * 100000 * 0.1 * (1 / 142.0), 0.01);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -343,9 +343,11 @@ Deno.test("getQuoteToUSDRate: Non-forex (US30) → 1.0", () => {
   assertEquals(rate, 1.0);
 });
 
-Deno.test("getQuoteToUSDRate: No rateMap → 1.0", () => {
+Deno.test("getQuoteToUSDRate: No rateMap → uses FALLBACK_RATES for JPY", () => {
+  // EUR/JPY quote is JPY → needs USD/JPY rate → FALLBACK_RATES["USD/JPY"] = 142.0
+  // quoteToUSD = 1/142 (inverted)
   const rate = getQuoteToUSDRate("EUR/JPY");
-  assertEquals(rate, 1.0);
+  assertAlmostEquals(rate, 1 / 142.0, 0.0001);
 });
 
 Deno.test("getQuoteToUSDRate: Unknown quote currency → 1.0", () => {

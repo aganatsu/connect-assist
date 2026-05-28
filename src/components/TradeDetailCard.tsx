@@ -1,6 +1,7 @@
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { getPipSize } from "@/lib/pipDisplay";
+import { formatPrice } from "@/lib/formatTime";
 
 interface TradeDetailProps {
   symbol: string;
@@ -23,22 +24,7 @@ interface TradeDetailProps {
   regime: string | null;
 }
 
-function getDigits(symbol: string): number {
-  const s = (symbol || "").toUpperCase();
-  if (s.includes("JPY")) return 3;
-  if (s.includes("XAU") || s.includes("GOLD")) return 2;
-  if (s.includes("XAG") || s.includes("SILVER")) return 4;
-  if (s.includes("BTC")) return 1;
-  if (s.includes("ETH")) return 2;
-  if (s.includes("OIL") || s.includes("USOIL") || s.includes("US Oil")) return 2;
-  if (s.includes("NAS") || s.includes("SPX") || s.includes("US30") || s.includes("US500")) return 1;
-  return 5;
-}
-
-function formatPrice(price: number | null | undefined, symbol: string): string {
-  if (price === null || price === undefined) return "—";
-  return price.toFixed(getDigits(symbol));
-}
+// formatPrice is now imported from @/lib/formatTime (single source of truth)
 
 export function TradeDetailCard({ 
   symbol, direction, entryPrice, stopLoss, takeProfit,
