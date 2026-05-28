@@ -8,6 +8,7 @@ import {
   Link2, Link2Off, Edit3, X, Check, GripVertical, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
+import { formatPrice } from "@/lib/formatTime";
 
 // ── Persistence ──
 const STORAGE_KEY = "broker-tab-layout";
@@ -36,10 +37,7 @@ function formatDuration(openTime: string): string {
   return `${days}d ${hrs % 24}h`;
 }
 
-function formatPrice(price: number | undefined, digits = 5): string {
-  if (price === undefined || price === null) return "—";
-  return price.toFixed(digits);
-}
+// formatPrice is now imported from @/lib/formatTime (single source of truth)
 
 function pnlColor(pnl: number): string {
   if (pnl > 0) return "text-success";

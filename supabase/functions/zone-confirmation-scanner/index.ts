@@ -23,6 +23,7 @@ import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSour
 import {
   SPECS,
   analyzeMarketStructure,
+  normalizeSymKey,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
 import {
@@ -66,9 +67,7 @@ async function metaFetch(
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
 
-function normalizeSymKey(s: string): string {
-  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
-}
+// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
 function resolveSymbol(pair: string, conn: any): string {
   const overrides = conn.symbol_overrides || {};
   const norm = normalizeSymKey(pair);

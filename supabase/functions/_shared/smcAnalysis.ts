@@ -2404,6 +2404,16 @@ export function calculateSLTP(input: SLTPInput): { stopLoss: number | null; take
 // (e.g. { "USD/JPY": 150.0, "GBP/USD": 1.27, "AUD/USD": 0.65, ... }).
 // For non-forex instruments (indices, commodities, crypto) priced in USD,
 // returns 1.0 since their PnL is already denominated in USD.
+// Hardcoded fallback rates (approximate) — prevents catastrophic sizing errors when API fails
+export const FALLBACK_RATES: Record<string, number> = {
+  "USD/JPY": 142.0,
+  "GBP/USD": 1.27,
+  "AUD/USD": 0.66,
+  "NZD/USD": 0.61,
+  "USD/CAD": 1.36,
+  "USD/CHF": 0.88,
+};
+
 export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
   // Non-forex: already USD-denominated
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -2415,17 +2425,6 @@ export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, numbe
 
   // Quote is already USD — no conversion needed
   if (quote === "USD") return 1.0;
-
-  // If no rate map provided, fall back to 1.0 (legacy behavior)
-  if (!rateMap) return 1.0;
-
-  // Try to find a direct conversion rate
-  // For JPY quote: need USD/JPY → quoteToUSD = 1 / USD_JPY
-  // For GBP quote: need GBP/USD → quoteToUSD = GBP_USD
-  // For AUD quote: need AUD/USD → quoteToUSD = AUD_USD
-  // For NZD quote: need NZD/USD → quoteToUSD = NZD_USD
-  // For CAD quote: need USD/CAD → quoteToUSD = 1 / USD_CAD
-  // For CHF quote: need USD/CHF → quoteToUSD = 1 / USD_CHF
 
   const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
     "JPY": { pair: "USD/JPY", invert: true },   // 1 JPY = 1/USDJPY USD
@@ -2439,11 +2438,36 @@ export function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, numbe
   const conv = QUOTE_CONVERSION[quote];
   if (!conv) return 1.0; // Unknown quote currency — safe fallback
 
-  const rate = rateMap[conv.pair];
-  if (!rate || rate <= 0) return 1.0; // Rate unavailable — safe fallback
+  // Try live rate first, then fallback to approximate hardcoded rate
+  const liveRate = rateMap?.[conv.pair];
+  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
+  if (!rate || rate <= 0) return 1.0;
 
   return conv.invert ? (1 / rate) : rate;
 }
+
+// ─── Minimum SL distance per asset class (in pips) ────────────────────────────────────
+// Prevents absurdly tight SLs that produce micro-scalp trades with 2-5 pip targets.
+// These floors ensure trades have room to breathe and TP targets are meaningful after spread.
+export const MIN_SL_PIPS: Record<string, number> = {
+  // JPY crosses — high volatility
+  "GBP/JPY": 35, "EUR/JPY": 30, "USD/JPY": 25,
+  "AUD/JPY": 25, "CAD/JPY": 25, "NZD/JPY": 25, "CHF/JPY": 25,
+  // GBP crosses — above-average volatility
+  "GBP/USD": 25, "GBP/AUD": 30, "GBP/CAD": 30, "GBP/NZD": 30, "GBP/CHF": 25,
+  // EUR crosses — moderate volatility
+  "EUR/USD": 20, "EUR/GBP": 15, "EUR/AUD": 25, "EUR/CAD": 25, "EUR/NZD": 25, "EUR/CHF": 18,
+  // USD crosses — moderate volatility
+  "AUD/USD": 18, "NZD/USD": 18, "USD/CAD": 18, "USD/CHF": 18,
+  // Minor crosses
+  "AUD/CAD": 20, "AUD/NZD": 20, "AUD/CHF": 20, "NZD/CAD": 20, "NZD/CHF": 20, "CAD/CHF": 18,
+  // Commodities & crypto
+  "XAU/USD": 50, "BTC/USD": 150,
+};
+
+// ATR-based dynamic SL floor: SL must be at least this multiple of ATR(14).
+// This adapts to current volatility — wider during active sessions, tighter during quiet periods.
+export const ATR_SL_FLOOR_MULTIPLIER = 1.5;
 
 // ─── Position Sizing ────────────────────────────────────────────────
 // rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
@@ -2453,12 +2477,21 @@ export function calculatePositionSize(
   balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
   config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number; atrVolatilityMultiplier?: number },
   rateMap?: Record<string, number>,
-  fallbackMaxLot?: number
+  fallbackMaxLot?: number,
+  commissionPerLot?: number,
 ): number {
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const maxLot = fallbackMaxLot ?? (spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5);
-  const method = config?.positionSizingMethod || "percent_risk";
+  const typeMaxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
+  // Account-relative cap: max 10x leverage (notional / balance)
+  // e.g., $10k account → max $100k notional → ~0.47 lots on GBP/JPY at 214
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
+  const priceInUSD = spec.type === "forex" ? entryPrice * quoteToUSD : entryPrice;
+  const maxLeverage = 10;
+  const accountMaxLot = balance > 0 ? (balance * maxLeverage) / (spec.lotUnits * priceInUSD) : 0.01;
+  const maxLot = fallbackMaxLot ?? Math.min(typeMaxLot, Math.max(0.01, Math.round(accountMaxLot * 100) / 100));
+  const method = config?.positionSizingMethod || "percent_risk";
+  // Round-trip commission per lot in account currency (default 0)
+  const commRT = commissionPerLot ?? 0;
 
   if (method === "fixed_lot") {
     const fixed = config?.fixedLotSize ?? 0.01;
@@ -2471,8 +2504,12 @@ export function calculatePositionSize(
     const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
     const atrDistance = config.atrValue * atrMultiplier; // Configurable ATR multiplier for volatility sizing
     if (atrDistance === 0) return 0.01;
-    // pipValuePerLot in USD = atrDistance * lotUnits * quoteToUSD
-    const lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
+    // Iterative solve: lots = (riskAmount - lots*commission) / (distance*lotUnits*quoteToUSD)
+    let lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
+    if (commRT > 0) {
+      const adjustedRisk = riskAmount - (lots * commRT);
+      if (adjustedRisk > 0) lots = adjustedRisk / (atrDistance * spec.lotUnits * quoteToUSD);
+    }
     return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
   }
 
@@ -2480,8 +2517,12 @@ export function calculatePositionSize(
   const riskAmount = balance * (riskPercent / 100);
   const slDistance = Math.abs(entryPrice - stopLoss);
   if (slDistance === 0) return 0.01;
-  // pipValuePerLot in USD = slDistance * lotUnits * quoteToUSD
-  const lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
+  // Iterative solve: lots = (riskAmount - lots*commission) / (slDistance*lotUnits*quoteToUSD)
+  let lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
+  if (commRT > 0) {
+    const adjustedRisk = riskAmount - (lots * commRT);
+    if (adjustedRisk > 0) lots = adjustedRisk / (slDistance * spec.lotUnits * quoteToUSD);
+  }
   return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
 }
 
@@ -3560,4 +3601,14 @@ function _computeRegimeScore(
   }
 
   return { score };
+}
+
+// ─── Symbol Normalization (single source of truth) ──────────────────────────
+/**
+ * Normalize a symbol/pair string for comparison purposes.
+ * Strips whitespace, slashes, dots, underscores, hyphens and uppercases.
+ * e.g. "EUR/USD" → "EURUSD", "eur_usd" → "EURUSD", "Eur.Usd" → "EURUSD"
+ */
+export function normalizeSymKey(s: string): string {
+  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
 }

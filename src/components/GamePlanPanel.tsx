@@ -17,6 +17,7 @@ import {
   Zap, Eye, EyeOff, BarChart3, Activity, RefreshCw, History,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { formatPrice } from "@/lib/formatTime";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -163,11 +164,7 @@ function formatDateTime(isoStr: string) {
   } catch { return isoStr; }
 }
 
-function formatPrice(price: number, symbol: string) {
-  if (symbol.includes("JPY")) return price.toFixed(3);
-  if (symbol.includes("XAU") || symbol.includes("BTC")) return price.toFixed(2);
-  return price.toFixed(5);
-}
+// formatPrice is now imported from @/lib/formatTime (single source of truth)
 
 // ─── Sub-Components ─────────────────────────────────────────────────
 

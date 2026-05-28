@@ -1,14 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
 
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
-// Normalize a symbol/key for case-insensitive, whitespace-insensitive matching.
-// Strips slashes, spaces, dots, hyphens, underscores; uppercases.
-function normalizeKey(s: string): string {
-  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
-}
+// normalizeKey is now an alias for normalizeSymKey from shared module
+const normalizeKey = normalizeSymKey;
 
 // Resolve symbol name: check normalized override map first, then apply default suffix.
 // Override value (broker symbol) is returned EXACTLY as the user entered it.

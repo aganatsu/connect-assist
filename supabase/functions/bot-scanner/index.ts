@@ -16,6 +16,7 @@ import {
   type ReasoningFactor, type GateResult,
   // Constants
   SPECS, SUPPORTED_SYMBOLS, SMT_PAIRS, ASSET_PROFILES, getAssetProfile,
+  FALLBACK_RATES, MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER,
   // Analysis functions
   calculateATR, calculateAnchoredVWAP,
   detectSwingPoints, analyzeMarketStructure,
@@ -25,6 +26,8 @@ import {
   detectJudasSwing, detectReversalCandle,
   calculatePDLevels,
   computeOpeningRange, calculateSLTP,
+  // Position sizing & rate conversion
+  calculatePositionSize, getQuoteToUSDRate,
   // Confluence stacking, sweep reclaim, pullback decay
   computeConfluenceStacking, detectSweepReclaim, measurePullbackDecay,
   type ConfluenceStack, type SweepReclaim, type PullbackDecay,
@@ -34,6 +37,8 @@ import {
   type ZigZagPivot, type FibLevel, type FibLevels,
   // Optimal style detection
   detectOptimalStyle,
+  // Symbol normalization
+  normalizeSymKey,
 } from "../_shared/smcAnalysis.ts";
 import {
   generateInstrumentGamePlan, buildSessionGamePlan, filterTradeByGamePlan,
@@ -213,9 +218,7 @@ const DEFAULTS = {
   htfTimeframe: "1day",
 };
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
-function normalizeSymKey(s: string): string {
-  return (s || "").toString().trim().toUpperCase().replace(/[\s/._-]/g, "");
-}
+// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
 function resolveSymbol(pair: string, conn: any): string {
   const overrides = conn.symbol_overrides || {};
   const norm = normalizeSymKey(pair);
@@ -587,118 +590,8 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
   return result.candles;
 }
 
-// ─── Hardcoded fallback rates (approximate) — prevents catastrophic sizing errors when API fails ──
-const FALLBACK_RATES: Record<string, number> = {
-  "USD/JPY": 142.0,
-  "GBP/USD": 1.27,
-  "AUD/USD": 0.66,
-  "NZD/USD": 0.61,
-  "USD/CAD": 1.36,
-  "USD/CHF": 0.88,
-};
-
-// ─── Quote-to-USD conversion (local copy matching shared/smcAnalysis.ts) ──
-function getQuoteToUSDRate(symbol: string, rateMap?: Record<string, number>): number {
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  if (spec.type !== "forex") return 1.0;
-  const parts = symbol.split("/");
-  if (parts.length !== 2) return 1.0;
-  const quote = parts[1];
-  if (quote === "USD") return 1.0;
-  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
-    "JPY": { pair: "USD/JPY", invert: true },
-    "GBP": { pair: "GBP/USD", invert: false },
-    "AUD": { pair: "AUD/USD", invert: false },
-    "NZD": { pair: "NZD/USD", invert: false },
-    "CAD": { pair: "USD/CAD", invert: true },
-    "CHF": { pair: "USD/CHF", invert: true },
-  };
-  const conv = QUOTE_CONVERSION[quote];
-  if (!conv) return 1.0;
-  // Try live rate first, then fallback to approximate hardcoded rate
-  const liveRate = rateMap?.[conv.pair];
-  const rate = (liveRate && liveRate > 0) ? liveRate : FALLBACK_RATES[conv.pair];
-  if (!rate || rate <= 0) return 1.0;
-  return conv.invert ? (1 / rate) : rate;
-}
-
-// ─── Minimum SL distance per asset class (in pips) ────────────────────────────────────
-// Prevents absurdly tight SLs that produce micro-scalp trades with 2-5 pip targets.
-// These floors ensure trades have room to breathe and TP targets are meaningful after spread.
-const MIN_SL_PIPS: Record<string, number> = {
-  // JPY crosses — high volatility
-  "GBP/JPY": 35, "EUR/JPY": 30, "USD/JPY": 25,
-  "AUD/JPY": 25, "CAD/JPY": 25, "NZD/JPY": 25, "CHF/JPY": 25,
-  // GBP crosses — above-average volatility
-  "GBP/USD": 25, "GBP/AUD": 30, "GBP/CAD": 30, "GBP/NZD": 30, "GBP/CHF": 25,
-  // EUR crosses — moderate volatility
-  "EUR/USD": 20, "EUR/GBP": 15, "EUR/AUD": 25, "EUR/CAD": 25, "EUR/NZD": 25, "EUR/CHF": 18,
-  // USD crosses — moderate volatility
-  "AUD/USD": 18, "NZD/USD": 18, "USD/CAD": 18, "USD/CHF": 18,
-  // Minor crosses
-  "AUD/CAD": 20, "AUD/NZD": 20, "AUD/CHF": 20, "NZD/CAD": 20, "NZD/CHF": 20, "CAD/CHF": 18,
-  // Commodities & crypto
-  "XAU/USD": 50, "BTC/USD": 150,
-};
-// ATR-based dynamic SL floor: SL must be at least this multiple of ATR(14).
-// This adapts to current volatility — wider during active sessions, tighter during quiet periods.
-const ATR_SL_FLOOR_MULTIPLIER = 1.5;
-
-// ─── Position sizing ────────────────────────────────────────────────
-// rateMap: optional map of { "USD/JPY": 150, "GBP/USD": 1.27, ... }
-// fallbackMaxLot: optional override for the hardcoded max lot cap.
-function calculatePositionSize(
-  balance: number, riskPercent: number, entryPrice: number, stopLoss: number, symbol: string,
-  config?: { positionSizingMethod?: string; fixedLotSize?: number; atrValue?: number; atrVolatilityMultiplier?: number },
-  rateMap?: Record<string, number>,
-  fallbackMaxLot?: number,
-  commissionPerLot?: number,
-): number {
-  const spec = SPECS[symbol] || SPECS["EUR/USD"];
-  const typeMaxLot = spec.type === "index" ? 50 : spec.type === "commodity" ? 10 : spec.type === "crypto" ? 100 : 5;
-  // Account-relative cap: max 10x leverage (notional / balance)
-  // e.g., $10k account → max $100k notional → ~0.47 lots on GBP/JPY at 214
-  const priceInUSD = spec.type === "forex" ? entryPrice * getQuoteToUSDRate(symbol, rateMap) : entryPrice;
-  const maxLeverage = 10;
-  const accountMaxLot = balance > 0 ? (balance * maxLeverage) / (spec.lotUnits * priceInUSD) : 0.01;
-  const maxLot = fallbackMaxLot ?? Math.min(typeMaxLot, Math.max(0.01, Math.round(accountMaxLot * 100) / 100));
-  const method = config?.positionSizingMethod || "percent_risk";
-  const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
-  // Round-trip commission per lot in account currency (default 0)
-  const commRT = commissionPerLot ?? 0;
-
-  if (method === "fixed_lot") {
-    const fixed = config?.fixedLotSize ?? 0.01;
-    return Math.max(0.01, Math.min(maxLot, Math.round(fixed * 100) / 100));
-  }
-
-  if (method === "volatility_adjusted" && config?.atrValue && config.atrValue > 0) {
-    const riskAmount = balance * (riskPercent / 100);
-    const atrMultiplier = config.atrVolatilityMultiplier ?? 1.5;
-    const atrDistance = config.atrValue * atrMultiplier;
-    if (atrDistance === 0) return 0.01;
-    // Iterative solve: lots = (riskAmount - lots*commission) / (distance*lotUnits*quoteToUSD)
-    // First pass without commission, then adjust
-    let lots = riskAmount / (atrDistance * spec.lotUnits * quoteToUSD);
-    if (commRT > 0) {
-      const adjustedRisk = riskAmount - (lots * commRT);
-      if (adjustedRisk > 0) lots = adjustedRisk / (atrDistance * spec.lotUnits * quoteToUSD);
-    }
-    return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
-  }
-
-  // Default: percent_risk (risk-based)
-  const riskAmount = balance * (riskPercent / 100);
-  const slDistance = Math.abs(entryPrice - stopLoss);
-  if (slDistance === 0) return 0.01;
-  // Iterative solve: lots = (riskAmount - lots*commission) / (slDistance*lotUnits*quoteToUSD)
-  let lots = riskAmount / (slDistance * spec.lotUnits * quoteToUSD);
-  if (commRT > 0) {
-    const adjustedRisk = riskAmount - (lots * commRT);
-    if (adjustedRisk > 0) lots = adjustedRisk / (slDistance * spec.lotUnits * quoteToUSD);
-  }
-  return Math.max(0.01, Math.min(maxLot, Math.round(lots * 100) / 100));
-}
+// FALLBACK_RATES, getQuoteToUSDRate, MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculatePositionSize
+// are now imported from ../_shared/smcAnalysis.ts (single source of truth)
 
 // ─── Load user config ───────────────────────────────────────────────
 async function loadConfig(supabase: any, userId: string, connectionId?: string) {

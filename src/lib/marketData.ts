@@ -35,6 +35,13 @@ export const INSTRUMENTS: Instrument[] = [
   { symbol: 'AUD/CAD', name: 'Australian Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
   { symbol: 'AUD/JPY', name: 'Australian Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
   { symbol: 'CAD/JPY', name: 'Canadian Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
+  { symbol: 'AUD/CHF', name: 'Australian Dollar / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'AUD/NZD', name: 'Australian Dollar / New Zealand Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'CAD/CHF', name: 'Canadian Dollar / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'CHF/JPY', name: 'Swiss Franc / Japanese Yen', type: 'forex', pipSize: 0.01 },
+  { symbol: 'NZD/CAD', name: 'New Zealand Dollar / Canadian Dollar', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'NZD/CHF', name: 'New Zealand Dollar / Swiss Franc', type: 'forex', pipSize: 0.0001 },
+  { symbol: 'NZD/JPY', name: 'New Zealand Dollar / Japanese Yen', type: 'forex', pipSize: 0.01 },
   // ── Indices ──
   { symbol: 'US30', name: 'Dow Jones Industrial', type: 'index', pipSize: 1.0, pointValue: 1, contractSize: 1 },
   { symbol: 'NAS100', name: 'Nasdaq 100', type: 'index', pipSize: 0.25, pointValue: 1, contractSize: 1 },
