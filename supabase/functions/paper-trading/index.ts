@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER } from "../_shared/smcAnalysis.ts";
+import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -38,6 +38,35 @@ async function fetchLivePrice(symbol: string): Promise<number | null> {
     return Number(data.price);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Fetch recent 15-minute candles from TwelveData and compute ATR(14).
+ * Returns 0 if data is unavailable (graceful degradation to static floor only).
+ */
+async function fetchATR(symbol: string): Promise<number> {
+  const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
+  if (!apiKey) return 0;
+  const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
+  if (!tdSymbol) return 0;
+  try {
+    // Fetch 20 candles (need at least 15 for ATR-14)
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=15min&outputsize=20&apikey=${apiKey}&order=ASC`;
+    const res = await fetch(url);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    if (data?.status === "error" || !Array.isArray(data?.values)) return 0;
+    const candles: Candle[] = data.values.map((v: any) => ({
+      datetime: `${v.datetime.replace(" ", "T")}Z`,
+      open: Number(v.open), high: Number(v.high), low: Number(v.low), close: Number(v.close),
+    })).filter((c: Candle) =>
+      Number.isFinite(c.open) && Number.isFinite(c.high) &&
+      Number.isFinite(c.low) && Number.isFinite(c.close)
+    );
+    return calculateATR(candles, 14);
+  } catch {
+    return 0;
   }
 }
 
@@ -1236,24 +1265,31 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── Enforce minimum SL distance (matching bot-scanner logic) ──
-      // Prevents paper trades with absurdly tight SLs that don't match live behavior.
+      // ── Enforce minimum SL distance (two-layer floor, matching bot-scanner) ──
+      // Layer 1: Per-instrument static floor (MIN_SL_PIPS)
+      // Layer 2: Dynamic ATR-based floor (adapts to current volatility)
       let adjustedSL = stopLoss;
       let adjustedTP = takeProfit;
       if (adjustedSL != null && entryPrice > 0) {
         const spec = SPECS[symbol];
         if (spec) {
           const staticMinSlPips = MIN_SL_PIPS[symbol] ?? 15;
-          const minSlDistance = staticMinSlPips * spec.pipSize;
+          // Fetch ATR for dynamic floor (returns 0 if unavailable — graceful degradation)
+          const atrVal = await fetchATR(symbol);
+          const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
+          // Use whichever floor is larger
+          const effectiveMinSlPips = Math.max(staticMinSlPips, atrFloorPips);
+          const minSlDistance = effectiveMinSlPips * spec.pipSize;
           const actualSlDistance = Math.abs(entryPrice - adjustedSL);
           if (actualSlDistance < minSlDistance) {
-            console.log(`[paper-trading][${symbol}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${staticMinSlPips} pips. Widening SL.`);
+            const floorSource = atrFloorPips > staticMinSlPips ? `ATR(${atrFloorPips.toFixed(1)}p)` : `static(${staticMinSlPips}p)`;
+            console.log(`[paper-trading][${symbol}] SL too tight: ${(actualSlDistance / spec.pipSize).toFixed(1)} pips < min ${effectiveMinSlPips.toFixed(1)} pips [${floorSource}]. Widening SL.`);
             if (direction === "long") {
               adjustedSL = entryPrice - minSlDistance;
             } else {
               adjustedSL = entryPrice + minSlDistance;
             }
-            // Recalculate TP based on widened SL if TP exists
+            // Recalculate TP based on widened SL if TP exists (preserve original R:R)
             if (adjustedTP != null) {
               const newRisk = Math.abs(entryPrice - adjustedSL);
               const originalRR = takeProfit != null && stopLoss != null && Math.abs(entryPrice - stopLoss) > 0
