@@ -40,6 +40,8 @@ import {
   type SwingPoint,
   type ReasoningFactor,
   SPECS,
+  MIN_SL_PIPS,
+  ATR_SL_FLOOR_MULTIPLIER,
   SUPPORTED_SYMBOLS,
   SMT_PAIRS,
   DEFAULTS,
@@ -1929,6 +1931,32 @@ async function runBacktestJob(runId: string, body: any) {
             });
           }
           continue;
+        }
+
+        // ── SL Floor Enforcement (matching bot-scanner/paper-trading) ──
+        // Two-layer floor: max(staticMinSlPips, atrFloorPips)
+        {
+          const slDistPips = Math.abs(candle.close - analysis.stopLoss) / spec.pipSize;
+          const staticMin = MIN_SL_PIPS[symbol] ?? MIN_SL_PIPS["EUR/USD"] ?? 10;
+          // For backtest, ATR is already available from the candle data
+          const recentCandles = entryCandles.slice(Math.max(0, i - 20), i);
+          const atrVal = recentCandles.length >= 14 ? calculateATR(recentCandles, 14) : 0;
+          const atrFloorPips = atrVal > 0 ? (atrVal * ATR_SL_FLOOR_MULTIPLIER) / spec.pipSize : 0;
+          const effectiveMinSl = Math.max(staticMin, atrFloorPips);
+          if (slDistPips < effectiveMinSl) {
+            // Widen SL to minimum, preserve R:R
+            const origRR = analysis.takeProfit && analysis.stopLoss
+              ? Math.abs(candle.close - analysis.takeProfit) / Math.abs(candle.close - analysis.stopLoss)
+              : 2;
+            const newSlDist = effectiveMinSl * spec.pipSize;
+            if (analysis.direction === "long") {
+              analysis.stopLoss = candle.close - newSlDist;
+              analysis.takeProfit = candle.close + newSlDist * origRR;
+            } else {
+              analysis.stopLoss = candle.close + newSlDist;
+              analysis.takeProfit = candle.close - newSlDist * origRR;
+            }
+          }
         }
 
         // ── Position Sizing ──
