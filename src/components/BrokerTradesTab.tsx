@@ -45,13 +45,8 @@ function pnlColor(pnl: number): string {
   return "text-muted-foreground";
 }
 
-function getDigits(symbol: string): number {
-  const s = (symbol || "").toUpperCase();
-  if (s.includes("JPY")) return 3;
-  if (s.includes("XAU") || s.includes("GOLD")) return 2;
-  if (s.includes("XAG") || s.includes("SILVER")) return 4;
-  return 5;
-}
+// getDigits removed — formatPrice from @/lib/formatTime handles digit resolution
+// via the symbol string passed as 2nd argument
 
 // ── Collapsible Section Wrapper ──
 function CollapsibleSection({
@@ -244,7 +239,7 @@ function OpenPositionsContent({
         const swap = parseFloat(pos.swap ?? 0);
         const commission = parseFloat(pos.commission ?? 0);
         const totalPnl = pnl + swap + commission;
-        const digits = getDigits(pos.symbol);
+        
         const isBotManaged = /paper:/i.test(pos.comment || pos.clientExtensions?.comment || "");
         return (
           <div key={pos.id} className="border border-border bg-card/50 p-2 space-y-1">
@@ -259,13 +254,13 @@ function OpenPositionsContent({
               </span>
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Entry: {formatPrice(pos.openPrice ?? pos.price, digits)}</span>
-              <span>Now: {formatPrice(pos.currentPrice, digits)}</span>
+              <span>Entry: {formatPrice(pos.openPrice ?? pos.price, pos.symbol)}</span>
+              <span>Now: {formatPrice(pos.currentPrice, pos.symbol)}</span>
               <span>Lots: {parseFloat(pos.volume ?? pos.currentUnits ?? 0).toFixed(2)}</span>
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, digits)}</span>
-              <span className="text-success/80">TP: {formatPrice(pos.takeProfit, digits)}</span>
+              <span className="text-destructive/80">SL: {formatPrice(pos.stopLoss, pos.symbol)}</span>
+              <span className="text-success/80">TP: {formatPrice(pos.takeProfit, pos.symbol)}</span>
             </div>
           </div>
         );
@@ -296,7 +291,7 @@ function OpenPositionsContent({
             const swap = parseFloat(pos.swap ?? 0);
             const commission = parseFloat(pos.commission ?? 0);
             const totalPnl = pnl + swap + commission;
-            const digits = getDigits(pos.symbol);
+            
             const isBotManaged = /paper:/i.test(pos.comment || pos.clientExtensions?.comment || "");
             const isEditing = editingId === pos.id;
 
@@ -310,8 +305,8 @@ function OpenPositionsContent({
                   </span>
                 </td>
                 <td className="px-2 py-1.5 text-right font-mono">{parseFloat(pos.volume ?? pos.currentUnits ?? 0).toFixed(2)}</td>
-                <td className="px-2 py-1.5 text-right font-mono">{formatPrice(pos.openPrice ?? pos.price, digits)}</td>
-                <td className="px-2 py-1.5 text-right font-mono">{formatPrice(pos.currentPrice, digits)}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{formatPrice(pos.openPrice ?? pos.price, pos.symbol)}</td>
+                <td className="px-2 py-1.5 text-right font-mono">{formatPrice(pos.currentPrice, pos.symbol)}</td>
                 <td className="px-2 py-1.5 text-right font-mono">
                   {isEditing ? (
                     <input
@@ -323,7 +318,7 @@ function OpenPositionsContent({
                     />
                   ) : (
                     <span className={pos.stopLoss ? "text-destructive/80" : "text-muted-foreground/40"}>
-                      {formatPrice(pos.stopLoss, digits)}
+                      {formatPrice(pos.stopLoss, pos.symbol)}
                     </span>
                   )}
                 </td>
@@ -338,7 +333,7 @@ function OpenPositionsContent({
                     />
                   ) : (
                     <span className={pos.takeProfit ? "text-success/80" : "text-muted-foreground/40"}>
-                      {formatPrice(pos.takeProfit, digits)}
+                      {formatPrice(pos.takeProfit, pos.symbol)}
                     </span>
                   )}
                 </td>
@@ -460,7 +455,7 @@ function SyncStatusContent({
         const paperSL = parseFloat(pp.stop_loss || pp.stopLoss || 0);
         const brokerSL = bp ? parseFloat(bp.stopLoss || 0) : 0;
         const slMismatch = bp && Math.abs(paperSL - brokerSL) > 0.0001;
-        const digits = getDigits(pp.symbol);
+        
 
         return (
           <div key={i} className={`flex items-center justify-between text-[10px] px-2 py-1 rounded ${slMismatch ? "bg-destructive/5 border border-destructive/20" : sr.synced ? "bg-success/5 border border-success/20" : "bg-warning/5 border border-warning/20"}`}>
@@ -469,10 +464,10 @@ function SyncStatusContent({
               <span className={pp.direction === "long" ? "text-success" : "text-destructive"}>{pp.direction?.toUpperCase()}</span>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-muted-foreground">Paper SL: <span className="font-mono">{formatPrice(paperSL, digits)}</span></span>
+              <span className="text-muted-foreground">Paper SL: <span className="font-mono">{formatPrice(paperSL, pp.symbol)}</span></span>
               {bp ? (
                 <>
-                  <span className="text-muted-foreground">Broker SL: <span className={`font-mono ${slMismatch ? "text-destructive font-bold" : ""}`}>{formatPrice(brokerSL, digits)}</span></span>
+                  <span className="text-muted-foreground">Broker SL: <span className={`font-mono ${slMismatch ? "text-destructive font-bold" : ""}`}>{formatPrice(brokerSL, pp.symbol)}</span></span>
                   {slMismatch ? <AlertTriangle className="h-3 w-3 text-destructive" /> : <CheckCircle2 className="h-3 w-3 text-success" />}
                 </>
               ) : (
@@ -543,7 +538,7 @@ function TradeHistoryContent({
           const isLong = trade.direction === "long" || trade.type?.includes("BUY");
           const grossPnl = trade.pnl ?? parseFloat(trade.realizedPL ?? 0);
           const netPnl = trade.netPnl ?? grossPnl;
-          const digits = getDigits(trade.symbol);
+          
           const isBotManaged = trade.botManaged || /paper:/i.test(trade.comment || "");
           const closeTime = trade.closeTime;
           return (
@@ -559,8 +554,8 @@ function TradeHistoryContent({
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                <span>Entry: {formatPrice(trade.entryPrice ?? trade.price, digits)}</span>
-                <span>Exit: {formatPrice(trade.exitPrice ?? trade.averageClosePrice, digits)}</span>
+                <span>Entry: {formatPrice(trade.entryPrice ?? trade.price, trade.symbol)}</span>
+                <span>Exit: {formatPrice(trade.exitPrice ?? trade.averageClosePrice, trade.symbol)}</span>
               </div>
               <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                 <span>{closeTime ? new Date(closeTime).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"}</span>
@@ -593,7 +588,7 @@ function TradeHistoryContent({
               const grossPnl = trade.pnl ?? parseFloat(trade.realizedPL ?? 0);
               const netPnl = trade.netPnl ?? grossPnl;
               const comm = trade.commission ?? 0;
-              const digits = getDigits(trade.symbol);
+              
               const isBotManaged = trade.botManaged || /paper:/i.test(trade.comment || "");
               const closeTime = trade.closeTime;
 
@@ -606,8 +601,8 @@ function TradeHistoryContent({
                     </span>
                   </td>
                   <td className="px-2 py-1.5 text-right font-mono">{parseFloat(trade.volume ?? trade.initialUnits ?? 0).toFixed(2)}</td>
-                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(trade.entryPrice ?? trade.price, digits)}</td>
-                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(trade.exitPrice ?? trade.averageClosePrice, digits)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(trade.entryPrice ?? trade.price, trade.symbol)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(trade.exitPrice ?? trade.averageClosePrice, trade.symbol)}</td>
                   <td className={`px-2 py-1.5 text-right font-mono ${pnlColor(grossPnl)}`}>
                     {grossPnl >= 0 ? "+" : ""}{grossPnl.toFixed(2)}
                   </td>
