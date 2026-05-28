@@ -371,6 +371,132 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
         </div>
       </div>
 
+      {/* ═══ ROW 1.5: Entry Confirmation Story ═══ */}
+      {(sr.confirmationEntry || sr.entryMethod === "market_fill_at_zone" || sr.filledFromLimitOrder) && (() => {
+        const conf = sr.confirmation || {};
+        const lo = sr.limitOrderOrigin || {};
+        const iz = sr.impulseZoneEntry || sr.impulseZone?.bestZone || {};
+        const isConfirmedEntry = sr.confirmationEntry && conf.type;
+        const isMarketFillAtZone = sr.entryMethod === "market_fill_at_zone";
+        const hasWatchlistOrigin = sr.promotedFromWatchlist && sr.watchlistOrigin;
+
+        const confirmTypeLabels: Record<string, string> = {
+          engulfing: "Engulfing", rejection_wick: "Rejection Wick",
+          fvg: "FVG Created", sweep_reclaim: "Sweep + Reclaim",
+          displacement: "Displacement", volume_spike: "Volume Spike",
+        };
+        const confirmLabel = confirmTypeLabels[conf.type] || conf.type || "\u2014";
+
+        const tierColors: Record<number, string> = {
+          1: "bg-success/15 border-success/40 text-success",
+          2: "bg-cyan-500/15 border-cyan-500/40 text-cyan-400",
+          3: "bg-purple-500/15 border-purple-500/40 text-purple-400",
+        };
+
+        const zoneType = lo.zoneType || iz.zoneType || iz.type || null;
+        const zoneLow = lo.zoneLow || iz.zoneLow || iz.low;
+        const zoneHigh = lo.zoneHigh || iz.zoneHigh || iz.high;
+
+        const fmtTime = (iso: string | undefined) => {
+          if (!iso) return null;
+          try {
+            return new Date(iso).toLocaleTimeString("en-US", {
+              month: "2-digit", day: "2-digit",
+              hour: "2-digit", minute: "2-digit", second: "2-digit",
+              hour12: true,
+            });
+          } catch { return null; }
+        };
+
+        const zoneTouchTime = fmtTime(conf.zoneTouchTime || lo.zoneTouchTime);
+        const filledAt = fmtTime(lo.filledAt);
+        const placedAt = fmtTime(lo.placedAt);
+
+        return (
+          <div className="rounded-lg border border-border/40 bg-secondary/30 px-3 py-2 space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-[1.5px] text-muted-foreground">Entry Confirmation</span>
+              {isConfirmedEntry && conf.tier && (
+                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${tierColors[conf.tier] || tierColors[3]}`}>
+                  T{conf.tier}
+                </span>
+              )}
+              {isMarketFillAtZone && !isConfirmedEntry && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 border border-amber-500/40 text-amber-400">
+                  Market Fill at Zone
+                </span>
+              )}
+              {sr.filledFromLimitOrder && !isConfirmedEntry && !isMarketFillAtZone && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 border border-blue-500/40 text-blue-400">
+                  Limit Order Fill
+                </span>
+              )}
+            </div>
+
+            {/* Confirmation signal details */}
+            {isConfirmedEntry && (
+              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] font-mono">
+                <span className="text-muted-foreground">Signal: <span className="text-foreground font-semibold">{confirmLabel}</span></span>
+                {conf.displacement != null && (
+                  <span className="text-muted-foreground">Disp: <span className={`font-semibold ${conf.displacement >= 1.5 ? "text-success" : conf.displacement >= 1.0 ? "text-foreground" : "text-warn"}`}>{conf.displacement.toFixed(2)}\u00d7</span></span>
+                )}
+                {conf.significance && (
+                  <span className="text-muted-foreground">Strength: <span className={`font-semibold ${conf.significance === "high" ? "text-success" : conf.significance === "medium" ? "text-foreground" : "text-muted-foreground"}`}>{conf.significance}</span></span>
+                )}
+                {conf.closeBased != null && (
+                  <span className="text-muted-foreground">{conf.closeBased ? "Close-based \u2713" : "Wick-based"}</span>
+                )}
+              </div>
+            )}
+
+            {/* Supporting signals */}
+            {isConfirmedEntry && Array.isArray(conf.supportingSignals) && conf.supportingSignals.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {conf.supportingSignals.map((sig: string, i: number) => (
+                  <span key={i} className="rounded-full bg-secondary/60 border border-border px-2 py-0.5 text-[9px] text-foreground/70">
+                    {sig.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Zone info */}
+            {(zoneType || zoneLow != null) && (
+              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] font-mono">
+                {zoneType && (
+                  <span className="text-muted-foreground">Zone: <span className="text-foreground font-semibold">{zoneType}</span></span>
+                )}
+                {zoneLow != null && zoneHigh != null && (
+                  <span className="text-muted-foreground">[{formatPrice(zoneLow, p.symbol)} \u2013 {formatPrice(zoneHigh, p.symbol)}]</span>
+                )}
+              </div>
+            )}
+
+            {/* Timeline: placed → zone touched → confirmed → filled */}
+            {(placedAt || zoneTouchTime || filledAt) && (
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+                {placedAt && <span>Placed: {placedAt}</span>}
+                {zoneTouchTime && <span>Zone touch: {zoneTouchTime}</span>}
+                {conf.confirmationAttempts != null && conf.confirmationAttempts > 0 && (
+                  <span>Attempts: {conf.confirmationAttempts}</span>
+                )}
+                {filledAt && <span>Filled: {filledAt}</span>}
+              </div>
+            )}
+
+            {/* Watchlist origin (compact — header already shows badge) */}
+            {hasWatchlistOrigin && (
+              <div className="flex items-center gap-2 text-[10px] text-cyan-400/80">
+                <span>Watched {sr.watchlistOrigin.cyclesWatched} cycles</span>
+                {sr.watchlistOrigin.initialScore != null && (
+                  <span>\u00b7 Started at {sr.watchlistOrigin.initialScore.toFixed(1)}%</span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ═══ ROW 2: Live Trade Management Status (3 cards) ═══ */}
       {hasManagement && (
         <div className="flex gap-2">

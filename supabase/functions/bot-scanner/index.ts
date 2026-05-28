@@ -2976,17 +2976,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (telegramChatIds.length > 0) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            const msg = `${emoji} <b>${mode} CONFIRMED Entry</b>\n\n` +
+            const confTierLabel = confirmationSignal.tier ? ` T${confirmationSignal.tier}` : "";
+            const confSupporting = Array.isArray(confirmationSignal.supportingSignals) && confirmationSignal.supportingSignals.length > 0
+              ? `\n<b>Supporting:</b> ${confirmationSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
+              : "";
+            const confAttempts = (pending.confirmation_attempts || 0) > 0
+              ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
+              : "";
+            const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
               `<b>Symbol:</b> ${pending.symbol}\n` +
               `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
               `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (live, ${confirmationSignal.type})\n` +
-              `<b>Zone Level:</b> ${entryPrice}\n` +
+              `<b>Entry:</b> ${actualFillPrice.toFixed(5)}\n` +
               `<b>SL:</b> ${pending.stop_loss}\n` +
               `<b>TP:</b> ${pending.take_profit}\n` +
-              `<b>Score:</b> ${pending.signal_score}\n` +
-              `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
-              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+              `<b>Score:</b> ${pending.signal_score}\n\n` +
+              `🎯 <b>Confirmation</b>\n` +
+              `<b>Signal:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)}×${confirmationSignal.significance ? ", " + confirmationSignal.significance : ""})${confAttempts}` +
+              confSupporting + `\n` +
+              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
@@ -5140,7 +5148,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
             `<b>Summary:</b> ${analysis.summary || "—"}` +
             (isPromotedFromStaging && existingStaged ? `\n\n📋 <b>Promoted from Watchlist</b>\nWatched ${existingStaged.scan_cycles + 1} cycles | Started at ${parseFloat(existingStaged.initial_score).toFixed(1)}%` : "") +
-            (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\nZone: [${izData?.bestZone?.low?.toFixed(5)}-${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? "" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}` : "");
+            (useMarketFillAtZone ? `\n\n🎯 <b>Market Fill at Zone</b>\n<b>Zone:</b> ${izData?.bestZone?.type || "IZ"} [${izData?.bestZone?.low?.toFixed(5)} \u2013 ${izData?.bestZone?.high?.toFixed(5)}]${izData?.bestZone?.priceInsideZone ? " (inside)" : ` (${izData?.bestZone?.distancePips?.toFixed(1) ?? "?"}p from edge)`}${izData?.bestZone?.refinedEntry ? `\n<b>Refined Entry:</b> ${izData.bestZone.refinedEntry.toFixed(5)}` : ""}` : "");
           await Promise.all(telegramChatIds.map(async (chatId) => {
             try {
               const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
