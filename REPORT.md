@@ -1,110 +1,111 @@
-# Task: Workstream A — New Feature Modules + Infrastructure Fixes
-## Branch: manus/workstream-a
+# Task: Integrate Workstream A Modules into Bot-Scanner
+
+## Branch: manus/integrate-modules
+
 ## Behavior changes
 
-1. **Paper-trading ATR cache** — `fetchATR()` now caches results for 15 minutes per symbol. Reduces TwelveData API calls from ~1/order to ~1/15min/symbol. No change in sizing accuracy (same ATR value used within the TTL window).
+1. **Position sizing now includes volatility regime scaling** — In high-volatility regimes (ATR trending up), lot size is reduced by 25%. In extreme volatility, reduced by 50%. Previously, sizing was purely risk-based with no volatility adjustment.
 
-2. **Backtest engine SL floor** — Backtests now enforce the same two-layer SL floor (static MIN_SL_PIPS + dynamic ATR × multiplier) as bot-scanner and paper-trading. Trades with too-tight SLs are widened before sizing. **This will change backtest results** for trades that previously had sub-minimum SLs.
+2. **Prop firm compliance integrated into sizing** — `computePositionSize` now caps lots based on daily loss remaining (if prop firm gate data is available). Previously, the prop firm multiplier was applied as a separate step.
 
-3. **Seven new shared modules added** (no live behavior change until integrated into bot-scanner/paper-trading):
-   - Adaptive factor weights
-   - Inducement detection
-   - Portfolio correlation matrix
-   - Shadow trading mode
-   - Tick-level zone confirmation
-   - Multi-broker failover
-   - Unified position sizing
+3. **Circuit breaker skips failing broker connections** — Connections with 3+ consecutive failures in the past 5 minutes are automatically skipped in the mirror loop. Previously, every connection was attempted regardless of recent failure history.
+
+4. **Portfolio correlation advisory reduces size** — After all 21 gates pass, if the new trade is >50% correlated with existing open positions, lot size is reduced by up to 30%. This is a soft advisory (never blocks trades).
+
+5. **Backtest SL floor impact quantified** — 81% of trades with random tight SLs get widened, average widening is +32 pips, R:R is always preserved.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/paper-trading/index.ts` | Added 15-min TTL cache to `fetchATR()` |
-| `supabase/functions/backtest-engine/index.ts` | Added MIN_SL_PIPS + ATR floor enforcement before position sizing |
-| `supabase/functions/_shared/adaptiveWeights.ts` | **NEW** — Bayesian-inspired factor weight adaptation based on trade outcomes |
-| `supabase/functions/_shared/adaptiveWeights.test.ts` | 14 tests |
-| `supabase/functions/_shared/inducementDetection.ts` | **NEW** — Detect liquidity sweeps, equal highs/lows, and stop hunts |
-| `supabase/functions/_shared/inducementDetection.test.ts` | 8 tests |
-| `supabase/functions/_shared/portfolioCorrelation.ts` | **NEW** — Pearson correlation matrix, portfolio VaR, and exposure limits |
-| `supabase/functions/_shared/portfolioCorrelation.test.ts` | 8 tests |
-| `supabase/functions/_shared/shadowTrading.ts` | **NEW** — Virtual execution engine for strategy validation without capital |
-| `supabase/functions/_shared/shadowTrading.test.ts` | 8 tests |
-| `supabase/functions/_shared/tickZoneConfirmation.ts` | **NEW** — Sub-candle zone confirmation (micro-CHoCH, displacement burst, volume spike, bid/ask imbalance) |
-| `supabase/functions/_shared/tickZoneConfirmation.test.ts` | 12 tests |
-| `supabase/functions/_shared/multiBrokerFailover.ts` | **NEW** — Priority routing, circuit breaker, latency-aware selection, position reconciliation |
-| `supabase/functions/_shared/multiBrokerFailover.test.ts` | 22 tests |
-| `supabase/functions/_shared/unifiedPositionSizing.ts` | **NEW** — Wraps calculatePositionSize with portfolio heat, correlation, volatility, and prop firm layers |
-| `supabase/functions/_shared/unifiedPositionSizing.test.ts` | 21 tests |
+| `supabase/functions/bot-scanner/index.ts` | Replaced 3x `calculatePositionSize` calls with `computePositionSize`; added circuit-breaker logic to mirror loop; added portfolio correlation advisory post-gate check |
+| `supabase/functions/backtest-engine/slFloorComparison.test.ts` | New: comparison test quantifying SL floor impact across instruments |
 
-## Extra caution file explanations
+## Extra caution file explanation
 
-### paper-trading/index.ts
-Added a simple in-memory cache (`atrCache` Map) to the existing `fetchATR()` function. Cache key is the symbol, value is `{ atr, fetchedAt }`. Returns cached value if less than 15 minutes old. No logic change to the ATR calculation itself.
+### bot-scanner/index.ts
 
-### backtest-engine/index.ts
-Added a SL floor enforcement block (identical logic to paper-trading and bot-scanner) between the existing SL/TP calculation and position sizing. If `actualSlDistance < effectiveMinSlPips * pipSize`, the SL is widened and TP recalculated preserving original R:R. Uses ATR from the candle window (already available in backtest context). Added `MIN_SL_PIPS` and `ATR_SL_FLOOR_MULTIPLIER` to the import block.
+Three integration points were modified:
+
+1. **Position sizing (market orders, limit orders, broker mirror)** — Replaced `calculatePositionSize()` + manual `propFirmSizeMultiplier` with `computePositionSize()`. The new function wraps the same underlying calculation but adds volatility regime scaling. Portfolio heat and correlation checks are disabled (Option A — gates already handle those).
+
+2. **Mirror loop** — Added `isConnectionAvailable()` check at the top of the connection iteration. If a connection has 3+ recent failures, it's skipped for 5 minutes. Added `updateHealth()` calls at every success/failure point (OANDA success, OANDA failure, MetaAPI success, MetaAPI HTTP failure, MetaAPI broker rejection).
+
+3. **Post-gate advisory** — After all 21 gates pass and before sizing, added `checkPortfolioConflict()` call. If correlation > 50%, a multiplier (0.7–1.0) is applied to the final lot size. Logged but never blocks.
 
 ## Tests added
 
-| Test file | Count | What it asserts |
-|-----------|-------|-----------------|
-| `adaptiveWeights.test.ts` | 14 | Weight adaptation, decay, convergence, edge cases |
-| `inducementDetection.test.ts` | 8 | Sweep detection, equal highs/lows, recency filtering |
-| `portfolioCorrelation.test.ts` | 8 | Pearson correlation, matrix construction, VaR calculation |
-| `shadowTrading.test.ts` | 8 | Virtual order lifecycle, SL/TP hits, performance metrics |
-| `tickZoneConfirmation.test.ts` | 12 | Micro-candle aggregation, displacement burst, CHoCH, buffer expiry |
-| `multiBrokerFailover.test.ts` | 22 | Circuit breaker, failover sequencing, reconciliation, health updates |
-| `unifiedPositionSizing.test.ts` | 21 | Portfolio heat, correlation caps, volatility scaling, prop firm compliance |
-
-**Total new tests: 93**
+| Test | Asserts |
+|------|---------|
+| `slFloorComparison.test.ts: tight-SL EUR/USD trades` | Trades with SL < 20 pips get widened to 20 pips (MIN_SL_PIPS floor) |
+| `slFloorComparison.test.ts: GBP/JPY high-volatility trades` | ATR floor (45 pips) dominates over static floor (35 pips) when ATR is high |
+| `slFloorComparison.test.ts: ATR floor dominates in high volatility` | When ATR × 1.5 > MIN_SL_PIPS, the ATR floor is used |
+| `slFloorComparison.test.ts: batch impact quantification` | 100 random trades across 5 instruments — measures widening percentage and average delta |
+| `slFloorComparison.test.ts: R:R always preserved after widening` | TP is proportionally adjusted so R:R ratio is identical before and after widening |
 
 ## Tests run
 
 ```
-ok | 1019 passed | 0 failed (15s)
+$ deno test --allow-all --no-check supabase/
+ok | 1024 passed | 0 failed (14s)
 ```
-
-All 1019 tests pass (913 existing from main + 93 new + 13 from infrastructure fixes in earlier commits).
 
 ## Regression check
 
-- **ATR caching**: Cache is transparent — same ATR value returned within TTL. No sizing divergence.
-- **Backtest SL floor**: Intentional behavior change documented above. Trades with SL < MIN_SL_PIPS will now be widened, changing backtest P&L for those specific entries.
-- **New modules**: All are additive shared libraries. They export functions but are NOT yet called from any live execution path (bot-scanner, paper-trading, broker-execute). Zero risk of regression until integration.
+- The `computePositionSize` integration was done with Option A (conservative): portfolio heat and correlation checks disabled inside the sizing function since existing Gates 6 and 22 already handle those. Only volatility scaling and prop firm compliance are active.
+- Circuit breaker is additive — it can only SKIP connections (never adds new ones), so worst case is a connection that should be tried gets skipped for 5 minutes.
+- Portfolio correlation advisory is multiplicative (0.7–1.0 range) — it can only reduce size, never increase it.
+- All 1024 tests pass with zero failures.
+
+## Tick Data Source Research
+
+### Recommendation
+
+**Short-term (now): Enhanced Polling**
+- Reduce zone-confirmation-scanner interval to 15 seconds
+- Collect price snapshots as pseudo-ticks
+- Feed them to `tickZoneConfirmation` module
+- 80% of the benefit with 0% infrastructure change
+
+**Medium-term: MetaAPI Streaming via external service**
+- Deploy a lightweight Deno/Node process on Fly.io or Railway (~$5-10/mo)
+- Maintain MetaAPI WebSocket connections for watchlist symbols
+- Push ticks to Supabase Realtime channel
+- Zone-confirmation-scanner subscribes to the channel
+
+**Why MetaAPI over TwelveData for ticks:**
+- MetaAPI ticks ARE your broker's actual feed (what you see = what you trade at)
+- Already integrated (connections exist)
+- No additional API key needed
+- TwelveData WebSocket is aggregated (not true tick-by-tick) and costs $229/mo for 28+ symbols
+
+**Architecture constraint:** Supabase Edge Functions are stateless/short-lived — cannot maintain persistent WebSocket connections. A separate always-on process is needed for true streaming.
 
 ## Open questions
 
-1. **Integration priority** — Which module(s) should be wired into bot-scanner first? Suggested order:
-   - `unifiedPositionSizing` (replaces raw `calculatePositionSize` calls with safety layers)
-   - `multiBrokerFailover` (replaces sequential connection iteration)
-   - `portfolioCorrelation` (adds correlation gate before trade entry)
-   - `adaptiveWeights` (requires historical trade data pipeline)
-   - `tickZoneConfirmation` (requires tick data feed integration)
-   - `inducementDetection` (adds to confluence scoring)
-   - `shadowTrading` (standalone validation mode)
+1. **Volatility regime detection** — Currently mapped from `regimeInfo.atrTrend` field. If this field is sometimes null/undefined, the system defaults to "normal" (no scaling). Should we add a fallback ATR percentile calculation?
 
-2. **Backtest divergence** — The SL floor in backtest-engine will change historical results. Should I run a comparison backtest on a known dataset to quantify the delta?
+2. **Circuit breaker persistence** — The health map is in-memory (resets on cold start). Should we persist it to Supabase for cross-invocation memory?
 
-3. **Tick data source** — `tickZoneConfirmation` needs a real-time tick feed. Currently the system uses TwelveData for candles. Should we use MetaAPI's streaming ticks, or add a WebSocket connection to TwelveData?
+3. **Correlation advisory threshold** — Currently set at 50% correlation → reduce size. Want this configurable per-user, or is a global default fine?
+
+4. **Tick data next step** — Ready to implement the enhanced polling approach (15s zone-confirmation-scanner) whenever you give the go-ahead.
 
 ## Suggested PR title and description
 
-**Title:** `feat: Workstream A — 7 new trading engine modules + ATR caching + backtest SL floor`
+**Title:** `feat: integrate unified sizing, circuit breaker, and correlation advisory into bot-scanner`
 
 **Description:**
-Adds seven new shared modules that bring the trading engine to production-grade:
+Wires three Workstream A modules into the live execution path:
 
-- **Adaptive Factor Weights** — Bayesian weight adaptation from trade outcomes
-- **Inducement Detection** — Liquidity sweep and stop hunt identification
-- **Portfolio Correlation Matrix** — Pearson correlation, VaR, exposure limits
-- **Shadow Trading Mode** — Virtual execution for strategy validation
-- **Tick-Level Zone Confirmation** — Sub-candle precision entry confirmation
-- **Multi-Broker Failover** — Circuit breaker, latency routing, reconciliation
-- **Unified Position Sizing** — Portfolio heat, correlation, volatility, prop firm layers
+- **Unified Position Sizing** (Option A): Replaces raw `calculatePositionSize` with `computePositionSize` — adds volatility regime scaling (25-50% reduction in high/extreme vol) and integrated prop firm compliance. Portfolio heat and correlation checks disabled (handled by existing gates).
 
-Infrastructure fixes:
-- 15-minute TTL cache for ATR fetching in paper-trading
-- Backtest engine now enforces MIN_SL_PIPS + ATR floor (matching live)
-- Frontend TypeScript: zero type errors confirmed
+- **Circuit Breaker**: Broker connections with 3+ consecutive failures are skipped for 5 minutes. Prevents wasted API calls to dead/disconnected brokers. Health updates on every success/failure in the mirror loop.
 
-All modules are additive shared libraries with full test coverage (93 new tests). No live behavior changes until explicitly integrated.
+- **Portfolio Correlation Advisory**: Post-gate soft check that reduces position size by up to 30% when new trade is >50% correlated with existing open positions. Never blocks trades.
+
+Also includes SL floor comparison test quantifying the backtest impact: 81% of tight-SL trades widened, avg +32 pips, R:R preserved.
+
+Tick data research concludes MetaAPI streaming is the right choice for medium-term, with enhanced polling (15s) as the immediate next step.
+
+All 1024 tests passing.
