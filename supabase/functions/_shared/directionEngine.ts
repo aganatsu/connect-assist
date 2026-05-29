@@ -311,6 +311,17 @@ export function determineDirection(
     };
   }
 
+  // ── Hard block: 4H trend opposes daily bias ──
+  // Catches the case where the CHoCH that flipped 4H happened outside the lookback window
+  // but 4H is still trending against the daily bias (recent BOS confirms the opposing trend).
+  if (h4Structure.trend !== "ranging" && h4Structure.trend !== bias) {
+    return {
+      direction: null, bias: bias!, biasSource: biasSource!,
+      h4Retrace: false, h4ChochAgainst: true, h1Confirmed: false,
+      reason: `${biasSource} ${bias} bias BUT 4H trend is ${h4Structure.trend} (opposes bias) → BLOCKED`,
+    };
+  }
+
   // ── Step 3: Check 1H confirmation ──
   if (!h1Candles || h1Candles.length < 20) {
     return {
