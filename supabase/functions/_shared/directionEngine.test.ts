@@ -700,3 +700,225 @@ Deno.test("4H TREND BLOCK: source code contains the trend opposition check", () 
   assertEquals(source.includes("opposes bias"), true,
     "directionEngine.ts should contain 'opposes bias' in the block reason");
 });
+
+// ─── confirmedTrend tests ───────────────────────────────────────────
+
+import { confirmedTrend, type ConfirmedTrendResult } from "./directionEngine.ts";
+
+// ── Helper: generate candles with explicit swing points for confirmedTrend testing ──
+// Creates a series with controlled HH/HL or LH/LL with specific extension amounts
+function makeSwingCandles(
+  swings: { price: number; type: "high" | "low" }[],
+  candlesPerSwing = 6,
+): Candle[] {
+  const candles: Candle[] = [];
+  for (let s = 0; s < swings.length - 1; s++) {
+    const from = swings[s].price;
+    const to = swings[s + 1].price;
+    for (let i = 0; i < candlesPerSwing; i++) {
+      const t = i / (candlesPerSwing - 1);
+      const price = from + (to - from) * t;
+      const noise = Math.abs(to - from) * 0.02;
+      candles.push({
+        datetime: new Date(Date.now() - (swings.length * candlesPerSwing - candles.length) * 86400000).toISOString(),
+        open: price - noise,
+        high: price + noise * 2,
+        low: price - noise * 2,
+        close: price + noise,
+        volume: 100,
+      });
+    }
+  }
+  return candles;
+}
+
+Deno.test("confirmedTrend: returns ranging when insufficient data", () => {
+  const candles = makeCandles(10, 1.1, "flat");
+  const result = confirmedTrend(candles);
+  assertEquals(result.trend, "ranging");
+  assertEquals(result.confirmedMSBs.length, 0);
+  assertEquals(result.reason.includes("insufficient"), true);
+});
+
+Deno.test("confirmedTrend: detects bullish trend with strong HH extensions", () => {
+  // Create clear bullish structure: each high significantly exceeds the previous
+  // Swing pattern: low(1.0) → high(1.05) → low(1.02) → high(1.10) → low(1.06) → high(1.15)
+  // Extension of second HH: (1.10 - 1.05) / (1.05 - 1.02) = 0.05/0.03 = 1.67 (167% > 25%)
+  const swings = [
+    { price: 1.00, type: "low" as const },
+    { price: 1.05, type: "high" as const },
+    { price: 1.02, type: "low" as const },
+    { price: 1.10, type: "high" as const },
+    { price: 1.06, type: "low" as const },
+    { price: 1.15, type: "high" as const },
+    { price: 1.11, type: "low" as const },
+  ];
+  const candles = makeSwingCandles(swings, 12);
+  const result = confirmedTrend(candles, 0.25, 5);
+  assertEquals(result.trend, "bullish", `Expected bullish, got ${result.trend}. Reason: ${result.reason}`);
+  assertEquals(result.confirmedMSBs.length > 0, true, "Should have at least one confirmed MSB");
+  assertEquals(result.confirmedMSBs.every(m => m.type === "bullish"), true, "All MSBs should be bullish");
+});
+
+Deno.test("confirmedTrend: detects bearish trend with strong LL extensions", () => {
+  // Clear bearish: each low significantly exceeds the previous
+  // Swing pattern: high(1.15) → low(1.10) → high(1.13) → low(1.05) → high(1.09) → low(1.00)
+  const swings = [
+    { price: 1.15, type: "high" as const },
+    { price: 1.10, type: "low" as const },
+    { price: 1.13, type: "high" as const },
+    { price: 1.05, type: "low" as const },
+    { price: 1.09, type: "high" as const },
+    { price: 1.00, type: "low" as const },
+    { price: 1.04, type: "high" as const },
+  ];
+  const candles = makeSwingCandles(swings, 12);
+  const result = confirmedTrend(candles, 0.25, 5);
+  assertEquals(result.trend, "bearish", `Expected bearish, got ${result.trend}. Reason: ${result.reason}`);
+  assertEquals(result.confirmedMSBs.length > 0, true, "Should have at least one confirmed MSB");
+});
+
+Deno.test("confirmedTrend: STABILITY - doesn't flip on a single marginal new swing", () => {
+  // Key test: create a bullish trend with large swings, then add a TINY pullback
+  // that is well below the fib extension threshold. The trend should STAY bullish.
+  // Bullish established with big swings, then a tiny dip at the end.
+  // The key: the "noise" low must be barely below the previous low, so the extension
+  // relative to the swing range (high - previous low) is well under 25%.
+  // Swing range for lows: high(1.50) - low(1.35) = 0.15. A new low at 1.345 = extension 0.005/0.15 = 3.3%
+  const bullishSwings = [
+    { price: 1.00, type: "low" as const },
+    { price: 1.20, type: "high" as const },
+    { price: 1.10, type: "low" as const },
+    { price: 1.35, type: "high" as const },
+    { price: 1.25, type: "low" as const },
+    { price: 1.50, type: "high" as const },
+    { price: 1.35, type: "low" as const },
+    { price: 1.48, type: "high" as const },
+    // Tiny dip: 1.345 is barely below 1.35. Extension = (1.35-1.345)/(1.48-1.35) = 0.005/0.13 = 3.8% << 25%
+    { price: 1.345, type: "low" as const },
+    { price: 1.46, type: "high" as const },
+  ];
+  const candles = makeSwingCandles(bullishSwings, 12);
+  const result = confirmedTrend(candles, 0.25, 5);
+  // The bullish trend should hold because the tiny dip doesn't meet the extension threshold
+  assertEquals(result.trend, "bullish",
+    `Expected bullish trend to hold despite tiny dip. Got ${result.trend}. Reason: ${result.reason}`);
+});
+
+Deno.test("confirmedTrend: flips from bullish to bearish on confirmed bearish MSB", () => {
+  // Bullish trend, then a LARGE lower low that exceeds the fib extension threshold
+  // Bullish: low(1.0) → high(1.10) → low(1.05) → high(1.18)
+  // Then bearish MSB: low(0.95) — extension = (1.05-0.95)/(1.18-1.05) = 0.10/0.13 = 77% >> 25%
+  const swings = [
+    { price: 1.00, type: "low" as const },
+    { price: 1.10, type: "high" as const },
+    { price: 1.05, type: "low" as const },
+    { price: 1.18, type: "high" as const },
+    { price: 1.12, type: "low" as const },
+    { price: 1.20, type: "high" as const },
+    // Now a decisive bearish break
+    { price: 0.95, type: "low" as const },
+    { price: 1.00, type: "high" as const },
+  ];
+  const candles = makeSwingCandles(swings, 12);
+  const result = confirmedTrend(candles, 0.25, 5);
+  assertEquals(result.trend, "bearish",
+    `Expected bearish after large LL. Got ${result.trend}. Reason: ${result.reason}`);
+});
+
+Deno.test("confirmedTrend: higher fibFactor requires larger breaks", () => {
+  // Same data, but with fibFactor=0.5 (50%) vs 0.25 (25%)
+  const swings = [
+    { price: 1.00, type: "low" as const },
+    { price: 1.10, type: "high" as const },
+    { price: 1.04, type: "low" as const },
+    { price: 1.12, type: "high" as const },
+    { price: 1.06, type: "low" as const },
+    { price: 1.14, type: "high" as const },
+    { price: 1.08, type: "low" as const },
+  ];
+  const candles = makeSwingCandles(swings, 12);
+
+  const result25 = confirmedTrend(candles, 0.25, 5);
+  const result50 = confirmedTrend(candles, 0.50, 5);
+
+  // 50% threshold should never be MORE permissive than 25%
+  assertEquals(result50.confirmedMSBs.length <= result25.confirmedMSBs.length, true,
+    `Higher fibFactor should produce fewer or equal MSBs. 25%: ${result25.confirmedMSBs.length}, 50%: ${result50.confirmedMSBs.length}`);
+});
+
+Deno.test("confirmedTrend: integrates with determineDirection via useConfirmedTrend=true", () => {
+  // Create clear bullish daily candles and verify direction engine uses confirmedTrend
+  const daily = makeTrendingCandles(50, 1.0, "bullish", 0.01);
+  const h4 = makeTrendingCandles(50, 1.0, "bullish", 0.005);
+  const h1 = makeTrendingCandles(30, 1.0, "bullish", 0.003);
+
+  const resultNew = determineDirection(daily, h4, h1, { useConfirmedTrend: true });
+  const resultOld = determineDirection(daily, h4, h1, { useConfirmedTrend: false });
+
+  // Both should produce valid results (the function doesn't crash with either mode)
+  assertExists(resultNew.reason);
+  assertExists(resultOld.reason);
+
+  // If both detect a bias, they should agree on direction (same underlying data)
+  if (resultNew.direction && resultOld.direction) {
+    assertEquals(resultNew.direction, resultOld.direction,
+      `Both modes should agree on clear trend. New: ${resultNew.direction} (${resultNew.reason}), Old: ${resultOld.direction} (${resultOld.reason})`);
+  }
+});
+
+Deno.test("confirmedTrend: useConfirmedTrend=false falls back to legacy behavior", () => {
+  const daily = makeTrendingCandles(30, 1.1, "bearish", 0.005);
+  const h4 = makeTrendingCandles(30, 1.1, "bearish", 0.003);
+  const h1 = makeTrendingCandles(30, 1.1, "bearish", 0.002);
+
+  const result = determineDirection(daily, h4, h1, { useConfirmedTrend: false });
+  // Should use the old analyzeMarketStructure().trend path
+  assertExists(result.reason);
+  // Just verify it works without crashing
+  assertEquals(result.direction === "short" || result.direction === null, true);
+});
+
+Deno.test("confirmedTrend: AUD/JPY scenario - bullish confirmed trend stays bullish despite noise", () => {
+  // Simulate the AUD/JPY scenario: clear bullish trend on daily,
+  // with some noise swings at the top that DON'T meet the fib extension threshold.
+  // The key: the noise lows at the top must be barely below the previous lows,
+  // with the swing range (high - low) being large enough that the tiny break is < 25%.
+  // Bull run: 108 → 115, then noise at top with tiny pullbacks.
+  const swings = [
+    { price: 108.0, type: "low" as const },
+    { price: 111.0, type: "high" as const },
+    { price: 109.0, type: "low" as const },
+    { price: 113.0, type: "high" as const },
+    { price: 110.5, type: "low" as const },
+    { price: 115.0, type: "high" as const },
+    // Now noise at the top: the low is 113.8, then a tiny dip to 113.7
+    // Extension = (113.8 - 113.7) / (115.0 - 113.8) = 0.1 / 1.2 = 8.3% << 25%
+    { price: 113.8, type: "low" as const },
+    { price: 114.8, type: "high" as const },
+    { price: 113.7, type: "low" as const },
+    { price: 114.5, type: "high" as const },
+  ];
+  const candles = makeSwingCandles(swings, 12);
+  const result = confirmedTrend(candles, 0.25, 5);
+
+  // The strong bullish MSBs (108→111→113→115) should dominate
+  // The tiny noise at the top shouldn't flip the trend
+  assertEquals(result.trend, "bullish",
+    `AUD/JPY-like scenario should be bullish. Got: ${result.trend}. Reason: ${result.reason}`);
+});
+
+Deno.test("confirmedTrend: source code contains fib extension filter", () => {
+  // Structural guard: verify the implementation exists
+  const source = Deno.readTextFileSync(
+    new URL("./directionEngine.ts", import.meta.url).pathname
+  );
+  assertEquals(source.includes("confirmedTrend"), true,
+    "directionEngine.ts should contain confirmedTrend function");
+  assertEquals(source.includes("fibFactor"), true,
+    "directionEngine.ts should contain fibFactor parameter");
+  assertEquals(source.includes("extension < fibFactor"), true,
+    "directionEngine.ts should filter breaks by fib extension threshold");
+  assertEquals(source.includes("useConfirmedTrend"), true,
+    "directionEngine.ts should have useConfirmedTrend toggle");
+});

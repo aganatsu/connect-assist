@@ -11,7 +11,158 @@
  * The result is passed as config._overrideDirection so confluenceScoring uses it.
  */
 
-import { analyzeMarketStructure, type Candle, type StructureBreak } from "./smcAnalysis.ts";
+import { analyzeMarketStructure, detectSwingPoints, calculateATR, type Candle, type StructureBreak, type SwingPoint } from "./smcAnalysis.ts";
+
+// ── Confirmed Trend (fib-extension-filtered MSBs for stable macro-trend) ──
+
+export interface ConfirmedTrendResult {
+  trend: "bullish" | "bearish" | "ranging";
+  confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number }[];
+  lastFlipIndex: number;  // candle index of the last confirmed trend flip
+  reason: string;
+}
+
+/**
+ * confirmedTrend — Stable macro-trend determination using fib-extension-filtered MSBs.
+ *
+ * Unlike analyzeMarketStructure().trend (which flips on every new swing pair),
+ * this function only flips the trend when a swing break exceeds the previous swing
+ * by a configurable percentage of the swing range (like TradingView's MSB indicator).
+ *
+ * This provides:
+ *   - Hysteresis: trend doesn't flip on noise
+ *   - Stability: requires decisive breaks, not marginal ones
+ *   - Coarser swings: uses lookback=5 + higher ATR filter for significant pivots only
+ *
+ * @param candles - Price candles (daily or 4H)
+ * @param fibFactor - Minimum extension beyond previous swing as fraction of swing range (default: 0.25 = 25%)
+ * @param swingLookback - Lookback for swing detection (default: 5, coarser than entry-level 3)
+ */
+export function confirmedTrend(
+  candles: Candle[],
+  fibFactor = 0.25,
+  swingLookback = 5,
+): ConfirmedTrendResult {
+  const noTrend: ConfirmedTrendResult = {
+    trend: "ranging",
+    confirmedMSBs: [],
+    lastFlipIndex: -1,
+    reason: "insufficient data",
+  };
+
+  if (candles.length < swingLookback * 2 + 5) return noTrend;
+
+  // Use coarser swing detection with higher ATR filter for significant pivots
+  const atrFilter = 0.4; // 40% of ATR — only significant swings
+  const swings = detectSwingPoints(candles, swingLookback, atrFilter);
+
+  const highs = swings.filter(s => s.type === "high");
+  const lows = swings.filter(s => s.type === "low");
+
+  if (highs.length < 2 || lows.length < 2) {
+    return { ...noTrend, reason: `insufficient swings (${highs.length} highs, ${lows.length} lows)` };
+  }
+
+  // Process swing breaks chronologically with fib extension filter
+  type BreakEvent = {
+    index: number;
+    swingType: "high" | "low";
+    prevLevel: number;
+    currentLevel: number;
+    swingRange: number; // range between the broken swing and the opposite extreme
+    extension: number;  // how far past the previous swing (as fraction of swingRange)
+  };
+
+  const events: BreakEvent[] = [];
+
+  // For each consecutive pair of swing highs, check if the later one broke the earlier
+  for (let i = 1; i < highs.length; i++) {
+    const prev = highs[i - 1];
+    const curr = highs[i];
+    if (curr.price > prev.price) {
+      // Find the lowest low between these two highs for swing range calculation
+      const lowestBetween = lows
+        .filter(l => l.index > prev.index && l.index < curr.index)
+        .reduce((min, l) => l.price < min ? l.price : min, prev.price);
+      const swingRange = prev.price - lowestBetween;
+      const extensionAbs = curr.price - prev.price;
+      const extension = swingRange > 0 ? extensionAbs / swingRange : 0;
+      events.push({
+        index: curr.index,
+        swingType: "high",
+        prevLevel: prev.price,
+        currentLevel: curr.price,
+        swingRange,
+        extension,
+      });
+    }
+  }
+
+  for (let i = 1; i < lows.length; i++) {
+    const prev = lows[i - 1];
+    const curr = lows[i];
+    if (curr.price < prev.price) {
+      // Find the highest high between these two lows for swing range calculation
+      const highestBetween = highs
+        .filter(h => h.index > prev.index && h.index < curr.index)
+        .reduce((max, h) => h.price > max ? h.price : max, prev.price);
+      const swingRange = highestBetween - prev.price;
+      const extensionAbs = prev.price - curr.price;
+      const extension = swingRange > 0 ? extensionAbs / swingRange : 0;
+      events.push({
+        index: curr.index,
+        swingType: "low",
+        prevLevel: prev.price,
+        currentLevel: curr.price,
+        swingRange,
+        extension,
+      });
+    }
+  }
+
+  // Sort chronologically
+  events.sort((a, b) => a.index - b.index);
+
+  // Walk through events, only flip trend on confirmed MSBs (extension >= fibFactor)
+  let currentTrend: "bullish" | "bearish" | "ranging" = "ranging";
+  let lastFlipIndex = -1;
+  const confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number }[] = [];
+
+  for (const evt of events) {
+    if (evt.extension < fibFactor) continue; // Not a confirmed MSB — skip
+
+    if (evt.swingType === "high") {
+      // Higher high with sufficient extension = bullish MSB
+      if (currentTrend !== "bullish") {
+        currentTrend = "bullish";
+        lastFlipIndex = evt.index;
+      }
+      confirmedMSBs.push({ type: "bullish", price: evt.currentLevel, extension: evt.extension });
+    } else {
+      // Lower low with sufficient extension = bearish MSB
+      if (currentTrend !== "bearish") {
+        currentTrend = "bearish";
+        lastFlipIndex = evt.index;
+      }
+      confirmedMSBs.push({ type: "bearish", price: evt.currentLevel, extension: evt.extension });
+    }
+  }
+
+  // Build reason string
+  const bullishMSBs = confirmedMSBs.filter(m => m.type === "bullish");
+  const bearishMSBs = confirmedMSBs.filter(m => m.type === "bearish");
+  const lastMSB = confirmedMSBs.length > 0 ? confirmedMSBs[confirmedMSBs.length - 1] : null;
+  const reason = currentTrend === "ranging"
+    ? `No confirmed MSBs (${events.length} breaks found, none exceeded ${(fibFactor * 100).toFixed(0)}% extension threshold)`
+    : `${currentTrend} (${bullishMSBs.length} bull MSBs, ${bearishMSBs.length} bear MSBs, last: ${lastMSB?.type} at ${lastMSB?.price.toFixed(5)} ext=${((lastMSB?.extension ?? 0) * 100).toFixed(0)}%)`;
+
+  return {
+    trend: currentTrend,
+    confirmedMSBs,
+    lastFlipIndex,
+    reason,
+  };
+}
 
 // ── Public types ──
 
@@ -34,12 +185,21 @@ interface DirectionConfig {
   h1BosLookback?: number;
   /** Minimum BOS count for 4H to be considered a "clear trend" in ranging daily fallback (default: 2) */
   h4MinBosForFallback?: number;
+  /** Fib extension factor for confirmedTrend (default: 0.25 = 25% of swing range) */
+  fibFactor?: number;
+  /** Swing lookback for confirmedTrend (default: 5, coarser than entry-level) */
+  trendSwingLookback?: number;
+  /** Whether to use confirmedTrend for bias determination (default: true) */
+  useConfirmedTrend?: boolean;
 }
 
 const DEFAULTS = {
   h4ChochLookback: 10,
   h1BosLookback: 8,
   h4MinBosForFallback: 2,
+  fibFactor: 0.25,
+  trendSwingLookback: 5,
+  useConfirmedTrend: true,
 };
 
 // ── Helper: extract recent breaks from structure ──
@@ -214,25 +374,53 @@ export function determineDirection(
     reason: "",
   };
 
+  const fibFactor = config?.fibFactor ?? DEFAULTS.fibFactor;
+  const trendSwingLookback = config?.trendSwingLookback ?? DEFAULTS.trendSwingLookback;
+  const useConfirmedTrend = config?.useConfirmedTrend ?? DEFAULTS.useConfirmedTrend;
+
   // ── Step 1: Determine bias from Daily ──
   let bias: "bullish" | "bearish" | null = null;
   let biasSource: "daily" | "4h" | null = null;
 
   if (dailyCandles && dailyCandles.length >= 20) {
-    const dailyStructure = analyzeMarketStructure(dailyCandles);
-    bias = trendToBias(dailyStructure.trend);
+    // Use confirmedTrend (fib-extension-filtered) for stable macro-trend determination
+    let dailyTrend: "bullish" | "bearish" | "ranging";
+    let dailyTrendReason: string;
+    if (useConfirmedTrend) {
+      const ct = confirmedTrend(dailyCandles, fibFactor, trendSwingLookback);
+      dailyTrend = ct.trend;
+      dailyTrendReason = `[confirmedTrend] ${ct.reason}`;
+    } else {
+      const dailyStructure = analyzeMarketStructure(dailyCandles);
+      dailyTrend = dailyStructure.trend;
+      dailyTrendReason = `[legacyTrend] last-2-swings`;
+    }
+    bias = trendToBias(dailyTrend);
 
     if (bias) {
       biasSource = "daily";
     } else {
       // Daily is ranging → Option C: fall back to 4H
-      const dailyRanging = rangingReason("Daily", dailyStructure);
+      const dailyStructure = analyzeMarketStructure(dailyCandles);
+      const dailyRanging = `Daily ranging (${dailyTrendReason})`;
       if (h4Candles && h4Candles.length >= 20) {
-        const h4Structure = analyzeMarketStructure(h4Candles);
-        const h4Bias = trendToBias(h4Structure.trend);
+        // Use confirmedTrend for 4H fallback too
+        let h4Trend: "bullish" | "bearish" | "ranging";
+        let h4TrendReason: string;
+        if (useConfirmedTrend) {
+          const ct = confirmedTrend(h4Candles, fibFactor, trendSwingLookback);
+          h4Trend = ct.trend;
+          h4TrendReason = `[confirmedTrend] ${ct.reason}`;
+        } else {
+          const h4Struct = analyzeMarketStructure(h4Candles);
+          h4Trend = h4Struct.trend;
+          h4TrendReason = `[legacyTrend] last-2-swings`;
+        }
+        const h4Bias = trendToBias(h4Trend);
 
         if (h4Bias) {
           // Verify 4H has clear structure: enough BOS, no recent CHoCH against
+          const h4Structure = analyzeMarketStructure(h4Candles);
           const recentH4Bos = h4Structure.bos.filter(b => b.type === h4Bias);
           const recentH4ChochAgainst = recentBreaks(
             h4Structure.choch, h4Candles.length, h4ChochLookback
@@ -250,10 +438,9 @@ export function determineDirection(
           }
         } else {
           // Both daily and 4H ranging → no trade
-          const h4Ranging = rangingReason("4H", h4Structure);
           return {
             ...noDirection,
-            reason: `${dailyRanging} | ${h4Ranging} → no directional edge, no trade`,
+            reason: `${dailyRanging} | 4H also ranging (${h4TrendReason}) → no directional edge, no trade`,
           };
         }
       } else {
