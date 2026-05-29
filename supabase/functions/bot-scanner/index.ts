@@ -68,6 +68,7 @@ import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmat
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -4610,18 +4611,41 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
-        let size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
-          positionSizingMethod: (pairConfig as any).positionSizingMethod,
-          fixedLotSize: (pairConfig as any).fixedLotSize,
-          atrValue: (analysis as any).atrValue,
-          atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-        }, rateMap, undefined, avgCommissionPerLot);
-        // Apply prop firm size reduction if near daily/drawdown limits
-        if (propFirmSizeMultiplier < 1.0 && propFirmSizeMultiplier > 0) {
-          const originalSize = size;
-          size = parseFloat((size * propFirmSizeMultiplier).toFixed(2));
-          if (size < 0.01) size = 0.01; // Minimum lot
-          console.log(`[prop-firm-gate] Size reduced: ${originalSize} → ${size} (${(propFirmSizeMultiplier * 100).toFixed(0)}% multiplier)`);
+        // ── Unified Position Sizing (volatility scaling + prop firm compliance) ──
+        // Portfolio heat and correlation checks are handled by Gates 6 & 22 above.
+        const volCtx: VolatilityContext | undefined = analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.atrTrend === "expanding" ? "high" :
+                  analysis.regimeInfo.regime === "choppy_range" ? "high" :
+                  analysis.regimeInfo.atrTrend === "contracting" ? "low" : "normal",
+          atrPercentile: undefined,
+        } : undefined;
+        const propFirmCtx: PropFirmContext | undefined = (propFirmGateResult?.enabled) ? {
+          enabled: true,
+          sizeMultiplier: propFirmSizeMultiplier,
+          dailyLossRemaining: undefined, // Already enforced by prop firm gate
+          maxDrawdownRemaining: undefined,
+        } : undefined;
+        const sizingResult = computePositionSize(
+          {
+            balance,
+            riskPercent: pairConfig.riskPerTrade,
+            entryPrice: analysis.lastPrice,
+            stopLoss: sl,
+            symbol: pair,
+            method: (pairConfig as any).positionSizingMethod || "percent_risk",
+            fixedLotSize: (pairConfig as any).fixedLotSize,
+            atrValue: (analysis as any).atrValue,
+            atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+            rateMap,
+            commissionPerLot: avgCommissionPerLot,
+          },
+          undefined, // No portfolio context — Gates 6 & 22 handle this
+          volCtx,
+          propFirmCtx,
+        );
+        let size = sizingResult.lots;
+        if (sizingResult.adjustments.length > 0) {
+          console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
@@ -4839,13 +4863,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
           }
 
-          // Recalculate position size based on limit entry price
-          const limitSize = calculatePositionSize(balance, pairConfig.riskPerTrade, limitEntry.price, limitSL, pair, {
-            positionSizingMethod: (pairConfig as any).positionSizingMethod,
-            fixedLotSize: (pairConfig as any).fixedLotSize,
-            atrValue: (analysis as any).atrValue,
-            atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-          }, rateMap, undefined, avgCommissionPerLot);
+          // Recalculate position size based on limit entry price (unified sizing)
+          const limitSizingResult = computePositionSize(
+            {
+              balance,
+              riskPercent: pairConfig.riskPerTrade,
+              entryPrice: limitEntry.price,
+              stopLoss: limitSL,
+              symbol: pair,
+              method: (pairConfig as any).positionSizingMethod || "percent_risk",
+              fixedLotSize: (pairConfig as any).fixedLotSize,
+              atrValue: (analysis as any).atrValue,
+              atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+              rateMap,
+              commissionPerLot: avgCommissionPerLot,
+            },
+            undefined, // No portfolio context — Gates handle this
+            volCtx,
+            propFirmCtx,
+          );
+          const limitSize = limitSizingResult.lots;
 
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
@@ -5173,13 +5210,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                      const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
                      const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;
                      const connCommRT = connUserComm > 0 ? connUserComm : connDetectedComm;
-                     brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair, {
-                       positionSizingMethod: (pairConfig as any).positionSizingMethod,
-                       fixedLotSize: (pairConfig as any).fixedLotSize,
-                       atrValue: (analysis as any).atrValue,
-                       atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-                     }, rateMap, undefined, connCommRT);
-                     console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
+                     // Unified sizing for broker mirror (volatility scaling applies)
+                     const brokerSizingResult = computePositionSize(
+                       {
+                         balance: brokerBalance,
+                         riskPercent: cappedRisk,
+                         entryPrice: analysis.lastPrice,
+                         stopLoss: sl,
+                         symbol: pair,
+                         method: (pairConfig as any).positionSizingMethod || "percent_risk",
+                         fixedLotSize: (pairConfig as any).fixedLotSize,
+                         atrValue: (analysis as any).atrValue,
+                         atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+                         rateMap,
+                         commissionPerLot: connCommRT,
+                       },
+                       undefined, // No portfolio context for broker
+                       volCtx,
+                       undefined, // No prop firm context for broker (broker has own limits)
+                     );
+                     brokerVolume = brokerSizingResult.lots;
+                     console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})${brokerSizingResult.adjustments.length > 0 ? ` [${brokerSizingResult.adjustments.map(a => a.type).join(",")}]` : ""}`);
                    } catch (balErr: any) {
                      console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);
                      mirrorResults.push(`${conn.display_name}: skipped (balance error)`);
