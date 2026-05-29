@@ -68,6 +68,9 @@ import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmat
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
+import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
+import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -1577,6 +1580,7 @@ Deno.serve(async (req) => {
 async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
+  const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const scanCycleId = crypto.randomUUID();
 
@@ -4610,18 +4614,72 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
-        let size = calculatePositionSize(balance, pairConfig.riskPerTrade, analysis.lastPrice, sl, pair, {
-          positionSizingMethod: (pairConfig as any).positionSizingMethod,
-          fixedLotSize: (pairConfig as any).fixedLotSize,
-          atrValue: (analysis as any).atrValue,
-          atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-        }, rateMap, undefined, avgCommissionPerLot);
-        // Apply prop firm size reduction if near daily/drawdown limits
-        if (propFirmSizeMultiplier < 1.0 && propFirmSizeMultiplier > 0) {
-          const originalSize = size;
-          size = parseFloat((size * propFirmSizeMultiplier).toFixed(2));
-          if (size < 0.01) size = 0.01; // Minimum lot
-          console.log(`[prop-firm-gate] Size reduced: ${originalSize} → ${size} (${(propFirmSizeMultiplier * 100).toFixed(0)}% multiplier)`);
+        // ── Portfolio Correlation Advisory (post-gate soft check) ──
+        // Runs AFTER all 21 gates pass. Does NOT block trades — logs exposure and optionally reduces size.
+        let correlationSizeMultiplier = 1.0;
+        try {
+          const portfolioCheck = checkPortfolioConflict(
+            { symbol: pair, direction: analysis.direction as "long" | "short", size: 0.01 }, // size doesn't matter for correlation check
+            openPosArr.filter((p: any) => p.position_status === "open").map((p: any) => ({
+              symbol: p.symbol, direction: p.direction as "long" | "short",
+              size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
+            })),
+            { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
+          );
+          if (portfolioCheck.concentrationScore > 0.5) {
+            // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
+            correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
+            console.log(`[${pair}] ⚠️ Portfolio correlation advisory: concentration=${(portfolioCheck.concentrationScore * 100).toFixed(0)}%, size multiplier=${correlationSizeMultiplier.toFixed(2)}. Conflicts: ${portfolioCheck.conflicts.map(c => c.detail).join("; ") || "none"}`);
+            detail.correlationAdvisory = {
+              concentrationScore: portfolioCheck.concentrationScore,
+              sizeMultiplier: correlationSizeMultiplier,
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
+              currencyExposure: portfolioCheck.currencyExposure,
+            };
+          }
+        } catch (corrErr: any) {
+          console.warn(`[${pair}] Portfolio correlation check error (non-blocking): ${corrErr?.message}`);
+        }
+
+        // ── Unified Position Sizing (volatility scaling + prop firm compliance) ──
+        // Portfolio heat and correlation checks are handled by Gates 6 & 22 above.
+        const volCtx: VolatilityContext | undefined = analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.atrTrend === "expanding" ? "high" :
+                  analysis.regimeInfo.regime === "choppy_range" ? "high" :
+                  analysis.regimeInfo.atrTrend === "contracting" ? "low" : "normal",
+          atrPercentile: undefined,
+        } : undefined;
+        const propFirmCtx: PropFirmContext | undefined = (propFirmGateResult?.enabled) ? {
+          enabled: true,
+          sizeMultiplier: propFirmSizeMultiplier,
+          dailyLossRemaining: undefined, // Already enforced by prop firm gate
+          maxDrawdownRemaining: undefined,
+        } : undefined;
+        const sizingResult = computePositionSize(
+          {
+            balance,
+            riskPercent: pairConfig.riskPerTrade,
+            entryPrice: analysis.lastPrice,
+            stopLoss: sl,
+            symbol: pair,
+            method: (pairConfig as any).positionSizingMethod || "percent_risk",
+            fixedLotSize: (pairConfig as any).fixedLotSize,
+            atrValue: (analysis as any).atrValue,
+            atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+            rateMap,
+            commissionPerLot: avgCommissionPerLot,
+          },
+          undefined, // No portfolio context — Gates 6 & 22 handle this
+          volCtx,
+          propFirmCtx,
+        );
+        let size = sizingResult.lots;
+        if (correlationSizeMultiplier < 1.0) {
+          size = Math.round(size * correlationSizeMultiplier * 100) / 100;
+          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
+        }
+        if (sizingResult.adjustments.length > 0) {
+          console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
@@ -4839,13 +4897,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
           }
 
-          // Recalculate position size based on limit entry price
-          const limitSize = calculatePositionSize(balance, pairConfig.riskPerTrade, limitEntry.price, limitSL, pair, {
-            positionSizingMethod: (pairConfig as any).positionSizingMethod,
-            fixedLotSize: (pairConfig as any).fixedLotSize,
-            atrValue: (analysis as any).atrValue,
-            atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-          }, rateMap, undefined, avgCommissionPerLot);
+          // Recalculate position size based on limit entry price (unified sizing)
+          const limitSizingResult = computePositionSize(
+            {
+              balance,
+              riskPercent: pairConfig.riskPerTrade,
+              entryPrice: limitEntry.price,
+              stopLoss: limitSL,
+              symbol: pair,
+              method: (pairConfig as any).positionSizingMethod || "percent_risk",
+              fixedLotSize: (pairConfig as any).fixedLotSize,
+              atrValue: (analysis as any).atrValue,
+              atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+              rateMap,
+              commissionPerLot: avgCommissionPerLot,
+            },
+            undefined, // No portfolio context — Gates handle this
+            volCtx,
+            propFirmCtx,
+          );
+          const limitSize = limitSizingResult.lots;
 
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
@@ -5069,6 +5140,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               for (const conn of connections) {
                 try {
+                  // ── Circuit Breaker: skip connections that have failed repeatedly ──
+                  const connHealth = brokerHealthMap[conn.id] || createInitialHealth(conn.id);
+                  if (!isConnectionAvailable(connHealth)) {
+                    mirrorResults.push(`${conn.display_name}: skipped (circuit-breaker open until ${connHealth.cooldownUntil})`);
+                    continue;
+                  }
                   if (conn.broker_type !== "metaapi") {
                     // ── Unified spread check for OANDA ──
                     const oandaSpread = await fetchBrokerSpread(conn, pair, pairConfig);
@@ -5110,6 +5187,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                       mirroredConnIds.push(conn.id);
+                      // Circuit breaker: record success
+                      brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
                       // Auto-detect commission from OANDA fill response
                       try {
                         const fillTx = parsedEx?.orderFillTransaction || parsedEx?.data?.orderFillTransaction;
@@ -5132,6 +5211,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       const reason = parsedEx?.error || exBody.slice(0, 200);
                       console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
                       mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
+                      // Circuit breaker: record failure (transient if HTTP error, permanent if auth)
+                      const isTransient = !reason.includes("auth") && !reason.includes("invalid");
+                      brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: reason, isTransient });
                     }
                     continue;
                   }
@@ -5173,13 +5255,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                      const connUserComm = parseFloat(conn.commission_per_lot ?? "0");
                      const connDetectedComm = parseFloat(conn.detected_commission_per_lot ?? "0") * 2;
                      const connCommRT = connUserComm > 0 ? connUserComm : connDetectedComm;
-                     brokerVolume = calculatePositionSize(brokerBalance, cappedRisk, analysis.lastPrice, sl, pair, {
-                       positionSizingMethod: (pairConfig as any).positionSizingMethod,
-                       fixedLotSize: (pairConfig as any).fixedLotSize,
-                       atrValue: (analysis as any).atrValue,
-                       atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
-                     }, rateMap, undefined, connCommRT);
-                     console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})`);
+                     // Unified sizing for broker mirror (volatility scaling applies)
+                     const brokerSizingResult = computePositionSize(
+                       {
+                         balance: brokerBalance,
+                         riskPercent: cappedRisk,
+                         entryPrice: analysis.lastPrice,
+                         stopLoss: sl,
+                         symbol: pair,
+                         method: (pairConfig as any).positionSizingMethod || "percent_risk",
+                         fixedLotSize: (pairConfig as any).fixedLotSize,
+                         atrValue: (analysis as any).atrValue,
+                         atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier,
+                         rateMap,
+                         commissionPerLot: connCommRT,
+                       },
+                       undefined, // No portfolio context for broker
+                       volCtx,
+                       undefined, // No prop firm context for broker (broker has own limits)
+                     );
+                     brokerVolume = brokerSizingResult.lots;
+                     console.log(`[${conn.display_name} $${brokerBalance.toFixed(2)}] risk=${cappedRisk}% → size=${brokerVolume} (paper size was ${size})${brokerSizingResult.adjustments.length > 0 ? ` [${brokerSizingResult.adjustments.map(a => a.type).join(",")}]` : ""}`);
                    } catch (balErr: any) {
                      console.warn(`Broker balance error [${conn.display_name}]: ${balErr?.message} — skipping mirror`);
                      mirrorResults.push(`${conn.display_name}: skipped (balance error)`);
@@ -5246,9 +5342,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                          if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
                            console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
                            mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                           // Circuit breaker: broker rejection is NOT transient (won't open circuit)
+                           brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: parsed.stringCode, isTransient: false });
                         } else {
                           mirrorResults.push(`${conn.display_name}: success`);
                           mirroredConnIds.push(conn.id);
+                          // Circuit breaker: record success
+                          brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
                           // Auto-detect commission from MetaApi trade response
                           try {
                             const orderId = parsed.orderId || parsed.positionId;
@@ -5282,10 +5382,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                    } else {
                      console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
+                     // Circuit breaker: record failure
+                     const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
+                     brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
+                  // Circuit breaker: record transient failure
+                  brokerHealthMap[conn.id] = updateHealth(connHealth, {
+                    connectionId: conn.id, success: false, latencyMs: 0,
+                    error: connErr?.message || "unknown", isTransient: true,
+                  });
                 }
               }
               detail.mt5Mirror = mirrorResults.join("; ");

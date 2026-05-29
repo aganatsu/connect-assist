@@ -44,8 +44,17 @@ async function fetchLivePrice(symbol: string): Promise<number | null> {
 /**
  * Fetch recent 15-minute candles from TwelveData and compute ATR(14).
  * Returns 0 if data is unavailable (graceful degradation to static floor only).
+ * Results are cached for 15 minutes per symbol to reduce API calls.
  */
+const ATR_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const atrCache: Map<string, { value: number; expiresAt: number }> = new Map();
+
 async function fetchATR(symbol: string): Promise<number> {
+  // Check cache first
+  const cached = atrCache.get(symbol);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.value;
+  }
   const apiKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (!apiKey) return 0;
   const tdSymbol = TWELVE_DATA_SYMBOLS[symbol];
@@ -64,7 +73,10 @@ async function fetchATR(symbol: string): Promise<number> {
       Number.isFinite(c.open) && Number.isFinite(c.high) &&
       Number.isFinite(c.low) && Number.isFinite(c.close)
     );
-    return calculateATR(candles, 14);
+    const atr = calculateATR(candles, 14);
+    // Cache the result
+    atrCache.set(symbol, { value: atr, expiresAt: Date.now() + ATR_CACHE_TTL_MS });
+    return atr;
   } catch {
     return 0;
   }
