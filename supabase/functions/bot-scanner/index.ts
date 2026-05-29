@@ -70,6 +70,7 @@ import { validatePendingOrderThesis, type ThesisValidationResult } from "../_sha
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
+import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -4613,6 +4614,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
+        // ── Portfolio Correlation Advisory (post-gate soft check) ──
+        // Runs AFTER all 21 gates pass. Does NOT block trades — logs exposure and optionally reduces size.
+        let correlationSizeMultiplier = 1.0;
+        try {
+          const portfolioCheck = checkPortfolioConflict(
+            { symbol: pair, direction: analysis.direction as "long" | "short", size: 0.01 }, // size doesn't matter for correlation check
+            openPosArr.filter((p: any) => p.position_status === "open").map((p: any) => ({
+              symbol: p.symbol, direction: p.direction as "long" | "short",
+              size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
+            })),
+            { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
+          );
+          if (portfolioCheck.concentrationScore > 0.5) {
+            // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
+            correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
+            console.log(`[${pair}] ⚠️ Portfolio correlation advisory: concentration=${(portfolioCheck.concentrationScore * 100).toFixed(0)}%, size multiplier=${correlationSizeMultiplier.toFixed(2)}. Conflicts: ${portfolioCheck.conflicts.map(c => c.detail).join("; ") || "none"}`);
+            detail.correlationAdvisory = {
+              concentrationScore: portfolioCheck.concentrationScore,
+              sizeMultiplier: correlationSizeMultiplier,
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
+              currencyExposure: portfolioCheck.currencyExposure,
+            };
+          }
+        } catch (corrErr: any) {
+          console.warn(`[${pair}] Portfolio correlation check error (non-blocking): ${corrErr?.message}`);
+        }
+
         // ── Unified Position Sizing (volatility scaling + prop firm compliance) ──
         // Portfolio heat and correlation checks are handled by Gates 6 & 22 above.
         const volCtx: VolatilityContext | undefined = analysis.regimeInfo ? {
@@ -4646,6 +4674,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           propFirmCtx,
         );
         let size = sizingResult.lots;
+        if (correlationSizeMultiplier < 1.0) {
+          size = Math.round(size * correlationSizeMultiplier * 100) / 100;
+          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
+        }
         if (sizingResult.adjustments.length > 0) {
           console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
