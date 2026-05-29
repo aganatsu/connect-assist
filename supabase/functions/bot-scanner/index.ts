@@ -69,6 +69,7 @@ import { determineDirection, type DirectionResult } from "../_shared/directionEn
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
+import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -1578,6 +1579,7 @@ Deno.serve(async (req) => {
 async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
+  const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
   const scanCycleId = crypto.randomUUID();
 
@@ -5106,6 +5108,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
               for (const conn of connections) {
                 try {
+                  // ── Circuit Breaker: skip connections that have failed repeatedly ──
+                  const connHealth = brokerHealthMap[conn.id] || createInitialHealth(conn.id);
+                  if (!isConnectionAvailable(connHealth)) {
+                    mirrorResults.push(`${conn.display_name}: skipped (circuit-breaker open until ${connHealth.cooldownUntil})`);
+                    continue;
+                  }
                   if (conn.broker_type !== "metaapi") {
                     // ── Unified spread check for OANDA ──
                     const oandaSpread = await fetchBrokerSpread(conn, pair, pairConfig);
@@ -5147,6 +5155,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                       mirroredConnIds.push(conn.id);
+                      // Circuit breaker: record success
+                      brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
                       // Auto-detect commission from OANDA fill response
                       try {
                         const fillTx = parsedEx?.orderFillTransaction || parsedEx?.data?.orderFillTransaction;
@@ -5169,6 +5179,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       const reason = parsedEx?.error || exBody.slice(0, 200);
                       console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
                       mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
+                      // Circuit breaker: record failure (transient if HTTP error, permanent if auth)
+                      const isTransient = !reason.includes("auth") && !reason.includes("invalid");
+                      brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: reason, isTransient });
                     }
                     continue;
                   }
@@ -5297,9 +5310,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                          if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
                            console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
                            mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
+                           // Circuit breaker: broker rejection is NOT transient (won't open circuit)
+                           brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: parsed.stringCode, isTransient: false });
                         } else {
                           mirrorResults.push(`${conn.display_name}: success`);
                           mirroredConnIds.push(conn.id);
+                          // Circuit breaker: record success
+                          brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
                           // Auto-detect commission from MetaApi trade response
                           try {
                             const orderId = parsed.orderId || parsed.positionId;
@@ -5333,10 +5350,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                    } else {
                      console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
+                     // Circuit breaker: record failure
+                     const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
+                     brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
+                  // Circuit breaker: record transient failure
+                  brokerHealthMap[conn.id] = updateHealth(connHealth, {
+                    connectionId: conn.id, success: false, latencyMs: 0,
+                    error: connErr?.message || "unknown", isTransient: true,
+                  });
                 }
               }
               detail.mt5Mirror = mirrorResults.join("; ");
