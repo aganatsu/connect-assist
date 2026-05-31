@@ -17,7 +17,7 @@ import { analyzeMarketStructure, detectSwingPoints, calculateATR, type Candle, t
 
 export interface ConfirmedTrendResult {
   trend: "bullish" | "bearish" | "ranging";
-  confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number }[];
+  confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number; closeBased: boolean }[];
   lastFlipIndex: number;  // candle index of the last confirmed trend flip
   reason: string;
 }
@@ -29,10 +29,10 @@ export interface ConfirmedTrendResult {
  * this function only flips the trend when a swing break exceeds the previous swing
  * by a configurable percentage of the swing range (like TradingView's MSB indicator).
  *
- * This provides:
- *   - Hysteresis: trend doesn't flip on noise
- *   - Stability: requires decisive breaks, not marginal ones
- *   - Coarser swings: uses lookback=5 + higher ATR filter for significant pivots only
+ * Three pillars of robustness (based on LuxAlgo, zazenio, ICT MSS research):
+ *   1. Fib extension filter: break must exceed X% of swing range
+ *   2. Close-based confirmation: candle must CLOSE beyond the previous swing level
+ *   3. Alternation enforcement: H→L→H→L state machine prevents double-counting
  *
  * @param candles - Price candles (daily or 4H)
  * @param fibFactor - Minimum extension beyond previous swing as fraction of swing range (default: 0.25 = 25%)
@@ -54,33 +54,62 @@ export function confirmedTrend(
 
   // Use coarser swing detection with higher ATR filter for significant pivots
   const atrFilter = 0.4; // 40% of ATR — only significant swings
-  const swings = detectSwingPoints(candles, swingLookback, atrFilter);
+  const rawSwings = detectSwingPoints(candles, swingLookback, atrFilter);
+
+  // ── Alternation Enforcement (Pillar 3) ──
+  // Enforce strict H→L→H→L alternation like LuxAlgo's `os` state machine.
+  // When two consecutive same-direction swings appear, keep the more extreme one.
+  const swings: SwingPoint[] = [];
+  for (const swing of rawSwings) {
+    if (swings.length === 0) {
+      swings.push(swing);
+      continue;
+    }
+    const last = swings[swings.length - 1];
+    if (swing.type === last.type) {
+      // Same direction — keep the more extreme one
+      if (swing.type === "high" && swing.price > last.price) {
+        swings[swings.length - 1] = swing; // replace with higher high
+      } else if (swing.type === "low" && swing.price < last.price) {
+        swings[swings.length - 1] = swing; // replace with lower low
+      }
+      // Otherwise discard the new one (less extreme)
+    } else {
+      swings.push(swing); // Alternation maintained
+    }
+  }
 
   const highs = swings.filter(s => s.type === "high");
   const lows = swings.filter(s => s.type === "low");
 
   if (highs.length < 2 || lows.length < 2) {
-    return { ...noTrend, reason: `insufficient swings (${highs.length} highs, ${lows.length} lows)` };
+    return { ...noTrend, reason: `insufficient swings after alternation (${highs.length} highs, ${lows.length} lows)` };
   }
 
-  // Process swing breaks chronologically with fib extension filter
+  // Process swing breaks chronologically with fib extension + close-based filter
   type BreakEvent = {
     index: number;
     swingType: "high" | "low";
     prevLevel: number;
     currentLevel: number;
-    swingRange: number; // range between the broken swing and the opposite extreme
-    extension: number;  // how far past the previous swing (as fraction of swingRange)
+    swingRange: number;
+    extension: number;
+    closeBased: boolean; // true = candle CLOSE confirmed the break
   };
 
   const events: BreakEvent[] = [];
 
-  // For each consecutive pair of swing highs, check if the later one broke the earlier
+  // ── Close-Based Confirmation (Pillar 2) ──
+  // A break only counts if the candle at the swing point CLOSED beyond the previous level.
+  // This filters out liquidity sweeps (wick through + close back).
+
   for (let i = 1; i < highs.length; i++) {
     const prev = highs[i - 1];
     const curr = highs[i];
-    if (curr.price > prev.price) {
-      // Find the lowest low between these two highs for swing range calculation
+    // Close-based: the candle that formed this swing high must have CLOSED above prev swing high
+    const candleClose = candles[curr.index].close;
+    const closedAbove = candleClose > prev.price;
+    if (curr.price > prev.price && closedAbove) {
       const lowestBetween = lows
         .filter(l => l.index > prev.index && l.index < curr.index)
         .reduce((min, l) => l.price < min ? l.price : min, prev.price);
@@ -94,6 +123,7 @@ export function confirmedTrend(
         currentLevel: curr.price,
         swingRange,
         extension,
+        closeBased: true,
       });
     }
   }
@@ -101,8 +131,10 @@ export function confirmedTrend(
   for (let i = 1; i < lows.length; i++) {
     const prev = lows[i - 1];
     const curr = lows[i];
-    if (curr.price < prev.price) {
-      // Find the highest high between these two lows for swing range calculation
+    // Close-based: the candle that formed this swing low must have CLOSED below prev swing low
+    const candleClose = candles[curr.index].close;
+    const closedBelow = candleClose < prev.price;
+    if (curr.price < prev.price && closedBelow) {
       const highestBetween = highs
         .filter(h => h.index > prev.index && h.index < curr.index)
         .reduce((max, h) => h.price > max ? h.price : max, prev.price);
@@ -116,6 +148,7 @@ export function confirmedTrend(
         currentLevel: curr.price,
         swingRange,
         extension,
+        closeBased: true,
       });
     }
   }
@@ -123,28 +156,29 @@ export function confirmedTrend(
   // Sort chronologically
   events.sort((a, b) => a.index - b.index);
 
+  // ── Fib Extension Filter (Pillar 1) ──
   // Walk through events, only flip trend on confirmed MSBs (extension >= fibFactor)
   let currentTrend: "bullish" | "bearish" | "ranging" = "ranging";
   let lastFlipIndex = -1;
-  const confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number }[] = [];
+  const confirmedMSBs: { type: "bullish" | "bearish"; price: number; extension: number; closeBased: boolean }[] = [];
 
   for (const evt of events) {
     if (evt.extension < fibFactor) continue; // Not a confirmed MSB — skip
 
     if (evt.swingType === "high") {
-      // Higher high with sufficient extension = bullish MSB
+      // Higher high with sufficient extension + close confirmation = bullish MSB
       if (currentTrend !== "bullish") {
         currentTrend = "bullish";
         lastFlipIndex = evt.index;
       }
-      confirmedMSBs.push({ type: "bullish", price: evt.currentLevel, extension: evt.extension });
+      confirmedMSBs.push({ type: "bullish", price: evt.currentLevel, extension: evt.extension, closeBased: evt.closeBased });
     } else {
-      // Lower low with sufficient extension = bearish MSB
+      // Lower low with sufficient extension + close confirmation = bearish MSB
       if (currentTrend !== "bearish") {
         currentTrend = "bearish";
         lastFlipIndex = evt.index;
       }
-      confirmedMSBs.push({ type: "bearish", price: evt.currentLevel, extension: evt.extension });
+      confirmedMSBs.push({ type: "bearish", price: evt.currentLevel, extension: evt.extension, closeBased: evt.closeBased });
     }
   }
 
@@ -153,8 +187,8 @@ export function confirmedTrend(
   const bearishMSBs = confirmedMSBs.filter(m => m.type === "bearish");
   const lastMSB = confirmedMSBs.length > 0 ? confirmedMSBs[confirmedMSBs.length - 1] : null;
   const reason = currentTrend === "ranging"
-    ? `No confirmed MSBs (${events.length} breaks found, none exceeded ${(fibFactor * 100).toFixed(0)}% extension threshold)`
-    : `${currentTrend} (${bullishMSBs.length} bull MSBs, ${bearishMSBs.length} bear MSBs, last: ${lastMSB?.type} at ${lastMSB?.price.toFixed(5)} ext=${((lastMSB?.extension ?? 0) * 100).toFixed(0)}%)`;
+    ? `No confirmed MSBs (${events.length} close-confirmed breaks found, none exceeded ${(fibFactor * 100).toFixed(0)}% extension threshold)`
+    : `${currentTrend} (${bullishMSBs.length} bull MSBs, ${bearishMSBs.length} bear MSBs, last: ${lastMSB?.type} at ${lastMSB?.price.toFixed(5)} ext=${((lastMSB?.extension ?? 0) * 100).toFixed(0)}% close-confirmed)`;
 
   return {
     trend: currentTrend,

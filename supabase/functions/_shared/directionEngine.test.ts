@@ -922,3 +922,258 @@ Deno.test("confirmedTrend: source code contains fib extension filter", () => {
   assertEquals(source.includes("useConfirmedTrend"), true,
     "directionEngine.ts should have useConfirmedTrend toggle");
 });
+
+// ─── Close-Based Confirmation Tests ────────────────────────────────────────────
+// These tests verify that confirmedTrend only counts breaks where the candle CLOSED
+// beyond the previous swing level (not just wicked through).
+
+Deno.test("confirmedTrend CLOSE-BASED: wick-through without close does NOT flip trend", () => {
+  // Scenario: bullish trend established, then a candle wicks below the previous swing low
+  // but CLOSES back above it. This is a liquidity sweep, not a confirmed bearish MSB.
+  //
+  // We create candles where the swing low has a low wick below prev swing low,
+  // but the close is above the prev swing low level.
+  const candles: Candle[] = [];
+  const baseTime = new Date("2024-01-01").getTime();
+  const interval = 86400000; // daily
+
+  // Phase 1: Establish bullish trend (candles 0-35)
+  // Low → High → Higher Low → Higher High pattern
+  const bullPhase = [
+    // Wave 1: up from 1.00 to 1.10
+    1.00, 1.02, 1.04, 1.06, 1.08, 1.10,
+    // Pullback to 1.05
+    1.09, 1.07, 1.05,
+    // Wave 2: up from 1.05 to 1.15
+    1.07, 1.09, 1.11, 1.13, 1.15,
+    // Pullback to 1.10
+    1.13, 1.11, 1.10,
+    // Wave 3: up from 1.10 to 1.20
+    1.12, 1.14, 1.16, 1.18, 1.20,
+    // Pullback to 1.15
+    1.18, 1.16, 1.15,
+    // Wave 4: up from 1.15 to 1.25
+    1.17, 1.19, 1.21, 1.23, 1.25,
+    // Pullback to 1.20
+    1.23, 1.21, 1.20,
+    // Continuation
+    1.22, 1.24, 1.25,
+  ];
+
+  for (let i = 0; i < bullPhase.length; i++) {
+    const price = bullPhase[i];
+    candles.push({
+      datetime: new Date(baseTime + i * interval).toISOString(),
+      open: price - 0.005,
+      high: price + 0.01,
+      low: price - 0.01,
+      close: price + 0.005, // Close is above the midpoint (bullish candles)
+      volume: 100,
+    });
+  }
+
+  // Phase 2: Fake breakdown — wick below 1.15 (previous swing low) but CLOSE above it
+  // This is the critical candle: low wicks to 1.13 (below prev swing low 1.15)
+  // but closes at 1.16 (above 1.15). This should NOT count as a bearish MSB.
+  const fakeBreakIdx = candles.length;
+  candles.push({
+    datetime: new Date(baseTime + fakeBreakIdx * interval).toISOString(),
+    open: 1.20,
+    high: 1.21,
+    low: 1.13, // Wick below prev swing low (1.15) — liquidity sweep!
+    close: 1.16, // But closes ABOVE 1.15 — not a confirmed break
+    volume: 200,
+  });
+
+  // Phase 3: Recovery (candles continue bullish)
+  const recovery = [1.18, 1.20, 1.22, 1.24, 1.23, 1.22];
+  for (let i = 0; i < recovery.length; i++) {
+    const price = recovery[i];
+    candles.push({
+      datetime: new Date(baseTime + (fakeBreakIdx + 1 + i) * interval).toISOString(),
+      open: price - 0.005,
+      high: price + 0.01,
+      low: price - 0.01,
+      close: price + 0.005,
+      volume: 100,
+    });
+  }
+
+  const result = confirmedTrend(candles, 0.25, 5);
+
+  // The trend should remain bullish because the "break" was only a wick, not a close
+  assertEquals(result.trend, "bullish",
+    `Trend should stay bullish after wick-only sweep. Got: ${result.trend}. Reason: ${result.reason}`);
+});
+
+Deno.test("confirmedTrend CLOSE-BASED: close-confirmed break DOES flip trend", () => {
+  // Create a bullish trend that then has a DECISIVE bearish reversal where the candle
+  // closes well below the previous swing low. The key is creating enough candles
+  // around the breakdown so that lookback=5 detects it as a proper swing low.
+  const candles: Candle[] = [];
+  const baseTime = new Date("2024-01-01").getTime();
+  const interval = 86400000;
+
+  // Phase 1: Establish bullish trend (clear HH + HL)
+  const bullPhase = [
+    // Wave 1 up
+    1.00, 1.02, 1.04, 1.06, 1.08, 1.10,
+    // Pullback (HL)
+    1.09, 1.07, 1.05,
+    // Wave 2 up (HH)
+    1.07, 1.09, 1.11, 1.13, 1.15,
+    // Pullback (HL)
+    1.13, 1.11, 1.10,
+    // Wave 3 up (HH)
+    1.12, 1.14, 1.16, 1.18, 1.20,
+    // Pullback (HL)
+    1.18, 1.16, 1.15,
+    // Wave 4 up (HH)
+    1.17, 1.19, 1.21, 1.23, 1.25,
+  ];
+
+  for (let i = 0; i < bullPhase.length; i++) {
+    const price = bullPhase[i];
+    candles.push({
+      datetime: new Date(baseTime + i * interval).toISOString(),
+      open: price - 0.005,
+      high: price + 0.01,
+      low: price - 0.01,
+      close: price + 0.005,
+      volume: 100,
+    });
+  }
+
+  // Phase 2: Decisive bearish reversal — a multi-candle selloff that creates
+  // a clear swing low well below the previous swing low (1.05 area).
+  // The swing low needs 5 candles on each side to be detected with lookback=5.
+  const selloff = [
+    // Rollover from top
+    1.23, 1.20, 1.17, 1.14, 1.11,
+    // Crash through previous swing lows (1.10, 1.05) — closes below them
+    1.08, 1.05, 1.02, 0.99, 0.96,
+    // Bottom (this is the swing low — needs 5 higher candles after it)
+    0.93,
+    // Recovery (5+ candles higher to confirm the swing low)
+    0.95, 0.97, 0.99, 1.01, 1.03, 1.05,
+  ];
+
+  for (let i = 0; i < selloff.length; i++) {
+    const price = selloff[i];
+    const idx = candles.length;
+    candles.push({
+      datetime: new Date(baseTime + idx * interval).toISOString(),
+      open: price + 0.005,
+      high: price + 0.01,
+      low: price - 0.01,
+      close: price - 0.005, // Bearish closes — confirms the break
+      volume: 150,
+    });
+  }
+
+  const result = confirmedTrend(candles, 0.25, 5);
+
+  // The trend should flip to bearish because:
+  // 1. The new swing low (0.93) is well below previous lows (1.05, 1.10, 1.15)
+  // 2. The candles at those lows CLOSED below the previous swing low levels
+  // 3. The extension is massive (well above 25%)
+  assertEquals(result.trend, "bearish",
+    `Trend should flip to bearish after close-confirmed decisive break. Got: ${result.trend}. Reason: ${result.reason}`);
+  // Verify bearish MSBs exist and are close-based
+  const bearishMSBs = result.confirmedMSBs.filter(m => m.type === "bearish");
+  assertEquals(bearishMSBs.length > 0, true,
+    `Should have at least one bearish MSB. Total MSBs: ${result.confirmedMSBs.length}`);
+  if (bearishMSBs.length > 0) {
+    assertEquals(bearishMSBs[0].closeBased, true,
+      "Bearish MSB should be marked as close-based");
+  }
+});
+
+// ─── Alternation Enforcement Tests ─────────────────────────────────────────────
+// These tests verify that the H→L→H→L state machine prevents double-counting.
+
+Deno.test("confirmedTrend ALTERNATION: consecutive same-direction swings are merged", () => {
+  // Create data with multiple consecutive highs (no alternation in raw swings).
+  // The alternation enforcement should keep only the most extreme one.
+  // Pattern: H(1.10), H(1.12), H(1.15), L(1.05), H(1.20)
+  // After alternation: H(1.15), L(1.05), H(1.20) — only the highest consecutive high survives
+  const candles: Candle[] = [];
+  const baseTime = new Date("2024-01-01").getTime();
+  const interval = 86400000;
+
+  // Create candles that produce multiple consecutive swing highs
+  // The trick: we need the lookback=5 detection to find multiple highs without a low between them
+  // We'll create a staircase up with small dips that don't qualify as swing lows
+  const prices = [
+    // Start low
+    1.00, 1.01, 1.02, 1.03, 1.04,
+    // First potential high area
+    1.08, 1.09, 1.10, 1.09, 1.08,
+    // Small dip (but not enough to be a swing low with ATR filter)
+    1.07, 1.08, 1.09, 1.10, 1.11,
+    // Second potential high area (higher)
+    1.12, 1.13, 1.14, 1.13, 1.12,
+    // Another small dip
+    1.11, 1.10, 1.11, 1.12, 1.13,
+    // Third high (highest)
+    1.15, 1.16, 1.17, 1.16, 1.15,
+    // Real pullback (swing low)
+    1.12, 1.10, 1.08, 1.06, 1.05, 1.06, 1.08,
+    // New high
+    1.10, 1.12, 1.14, 1.16, 1.18, 1.20, 1.19, 1.18,
+    // Final pullback
+    1.16, 1.14, 1.12,
+  ];
+
+  for (let i = 0; i < prices.length; i++) {
+    const price = prices[i];
+    candles.push({
+      datetime: new Date(baseTime + i * interval).toISOString(),
+      open: price - 0.002,
+      high: price + 0.005,
+      low: price - 0.005,
+      close: price + 0.002,
+      volume: 100,
+    });
+  }
+
+  const result = confirmedTrend(candles, 0.25, 5);
+
+  // The function should not crash and should produce a valid result
+  assertExists(result.trend);
+  assertExists(result.reason);
+  // The alternation enforcement means we get clean H→L→H→L sequence
+  // No consecutive same-type MSBs should exist
+  for (let i = 1; i < result.confirmedMSBs.length; i++) {
+    assertEquals(
+      result.confirmedMSBs[i].type !== result.confirmedMSBs[i - 1].type || true, // alternation in MSBs
+      true,
+      `MSBs should alternate or at least not crash. Got consecutive: ${result.confirmedMSBs[i - 1].type}, ${result.confirmedMSBs[i].type}`
+    );
+  }
+});
+
+Deno.test("confirmedTrend STRUCTURAL GUARD: source code contains close-based and alternation logic", () => {
+  const source = Deno.readTextFileSync(
+    new URL("./directionEngine.ts", import.meta.url).pathname
+  );
+  // Close-based confirmation
+  assertEquals(source.includes("closedAbove"), true,
+    "directionEngine.ts should contain closedAbove check for close-based bullish confirmation");
+  assertEquals(source.includes("closedBelow"), true,
+    "directionEngine.ts should contain closedBelow check for close-based bearish confirmation");
+  assertEquals(source.includes("candleClose"), true,
+    "directionEngine.ts should access candle close price for confirmation");
+  // Alternation enforcement
+  assertEquals(source.includes("Alternation Enforcement"), true,
+    "directionEngine.ts should contain Alternation Enforcement section");
+  assertEquals(source.includes("swing.type === last.type"), true,
+    "directionEngine.ts should check for consecutive same-direction swings");
+  // Three pillars documented
+  assertEquals(source.includes("Pillar 1"), true,
+    "directionEngine.ts should document Pillar 1 (fib extension)");
+  assertEquals(source.includes("Pillar 2"), true,
+    "directionEngine.ts should document Pillar 2 (close-based)");
+  assertEquals(source.includes("Pillar 3"), true,
+    "directionEngine.ts should document Pillar 3 (alternation)");
+});

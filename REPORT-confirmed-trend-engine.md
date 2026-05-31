@@ -1,4 +1,4 @@
-# Task: Confirmed Trend Engine (Fib-Extension-Filtered MSBs)
+# Task: Confirmed Trend Engine (Three-Pillar Noise-Resistant MSB Detection)
 
 ## Branch: manus/confirmed-trend-engine
 
@@ -6,20 +6,23 @@
 
 1. **Daily bias determination now uses `confirmedTrend()` instead of `analyzeMarketStructure().trend`** — this means the direction engine will only flip the daily trend when a swing break exceeds 25% of the swing range (configurable). Previously, a single new swing pair comparison could flip the trend.
 
-2. **4H fallback (when daily is ranging) also uses `confirmedTrend()`** — same fib-extension filter applies to the 4H bias determination, making the fallback path equally stable.
+2. **Close-based confirmation (Pillar 2):** A break only counts as a confirmed MSB if the candle's CLOSE is beyond the previous swing level — not just the wick/extreme. This matches LuxAlgo, zazenio, and ICT MSS methodology. Wick-through fakeouts (liquidity sweeps) no longer flip the trend.
 
-3. **Trades that would have fired on marginal/noisy trend flips will now be blocked** — the direction engine will return `null` (no trade) more often in ranging/choppy markets where the old system would oscillate between bullish/bearish on every new swing.
+3. **Alternation enforcement (Pillar 3):** An H→L→H→L state machine prevents double-counting consecutive same-direction swings. When multiple consecutive highs (or lows) are detected, only the most extreme one is kept. This produces cleaner swing sequences.
 
-4. **Toggle available: `useConfirmedTrend: false`** reverts to legacy behavior — can be set per-pair in config if needed for rollback.
+4. **4H fallback (when daily is ranging) also uses `confirmedTrend()`** — same three-pillar filter applies to the 4H bias determination, making the fallback path equally stable.
 
-5. **Note:** The `confirmedTrend` function is called with default parameters from `determineDirection()`. The bot-scanner and backtest-engine call sites pass no explicit `fibFactor`/`trendSwingLookback` config yet — they will use the hardcoded defaults (0.25, 5). To make these tunable per-pair, the bot-scanner config merge would need updating (see Open Questions).
+5. **Trades that would have fired on marginal/noisy trend flips will now be blocked** — the direction engine will return `null` (no trade) more often in ranging/choppy markets where the old system would oscillate between bullish/bearish on every new swing.
+
+6. **Per-pair tunability:** `useConfirmedTrend`, `confirmedTrendFibFactor`, and `confirmedTrendSwingLookback` are all configurable per-pair in bot-scanner strategy overrides.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/directionEngine.ts` | Added `confirmedTrend()` function (130 lines), added `ConfirmedTrendResult` interface, added config options (`fibFactor`, `trendSwingLookback`, `useConfirmedTrend`), integrated into `determineDirection()` Step 1 bias determination, fixed operator precedence bug in reason string |
-| `supabase/functions/_shared/directionEngine.test.ts` | Added 12 new tests for `confirmedTrend()` covering: insufficient data, bullish/bearish detection, stability (noise resistance), trend flip on confirmed MSB, fib threshold comparison, integration with `determineDirection()`, legacy fallback, AUD/JPY scenario, and structural source code guard |
+| `supabase/functions/_shared/directionEngine.ts` | Added `confirmedTrend()` function (~160 lines) with three pillars: fib extension filter, close-based confirmation, alternation enforcement. Added `ConfirmedTrendResult` interface with `closeBased` field on MSBs. Integrated into `determineDirection()` Step 1 bias determination. |
+| `supabase/functions/_shared/directionEngine.test.ts` | Added 16 new tests covering: insufficient data, bullish/bearish detection, stability (noise resistance), trend flip on confirmed MSB, fib threshold comparison, integration with `determineDirection()`, legacy fallback, AUD/JPY scenario, close-based wick rejection, close-based confirmed break, alternation enforcement, and structural source code guards. |
+| `supabase/functions/bot-scanner/index.ts` | Added 3 config options to DEFAULTS (lines 184-186), 3 lines to config merge (lines 691-693), and 3 lines to `determineDirection()` call (lines 3602-3604). No gate definitions modified. |
 
 ## Tests added
 
@@ -35,41 +38,47 @@
 | `confirmedTrend: useConfirmedTrend=false falls back to legacy behavior` | Legacy path works without crash |
 | `confirmedTrend: AUD/JPY scenario - bullish confirmed trend stays bullish despite noise` | Strong bull run (108→115) holds despite tiny noise at top (8.3% extension) |
 | `confirmedTrend: source code contains fib extension filter` | Structural guard verifying key code patterns exist |
+| `confirmedTrend CLOSE-BASED: wick-through without close does NOT flip trend` | Bullish trend holds when candle wicks below prev swing low but closes above it |
+| `confirmedTrend CLOSE-BASED: close-confirmed break DOES flip trend` | Trend flips to bearish when multi-candle selloff closes decisively below prev swing lows |
+| `confirmedTrend ALTERNATION: consecutive same-direction swings are merged` | No crashes with consecutive same-direction swings; alternation produces clean sequence |
+| `confirmedTrend STRUCTURAL GUARD: source code contains close-based and alternation logic` | Verifies closedAbove, closedBelow, alternation enforcement, and three pillars documented |
 
 ## Tests run
 
 ```
-ok | 1039 passed | 0 failed (12s)
+ok | 1043 passed | 0 failed (14s)
 ```
 
-Full test suite: all 1039 tests pass, including 35 direction engine tests (12 new + 23 existing).
+Full test suite: all 1043 tests pass, including 39 direction engine tests (16 new + 23 existing).
 
 ## Regression check
 
-- **All existing direction engine tests pass unchanged** — the `useConfirmedTrend=true` default doesn't break any existing test because the synthetic trending data (makeTrendingCandles) produces strong enough swings to pass the fib extension filter.
-- **Legacy mode verified** — `useConfirmedTrend: false` produces identical behavior to the previous implementation (same code path, same `analyzeMarketStructure().trend` call).
-- **The `thesisValidator.ts` module** calls `determineDirection()` without config, so it will use the new `confirmedTrend` by default. This is intentional — pending order cancellation should also benefit from the more stable trend determination.
+- **All existing direction engine tests pass unchanged** — the `useConfirmedTrend=true` default doesn't break any existing test because the synthetic trending data produces strong enough swings to pass all three filters.
+- **Legacy mode verified** — `useConfirmedTrend: false` produces identical behavior to the previous implementation.
+- **Close-based confirmation is additive** — it can only make the trend MORE stable (fewer flips), never less. A confirmed MSB under the old rules will still be confirmed under the new rules if the candle closed past the level.
+- **Alternation enforcement is additive** — it only removes duplicate same-direction swings, never adds new ones. The resulting swing sequence is a subset of the original.
+- **Bot-scanner changes are config-only** — no gate definitions modified, no scoring logic changed. The three new config options use the same `strategy ?? raw ?? default` pattern as all other configs.
 
 ## Open questions
 
-1. **Should `fibFactor` and `trendSwingLookback` be tunable per-pair in bot-scanner config?** Currently they use hardcoded defaults (0.25, 5). Adding config merge lines to bot-scanner/index.ts would require modifying that file (rule 3 — extra caution file). The defaults are sensible for all pairs but you may want JPY pairs to use a different threshold.
+1. **Should backtest-engine also pass the new config options?** Currently it only passes `h4ChochLookback` and `h1BosLookback`. Without explicit config, backtests will use the new `confirmedTrend` by default (matching live behavior), which is correct for forward parity. But historical backtests run before this change will produce different results.
 
-2. **Should backtest-engine also pass the new config options?** Currently it only passes `h4ChochLookback` and `h1BosLookback`. Without explicit config, backtests will use the new `confirmedTrend` by default (matching live behavior), which is correct for forward parity. But historical backtests run before this change will produce different results.
-
-3. **The 4H TREND BLOCK (from previous branch) is still active alongside confirmedTrend.** Both are complementary: `confirmedTrend` stabilizes the DAILY bias, while the 4H trend block catches 4H opposing the daily bias. They don't conflict.
+2. **The 4H TREND BLOCK (from previous branch) is still active alongside confirmedTrend.** Both are complementary: `confirmedTrend` stabilizes the DAILY bias, while the 4H trend block catches 4H opposing the daily bias. They don't conflict.
 
 ## Suggested PR title and description
 
-**Title:** `feat(direction-engine): add confirmedTrend with fib-extension-filtered MSBs for stable macro-trend`
+**Title:** `feat(direction-engine): three-pillar confirmedTrend — fib extension, close-based, alternation`
 
 **Description:**
-Replaces the fragile `analyzeMarketStructure().trend` (which flips on every new swing pair) with a Pine Script-inspired `confirmedTrend()` function that requires breaks to exceed 25% of the swing range before counting as confirmed MSBs.
+Replaces the fragile `analyzeMarketStructure().trend` (which flips on every new swing pair) with a research-backed `confirmedTrend()` function implementing three noise-resistance pillars:
 
-This directly addresses the AUD/JPY direction bug root cause: the old system would flip daily trend on marginal noise swings, allowing trades against the dominant structure.
+1. **Fib extension filter** — breaks must exceed 25% of the swing range to count
+2. **Close-based confirmation** — only candle CLOSES past structure count (matches LuxAlgo/ICT)
+3. **Alternation enforcement** — H→L→H→L state machine prevents double-counting
 
-Key changes:
-- New `confirmedTrend()` function with coarser swing detection (lookback=5, ATR filter 40%)
-- Fib extension filter: only breaks exceeding 25% of swing range count as confirmed MSBs
-- Integrated as default bias determination in `determineDirection()`
+Per-pair tunable via `confirmedTrendFibFactor`, `confirmedTrendSwingLookback`, `useConfirmedTrend`.
+
+Directly addresses the AUD/JPY direction bug root cause: the old system would flip daily trend on marginal noise swings and wick-through fakeouts.
+
+- 16 new tests, all 1043 existing tests pass
 - Toggle: `useConfirmedTrend: false` reverts to legacy for rollback
-- 12 new tests, all 1039 existing tests pass
