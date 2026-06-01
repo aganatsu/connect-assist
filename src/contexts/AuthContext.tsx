@@ -28,7 +28,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     });
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (session) {
+        // Validate session against the server. If JWT is bad (e.g. missing sub),
+        // sign out so the user can re-authenticate instead of being stuck.
+        const { error } = await supabase.auth.getUser();
+        if (error) {
+          console.warn("[Auth] Invalid session detected, signing out:", error.message);
+          await supabase.auth.signOut();
+          setSession(null);
+          setLoading(false);
+          return;
+        }
+      }
       setSession(session);
       setLoading(false);
     });
