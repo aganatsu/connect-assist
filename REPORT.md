@@ -1,111 +1,84 @@
-# Task: Integrate Workstream A Modules into Bot-Scanner
+# Task: Unified Advisor — Gate Performance Engine
 
-## Branch: manus/integrate-modules
+## Branch: manus/unified-advisor
 
 ## Behavior changes
 
-1. **Position sizing now includes volatility regime scaling** — In high-volatility regimes (ATR trending up), lot size is reduced by 25%. In extreme volatility, reduced by 50%. Previously, sizing was purely risk-based with no volatility adjustment.
+none — pure analytics enhancement. This change does NOT alter:
+- What trades get taken
+- What positions get sized
+- What gates pass or fail
+- How rejected setups are logged
 
-2. **Prop firm compliance integrated into sizing** — `computePositionSize` now caps lots based on daily loss remaining (if prop firm gate data is available). Previously, the prop firm multiplier was applied as a separate step.
-
-3. **Circuit breaker skips failing broker connections** — Connections with 3+ consecutive failures in the past 5 minutes are automatically skipped in the mirror loop. Previously, every connection was attempted regardless of recent failure history.
-
-4. **Portfolio correlation advisory reduces size** — After all 21 gates pass, if the new trade is >50% correlated with existing open positions, lot size is reduced by up to 30%. This is a soft advisory (never blocks trades).
-
-5. **Backtest SL floor impact quantified** — 81% of trades with random tight SLs get widened, average widening is +32 pips, R:R is always preserved.
+It only adds richer context to the LLM prompt used by bot-daily-review and bot-weekly-advisor when generating recommendations. The recommendations themselves still require manual user approval before any config changes are applied.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/bot-scanner/index.ts` | Replaced 3x `calculatePositionSize` calls with `computePositionSize`; added circuit-breaker logic to mirror loop; added portfolio correlation advisory post-gate check |
-| `supabase/functions/backtest-engine/slFloorComparison.test.ts` | New: comparison test quantifying SL floor impact across instruments |
+| `supabase/functions/_shared/gatePerformanceEngine.ts` | **NEW.** Pure-logic module implementing: confusion matrix per gate, CUSUM change detection, net gate value (cost-sensitive), walk-forward validation, regime breakdown, and prompt formatting. ~280 lines. |
+| `supabase/functions/_shared/gatePerformanceEngine.test.ts` | **NEW.** 59 unit tests covering all functions: normalizeGateReason (22 gate name variants), computeCusum (7 cases), computeNetGateValue (5 cases), walkForwardValidate (3 cases), computeGatePerformance (8 integration cases), formatGatePerformancePrompt (4 cases), and 1 regression test. |
+| `supabase/functions/bot-daily-review/index.ts` | Added import of gatePerformanceEngine. Added Step 5b: query resolved rejected_setups (last 7 days), compute gate performance, format prompt section. Added `gatePerformancePrompt` parameter to `buildUserPrompt`. Added gate performance guidance to SYSTEM_PROMPT (5 rules for LLM to follow). Added `gatePerformanceIncluded` flag to stored performance_summary. |
+| `supabase/functions/bot-weekly-advisor/index.ts` | Same integration as bot-daily-review but using 4-week window (matches existing `fourWeeksAgo` cutoff). Added import, Step 8b query, `gatePerformancePrompt` parameter to `buildWeeklyPrompt`, and gate performance guidance to WEEKLY_SYSTEM_PROMPT. |
 
-## Extra caution file explanation
+### Extra caution notes (Rule 3 files):
 
-### bot-scanner/index.ts
+**bot-daily-review/index.ts:** Added ~45 lines. The change is purely additive — a new data query (Step 5b) that runs in a try/catch so failures are non-fatal, and an optional parameter appended to the existing prompt. The existing flow (Steps 1-7) is unchanged. The LLM output format is unchanged. The only difference is the LLM now receives additional context about gate performance when 10+ resolved rejections exist.
 
-Three integration points were modified:
-
-1. **Position sizing (market orders, limit orders, broker mirror)** — Replaced `calculatePositionSize()` + manual `propFirmSizeMultiplier` with `computePositionSize()`. The new function wraps the same underlying calculation but adds volatility regime scaling. Portfolio heat and correlation checks are disabled (Option A — gates already handle those).
-
-2. **Mirror loop** — Added `isConnectionAvailable()` check at the top of the connection iteration. If a connection has 3+ recent failures, it's skipped for 5 minutes. Added `updateHealth()` calls at every success/failure point (OANDA success, OANDA failure, MetaAPI success, MetaAPI HTTP failure, MetaAPI broker rejection).
-
-3. **Post-gate advisory** — After all 21 gates pass and before sizing, added `checkPortfolioConflict()` call. If correlation > 50%, a multiplier (0.7–1.0) is applied to the final lot size. Logged but never blocks.
+**bot-weekly-advisor/index.ts:** Same pattern as daily. ~45 lines added. Non-fatal try/catch around the rejected_setups query. Optional parameter to buildWeeklyPrompt. Existing flow unchanged.
 
 ## Tests added
 
-| Test | Asserts |
-|------|---------|
-| `slFloorComparison.test.ts: tight-SL EUR/USD trades` | Trades with SL < 20 pips get widened to 20 pips (MIN_SL_PIPS floor) |
-| `slFloorComparison.test.ts: GBP/JPY high-volatility trades` | ATR floor (45 pips) dominates over static floor (35 pips) when ATR is high |
-| `slFloorComparison.test.ts: ATR floor dominates in high volatility` | When ATR × 1.5 > MIN_SL_PIPS, the ATR floor is used |
-| `slFloorComparison.test.ts: batch impact quantification` | 100 random trades across 5 instruments — measures widening percentage and average delta |
-| `slFloorComparison.test.ts: R:R always preserved after widening` | TP is proportionally adjusted so R:R ratio is identical before and after widening |
+| Test | Assertion |
+|------|-----------|
+| `normalizeGateReason` (22 tests) | Every known gate rejection string maps to the correct canonical gate ID |
+| `computeCusum` (7 tests) | CUSUM accumulates correctly, breaches at threshold, doesn't false-alarm on sparse errors |
+| `computeNetGateValue` (5 tests) | Dollar-weighted cost/benefit calculation is correct for all-TN, all-FN, balanced, and edge cases |
+| `walkForwardValidate` (3 tests) | Train/test split produces consistent/inconsistent verdicts correctly |
+| `computeGatePerformance` (8 tests) | Full integration: confusion matrices, CUSUM breaches, regime breakdown, walk-forward inclusion/exclusion, multi-gate rejections, empty inputs, filtering of pending/inconclusive |
+| `formatGatePerformancePrompt` (4 tests) | Prompt formatting respects minSamples, includes gate table, CUSUM warnings, walk-forward results |
+| `regression` (1 test) | Deterministic output for fixed inputs (guards against accidental logic changes) |
 
 ## Tests run
 
 ```
-$ deno test --allow-all --no-check supabase/
-ok | 1024 passed | 0 failed (14s)
+$ deno test supabase/functions/_shared/ --allow-all
+ok | 827 passed | 0 failed (13s)
 ```
+
+All 827 tests pass (59 new + 768 existing).
 
 ## Regression check
 
-- The `computePositionSize` integration was done with Option A (conservative): portfolio heat and correlation checks disabled inside the sizing function since existing Gates 6 and 22 already handle those. Only volatility scaling and prop firm compliance are active.
-- Circuit breaker is additive — it can only SKIP connections (never adds new ones), so worst case is a connection that should be tried gets skipped for 5 minutes.
-- Portfolio correlation advisory is multiplicative (0.7–1.0 range) — it can only reduce size, never increase it.
-- All 1024 tests pass with zero failures.
-
-## Tick Data Source Research
-
-### Recommendation
-
-**Short-term (now): Enhanced Polling**
-- Reduce zone-confirmation-scanner interval to 15 seconds
-- Collect price snapshots as pseudo-ticks
-- Feed them to `tickZoneConfirmation` module
-- 80% of the benefit with 0% infrastructure change
-
-**Medium-term: MetaAPI Streaming via external service**
-- Deploy a lightweight Deno/Node process on Fly.io or Railway (~$5-10/mo)
-- Maintain MetaAPI WebSocket connections for watchlist symbols
-- Push ticks to Supabase Realtime channel
-- Zone-confirmation-scanner subscribes to the channel
-
-**Why MetaAPI over TwelveData for ticks:**
-- MetaAPI ticks ARE your broker's actual feed (what you see = what you trade at)
-- Already integrated (connections exist)
-- No additional API key needed
-- TwelveData WebSocket is aggregated (not true tick-by-tick) and costs $229/mo for 28+ symbols
-
-**Architecture constraint:** Supabase Edge Functions are stateless/short-lived — cannot maintain persistent WebSocket connections. A separate always-on process is needed for true streaming.
+1. **Type safety:** `deno check` passes on all 3 files (gatePerformanceEngine.ts, bot-daily-review/index.ts, bot-weekly-advisor/index.ts) with zero errors.
+2. **Non-fatal integration:** The gate performance query is wrapped in try/catch. If it fails (e.g., table doesn't exist, network error), the daily/weekly review continues exactly as before — the `gatePerformancePromptStr` stays empty and is not appended to the prompt.
+3. **Minimum data guard:** Gate performance analysis only runs when there are 10+ resolved rejections. Below that threshold, the prompt is identical to the previous version.
+4. **No schema changes:** No database migrations needed. The code reads from the existing `rejected_setups` table using columns that already exist.
+5. **No config changes required:** CUSUM threshold defaults to 5.0 (conservative). Users can optionally add `gatePerformance.cusumThreshold` and `gatePerformance.cusumSlack` to their bot_configs JSON if they want to tune sensitivity.
 
 ## Open questions
 
-1. **Volatility regime detection** — Currently mapped from `regimeInfo.atrTrend` field. If this field is sometimes null/undefined, the system defaults to "normal" (no scaling). Should we add a fallback ATR percentile calculation?
+1. **rawDetail not populated:** The `logRejectedSetup` calls in bot-scanner don't pass `rawDetail` (the full factor breakdown). This means gate performance analysis can only use summary fields (score, tier1_count, failed_gates, regime, session). If you want per-factor analysis of rejected setups in the future, we'd need to start populating `raw_detail` — but that's a separate task and touches bot-scanner (Rule 3).
 
-2. **Circuit breaker persistence** — The health map is in-memory (resets on cold start). Should we persist it to Supabase for cross-invocation memory?
+2. **Walk-forward split ratio:** Currently hardcoded at 0.7 train / 0.3 test. With only 7 days of daily data, this means ~5 days train / 2 days test. For the weekly advisor (4 weeks), it's ~3 weeks train / 1 week test. This is reasonable but could be made configurable if needed.
 
-3. **Correlation advisory threshold** — Currently set at 50% correlation → reduce size. Want this configurable per-user, or is a global default fine?
-
-4. **Tick data next step** — Ready to implement the enhanced polling approach (15s zone-confirmation-scanner) whenever you give the go-ahead.
+3. **Outcome-tracker deletion:** You confirmed 30 days is enough. If you ever want longer historical analysis, the outcome-tracker's cleanup logic would need adjustment (separate task).
 
 ## Suggested PR title and description
 
-**Title:** `feat: integrate unified sizing, circuit breaker, and correlation advisory into bot-scanner`
+**Title:** feat: Unified Advisor — Gate Performance Engine with CUSUM change detection
 
 **Description:**
-Wires three Workstream A modules into the live execution path:
+Adds a shared gate performance analysis module that computes confusion matrices, CUSUM change detection, cost-sensitive net gate value, and walk-forward validation for each safety gate. Integrates into both bot-daily-review and bot-weekly-advisor to give the LLM full visibility into "what we took vs what we blocked" when generating recommendations.
 
-- **Unified Position Sizing** (Option A): Replaces raw `calculatePositionSize` with `computePositionSize` — adds volatility regime scaling (25-50% reduction in high/extreme vol) and integrated prop firm compliance. Portfolio heat and correlation checks disabled (handled by existing gates).
+Key features:
+- Per-gate confusion matrix (TP/FP/TN/FN) from resolved rejected setups
+- CUSUM sequential analysis to detect persistent over-filtering (configurable threshold)
+- Dollar-weighted net gate value (cost of false negatives vs benefit of true negatives)
+- Walk-forward validation to prevent overfitting recommendations
+- Regime-aware breakdown (trending vs ranging performance per gate)
+- Non-fatal integration: gracefully degrades if insufficient data (<10 rejections)
 
-- **Circuit Breaker**: Broker connections with 3+ consecutive failures are skipped for 5 minutes. Prevents wasted API calls to dead/disconnected brokers. Health updates on every success/failure in the mirror loop.
+No behavior changes to trading logic. Pure analytics enhancement to the advisor LLM prompt.
 
-- **Portfolio Correlation Advisory**: Post-gate soft check that reduces position size by up to 30% when new trade is >50% correlated with existing open positions. Never blocks trades.
-
-Also includes SL floor comparison test quantifying the backtest impact: 81% of tight-SL trades widened, avg +32 pips, R:R preserved.
-
-Tick data research concludes MetaAPI streaming is the right choice for medium-term, with enhanced polling (15s) as the immediate next step.
-
-All 1024 tests passing.
+59 new tests, 827 total passing.
