@@ -227,29 +227,32 @@ interface BotConfigModalProps {
   onClose: () => void;
   connectionId?: string;
   connectionName?: string;
+  defaultTab?: string;
+  defaultSearch?: string;
 }
 
-export function BotConfigModal({ open, onClose, connectionId, connectionName }: BotConfigModalProps) {
+export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch }: BotConfigModalProps) {
   const queryClient = useQueryClient();
   const queryKey = connectionId ? ["bot-config", connectionId] : ["bot-config"];
   const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
   const [config, setConfig] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState("strategy");
-  const [search, setSearch] = useState("");
+  const [activeTab, setActiveTab] = useState(defaultTab || "strategy");
+  const [search, setSearch] = useState(defaultSearch || "");
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (rawConfig && open) setConfig(JSON.parse(JSON.stringify(rawConfig)));
   }, [rawConfig, open]);
 
-  // Reset search + autofocus when modal opens
+  // Reset search + autofocus when modal opens; apply defaults if provided
   useEffect(() => {
     if (open) {
-      setSearch("");
+      setSearch(defaultSearch || "");
+      if (defaultTab) setActiveTab(defaultTab);
       // Defer to next tick so input is mounted
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open]);
+  }, [open, defaultTab, defaultSearch]);
 
   const saveMut = useMutation({
     mutationFn: () => {
