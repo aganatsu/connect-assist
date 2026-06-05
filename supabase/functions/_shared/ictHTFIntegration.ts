@@ -106,8 +106,8 @@ export function runICTHTFAnalysis(
     details: [],
   };
 
-  if (!cfg.ictHTFEnabled || cfg.ictHTFGateMode === "off") {
-    return { ...noResult, reason: "ICT HTF gate mode: off" };
+  if (!cfg.ictHTFEnabled) {
+    return { ...noResult, reason: "ICT HTF analysis disabled" };
   }
 
   const details: string[] = [];
@@ -171,12 +171,20 @@ export function runICTHTFAnalysis(
   // ── Step 4: Determine pass/fail and score adjustment ──
   const weeklyFailed = cfg.ictWeeklyBiasRequired && !weeklyAligned;
   const containmentFailed = cfg.ictDailyContainmentRequired && !zoneContained;
-  // Hard mode: block trade if requirements fail. Soft mode: always pass (penalty only).
-  const passed = cfg.ictHTFGateMode === "hard"
-    ? (!weeklyFailed && !containmentFailed)
-    : true;
 
-  // Score adjustment
+  // Off mode: always pass, no score adjustment (log-only)
+  // Soft mode: always pass, apply score adjustment
+  // Hard mode: block trade if requirements fail
+  let passed: boolean;
+  if (cfg.ictHTFGateMode === "off") {
+    passed = true;
+  } else if (cfg.ictHTFGateMode === "hard") {
+    passed = !weeklyFailed && !containmentFailed;
+  } else {
+    passed = true; // soft
+  }
+
+  // Score adjustment (computed always for logging, but only applied in soft/hard modes)
   if (weeklyAligned && zoneContained && dailyOB?.isValid) {
     // Full alignment: weekly + daily + contained
     scoreAdjustment = cfg.ictHTFAlignedBonus;
@@ -191,6 +199,12 @@ export function runICTHTFAnalysis(
   } else if (!zoneContained) {
     scoreAdjustment = -(cfg.ictHTFMisalignedPenalty * 0.5);
     details.push(`✗ Zone not contained in Daily OB — ${scoreAdjustment.toFixed(1)} score penalty`);
+  }
+
+  // In "off" mode, zero out the score adjustment (it was computed for logging only)
+  if (cfg.ictHTFGateMode === "off") {
+    details.push(`[OFF MODE] Would have applied: ${scoreAdjustment > 0 ? "+" : ""}${scoreAdjustment.toFixed(1)} score adjustment`);
+    scoreAdjustment = 0;
   }
 
   // Build reason string

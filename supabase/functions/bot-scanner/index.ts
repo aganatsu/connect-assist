@@ -68,6 +68,7 @@ import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmat
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
 import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
@@ -219,6 +220,14 @@ const DEFAULTS = {
   _smtResult: null as any,
   // ── Factor Weights (config-driven, AI-tunable) ──
   factorWeights: {} as Record<string, number>,
+  // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+  ictHTFEnabled: true,             // Enable ICT HTF analysis (weekly bias + daily impulse + containment)
+  ictHTFGateMode: "off" as "hard" | "soft" | "off",  // "off" = log only (no trade impact); "soft" = score adjust; "hard" = block
+  ictHTFAlignedBonus: 2.0,         // Score bonus when weekly + daily + containment all align
+  ictHTFMisalignedPenalty: 3.0,    // Score penalty when weekly bias opposes trade direction
+  ictHTFMinContainment: 50,        // Min % overlap between LTF zone and Daily OB for containment pass
+  ictWeeklyBiasRequired: true,     // Require weekly bias alignment (when gate != off)
+  ictDailyContainmentRequired: true, // Require LTF zone to be inside Daily OB (when gate != off)
   // ── Entry/HTF timeframes (set by style) ──
   entryTimeframe: "15min",
   htfTimeframe: "1day",
@@ -854,6 +863,15 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
     stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
     minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
+
+    // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+    ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? DEFAULTS.ictHTFEnabled,
+    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
+    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? DEFAULTS.ictHTFAlignedBonus,
+    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? DEFAULTS.ictHTFMisalignedPenalty,
+    ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? DEFAULTS.ictHTFMinContainment,
+    ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? DEFAULTS.ictWeeklyBiasRequired,
+    ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? DEFAULTS.ictDailyContainmentRequired,
 
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
@@ -3413,6 +3431,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
     fetchPromises.push(cachedFetch(pair, "1h", "5d"));
     if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
+    // Fetch weekly candles for ICT HTF framework (cached — same data reused across pairs)
+    const ictHTFActive = pairConfig.ictHTFEnabled !== false;
+    if (ictHTFActive) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -3421,6 +3442,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // 1H candles always fetched (index = 2 + h4Offset)
     const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
     const smtCandles = smtFlag ? fetched[3 + h4Offset] : null;
+    // Weekly candles (last in fetch array when ICT HTF is active)
+    const weeklyCandles: Candle[] | null = ictHTFActive ? (fetched[fetched.length - 1] || null) : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -3978,6 +4001,72 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       };
     }
 
+    // ── ICT HTF Framework: Weekly Bias + Daily Impulse + Containment (log-only in "off" mode) ──
+    let ictHTFResult: ICTHTFResult | null = null;
+    if (ictHTFActive && analysis.direction) {
+      try {
+        // Build LTF zone from impulse zone engine result (if available)
+        const izData = (detail as any).impulseZone;
+        const ltfZone: { high: number; low: number } | null = izData?.bestZone
+          ? { high: izData.bestZone.high, low: izData.bestZone.low }
+          : null;
+
+        ictHTFResult = runICTHTFAnalysis(
+          weeklyCandles,
+          dailyCandles,
+          analysis.lastPrice,
+          analysis.direction as "long" | "short",
+          ltfZone,
+          {
+            ictHTFEnabled: pairConfig.ictHTFEnabled,
+            ictHTFGateMode: pairConfig.ictHTFGateMode,
+            ictHTFAlignedBonus: pairConfig.ictHTFAlignedBonus,
+            ictHTFMisalignedPenalty: pairConfig.ictHTFMisalignedPenalty,
+            ictHTFMinContainment: pairConfig.ictHTFMinContainment,
+            ictWeeklyBiasRequired: pairConfig.ictWeeklyBiasRequired,
+            ictDailyContainmentRequired: pairConfig.ictDailyContainmentRequired,
+          },
+        );
+
+        // Attach to scan detail for dashboard visibility
+        (detail as any).ictHTF = {
+          gateMode: pairConfig.ictHTFGateMode,
+          passed: ictHTFResult.passed,
+          weeklyBias: ictHTFResult.weeklyBias ? {
+            bias: ictHTFResult.weeklyBias.bias,
+            confidence: ictHTFResult.weeklyBias.confidence,
+            primaryDOL: ictHTFResult.weeklyBias.primaryDOL?.label ?? null,
+          } : null,
+          dailyOB: ictHTFResult.dailyOB ? {
+            high: ictHTFResult.dailyOB.high,
+            low: ictHTFResult.dailyOB.low,
+            direction: ictHTFResult.dailyOB.direction,
+            isValid: ictHTFResult.dailyOB.isValid,
+            priceInZone: ictHTFResult.dailyOB.priceInZone,
+          } : null,
+          containment: ictHTFResult.containment ? {
+            overlapPercent: ictHTFResult.containment.overlapPercent,
+            isContained: ictHTFResult.containment.isContained,
+          } : null,
+          weeklyAligned: ictHTFResult.weeklyAligned,
+          zoneContained: ictHTFResult.zoneContained,
+          scoreAdjustment: ictHTFResult.scoreAdjustment,
+          reason: ictHTFResult.reason,
+          details: ictHTFResult.details,
+        };
+
+        // Log ICT HTF result
+        const modeTag = pairConfig.ictHTFGateMode.toUpperCase();
+        console.log(`[scan ${scanCycleId}] ${pair} ICT HTF [${modeTag}]: ${ictHTFResult.reason}`);
+        if (ictHTFResult.details.length > 0) {
+          console.log(`[scan ${scanCycleId}] ${pair} ICT HTF details: ${ictHTFResult.details.join(" | ")}`);
+        }
+      } catch (ictErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT HTF error (non-fatal): ${ictErr?.message}`);
+        (detail as any).ictHTF = { gateMode: pairConfig.ictHTFGateMode, passed: true, error: ictErr?.message };
+      }
+    }
+
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
@@ -4342,9 +4431,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     // "off" mode: no adjustment at all
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
+    const ictHTFScoreAdj = ictHTFResult?.scoreAdjustment ?? 0;
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictHTFScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
+    }
+    if (ictHTFScoreAdj !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} ICT HTF scoring: ${ictHTFScoreAdj > 0 ? "+" : ""}${ictHTFScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
     }
 
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
@@ -4419,6 +4512,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       detail.status = "rejected";
       detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
       detail.reason = `Conflict block: ${opposingCount} opposing factors`;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+
+    // ICT HTF hard gate: block trade if weekly bias or containment requirement fails (only in "hard" mode)
+    if (ictHTFResult && !ictHTFResult.passed) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT HTF BLOCKED: ${ictHTFResult.reason}`];
+      detail.reason = ictHTFResult.reason;
       rejectedCount++;
       scanDetails.push(detail);
       continue;
