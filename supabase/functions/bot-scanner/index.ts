@@ -181,6 +181,9 @@ const DEFAULTS = {
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
   simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
+  useConfirmedTrend: true,             // Use fib-extension-filtered MSBs for stable macro-trend (vs legacy swing-pair flip)
+  confirmedTrendFibFactor: 0.25,       // Min extension as fraction of swing range to count as confirmed MSB (0.25 = 25%)
+  confirmedTrendSwingLookback: 5,      // Swing detection lookback for confirmedTrend (coarser than entry-level lookback=3)
   // ── Structural Conviction Gate (Gate 3) ──
   // S2F (Structure-to-Fractal) thresholds: block trade when directionRate=0% AND S2F < threshold.
   // Asymmetric defaults: longs strict (35%), shorts loose (20%) per weekly advisor recommendation.
@@ -685,6 +688,9 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
     simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
+    useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? true,
+    confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? 0.25,
+    confirmedTrendSwingLookback: strategy.confirmedTrendSwingLookback ?? raw.confirmedTrendSwingLookback ?? 5,
     // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
     structuralConvictionEnabled: strategy.structuralConvictionEnabled !== false,
     structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
@@ -3593,6 +3599,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           {
             h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
             h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
+            useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
+            fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
+            trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
           },
         );
         console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection: ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | 4H-retrace=${simpleDirectionResult.h4Retrace} | 4H-choch-against=${simpleDirectionResult.h4ChochAgainst} | 1H-confirmed=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
