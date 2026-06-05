@@ -8,6 +8,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { classifyInstrumentRegime as classifyInstrumentRegimeShared, type InstrumentRegime } from "../_shared/smcAnalysis.ts";
+import {
+  computeGatePerformance,
+  formatGatePerformancePrompt,
+  type ResolvedRejection,
+  type ClosedTrade,
+} from "../_shared/gatePerformanceEngine.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -945,6 +951,12 @@ RULES:
 - Regime-based suggestions should be temporary (include "revert when..." conditions)
 - Be specific about numbers: "increase from 2.0 to 2.5" not "increase slightly"
 - If the bot is profitable and improving, say so — don't fix what isn't broken
+- If a GATE PERFORMANCE ANALYSIS section is present, use it to compare taken vs blocked trade outcomes:
+  * Negative Net Gate Value = gate is costing more than it saves (blocking too many winners)
+  * CUSUM breaches = statistically persistent over-filtering (not just random noise)
+  * Walk-forward VALIDATED = conclusion holds out-of-sample (safe to recommend changes)
+  * Walk-forward INVALIDATED = conclusion is noise (do NOT recommend changes for that gate)
+  * Only recommend gate threshold changes when CUSUM has breached AND walk-forward validates
 - Rate overall weekly_trend as: "improving" | "degrading" | "stable" | "volatile" | "insufficient_data"
 - For factor_weights recommendations, suggested_value keys MUST use camelCase config keys, NOT display names.
   Mapping: Market Structure=marketStructure, Order Block=orderBlock, Fair Value Gap=fairValueGap,
@@ -1004,7 +1016,8 @@ function buildWeeklyPrompt(
   factorSuggestions: FactorWeightSuggestion[],
   regimeAnalysis: RegimeAnalysis,
   pastRecommendations: PreviousRecommendation[],
-  config: any
+  config: any,
+  gatePerformancePrompt?: string
 ): string {
   const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance * 100).toFixed(1) : "0.0";
 
@@ -1068,6 +1081,11 @@ Current balance: $${balance.toFixed(2)} | Peak: $${peakBalance.toFixed(2)} | Dra
   prompt += `Max Daily Loss: ${c.maxDailyLoss || 5.0}% | Max Hold: ${c.maxHoldHours || 48}h\n`;
   prompt += `Trailing: ${c.trailingStopEnabled ? "ON" : "OFF"} | Break-Even: ${c.breakEvenEnabled ? "ON" : "OFF"}\n`;
 
+
+  // Append gate performance analysis (unified taken vs blocked)
+  if (gatePerformancePrompt) {
+    prompt += gatePerformancePrompt;
+  }
   return prompt;
 }
 
@@ -1405,13 +1423,57 @@ Deno.serve(async (req) => {
         breakEvenEnabled: configObj.exit?.breakEvenEnabled ?? true,
       };
 
+      // Step 8b: Fetch resolved rejected setups for gate performance analysis (4-week window)
+      let gatePerformancePromptStr = "";
+      try {
+        const { data: resolvedRejections } = await supabase
+          .from("rejected_setups")
+          .select("id, symbol, direction, failed_gates, confluence_score, tier1_count, outcome_status, mfe_pips, mae_pips, tp_hit, sl_hit, regime, session_name, rejected_at, rr_ratio")
+          .eq("user_id", userId)
+          .in("outcome_status", ["would_have_won", "would_have_lost"])
+          .gte("rejected_at", fourWeeksAgo.toISOString())
+          .order("rejected_at", { ascending: true });
+
+        if (resolvedRejections && resolvedRejections.length >= 10) {
+          const closedTrades: ClosedTrade[] = botTrades.map((t: any) => ({
+            id: t.id,
+            symbol: t.symbol,
+            direction: t.direction,
+            pnl: Number(t.pnl) || 0,
+            rr_achieved: t.pnl_percent ? Number(t.pnl_percent) / (configObj?.risk?.riskPerTrade || 1) : null,
+            close_time: t.closed_at,
+          }));
+
+          const cusumThreshold = (typeof configObj?.gatePerformance?.cusumThreshold === "number")
+            ? configObj.gatePerformance.cusumThreshold : 5.0;
+          const cusumSlack = (typeof configObj?.gatePerformance?.cusumSlack === "number")
+            ? configObj.gatePerformance.cusumSlack : 0.3;
+
+          const gateReport = computeGatePerformance(
+            resolvedRejections as ResolvedRejection[],
+            closedTrades,
+            {
+              avgRR: configObj?.strategy?.tpRatio || 2.0,
+              cusum: { slack: cusumSlack, threshold: cusumThreshold },
+            }
+          );
+
+          gatePerformancePromptStr = formatGatePerformancePrompt(gateReport, 10);
+          if (gatePerformancePromptStr) {
+            console.log(`[Weekly Advisor] ${botName}: Gate performance analysis included (${resolvedRejections.length} resolved rejections, ${gateReport.cusumBreaches.length} CUSUM breaches)`);
+          }
+        }
+      } catch (gateErr) {
+        console.error(`[Weekly Advisor] Gate performance analysis failed for ${botName}:`, gateErr);
+      }
+
       // Step 9: Build prompt and call LLM
       const balanceNum = toSafeNumber(account.balance);
       const peakBalanceNum = toSafeNumber(account.peak_balance, balanceNum);
       const userPrompt = buildWeeklyPrompt(
         botId, botName, balanceNum, peakBalanceNum,
         weeklyData, factorSuggestions, regimeAnalysis,
-        pastRecs || [], strategyConfig
+        pastRecs || [], strategyConfig, gatePerformancePromptStr || undefined
       );
 
       console.log(`[Weekly Advisor] Calling LLM for ${botName}...`);
