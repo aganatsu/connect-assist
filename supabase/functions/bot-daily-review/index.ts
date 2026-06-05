@@ -491,14 +491,21 @@ RULES:
   * Walk-forward VALIDATED = conclusion holds out-of-sample (safe to recommend changes)
   * Walk-forward INVALIDATED = conclusion is noise (do NOT recommend changes for that gate)
   * Only recommend gate threshold changes when CUSUM has breached AND walk-forward validates
-- For factor_weights recommendations, suggested_value keys MUST use camelCase config keys, NOT display names.
-  Mapping: Market Structure=marketStructure, Order Block=orderBlock, Fair Value Gap=fairValueGap,
-  Premium/Discount & Fib=premiumDiscountFib, Session/Kill Zone=sessionKillZone, Judas Swing=judasSwing,
-  PD/PW Levels=pdPwLevels, Reversal Candle=reversalCandle, Liquidity Sweep=liquiditySweep,
-  Displacement=displacement, Breaker Block=breakerBlock, Unicorn Model=unicornModel,
-  Silver Bullet=silverBullet, Macro Window=macroWindow, SMT Divergence=smtDivergence,
-  Volume Profile=volumeProfile, AMD Phase=amdPhase, Currency Strength=currencyStrength,
-  Trend Direction=trendDirection, Daily Bias=dailyBias
+- ALL suggested_value keys MUST use exact camelCase config keys below. Do NOT invent keys.
+- For factor_weights: suggested_value keys MUST be one of:
+  marketStructure, orderBlock, fairValueGap, premiumDiscountFib, sessionQuality, judasSwing,
+  pdPwLevels, reversalCandle, liquiditySweep, displacement, breakerBlock, unicornModel,
+  smtDivergence, volumeProfile, amdPhase, currencyStrength, dailyBias, htfPoiAlignment,
+  htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
+- For take_profit: tpRRRatio (number, the R:R target), takeProfitMethod ("rr"|"fixed"|"atr"), fixedTPPips, tpATRMultiple
+- For stop_loss: stopLossMethod ("swing"|"fixed"|"atr"), fixedSLPips, slATRMultiple, slBufferPips
+- For risk_management: riskPerTrade (0.5-3.0), maxConcurrentTrades (number), maxPositionsPerSymbol (number),
+  maxDailyDrawdown (number %), maxPortfolioHeat (number %), fixedLotSize (number)
+- For session_filter: newsFilterEnabled (bool), newsFilterPauseMinutes (5-120), killZoneOnly (bool)
+- For instrument_filter: spreadFilterEnabled (bool), maxSpreadPips (number), atrFilterEnabled (bool), atrFilterMin, atrFilterMax
+- For timing: confluenceThreshold (20-90, the minimum score %)
+- tier1Minimum is NOT configurable (hardcoded to 3). Do NOT recommend changing it.
+- NEVER use invented keys like "looser_setting", "default", "threshold". Values MUST be numbers or booleans.
 
 You MUST respond with valid JSON in this exact format:
 {

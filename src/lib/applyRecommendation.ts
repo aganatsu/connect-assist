@@ -77,8 +77,11 @@ function resolveConfigPath(key: string): string | null {
     "maxDailyDrawdown": "risk.maxDailyDrawdown",
     "maxOpenPositions": "risk.maxConcurrent",
     "maxConcurrent": "risk.maxConcurrent",
+    "maxConcurrentTrades": "risk.maxConcurrentTrades",
     "portfolioHeat": "risk.portfolioHeat",
+    "maxPortfolioHeat": "risk.maxPortfolioHeat",
     "maxPerSymbol": "risk.maxPerSymbol",
+    "maxPositionsPerSymbol": "risk.maxPositionsPerSymbol",
     "fixedLotSize": "risk.fixedLotSize",
     "confluenceThreshold": "strategy.confluenceThreshold",
     "tier1Minimum": "strategy.tier1Minimum",
@@ -89,8 +92,26 @@ function resolveConfigPath(key: string): string | null {
     "stopLossMethod": "exit.stopLossMethod",
     "tpATRMultiple": "exit.tpATRMultiple",
     "slATRMultiple": "exit.slATRMultiple",
+    "slBufferPips": "entry.slBufferPips",
+    // Gate-related config keys
+    "newsFilterEnabled": "sessions.newsFilterEnabled",
+    "newsFilterPauseMinutes": "sessions.newsFilterPauseMinutes",
+    "killZoneOnly": "sessions.killZoneOnly",
+    "spreadFilterEnabled": "instruments.spreadFilterEnabled",
+    "maxSpreadPips": "instruments.maxSpreadPips",
+    "atrFilterEnabled": "instruments.volatilityFilterEnabled",
+    "atrFilterMin": "instruments.minATR",
+    "atrFilterMax": "instruments.maxATR",
+    "maxConsecutiveLosses": "protection.maxConsecutiveLosses",
   };
   if (direct[key]) return direct[key];
+
+  // Case-insensitive + underscore/space normalization:
+  // Convert "Rr_ratio", "Max_concurrent", "news_filter_enabled" → camelCase and retry
+  const normalized = key
+    .replace(/[_\s]+(.)/g, (_, c) => c.toUpperCase()) // snake_case/spaces → camelCase
+    .replace(/^(.)/, (_, c) => c.toLowerCase()); // ensure first char is lowercase
+  if (normalized !== key && direct[normalized]) return direct[normalized];
 
   // Bare factor name → strategy toggle. If map already includes "strategy.", use as-is.
   const toggle = FACTOR_TOGGLE_MAP[key];
@@ -114,6 +135,12 @@ function resolveConfigPath(key: string): string | null {
     "Volume Profile": "volumeProfile", "AMD Phase": "amdPhase",
     "Currency Strength": "currencyStrength", "Trend Direction": "trendDirection",
     "Daily Bias": "dailyBias",
+    "HTF POI Alignment": "htfPoiAlignment",
+    "HTF Fib + PD + Liquidity": "htfFibPdLiquidity",
+    "Confluence Stack": "confluenceStack",
+    "Pullback Health": "pullbackHealth",
+    "Game Plan Key Level": "gamePlanKeyLevel",
+    "Session Affinity": "sessionAffinity",
   };
   // Set of valid camelCase factor keys (the values of WEIGHT_KEY_MAP)
   const KNOWN_FACTOR_KEYS = new Set(Object.values(WEIGHT_KEY_MAP));

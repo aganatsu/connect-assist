@@ -167,7 +167,60 @@ const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: s
   "stopLossMethod": { label: "SL Method", tab: "entry_exit", search: "stop loss" },
   "tpATRMultiple": { label: "TP ATR Multiple", tab: "entry_exit", search: "ATR" },
   "slATRMultiple": { label: "SL ATR Multiple", tab: "entry_exit", search: "ATR" },
+  "slBufferPips": { label: "SL Buffer (pips)", tab: "entry_exit", search: "buffer" },
+  // Gate-related config keys
+  "newsFilterEnabled": { label: "News Filter", tab: "sessions", search: "news" },
+  "newsFilterPauseMinutes": { label: "News Pause (minutes)", tab: "sessions", search: "news" },
+  "killZoneOnly": { label: "Kill Zone Only", tab: "sessions", search: "kill zone" },
+  "spreadFilterEnabled": { label: "Spread Filter", tab: "instruments", search: "spread" },
+  "maxSpreadPips": { label: "Max Spread (pips)", tab: "instruments", search: "spread" },
+  "atrFilterEnabled": { label: "ATR Filter", tab: "instruments", search: "ATR" },
+  "atrFilterMin": { label: "Min ATR (pips)", tab: "instruments", search: "ATR" },
+  "atrFilterMax": { label: "Max ATR (pips)", tab: "instruments", search: "ATR" },
+  "maxConsecutiveLosses": { label: "Max Consecutive Losses", tab: "risk", search: "consecutive" },
+  "maxConcurrentTrades": { label: "Max Concurrent Trades", tab: "risk", search: "concurrent" },
+  "maxPositionsPerSymbol": { label: "Max Per Symbol", tab: "risk", search: "per symbol" },
+  "maxPortfolioHeat": { label: "Portfolio Heat (%)", tab: "risk", search: "portfolio heat" },
+  // Factor weight camelCase keys (when LLM emits them directly)
+  "marketStructure": { label: "Market Structure", tab: "factorWeights", search: "market structure" },
+  "orderBlock": { label: "Order Block", tab: "factorWeights", search: "order block" },
+  "fairValueGap": { label: "Fair Value Gap", tab: "factorWeights", search: "fair value" },
+  "premiumDiscountFib": { label: "Premium/Discount & Fib", tab: "factorWeights", search: "premium" },
+  "sessionQuality": { label: "Session Quality", tab: "factorWeights", search: "session" },
+  "judasSwing": { label: "Judas Swing", tab: "factorWeights", search: "judas" },
+  "pdPwLevels": { label: "PD/PW Levels", tab: "factorWeights", search: "PD/PW" },
+  "reversalCandle": { label: "Reversal Candle", tab: "factorWeights", search: "reversal" },
+  "liquiditySweep": { label: "Liquidity Sweep", tab: "factorWeights", search: "liquidity" },
+  "displacement": { label: "Displacement", tab: "factorWeights", search: "displacement" },
+  "breakerBlock": { label: "Breaker Block", tab: "factorWeights", search: "breaker" },
+  "unicornModel": { label: "Unicorn Model", tab: "factorWeights", search: "unicorn" },
+  "smtDivergence": { label: "SMT Divergence", tab: "factorWeights", search: "SMT" },
+  "volumeProfile": { label: "Volume Profile", tab: "factorWeights", search: "volume" },
+  "amdPhase": { label: "AMD Phase", tab: "factorWeights", search: "AMD" },
+  "currencyStrength": { label: "Currency Strength", tab: "factorWeights", search: "currency" },
+  "dailyBias": { label: "Daily Bias", tab: "factorWeights", search: "daily bias" },
+  "htfPoiAlignment": { label: "HTF POI Alignment", tab: "factorWeights", search: "HTF POI" },
+  "htfFibPdLiquidity": { label: "HTF Fib + PD + Liquidity", tab: "factorWeights", search: "HTF Fib" },
+  "confluenceStack": { label: "Confluence Stack", tab: "factorWeights", search: "confluence stack" },
+  "pullbackHealth": { label: "Pullback Health", tab: "factorWeights", search: "pullback" },
+  "gamePlanKeyLevel": { label: "Game Plan Key Level", tab: "factorWeights", search: "game plan" },
+  "sessionAffinity": { label: "Session Affinity", tab: "factorWeights", search: "session affinity" },
 };
+
+/** Normalize a key to camelCase for lookup in CONFIG_KEY_LABELS */
+function normalizeConfigKey(key: string): string {
+  return key
+    .replace(/[_\s]+(.)/g, (_, c) => c.toUpperCase())
+    .replace(/^(.)/, (_, c) => c.toLowerCase());
+}
+
+/** Look up a config key label, trying exact match first then normalized */
+function lookupKeyLabel(key: string): { label: string; tab: string; search?: string } | null {
+  if (CONFIG_KEY_LABELS[key]) return CONFIG_KEY_LABELS[key];
+  const normalized = normalizeConfigKey(key);
+  if (normalized !== key && CONFIG_KEY_LABELS[normalized]) return CONFIG_KEY_LABELS[normalized];
+  return null;
+}
 
 /** Format a config value for display */
 function formatConfigValue(val: unknown): string {
@@ -183,7 +236,7 @@ function getConfigTarget(rec: Recommendation): { tab: string; search: string } |
   if (!rec.suggested_value || typeof rec.suggested_value !== "object") return null;
   const keys = Object.keys(rec.suggested_value);
   for (const key of keys) {
-    const info = CONFIG_KEY_LABELS[key];
+    const info = lookupKeyLabel(key);
     if (info) return { tab: info.tab, search: info.search || "" };
   }
   // Fallback: check category
@@ -270,8 +323,8 @@ function RecommendationCard({
               <div className="space-y-1">
                 {Object.entries(rec.suggested_value as Record<string, unknown>).map(([key, suggestedVal]) => {
                   const currentVal = (rec.current_value as Record<string, unknown>)?.[key];
-                  const labelInfo = CONFIG_KEY_LABELS[key];
-                  const label = labelInfo?.label || key.replace(/([A-Z])/g, " $1").replace(/^./, s => s.toUpperCase());
+                  const labelInfo = lookupKeyLabel(key);
+                  const label = labelInfo?.label || key.replace(/([A-Z])/g, " $1").replace(/[_]/g, " ").replace(/^./, s => s.toUpperCase());
                   return (
                     <div key={key} className="flex items-center gap-2 text-[10px]">
                       <span className="text-muted-foreground font-medium min-w-[100px]">{label}</span>
