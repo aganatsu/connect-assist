@@ -64,11 +64,31 @@ const FACTOR_TOGGLE_MAP: Record<string, string> = {
 function resolveConfigPath(key: string): string | null {
   const direct: Record<string, string> = {
     "Risk/Trade": "risk.riskPerTrade",
+    "riskPerTrade": "risk.riskPerTrade",
     "SL": "exit.fixedSLPips",
+    "fixedSLPips": "exit.fixedSLPips",
     "TP": "exit.fixedTPPips",
+    "fixedTPPips": "exit.fixedTPPips",
+    "rrRatio": "exit.tpRRRatio",
+    "tpRRRatio": "exit.tpRRRatio",
+    "tpRatio": "exit.tpRRRatio",
+    "minRR": "risk.minRR",
+    "minRiskReward": "risk.minRR",
+    "maxDailyDrawdown": "risk.maxDailyDrawdown",
+    "maxOpenPositions": "risk.maxConcurrent",
+    "maxConcurrent": "risk.maxConcurrent",
+    "portfolioHeat": "risk.portfolioHeat",
+    "maxPerSymbol": "risk.maxPerSymbol",
+    "fixedLotSize": "risk.fixedLotSize",
+    "confluenceThreshold": "strategy.confluenceThreshold",
+    "tier1Minimum": "strategy.tier1Minimum",
     "instrument_filter": "instruments",
     "excluded_instruments": "excludedInstruments",
     "newYorkEnd": "sessions.newYorkEnd",
+    "takeProfitMethod": "exit.takeProfitMethod",
+    "stopLossMethod": "exit.stopLossMethod",
+    "tpATRMultiple": "exit.tpATRMultiple",
+    "slATRMultiple": "exit.slATRMultiple",
   };
   if (direct[key]) return direct[key];
 

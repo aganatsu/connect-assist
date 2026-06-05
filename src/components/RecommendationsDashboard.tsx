@@ -9,9 +9,10 @@ import { toast } from "sonner";
 import {
   CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, Minus, AlertTriangle, Lightbulb,
-  BarChart3, Shield, Target, Zap, Brain, ArrowRight,
+  BarChart3, Shield, Target, Zap, Brain, ArrowRight, Settings,
 } from "lucide-react";
 import { applyRecommendationToConfig } from "@/lib/applyRecommendation";
+import { BotConfigModal } from "@/components/BotConfigModal";
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -141,6 +142,66 @@ function timeAgo(dateStr: string): string {
 
 // ─── Sub-Components ──────────────────────────────────────────
 
+// Map config keys to human-readable labels and their BotConfigModal tab
+const CONFIG_KEY_LABELS: Record<string, { label: string; tab: string; search?: string }> = {
+  "rrRatio": { label: "R:R Ratio (TP Target)", tab: "entry_exit", search: "R:R Ratio" },
+  "tpRRRatio": { label: "R:R Ratio (TP Target)", tab: "entry_exit", search: "R:R Ratio" },
+  "tpRatio": { label: "R:R Ratio (TP Target)", tab: "entry_exit", search: "R:R Ratio" },
+  "minRR": { label: "Min R:R Ratio (Gate)", tab: "risk", search: "Min R:R" },
+  "minRiskReward": { label: "Min R:R Ratio (Gate)", tab: "risk", search: "Min R:R" },
+  "riskPerTrade": { label: "Risk per Trade (%)", tab: "risk", search: "Risk per Trade" },
+  "Risk/Trade": { label: "Risk per Trade (%)", tab: "risk", search: "Risk per Trade" },
+  "maxDailyDrawdown": { label: "Max Daily Drawdown (%)", tab: "risk", search: "drawdown" },
+  "maxOpenPositions": { label: "Max Concurrent Trades", tab: "risk", search: "concurrent" },
+  "maxConcurrent": { label: "Max Concurrent Trades", tab: "risk", search: "concurrent" },
+  "portfolioHeat": { label: "Portfolio Heat (%)", tab: "risk", search: "portfolio heat" },
+  "maxPerSymbol": { label: "Max Per Symbol", tab: "risk", search: "per symbol" },
+  "fixedLotSize": { label: "Fixed Lot Size", tab: "risk", search: "lot size" },
+  "confluenceThreshold": { label: "Confluence Threshold", tab: "strategy", search: "confluence threshold" },
+  "tier1Minimum": { label: "Tier 1 Minimum", tab: "strategy", search: "tier" },
+  "fixedSLPips": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
+  "SL": { label: "Stop Loss (pips)", tab: "entry_exit", search: "stop loss" },
+  "fixedTPPips": { label: "Take Profit (pips)", tab: "entry_exit", search: "take profit" },
+  "TP": { label: "Take Profit (pips)", tab: "entry_exit", search: "take profit" },
+  "takeProfitMethod": { label: "TP Method", tab: "entry_exit", search: "take profit" },
+  "stopLossMethod": { label: "SL Method", tab: "entry_exit", search: "stop loss" },
+  "tpATRMultiple": { label: "TP ATR Multiple", tab: "entry_exit", search: "ATR" },
+  "slATRMultiple": { label: "SL ATR Multiple", tab: "entry_exit", search: "ATR" },
+};
+
+/** Format a config value for display */
+function formatConfigValue(val: unknown): string {
+  if (val === null || val === undefined) return "—";
+  if (typeof val === "number") return val.toString();
+  if (typeof val === "boolean") return val ? "Enabled" : "Disabled";
+  if (typeof val === "string") return val;
+  return JSON.stringify(val);
+}
+
+/** Get the best tab/search for a recommendation based on its suggested_value keys */
+function getConfigTarget(rec: Recommendation): { tab: string; search: string } | null {
+  if (!rec.suggested_value || typeof rec.suggested_value !== "object") return null;
+  const keys = Object.keys(rec.suggested_value);
+  for (const key of keys) {
+    const info = CONFIG_KEY_LABELS[key];
+    if (info) return { tab: info.tab, search: info.search || "" };
+  }
+  // Fallback: check category
+  const categoryTabMap: Record<string, string> = {
+    "stop_loss": "entry_exit",
+    "take_profit": "entry_exit",
+    "risk_management": "risk",
+    "factor_weights": "factorWeights",
+    "session_filter": "sessions",
+    "instrument_filter": "instruments",
+    "timing": "sessions",
+  };
+  if (rec.category && categoryTabMap[rec.category]) {
+    return { tab: categoryTabMap[rec.category], search: "" };
+  }
+  return null;
+}
+
 function RecommendationCard({
   rec,
   index,
@@ -159,106 +220,143 @@ function RecommendationCard({
   isAutoApplicable: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configTarget, setConfigTarget] = useState<{ tab: string; search: string } | null>(null);
+
+  const handleOpenConfig = () => {
+    const target = getConfigTarget(rec);
+    setConfigTarget(target);
+    setConfigModalOpen(true);
+  };
 
   return (
-    <div className="border border-border rounded-md p-2.5 space-y-1.5 bg-card/50 hover:bg-card/80 transition-colors">
-      <div className="flex items-start gap-2">
-        <span className="text-muted-foreground mt-0.5">
-          {categoryIcons[rec.category] || <Lightbulb className="w-3.5 h-3.5" />}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] font-semibold text-foreground">{rec.title}</span>
-            <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 ${confidenceColors[rec.confidence] || ""}`}>
-              {rec.confidence?.toUpperCase()}
-            </Badge>
-            {rec.risk_level && (
-              <span className={`text-[9px] font-medium ${riskColors[rec.risk_level] || ""}`}>
-                {rec.risk_level.toUpperCase()} RISK
-              </span>
-            )}
-            {isPending && !isAutoApplicable && (
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-badge-warn text-warn border-amber-500/30">
-                MANUAL
+    <>
+      <div className="border border-border rounded-md p-2.5 space-y-1.5 bg-card/50 hover:bg-card/80 transition-colors">
+        <div className="flex items-start gap-2">
+          <span className="text-muted-foreground mt-0.5">
+            {categoryIcons[rec.category] || <Lightbulb className="w-3.5 h-3.5" />}
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-semibold text-foreground">{rec.title}</span>
+              <Badge variant="outline" className={`text-[9px] px-1.5 py-0 h-4 ${confidenceColors[rec.confidence] || ""}`}>
+                {rec.confidence?.toUpperCase()}
               </Badge>
+              {rec.risk_level && (
+                <span className={`text-[9px] font-medium ${riskColors[rec.risk_level] || ""}`}>
+                  {rec.risk_level.toUpperCase()} RISK
+                </span>
+              )}
+              {isPending && !isAutoApplicable && (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-badge-warn text-warn border-amber-500/30">
+                  MANUAL
+                </Badge>
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+              {rec.description?.substring(0, expanded ? 1000 : 120)}
+              {!expanded && rec.description?.length > 120 && "..."}
+            </p>
+          </div>
+          <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground">
+            {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+
+        {expanded && (
+          <div className="pl-6 space-y-1.5">
+            {/* Human-readable config changes */}
+            {rec.current_value && rec.suggested_value && (
+              <div className="space-y-1">
+                {Object.entries(rec.suggested_value as Record<string, unknown>).map(([key, suggestedVal]) => {
+                  const currentVal = (rec.current_value as Record<string, unknown>)?.[key];
+                  const labelInfo = CONFIG_KEY_LABELS[key];
+                  const label = labelInfo?.label || key.replace(/([A-Z])/g, " $1").replace(/^./, s => s.toUpperCase());
+                  return (
+                    <div key={key} className="flex items-center gap-2 text-[10px]">
+                      <span className="text-muted-foreground font-medium min-w-[100px]">{label}</span>
+                      <span className="font-mono bg-muted text-muted-foreground px-1.5 py-0.5 rounded">
+                        {formatConfigValue(currentVal)}
+                      </span>
+                      <ArrowRight className="w-3 h-3 text-muted-foreground flex-shrink-0" />
+                      <span className="font-mono bg-primary/10 text-primary px-1.5 py-0.5 rounded font-semibold">
+                        {formatConfigValue(suggestedVal)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Evidence */}
+            {rec.evidence && (
+              <p className="text-[10px] text-muted-foreground italic">
+                Evidence: {rec.evidence}
+              </p>
+            )}
+
+            {/* Manual-action notice with Open in Config button */}
+            {isPending && !isAutoApplicable && (
+              <div className="flex items-center gap-2">
+                <p className="text-[10px] text-warn/90 leading-relaxed border-l-2 border-warn/40 pl-2 flex-1">
+                  Manual action required — apply this change in config, then click <span className="font-semibold">Mark as done</span>.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[9px] px-2 flex-shrink-0"
+                  onClick={handleOpenConfig}
+                >
+                  <Settings className="w-3 h-3 mr-1" /> Open in Config
+                </Button>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            {isPending && onDismiss && (
+              <div className="flex gap-2 pt-1">
+                {isAutoApplicable && onApprove && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-6 text-[10px] px-3"
+                    onClick={onApprove}
+                  >
+                    <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
+                  </Button>
+                )}
+                {!isAutoApplicable && onMarkDone && (
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-6 text-[10px] px-3"
+                    onClick={onMarkDone}
+                  >
+                    <CheckCircle2 className="w-3 h-3 mr-1" /> Mark as done
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 text-[10px] px-3"
+                  onClick={onDismiss}
+                >
+                  <XCircle className="w-3 h-3 mr-1" /> Dismiss
+                </Button>
+              </div>
             )}
           </div>
-          <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
-            {rec.description?.substring(0, expanded ? 1000 : 120)}
-            {!expanded && rec.description?.length > 120 && "..."}
-          </p>
-        </div>
-        <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground">
-          {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        </button>
+        )}
       </div>
 
-      {expanded && (
-        <div className="pl-6 space-y-1.5">
-          {/* Current → Suggested values */}
-          {rec.current_value && rec.suggested_value && (
-            <div className="flex items-center gap-2 text-[10px]">
-              <span className="text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">
-                {JSON.stringify(rec.current_value)}
-              </span>
-              <ArrowRight className="w-3 h-3 text-muted-foreground" />
-              <span className="text-primary font-mono bg-primary/10 px-1.5 py-0.5 rounded">
-                {JSON.stringify(rec.suggested_value)}
-              </span>
-            </div>
-          )}
-
-          {/* Evidence */}
-          {rec.evidence && (
-            <p className="text-[10px] text-muted-foreground italic">
-              Evidence: {rec.evidence}
-            </p>
-          )}
-
-          {/* Manual-action notice */}
-          {isPending && !isAutoApplicable && (
-            <p className="text-[10px] text-warn/90 leading-relaxed border-l-2 border-warn/40 pl-2">
-              💡 Manual action required — this recommendation can&apos;t be auto-applied.
-              Apply the change yourself in the relevant config tab, then click <span className="font-semibold">Mark as done</span>.
-            </p>
-          )}
-
-          {/* Action buttons */}
-          {isPending && onDismiss && (
-            <div className="flex gap-2 pt-1">
-              {isAutoApplicable && onApprove && (
-                <Button
-                  size="sm"
-                  variant="default"
-                  className="h-6 text-[10px] px-3"
-                  onClick={onApprove}
-                >
-                  <CheckCircle2 className="w-3 h-3 mr-1" /> Approve
-                </Button>
-              )}
-              {!isAutoApplicable && onMarkDone && (
-                <Button
-                  size="sm"
-                  variant="default"
-                  className="h-6 text-[10px] px-3"
-                  onClick={onMarkDone}
-                >
-                  <CheckCircle2 className="w-3 h-3 mr-1" /> Mark as done
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 text-[10px] px-3"
-                onClick={onDismiss}
-              >
-                <XCircle className="w-3 h-3 mr-1" /> Dismiss
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+      {/* Config Modal — opens to the relevant tab/field */}
+      <BotConfigModal
+        open={configModalOpen}
+        onClose={() => setConfigModalOpen(false)}
+        defaultTab={configTarget?.tab}
+        defaultSearch={configTarget?.search}
+      />
+    </>
   );
 }
 
