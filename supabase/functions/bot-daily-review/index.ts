@@ -491,21 +491,113 @@ RULES:
   * Walk-forward VALIDATED = conclusion holds out-of-sample (safe to recommend changes)
   * Walk-forward INVALIDATED = conclusion is noise (do NOT recommend changes for that gate)
   * Only recommend gate threshold changes when CUSUM has breached AND walk-forward validates
-- ALL suggested_value keys MUST use exact camelCase config keys below. Do NOT invent keys.
-- For factor_weights: suggested_value keys MUST be one of:
+- ALL suggested_value keys MUST use the EXACT camelCase keys below. NEVER invent keys.
+- Values MUST be numbers, booleans, or valid enum strings. NEVER use vague values like "looser_setting" or "default".
+- tier1Minimum is NOT configurable (hardcoded to 3). Do NOT recommend changing it.
+
+VALID CONFIG KEYS BY CATEGORY:
+
+[factor_weights] suggested_value keys MUST be one of:
   marketStructure, orderBlock, fairValueGap, premiumDiscountFib, sessionQuality, judasSwing,
   pdPwLevels, reversalCandle, liquiditySweep, displacement, breakerBlock, unicornModel,
   smtDivergence, volumeProfile, amdPhase, currencyStrength, dailyBias, htfPoiAlignment,
   htfFibPdLiquidity, confluenceStack, pullbackHealth, gamePlanKeyLevel, sessionAffinity
-- For take_profit: tpRRRatio (number, the R:R target), takeProfitMethod ("rr"|"fixed"|"atr"), fixedTPPips, tpATRMultiple
-- For stop_loss: stopLossMethod ("swing"|"fixed"|"atr"), fixedSLPips, slATRMultiple, slBufferPips
-- For risk_management: riskPerTrade (0.5-3.0), maxConcurrentTrades (number), maxPositionsPerSymbol (number),
-  maxDailyDrawdown (number %), maxPortfolioHeat (number %), fixedLotSize (number)
-- For session_filter: newsFilterEnabled (bool), newsFilterPauseMinutes (5-120), killZoneOnly (bool)
-- For instrument_filter: spreadFilterEnabled (bool), maxSpreadPips (number), atrFilterEnabled (bool), atrFilterMin, atrFilterMax
-- For timing: confluenceThreshold (20-90, the minimum score %)
-- tier1Minimum is NOT configurable (hardcoded to 3). Do NOT recommend changing it.
-- NEVER use invented keys like "looser_setting", "default", "threshold". Values MUST be numbers or booleans.
+  (values: number 0.0-5.0, where default is typically 1.0-2.5)
+
+[take_profit] keys:
+  tpRRRatio (number, R:R target e.g. 1.5-5.0)
+  takeProfitMethod ("rr"|"fixed"|"atr")
+  fixedTPPips (number)
+  tpATRMultiple (number, e.g. 1.5-4.0)
+  partialTPEnabled (bool)
+  partialTPLevel (number, pips at which partial TP triggers)
+  partialTPPercent (number, % of position to close, e.g. 50)
+
+[stop_loss] keys:
+  stopLossMethod ("swing"|"fixed"|"atr")
+  fixedSLPips (number)
+  slATRMultiple (number, e.g. 1.0-3.0)
+  slBufferPips (number, extra buffer added to SL)
+  breakEvenEnabled (bool)
+  breakEvenTriggerPips (number, pips in profit before moving SL to entry)
+  trailingStopEnabled (bool)
+  trailingStopPips (number)
+  trailingStopActivation (number, pips in profit before trailing starts)
+  structureInvalidationEnabled (bool, close if structure breaks against trade)
+
+[risk_management] keys:
+  riskPerTrade (number, 0.5-3.0 %)
+  positionSizingMethod ("risk_percent"|"fixed_lot")
+  fixedLotSize (number)
+  maxConcurrentTrades (number, e.g. 1-10)
+  maxPositionsPerSymbol (number, e.g. 1-3)
+  maxDailyDrawdown (number, % e.g. 3-10)
+  maxDrawdown (number, total % drawdown limit)
+  maxPortfolioHeat (number, % e.g. 5-15)
+  allowSameDirectionStacking (bool)
+  conflictBlockAt (number, correlation threshold to block)
+  conflictThresholdRaise (number)
+  atrVolatilityMultiplier (number)
+  minRR (number, minimum R:R gate e.g. 1.0-3.0)
+
+[protection] keys:
+  maxConsecutiveLosses (number, e.g. 3-10, pauses bot after N losses)
+  circuitBreakerPct (number, % loss that triggers full stop)
+  maxDailyLoss (number, absolute $ loss limit)
+
+[session_filter] keys:
+  newsFilterEnabled (bool)
+  newsFilterPauseMinutes (number, 5-120)
+  killZoneOnly (bool, only trade during kill zones)
+
+[instrument_filter] keys:
+  spreadFilterEnabled (bool)
+  maxSpreadPips (number)
+  atrFilterEnabled (bool)
+  atrFilterMin (number, min ATR in pips)
+  atrFilterMax (number, max ATR in pips)
+  correlationFilterEnabled (bool)
+  maxCorrelatedPositions (number)
+
+[exit_management] keys:
+  closeOnReverse (bool, close position if structure reverses)
+  maxHoldEnabled (bool)
+  maxHoldHours (number, force close after N hours)
+  timeBasedExitEnabled (bool)
+  timeExitHours (number)
+
+[entry_refinement] keys:
+  limitOrderEnabled (bool, use limit orders at zone instead of market)
+  limitOrderExpiryMinutes (number)
+  cooldownMinutes (number, wait between trades on same symbol)
+  scanIntervalMinutes (number, how often bot scans)
+
+[strategy] keys:
+  confluenceThreshold (number, 20-90, minimum score % to take trade)
+  structureLookback (number, candles for structure detection e.g. 30-200)
+  regimeScoringEnabled (bool, adapt weights to market regime)
+  regimeScoringStrength (number, 0.0-1.0, how much regime affects weights)
+  htfBiasHardVeto (bool, block trades against HTF bias entirely)
+  requireHTFBias (bool)
+  normalizedScoring (bool)
+  onlyBuyInDiscount (bool, only long below 50% fib)
+  onlySellInPremium (bool, only short above 50% fib)
+  useOrderBlocks (bool)
+  useFVG (bool)
+  useBreakerBlocks (bool)
+  useLiquiditySweep (bool)
+  useDisplacement (bool)
+  useSMT (bool)
+  useVolumeProfile (bool)
+  useAMD (bool)
+  useDailyBias (bool)
+  useSilverBullet (bool)
+  useMacroWindows (bool)
+  useUnicornModel (bool)
+  useStructureBreak (bool)
+  structuralConvictionEnabled (bool)
+
+END OF VALID CONFIG KEYS.
 
 You MUST respond with valid JSON in this exact format:
 {
@@ -516,7 +608,7 @@ You MUST respond with valid JSON in this exact format:
   ],
   "recommendations": [
     {
-      "category": "stop_loss|take_profit|factor_weights|session_filter|instrument_filter|risk_management|timing|general",
+      "category": "stop_loss|take_profit|factor_weights|session_filter|instrument_filter|risk_management|protection|exit_management|entry_refinement|strategy|timing|general",
       "title": "Short actionable title",
       "description": "Detailed explanation with numbers from the data",
       "current_value": { "config_key": "current_value" },
