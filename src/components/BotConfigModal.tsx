@@ -427,6 +427,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
     { id: "gamePlan", label: "Game Plan", icon: Crosshair },
+    { id: "ict2022", label: "ICT 2022", icon: Sparkles },
   ];
 
   // Search filtering — compute once per render
