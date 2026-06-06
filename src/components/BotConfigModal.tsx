@@ -128,6 +128,75 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "gamePlan", label: "IPDA Ranges", keywords: ["ipda", "institutional", "data ranges", "20 day", "40 day", "60 day", "equilibrium"] },
 ];
 
+// ─── ICT 2022 module definitions (single source of truth for tab + search) ──
+const ICT2022_MODULES: {
+  key: string;
+  label: string;
+  description: string;
+  enabledField: string;
+  gateField: string;
+  hasGate: boolean;
+}[] = [
+  {
+    key: "htf",
+    label: "HTF Framework",
+    description: "Weekly Bias + Daily Impulse + Containment (is your LTF zone inside the Daily OB?). The top-level directional engine from the 2022 Mentorship.",
+    enabledField: "ictHTFEnabled",
+    gateField: "ictHTFGateMode",
+    hasGate: true,
+  },
+  {
+    key: "mss",
+    label: "Displacement-Validated MSS",
+    description: "A Market Structure Shift is only valid if the break candle shows displacement (body/range ≥ 0.6, range ≥ 1.2× ATR). Sluggish breaks are rejected.",
+    enabledField: "ictDisplacementMSSEnabled",
+    gateField: "ictDisplacementMSSGateMode",
+    hasGate: true,
+  },
+  {
+    key: "judas",
+    label: "Judas Swing / Liquidity Sweep",
+    description: "Requires a liquidity sweep on the opposite side BEFORE the MSS (the false move that takes stops, then real move begins).",
+    enabledField: "ictJudasSwingEnabled",
+    gateField: "ictJudasSwingGateMode",
+    hasGate: true,
+  },
+  {
+    key: "fvg",
+    label: "FVG Invalidation Rules",
+    description: "Body-close invalidation (wicks don't count), Consequent Encroachment at 50%, Rule of 2 (FVG exhausted after 2 touches without follow-through).",
+    enabledField: "ictFVGInvalidationEnabled",
+    gateField: "ictFVGInvalidationGateMode",
+    hasGate: true,
+  },
+  {
+    key: "kz",
+    label: "Kill Zones & Silver Bullet",
+    description: "London KZ, NY KZ, Silver Bullet 1/2/3 windows. Penalises lunch & Asian dead zones. Boosts setups inside prime windows.",
+    enabledField: "ictKillZoneEnabled",
+    gateField: "ictKillZoneGateMode",
+    hasGate: true,
+  },
+  {
+    key: "risk",
+    label: "Risk Management",
+    description: "Drawdown halving after losses, 1%/day & 2.5%/week loss caps, FVG Rule-of-2 exit, position sizing. Enable as advisory — no built-in gate mode.",
+    enabledField: "ictRiskEnabled",
+    gateField: "",
+    hasGate: false,
+  },
+];
+
+const ICT2022_SEARCH_ENTRIES = ICT2022_MODULES.flatMap(m => [
+  { tab: "ict2022", label: m.label, keywords: ["ict", "mentorship", "2022", m.label.toLowerCase()] },
+]);
+
+// Append ICT entries to the main search index
+SEARCH_INDEX.push(
+  { tab: "ict2022", label: "ICT 2022 Mentorship", keywords: ["ict", "mentorship", "2022", "smc", "inner circle trader"] },
+  ...ICT2022_SEARCH_ENTRIES
+);
+
 const HighlightContext = createContext<Set<string>>(new Set());
 
 
