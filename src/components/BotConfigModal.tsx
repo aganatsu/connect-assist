@@ -1630,6 +1630,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     )}
                   </div>
                 )}
+                {effectiveActiveTab === "ict2022" && (
+                  <ICT2022Tab config={config} setConfig={setConfig} />
+                )}
               </>
             )}
             {config && filteredTabs.length === 0 && (
