@@ -68,6 +68,12 @@ import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmat
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
+import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
+import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
+import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
+import { validateFVGBatch, type BatchFVGValidationResult, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
+import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
+import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
 import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
@@ -219,6 +225,51 @@ const DEFAULTS = {
   _smtResult: null as any,
   // ── Factor Weights (config-driven, AI-tunable) ──
   factorWeights: {} as Record<string, number>,
+  // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+  ictHTFEnabled: true,             // Enable ICT HTF analysis (weekly bias + daily impulse + containment)
+  ictHTFGateMode: "off" as "hard" | "soft" | "off",  // "off" = log only (no trade impact); "soft" = score adjust; "hard" = block
+  ictHTFAlignedBonus: 2.0,         // Score bonus when weekly + daily + containment all align
+  ictHTFMisalignedPenalty: 3.0,    // Score penalty when weekly bias opposes trade direction
+  ictHTFMinContainment: 50,        // Min % overlap between LTF zone and Daily OB for containment pass
+  ictWeeklyBiasRequired: true,     // Require weekly bias alignment (when gate != off)
+  ictDailyContainmentRequired: true, // Require LTF zone to be inside Daily OB (when gate != off)
+  // ── ICT Displacement MSS Validation ──
+  ictDisplacementMSSEnabled: true,
+  ictDisplacementMSSGateMode: "off" as "hard" | "soft" | "off",
+  ictDisplacementMSSMinBodyRatio: 0.6,
+  ictDisplacementMSSMinRangeATR: 1.2,
+  ictDisplacementMSSLookback: 3,
+  ictDisplacementMSSPenalty: 2.0,
+  // ── ICT Judas Swing (Liquidity Sweep before MSS) ──
+  ictJudasSwingEnabled: true,
+  ictJudasSwingGateMode: "off" as "hard" | "soft" | "off",
+  ictJudasSwingLookback: 10,
+  ictJudasSwingMinDepthATR: 0.1,
+  ictJudasSwingRequireCloseBack: true,
+  ictJudasSwingPenalty: 1.5,
+  // ── ICT FVG Invalidation ──
+  ictFVGInvalidationEnabled: true,
+  ictFVGInvalidationGateMode: "off" as "hard" | "soft" | "off",
+  ictFVGBodyCloseOnly: true,
+  ictFVGRuleOfTwo: true,
+  ictFVGExhaustedPenalty: 1.5,
+  ictFVGInvalidatedPenalty: 3.0,
+  // ── ICT Kill Zone Time Filter ──
+  ictKillZoneEnabled: true,
+  ictKillZoneGateMode: "off" as "hard" | "soft" | "off",
+  ictKillZoneSilverBullet: true,
+  ictKillZonePMSession: true,
+  ictKillZoneOutsidePenalty: 1.0,
+  ictKillZonePrimeBonus: 1.5,
+  // ── ICT Risk Management ──
+  ictRiskEnabled: true,
+  ictRiskBasePercent: 0.01,
+  ictRiskDrawdownHalving: true,
+  ictRiskMaxConsecLosses: 3,
+  ictRiskDailyLimit: 0.01,
+  ictRiskWeeklyLimit: 0.025,
+  ictRiskMaxTradesPerDay: 3,
+  ictRiskFVGRuleOfTwoExit: true,
   // ── Entry/HTF timeframes (set by style) ──
   entryTimeframe: "15min",
   htfTimeframe: "1day",
@@ -855,6 +906,51 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
     minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
 
+    // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
+    ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? DEFAULTS.ictHTFEnabled,
+    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
+    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? DEFAULTS.ictHTFAlignedBonus,
+    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? DEFAULTS.ictHTFMisalignedPenalty,
+    ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? DEFAULTS.ictHTFMinContainment,
+    ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? DEFAULTS.ictWeeklyBiasRequired,
+        ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? DEFAULTS.ictDailyContainmentRequired,
+    // ── ICT Displacement MSS Validation ──
+    ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? DEFAULTS.ictDisplacementMSSEnabled,
+    ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
+    ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? DEFAULTS.ictDisplacementMSSMinBodyRatio,
+    ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? DEFAULTS.ictDisplacementMSSMinRangeATR,
+    ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? DEFAULTS.ictDisplacementMSSLookback,
+    ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? DEFAULTS.ictDisplacementMSSPenalty,
+    // ── ICT Judas Swing ──
+    ictJudasSwingEnabled: strategy.ictJudasSwingEnabled ?? raw.ictJudasSwingEnabled ?? DEFAULTS.ictJudasSwingEnabled,
+    ictJudasSwingGateMode: (strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? DEFAULTS.ictJudasSwingGateMode) as "hard" | "soft" | "off",
+    ictJudasSwingLookback: strategy.ictJudasSwingLookback ?? raw.ictJudasSwingLookback ?? DEFAULTS.ictJudasSwingLookback,
+    ictJudasSwingMinDepthATR: strategy.ictJudasSwingMinDepthATR ?? raw.ictJudasSwingMinDepthATR ?? DEFAULTS.ictJudasSwingMinDepthATR,
+    ictJudasSwingRequireCloseBack: strategy.ictJudasSwingRequireCloseBack ?? raw.ictJudasSwingRequireCloseBack ?? DEFAULTS.ictJudasSwingRequireCloseBack,
+    ictJudasSwingPenalty: strategy.ictJudasSwingPenalty ?? raw.ictJudasSwingPenalty ?? DEFAULTS.ictJudasSwingPenalty,
+    // ── ICT FVG Invalidation ──
+    ictFVGInvalidationEnabled: strategy.ictFVGInvalidationEnabled ?? raw.ictFVGInvalidationEnabled ?? DEFAULTS.ictFVGInvalidationEnabled,
+    ictFVGInvalidationGateMode: (strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? DEFAULTS.ictFVGInvalidationGateMode) as "hard" | "soft" | "off",
+    ictFVGBodyCloseOnly: strategy.ictFVGBodyCloseOnly ?? raw.ictFVGBodyCloseOnly ?? DEFAULTS.ictFVGBodyCloseOnly,
+    ictFVGRuleOfTwo: strategy.ictFVGRuleOfTwo ?? raw.ictFVGRuleOfTwo ?? DEFAULTS.ictFVGRuleOfTwo,
+    ictFVGExhaustedPenalty: strategy.ictFVGExhaustedPenalty ?? raw.ictFVGExhaustedPenalty ?? DEFAULTS.ictFVGExhaustedPenalty,
+    ictFVGInvalidatedPenalty: strategy.ictFVGInvalidatedPenalty ?? raw.ictFVGInvalidatedPenalty ?? DEFAULTS.ictFVGInvalidatedPenalty,
+    // ── ICT Kill Zone ──
+    ictKillZoneEnabled: strategy.ictKillZoneEnabled ?? raw.ictKillZoneEnabled ?? DEFAULTS.ictKillZoneEnabled,
+    ictKillZoneGateMode: (strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? DEFAULTS.ictKillZoneGateMode) as "hard" | "soft" | "off",
+    ictKillZoneSilverBullet: strategy.ictKillZoneSilverBullet ?? raw.ictKillZoneSilverBullet ?? DEFAULTS.ictKillZoneSilverBullet,
+    ictKillZonePMSession: strategy.ictKillZonePMSession ?? raw.ictKillZonePMSession ?? DEFAULTS.ictKillZonePMSession,
+    ictKillZoneOutsidePenalty: strategy.ictKillZoneOutsidePenalty ?? raw.ictKillZoneOutsidePenalty ?? DEFAULTS.ictKillZoneOutsidePenalty,
+    ictKillZonePrimeBonus: strategy.ictKillZonePrimeBonus ?? raw.ictKillZonePrimeBonus ?? DEFAULTS.ictKillZonePrimeBonus,
+    // ── ICT Risk Management ──
+    ictRiskEnabled: strategy.ictRiskEnabled ?? raw.ictRiskEnabled ?? DEFAULTS.ictRiskEnabled,
+    ictRiskBasePercent: strategy.ictRiskBasePercent ?? raw.ictRiskBasePercent ?? DEFAULTS.ictRiskBasePercent,
+    ictRiskDrawdownHalving: strategy.ictRiskDrawdownHalving ?? raw.ictRiskDrawdownHalving ?? DEFAULTS.ictRiskDrawdownHalving,
+    ictRiskMaxConsecLosses: strategy.ictRiskMaxConsecLosses ?? raw.ictRiskMaxConsecLosses ?? DEFAULTS.ictRiskMaxConsecLosses,
+    ictRiskDailyLimit: strategy.ictRiskDailyLimit ?? raw.ictRiskDailyLimit ?? DEFAULTS.ictRiskDailyLimit,
+    ictRiskWeeklyLimit: strategy.ictRiskWeeklyLimit ?? raw.ictRiskWeeklyLimit ?? DEFAULTS.ictRiskWeeklyLimit,
+    ictRiskMaxTradesPerDay: strategy.ictRiskMaxTradesPerDay ?? raw.ictRiskMaxTradesPerDay ?? DEFAULTS.ictRiskMaxTradesPerDay,
+    ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? DEFAULTS.ictRiskFVGRuleOfTwoExit,
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
     limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? DEFAULTS.limitOrderExpiryMinutes,
@@ -3413,6 +3509,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
     fetchPromises.push(cachedFetch(pair, "1h", "5d"));
     if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
+    // Fetch weekly candles for ICT HTF framework (cached — same data reused across pairs)
+    const ictHTFActive = pairConfig.ictHTFEnabled !== false;
+    if (ictHTFActive) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -3421,6 +3520,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // 1H candles always fetched (index = 2 + h4Offset)
     const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
     const smtCandles = smtFlag ? fetched[3 + h4Offset] : null;
+    // Weekly candles (last in fetch array when ICT HTF is active)
+    const weeklyCandles: Candle[] | null = ictHTFActive ? (fetched[fetched.length - 1] || null) : null;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -3978,6 +4079,216 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       };
     }
 
+    // ── ICT HTF Framework: Weekly Bias + Daily Impulse + Containment (log-only in "off" mode) ──
+    let ictHTFResult: ICTHTFResult | null = null;
+    if (ictHTFActive && analysis.direction) {
+      try {
+        // Build LTF zone from impulse zone engine result (if available)
+        const izData = (detail as any).impulseZone;
+        const ltfZone: { high: number; low: number } | null = izData?.bestZone
+          ? { high: izData.bestZone.high, low: izData.bestZone.low }
+          : null;
+
+        ictHTFResult = runICTHTFAnalysis(
+          weeklyCandles,
+          dailyCandles,
+          analysis.lastPrice,
+          analysis.direction as "long" | "short",
+          ltfZone,
+          {
+            ictHTFEnabled: pairConfig.ictHTFEnabled,
+            ictHTFGateMode: pairConfig.ictHTFGateMode,
+            ictHTFAlignedBonus: pairConfig.ictHTFAlignedBonus,
+            ictHTFMisalignedPenalty: pairConfig.ictHTFMisalignedPenalty,
+            ictHTFMinContainment: pairConfig.ictHTFMinContainment,
+            ictWeeklyBiasRequired: pairConfig.ictWeeklyBiasRequired,
+            ictDailyContainmentRequired: pairConfig.ictDailyContainmentRequired,
+          },
+        );
+
+        // Attach to scan detail for dashboard visibility
+        (detail as any).ictHTF = {
+          gateMode: pairConfig.ictHTFGateMode,
+          passed: ictHTFResult.passed,
+          weeklyBias: ictHTFResult.weeklyBias ? {
+            bias: ictHTFResult.weeklyBias.bias,
+            confidence: ictHTFResult.weeklyBias.confidence,
+            primaryDOL: ictHTFResult.weeklyBias.primaryDOL?.label ?? null,
+          } : null,
+          dailyOB: ictHTFResult.dailyOB ? {
+            high: ictHTFResult.dailyOB.high,
+            low: ictHTFResult.dailyOB.low,
+            direction: ictHTFResult.dailyOB.direction,
+            isValid: ictHTFResult.dailyOB.isValid,
+            priceInZone: ictHTFResult.dailyOB.priceInZone,
+          } : null,
+          containment: ictHTFResult.containment ? {
+            overlapPercent: ictHTFResult.containment.overlapPercent,
+            isContained: ictHTFResult.containment.isContained,
+          } : null,
+          weeklyAligned: ictHTFResult.weeklyAligned,
+          zoneContained: ictHTFResult.zoneContained,
+          scoreAdjustment: ictHTFResult.scoreAdjustment,
+          reason: ictHTFResult.reason,
+          details: ictHTFResult.details,
+        };
+
+        // Log ICT HTF result
+        const modeTag = pairConfig.ictHTFGateMode.toUpperCase();
+        console.log(`[scan ${scanCycleId}] ${pair} ICT HTF [${modeTag}]: ${ictHTFResult.reason}`);
+        if (ictHTFResult.details.length > 0) {
+          console.log(`[scan ${scanCycleId}] ${pair} ICT HTF details: ${ictHTFResult.details.join(" | ")}`);
+        }
+      } catch (ictErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT HTF error (non-fatal): ${ictErr?.message}`);
+        (detail as any).ictHTF = { gateMode: pairConfig.ictHTFGateMode, passed: true, error: ictErr?.message };
+      }
+    }
+
+    // ── ICT Displacement MSS Validation (log-only in "off" mode) ──
+    let ictMSSResult: MSSValidationResult | null = null;
+    if (pairConfig.ictDisplacementMSSEnabled) {
+      try {
+        const mssConfig: DisplacementMSSConfig = {
+          ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
+          minBodyRatio: pairConfig.ictDisplacementMSSMinBodyRatio,
+          minRangeATR: pairConfig.ictDisplacementMSSMinRangeATR,
+          lookback: pairConfig.ictDisplacementMSSLookback,
+        };
+        ictMSSResult = validateRecentMSS(candles, mssConfig);
+        const modeTag = pairConfig.ictDisplacementMSSGateMode.toUpperCase();
+        const statusTag = ictMSSResult.valid ? "VALID" : "INVALID";
+        console.log(`[scan ${scanCycleId}] ${pair} ICT MSS [${modeTag}]: ${statusTag} — ${ictMSSResult.reason}`);
+        (detail as any).ictMSS = {
+          gateMode: pairConfig.ictDisplacementMSSGateMode,
+          valid: ictMSSResult.valid,
+          reason: ictMSSResult.reason,
+          displacementStrength: ictMSSResult.displacementStrength,
+        };
+      } catch (e: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT MSS error (non-fatal): ${e?.message}`);
+        (detail as any).ictMSS = { gateMode: pairConfig.ictDisplacementMSSGateMode, valid: true, error: e?.message };
+      }
+    }
+
+    // ── ICT Judas Swing Detection (log-only in "off" mode) ──
+    let ictJudasResult: JudasSwingResult | null = null;
+    if (pairConfig.ictJudasSwingEnabled) {
+      try {
+        const judasConfig: JudasSwingConfig = {
+          ...DEFAULT_JUDAS_SWING_CONFIG,
+          lookback: pairConfig.ictJudasSwingLookback,
+          minDepthATR: pairConfig.ictJudasSwingMinDepthATR,
+          requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
+        };
+        const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
+        const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
+        const statusTag = ictJudasResult.detected ? "DETECTED" : "NOT_FOUND";
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
+        (detail as any).ictJudas = {
+          gateMode: pairConfig.ictJudasSwingGateMode,
+          detected: ictJudasResult.detected,
+          reason: ictJudasResult.reason,
+          sweepLevel: ictJudasResult.sweepLevel,
+          sweepDepthATR: ictJudasResult.sweepDepthATR,
+        };
+      } catch (e: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT Judas error (non-fatal): ${e?.message}`);
+        (detail as any).ictJudas = { gateMode: pairConfig.ictJudasSwingGateMode, detected: false, error: e?.message };
+      }
+    }
+
+    // ── ICT FVG Invalidation (log-only in "off" mode) ──
+    let ictFVGResult: BatchFVGValidationResult | null = null;
+    if (pairConfig.ictFVGInvalidationEnabled && analysis.fvgs && analysis.fvgs.length > 0) {
+      try {
+        const fvgConfig: FVGInvalidationConfig = {
+          ...DEFAULT_FVG_INVALIDATION_CONFIG,
+          bodyCloseOnly: pairConfig.ictFVGBodyCloseOnly,
+          ruleOfTwo: pairConfig.ictFVGRuleOfTwo,
+        };
+        ictFVGResult = validateFVGBatch(analysis.fvgs, candles, fvgConfig);
+        const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
+        console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${ictFVGResult.validCount}/${ictFVGResult.totalCount} valid, ${ictFVGResult.invalidatedCount} invalidated, ${ictFVGResult.exhaustedCount} exhausted`);
+        (detail as any).ictFVG = {
+          gateMode: pairConfig.ictFVGInvalidationGateMode,
+          validCount: ictFVGResult.validCount,
+          invalidatedCount: ictFVGResult.invalidatedCount,
+          exhaustedCount: ictFVGResult.exhaustedCount,
+          totalCount: ictFVGResult.totalCount,
+        };
+      } catch (e: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT FVG error (non-fatal): ${e?.message}`);
+        (detail as any).ictFVG = { gateMode: pairConfig.ictFVGInvalidationGateMode, error: e?.message };
+      }
+    }
+
+    // ── ICT Kill Zone Time Filter (log-only in "off" mode) ──
+    let ictKZResult: ICTKillZoneResult | null = null;
+    if (pairConfig.ictKillZoneEnabled) {
+      try {
+        const kzConfig: ICTKillZoneConfig = {
+          ...DEFAULT_ICT_KILLZONE_CONFIG,
+          silverBullet: pairConfig.ictKillZoneSilverBullet,
+          pmSession: pairConfig.ictKillZonePMSession,
+        };
+        ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
+        const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
+        const statusTag = ictKZResult.inKillZone ? `IN (${ictKZResult.activeZone})` : `OUT (${ictKZResult.reason})`;
+        console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
+        (detail as any).ictKillZone = {
+          gateMode: pairConfig.ictKillZoneGateMode,
+          inKillZone: ictKZResult.inKillZone,
+          activeZone: ictKZResult.activeZone,
+          isPrime: ictKZResult.isPrime,
+          reason: ictKZResult.reason,
+        };
+      } catch (e: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT KZ error (non-fatal): ${e?.message}`);
+        (detail as any).ictKillZone = { gateMode: pairConfig.ictKillZoneGateMode, inKillZone: true, error: e?.message };
+      }
+    }
+
+    // ── ICT Risk Assessment (log-only in "off" mode) ──
+    let ictRiskResult: ICTRiskAssessment | null = null;
+    if (pairConfig.ictRiskEnabled) {
+      try {
+        const riskConfig: ICTRiskConfig = {
+          ...DEFAULT_ICT_RISK_CONFIG,
+          baseRiskPercent: pairConfig.ictRiskBasePercent,
+          drawdownHalving: pairConfig.ictRiskDrawdownHalving,
+          maxConsecutiveLosses: pairConfig.ictRiskMaxConsecLosses,
+          dailyLossLimit: pairConfig.ictRiskDailyLimit,
+          weeklyLossLimit: pairConfig.ictRiskWeeklyLimit,
+          maxTradesPerDay: pairConfig.ictRiskMaxTradesPerDay,
+        };
+        // Fetch recent trade history for risk assessment
+        const { data: recentTrades } = await supabase
+          .from("trade_history")
+          .select("pnl_percent, closed_at")
+          .eq("bot_config_id", configId)
+          .order("closed_at", { ascending: false })
+          .limit(20);
+        const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
+        const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
+        ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
+        const modeTag = "OFF"; // Risk is always informational for now
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.adjustedRiskPercent * 100).toFixed(2)}%, reason=${ictRiskResult.reason}`);
+        (detail as any).ictRisk = {
+          canTrade: ictRiskResult.canTrade,
+          adjustedRiskPercent: ictRiskResult.adjustedRiskPercent,
+          reason: ictRiskResult.reason,
+          consecutiveLosses: ictRiskResult.consecutiveLosses,
+          dailyLossPercent: ictRiskResult.dailyLossPercent,
+          weeklyLossPercent: ictRiskResult.weeklyLossPercent,
+        };
+      } catch (e: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} ICT Risk error (non-fatal): ${e?.message}`);
+        (detail as any).ictRisk = { canTrade: true, error: e?.message };
+      }
+    }
+
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
@@ -4342,9 +4653,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     // "off" mode: no adjustment at all
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
+    const ictHTFScoreAdj = ictHTFResult?.scoreAdjustment ?? 0;
+    // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
+    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
+      ? -pairConfig.ictDisplacementMSSPenalty : 0;
+    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.detected)
+      ? -pairConfig.ictJudasSwingPenalty : 0;
+    const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
+      ? -(ictFVGResult.invalidatedCount * pairConfig.ictFVGInvalidatedPenalty + ictFVGResult.exhaustedCount * pairConfig.ictFVGExhaustedPenalty) / Math.max(ictFVGResult.totalCount, 1)
+      : 0;
+    const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
+      ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
+      : 0;
+    const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
+    }
+    if (ictHTFScoreAdj !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} ICT HTF scoring: ${ictHTFScoreAdj > 0 ? "+" : ""}${ictHTFScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
+    }
+    if (ictMSSAdj !== 0 || ictJudasAdj !== 0 || ictFVGAdj !== 0 || ictKZAdj !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} ICT modules scoring: MSS=${ictMSSAdj.toFixed(1)} Judas=${ictJudasAdj.toFixed(1)} FVG=${ictFVGAdj.toFixed(1)} KZ=${ictKZAdj.toFixed(1)} (total=${ictTotalAdj.toFixed(1)}%, effective=${effectiveScore.toFixed(1)}%)`);
     }
 
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
@@ -4419,6 +4749,61 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       detail.status = "rejected";
       detail.rejectionReasons = [`Conflict counter BLOCKED: ${opposingCount} factors oppose ${analysis.direction} — too many conflicting signals (block at ${conflictBlockAt}+)`];
       detail.reason = `Conflict block: ${opposingCount} opposing factors`;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+
+    // ICT HTF hard gate: block trade if weekly bias or containment requirement fails (only in "hard" mode)
+    if (ictHTFResult && !ictHTFResult.passed) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT HTF BLOCKED: ${ictHTFResult.reason}`];
+      detail.reason = ictHTFResult.reason;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+    // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.valid) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
+      detail.reason = ictMSSResult.reason;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+    // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.detected) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
+      detail.reason = ictJudasResult.reason;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+    // ICT FVG Invalidation hard gate: block trade if ALL FVGs are invalidated
+    if (pairConfig.ictFVGInvalidationGateMode === "hard" && ictFVGResult && ictFVGResult.validCount === 0 && ictFVGResult.totalCount > 0) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT FVG BLOCKED: All ${ictFVGResult.totalCount} FVGs invalidated/exhausted`];
+      detail.reason = `All FVGs invalidated (${ictFVGResult.invalidatedCount} closed, ${ictFVGResult.exhaustedCount} exhausted)`;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+    // ICT Kill Zone hard gate: block trade if outside all kill zones
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.inKillZone) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
+      detail.reason = ictKZResult.reason;
+      rejectedCount++;
+      scanDetails.push(detail);
+      continue;
+    }
+    // ICT Risk hard gate: block trade if risk limits exceeded
+    if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
+      detail.status = "rejected";
+      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reason}`];
+      detail.reason = ictRiskResult.reason;
       rejectedCount++;
       scanDetails.push(detail);
       continue;
