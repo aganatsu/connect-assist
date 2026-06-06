@@ -1873,3 +1873,125 @@ function ToggleField({ label, description, checked, onChange }: { label: string;
     </div>
   );
 }
+
+// ─── ICT 2022 Mentorship Tab ──────────────────────────────────────────────
+// Frontend-only surface for the ICT modules already wired into bot-scanner.
+// Values are written into config.strategy.* so the scanner's existing
+// `strategy.X ?? raw.X ?? DEFAULTS.X` resolution chain picks them up
+// without any bot-logic changes.
+function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
+  const strategy = config.strategy || {};
+
+  const updateStrategy = (key: string, value: any) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      strategy: { ...(prev.strategy || {}), [key]: value },
+    }));
+  };
+
+  const getEnabled = (field: string, fallback = true) =>
+    strategy[field] !== undefined ? !!strategy[field] : fallback;
+  const getGate = (field: string): "off" | "soft" | "hard" =>
+    (strategy[field] as "off" | "soft" | "hard") || "off";
+
+  const enabledCount = ICT2022_MODULES.filter(m => getEnabled(m.enabledField)).length;
+  const activeGates = ICT2022_MODULES.filter(m => m.hasGate && getGate(m.gateField) !== "off").length;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <SectionHeader
+          title="ICT 2022 Mentorship"
+          description="Inner Circle Trader 2022 Mentorship modules. Already wired into the scanner — these toggles expose the gate modes."
+        />
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {enabledCount}/{ICT2022_MODULES.length} enabled
+          </Badge>
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {activeGates} active gate{activeGates === 1 ? "" : "s"}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="rounded border border-tier3/40 bg-badge-info p-3 space-y-1.5">
+        <p className="text-[10px] text-tier3 font-bold uppercase tracking-wider">How gate modes work</p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <span className="font-mono font-bold text-foreground">Off</span> — module logs its verdict but has zero impact on trades. Use this to observe behaviour first.{" "}
+          <span className="font-mono font-bold text-foreground">Soft</span> — module adds a score bonus when satisfied / penalty when violated.{" "}
+          <span className="font-mono font-bold text-foreground">Hard</span> — module blocks the trade entirely when its rule is violated.
+        </p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          Recommended rollout: leave on <span className="font-mono">Off</span> for a few sessions, watch the logs, then move one module at a time to <span className="font-mono">Soft</span>.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {ICT2022_MODULES.map(m => {
+          const enabled = getEnabled(m.enabledField);
+          const gate = m.hasGate ? getGate(m.gateField) : null;
+          return (
+            <div
+              key={m.key}
+              className={`border p-3 space-y-3 transition-colors ${
+                enabled ? "border-border" : "border-border/40 opacity-70"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold">{m.label}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{m.description}</p>
+                </div>
+                <Switch
+                  checked={enabled}
+                  onCheckedChange={v => updateStrategy(m.enabledField, v)}
+                  className="shrink-0 mt-0.5"
+                />
+              </div>
+
+              {m.hasGate && (
+                <div className="flex items-center gap-3 pt-1 border-t border-border/40">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                    Gate Mode
+                  </Label>
+                  <Select
+                    value={gate || "off"}
+                    onValueChange={(v: "off" | "soft" | "hard") => updateStrategy(m.gateField, v)}
+                    disabled={!enabled}
+                  >
+                    <SelectTrigger className="h-8 text-xs w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off" className="text-xs">Off — log only</SelectItem>
+                      <SelectItem value="soft" className="text-xs">Soft — score impact</SelectItem>
+                      <SelectItem value="hard" className="text-xs">Hard — block trade</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {gate && gate !== "off" && (
+                    <Badge
+                      variant="outline"
+                      className={`text-[9px] font-mono ${
+                        gate === "hard" ? "text-loss border-loss/40" : "text-warn border-warn/40"
+                      }`}
+                    >
+                      {gate === "hard" ? "BLOCKING" : "SCORING"}
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded border border-border bg-muted/20 p-3">
+        <p className="text-[10px] text-muted-foreground">
+          <span className="font-bold text-foreground">Note:</span> The scanner reads these flags from{" "}
+          <span className="font-mono">config.strategy</span> first, then falls back to its compiled defaults.
+          Saving here persists overrides to your bot config — no redeploy required.
+        </p>
+      </div>
+    </div>
+  );
+}
