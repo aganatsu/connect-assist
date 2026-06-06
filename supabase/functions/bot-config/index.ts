@@ -358,6 +358,21 @@ function getDefaultConfig() {
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
       // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
       normalizedScoring: true,
+
+      // ── ICT 2022 Mentorship modules ───────────────────────────────────
+      // All gates default to "off" (log-only, no trade impact). Flip to
+      // "soft" for score impact or "hard" to block trades.
+      ictHTFEnabled: true,
+      ictHTFGateMode: "off",
+      ictDisplacementMSSEnabled: true,
+      ictDisplacementMSSGateMode: "off",
+      ictJudasSwingEnabled: true,
+      ictJudasSwingGateMode: "off",
+      ictFVGInvalidationEnabled: true,
+      ictFVGInvalidationGateMode: "off",
+      ictKillZoneEnabled: true,
+      ictKillZoneGateMode: "off",
+      ictRiskEnabled: true,
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
