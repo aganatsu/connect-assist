@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair } from "lucide-react";
+import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -127,6 +127,75 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "gamePlan", label: "DOL TP Extension", keywords: ["dol", "draw on liquidity", "tp", "take profit", "extension", "target"] },
   { tab: "gamePlan", label: "IPDA Ranges", keywords: ["ipda", "institutional", "data ranges", "20 day", "40 day", "60 day", "equilibrium"] },
 ];
+
+// ─── ICT 2022 module definitions (single source of truth for tab + search) ──
+const ICT2022_MODULES: {
+  key: string;
+  label: string;
+  description: string;
+  enabledField: string;
+  gateField: string;
+  hasGate: boolean;
+}[] = [
+  {
+    key: "htf",
+    label: "HTF Framework",
+    description: "Weekly Bias + Daily Impulse + Containment (is your LTF zone inside the Daily OB?). The top-level directional engine from the 2022 Mentorship.",
+    enabledField: "ictHTFEnabled",
+    gateField: "ictHTFGateMode",
+    hasGate: true,
+  },
+  {
+    key: "mss",
+    label: "Displacement-Validated MSS",
+    description: "A Market Structure Shift is only valid if the break candle shows displacement (body/range ≥ 0.6, range ≥ 1.2× ATR). Sluggish breaks are rejected.",
+    enabledField: "ictDisplacementMSSEnabled",
+    gateField: "ictDisplacementMSSGateMode",
+    hasGate: true,
+  },
+  {
+    key: "judas",
+    label: "Judas Swing / Liquidity Sweep",
+    description: "Requires a liquidity sweep on the opposite side BEFORE the MSS (the false move that takes stops, then real move begins).",
+    enabledField: "ictJudasSwingEnabled",
+    gateField: "ictJudasSwingGateMode",
+    hasGate: true,
+  },
+  {
+    key: "fvg",
+    label: "FVG Invalidation Rules",
+    description: "Body-close invalidation (wicks don't count), Consequent Encroachment at 50%, Rule of 2 (FVG exhausted after 2 touches without follow-through).",
+    enabledField: "ictFVGInvalidationEnabled",
+    gateField: "ictFVGInvalidationGateMode",
+    hasGate: true,
+  },
+  {
+    key: "kz",
+    label: "Kill Zones & Silver Bullet",
+    description: "London KZ, NY KZ, Silver Bullet 1/2/3 windows. Penalises lunch & Asian dead zones. Boosts setups inside prime windows.",
+    enabledField: "ictKillZoneEnabled",
+    gateField: "ictKillZoneGateMode",
+    hasGate: true,
+  },
+  {
+    key: "risk",
+    label: "Risk Management",
+    description: "Drawdown halving after losses, 1%/day & 2.5%/week loss caps, FVG Rule-of-2 exit, position sizing. Enable as advisory — no built-in gate mode.",
+    enabledField: "ictRiskEnabled",
+    gateField: "",
+    hasGate: false,
+  },
+];
+
+const ICT2022_SEARCH_ENTRIES = ICT2022_MODULES.flatMap(m => [
+  { tab: "ict2022", label: m.label, keywords: ["ict", "mentorship", "2022", m.label.toLowerCase()] },
+]);
+
+// Append ICT entries to the main search index
+SEARCH_INDEX.push(
+  { tab: "ict2022", label: "ICT 2022 Mentorship", keywords: ["ict", "mentorship", "2022", "smc", "inner circle trader"] },
+  ...ICT2022_SEARCH_ENTRIES
+);
 
 const HighlightContext = createContext<Set<string>>(new Set());
 
@@ -358,6 +427,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
     { id: "gamePlan", label: "Game Plan", icon: Crosshair },
+    { id: "ict2022", label: "ICT 2022", icon: Sparkles },
   ];
 
   // Search filtering — compute once per render
@@ -1560,6 +1630,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     )}
                   </div>
                 )}
+                {effectiveActiveTab === "ict2022" && (
+                  <ICT2022Tab config={config} setConfig={setConfig} />
+                )}
               </>
             )}
             {config && filteredTabs.length === 0 && (
@@ -1797,6 +1870,128 @@ function ToggleField({ label, description, checked, onChange }: { label: string;
         {description && <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="shrink-0 mt-0.5" />
+    </div>
+  );
+}
+
+// ─── ICT 2022 Mentorship Tab ──────────────────────────────────────────────
+// Frontend-only surface for the ICT modules already wired into bot-scanner.
+// Values are written into config.strategy.* so the scanner's existing
+// `strategy.X ?? raw.X ?? DEFAULTS.X` resolution chain picks them up
+// without any bot-logic changes.
+function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
+  const strategy = config.strategy || {};
+
+  const updateStrategy = (key: string, value: any) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      strategy: { ...(prev.strategy || {}), [key]: value },
+    }));
+  };
+
+  const getEnabled = (field: string, fallback = true) =>
+    strategy[field] !== undefined ? !!strategy[field] : fallback;
+  const getGate = (field: string): "off" | "soft" | "hard" =>
+    (strategy[field] as "off" | "soft" | "hard") || "off";
+
+  const enabledCount = ICT2022_MODULES.filter(m => getEnabled(m.enabledField)).length;
+  const activeGates = ICT2022_MODULES.filter(m => m.hasGate && getGate(m.gateField) !== "off").length;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <SectionHeader
+          title="ICT 2022 Mentorship"
+          description="Inner Circle Trader 2022 Mentorship modules. Already wired into the scanner — these toggles expose the gate modes."
+        />
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {enabledCount}/{ICT2022_MODULES.length} enabled
+          </Badge>
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {activeGates} active gate{activeGates === 1 ? "" : "s"}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="rounded border border-tier3/40 bg-badge-info p-3 space-y-1.5">
+        <p className="text-[10px] text-tier3 font-bold uppercase tracking-wider">How gate modes work</p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <span className="font-mono font-bold text-foreground">Off</span> — module logs its verdict but has zero impact on trades. Use this to observe behaviour first.{" "}
+          <span className="font-mono font-bold text-foreground">Soft</span> — module adds a score bonus when satisfied / penalty when violated.{" "}
+          <span className="font-mono font-bold text-foreground">Hard</span> — module blocks the trade entirely when its rule is violated.
+        </p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          Recommended rollout: leave on <span className="font-mono">Off</span> for a few sessions, watch the logs, then move one module at a time to <span className="font-mono">Soft</span>.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {ICT2022_MODULES.map(m => {
+          const enabled = getEnabled(m.enabledField);
+          const gate = m.hasGate ? getGate(m.gateField) : null;
+          return (
+            <div
+              key={m.key}
+              className={`border p-3 space-y-3 transition-colors ${
+                enabled ? "border-border" : "border-border/40 opacity-70"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold">{m.label}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{m.description}</p>
+                </div>
+                <Switch
+                  checked={enabled}
+                  onCheckedChange={v => updateStrategy(m.enabledField, v)}
+                  className="shrink-0 mt-0.5"
+                />
+              </div>
+
+              {m.hasGate && (
+                <div className="flex items-center gap-3 pt-1 border-t border-border/40">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                    Gate Mode
+                  </Label>
+                  <Select
+                    value={gate || "off"}
+                    onValueChange={(v: "off" | "soft" | "hard") => updateStrategy(m.gateField, v)}
+                    disabled={!enabled}
+                  >
+                    <SelectTrigger className="h-8 text-xs w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off" className="text-xs">Off — log only</SelectItem>
+                      <SelectItem value="soft" className="text-xs">Soft — score impact</SelectItem>
+                      <SelectItem value="hard" className="text-xs">Hard — block trade</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {gate && gate !== "off" && (
+                    <Badge
+                      variant="outline"
+                      className={`text-[9px] font-mono ${
+                        gate === "hard" ? "text-loss border-loss/40" : "text-warn border-warn/40"
+                      }`}
+                    >
+                      {gate === "hard" ? "BLOCKING" : "SCORING"}
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="rounded border border-border bg-muted/20 p-3">
+        <p className="text-[10px] text-muted-foreground">
+          <span className="font-bold text-foreground">Note:</span> The scanner reads these flags from{" "}
+          <span className="font-mono">config.strategy</span> first, then falls back to its compiled defaults.
+          Saving here persists overrides to your bot config — no redeploy required.
+        </p>
+      </div>
     </div>
   );
 }
