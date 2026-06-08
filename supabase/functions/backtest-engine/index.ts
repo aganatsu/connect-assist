@@ -1873,11 +1873,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
           if (!izData || !izData.hasZone) {
             // No valid impulse zone — skip (hard gate)
-            diagnostics.skippedNoDirection++;
+            diagnostics.skippedImpulseNoZone++;
             continue;
           }
           if (!izData.bestZone?.priceAtZone) {
             // Zone exists but price not there yet — skip
+            diagnostics.skippedImpulseNotAtZone++;
             continue;
           }
           // Price IS at zone — apply bonus
@@ -2104,6 +2105,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         if (!allPassed) {
           diagnostics.skippedGateBlocked++;
+          for (const gate of failedGates) {
+            const label = gate.reason.split(":")[0] || gate.reason;
+            diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
+          }
           // Research mode: track what would have happened
           if (researchMode) {
             const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
