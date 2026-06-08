@@ -2121,17 +2121,20 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     // ── Final chunk: close remaining open positions at last candle close ──
     for (const pos of [...openPositions]) {
       const lastCandle = candleData[pos.symbol]?.entry.slice(-1)[0];
-      if (lastCandle) {
-        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, btRateMap);
+      // Fallback: if this position belongs to a previous chunk's symbol, close at entry price (0 PnL).
+      const closePrice = lastCandle ? lastCandle.close : pos.entryPrice;
+      const closeTime = lastCandle ? lastCandle.datetime : new Date(endMs).toISOString();
+      {
+        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, closePrice, pos.size, pos.symbol, btRateMap);
         const comm = pos.size * commissionPerLot * 2;
         allTrades.push({
           id: pos.id,
           symbol: pos.symbol,
           direction: pos.direction,
           entryPrice: pos.entryPrice,
-          exitPrice: lastCandle.close,
+          exitPrice: closePrice,
           entryTime: pos.entryTime,
-          exitTime: lastCandle.datetime,
+          exitTime: closeTime,
           size: pos.size,
           pnl: rawPnl - comm,
           pnlPips,
