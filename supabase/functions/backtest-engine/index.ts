@@ -1576,8 +1576,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         // Progress update (throttled)
         if (Date.now() - lastProgressUpdate > 5000) {
-          const pct = Math.min(90, 40 + Math.round((processedBars / totalBars) * 50));
-          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length}...`);
+          const span = chunkProgressEnd - chunkProgressStart;
+          const pct = Math.min(chunkProgressEnd, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * span));
+          await updateProgress(pct, `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} bar ${i}/${entryCandles.length}...`);
           lastProgressUpdate = Date.now();
         }
 
