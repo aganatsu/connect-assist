@@ -1502,12 +1502,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
     // ── Build BT Rate Map ──
     const btRateMap: Record<string, number> = {};
-    for (const symbol of instruments) {
+    for (const symbol of chunkSymbols) {
       try {
         const rate = await getQuoteToUSDRate(symbol);
         btRateMap[symbol] = rate;
       } catch { btRateMap[symbol] = 1; }
     }
+    // Merge with previously persisted rate map
+    let priorRateMap: Record<string, number> = {};
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      priorRateMap = rr?.results?.partial_state?.btRateMap || {};
+    }
+    Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
     await updateProgress(40, "Running scan loop...");
