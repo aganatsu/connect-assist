@@ -501,6 +501,7 @@ function runBacktestSafetyGates(
   spreadPips: number,
   fotsiResult: FOTSIResult | null,
   smtResult: any,
+  session: SessionResult,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -632,8 +633,8 @@ function runBacktestSafetyGates(
 
   // Gate 11: Session filter
   if (config.enabledSessions && config.enabledSessions.length > 0) {
-    const sessionName = analysis.session?.name || "";
-    const sessionEnabled = isSessionEnabled(sessionName, config.enabledSessions);
+    const sessionName = session.name;
+    const sessionEnabled = isSessionEnabled(session, config.enabledSessions);
     gates.push({
       passed: sessionEnabled,
       reason: sessionEnabled ? `Session OK: ${sessionName}` : `Session blocked: ${sessionName} not in [${config.enabledSessions.join(",")}]`,
@@ -2102,7 +2103,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
-          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult,
+          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
         );
 
         const failedGates = gates.filter(g => !g.passed);
