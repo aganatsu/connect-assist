@@ -1289,7 +1289,7 @@ function respond(data: any, status = 200) {
 }
 
 // ─── Background Job Runner ──────────────────────────────────────────
-const CHUNK_SIZE = 4; // instruments per chunk to stay under edge function CPU limit
+const CHUNK_SIZE = 1; // one instrument per invocation to stay under edge function CPU limits
 
 async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number) {
   const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
@@ -2316,6 +2316,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       status: "failed",
       completed_at: new Date().toISOString(),
       progress_message: `Error: ${err?.message || "Unknown error"}`,
+        error_message: err?.message || "Unknown error",
       results: { error: err?.message, stack: err?.stack?.slice(0, 500) },
     }).eq("id", runId);
   }
@@ -2369,11 +2370,15 @@ Deno.serve(async (req: Request) => {
         status: data.status,
         progress: data.progress,
         message: data.progress_message,
+        progress_message: data.progress_message,
         results: data.results,
-        error: data.error_message,
+        error_message: data.error_message,
         createdAt: data.created_at,
+        created_at: data.created_at,
         startedAt: data.started_at,
+        started_at: data.started_at,
         completedAt: data.completed_at,
+        completed_at: data.completed_at,
       });
     }
 
