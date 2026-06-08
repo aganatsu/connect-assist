@@ -340,6 +340,16 @@ export default function Backtest() {
   // Run backtest (background mode)
   const runBacktest = useCallback(async () => {
     if (selectedSymbols.length === 0) { setError("Select at least one instrument."); return; }
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      setError("Choose a valid start and end date.");
+      return;
+    }
+    if (startMs >= endMs) {
+      setError("Start date must be before end date.");
+      return;
+    }
     setIsRunning(true); setError(""); setResults(null);
     setProgress("Starting backtest...");
     setProgressPct(0);
@@ -456,12 +466,12 @@ export default function Backtest() {
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div>
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Start Date</label>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                  <input type="date" value={startDate} max={endDate} onChange={e => setStartDate(e.target.value)}
                     className="w-full mt-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs" />
                 </div>
                 <div>
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">End Date</label>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                  <input type="date" value={endDate} min={startDate} onChange={e => setEndDate(e.target.value)}
                     className="w-full mt-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs" />
                 </div>
                 <div>
