@@ -1517,15 +1517,38 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    await updateProgress(40, "Running scan loop...");
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
+    await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
+
+    // Seed state from prior chunks
     let balance = startingBalance;
     let peakBalance = startingBalance;
-    const openPositions: OpenPosition[] = [];
-    const allTrades: BacktestTrade[] = [];
-    const blockedTrades: BlockedTrade[] = [];
+    let openPositions: OpenPosition[] = [];
+    let allTrades: BacktestTrade[] = [];
+    let blockedTrades: BlockedTrade[] = [];
     let tradeCounter = 0;
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      const ps = rr?.results?.partial_state;
+      if (ps) {
+        balance = ps.balance ?? startingBalance;
+        peakBalance = ps.peakBalance ?? startingBalance;
+        openPositions = ps.openPositions || [];
+        allTrades = ps.allTrades || [];
+        blockedTrades = ps.blockedTrades || [];
+        tradeCounter = ps.tradeCounter || 0;
+        if (ps.diagnostics) {
+          for (const k of Object.keys(ps.diagnostics)) {
+            if (typeof (ps.diagnostics as any)[k] === "number") {
+              (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
+            }
+          }
+        }
+      }
+    }
 
-    const symbolList = instruments.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
+    const symbolList = chunkSymbols.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
     const totalBars = symbolList.reduce((s: number, sym: string) => s + candleData[sym].entry.length, 0);
     let processedBars = 0;
     let lastProgressUpdate = Date.now();
