@@ -1413,7 +1413,20 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     }
     diagnostics.enabledFactorCount = enabledCount;
 
-    for (const symbol of instruments) {
+    // ── Determine this chunk's symbols ──
+    const supportedInstruments = instruments.filter((s: string) => SUPPORTED_SYMBOLS[s]);
+    const totalChunks = Math.max(1, Math.ceil(supportedInstruments.length / CHUNK_SIZE));
+    const chunkSymbols = supportedInstruments.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
+    console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks}: ${chunkSymbols.length} symbols [${chunkSymbols.join(", ")}]`);
+
+    // Track unsupported only on first chunk to avoid double counting
+    if (chunkIndex === 0) {
+      for (const s of instruments) {
+        if (!SUPPORTED_SYMBOLS[s]) diagnostics.skippedUnsupportedSymbol++;
+      }
+    }
+
+    for (const symbol of chunkSymbols) {
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
       const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
