@@ -1565,6 +1565,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
             }
           }
+          if (ps.diagnostics.gateBlockReasons) {
+            for (const [reason, count] of Object.entries(ps.diagnostics.gateBlockReasons as Record<string, number>)) {
+              diagnostics.gateBlockReasons[reason] = (diagnostics.gateBlockReasons[reason] || 0) + count;
+            }
+          }
         }
       }
     }
@@ -2312,6 +2317,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       trades: allTrades.slice(0, maxTradesStored),
       equityCurve,
       diagnostics,
+      gateBreakdown: Object.fromEntries(
+        Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
+      ),
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
       researchAnalytics: researchAnalytics ? {
         gateEffectiveness: researchAnalytics.gateEffectiveness,
