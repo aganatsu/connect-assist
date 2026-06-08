@@ -1553,7 +1553,7 @@ export default function Backtest() {
                           </tr>
                         </thead>
                         <tbody>
-                          {Object.entries(results.factorBreakdown).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
+                          {Object.entries(results.factorBreakdown ?? {}).sort(([, a], [, b]) => b.appeared - a.appeared).map(([name, v]) => {
                             const wr = v.appeared > 0 ? (v.wonWhen / v.appeared) * 100 : 0;
                             return (
                               <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
@@ -1593,7 +1593,7 @@ export default function Backtest() {
                         </tr>
                       </thead>
                       <tbody>
-                        {Object.entries(results.gateBreakdown).sort(([, a], [, b]) => b.blocked - a.blocked).map(([name, v]) => {
+                        {Object.entries(results.gateBreakdown ?? {}).sort(([, a], [, b]) => b.blocked - a.blocked).map(([name, v]) => {
                           const accuracy = v.blocked > 0 ? (v.wouldHaveLost / v.blocked) * 100 : 0;
                           return (
                             <tr key={name} className="border-b border-border/20 hover:bg-secondary/20">
