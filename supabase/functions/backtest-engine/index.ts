@@ -1289,7 +1289,28 @@ function respond(data: any, status = 200) {
 }
 
 // ─── Background Job Runner ──────────────────────────────────────────
-async function runBacktestJob(runId: string, body: any) {
+const CHUNK_SIZE = 4; // instruments per chunk to stay under edge function CPU limit
+
+async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number) {
+  const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  try {
+    // Fire-and-forget; the receiving invocation will continue work.
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+        "apikey": key,
+      },
+      body: JSON.stringify({ ...body, action: "chunk", runId, chunkIndex }),
+    }).catch(e => console.error(`[backtest:${runId}] self-invoke fetch error:`, e));
+  } catch (e) {
+    console.error(`[backtest:${runId}] self-invoke failed:`, e);
+  }
+}
+
+async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) {
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1300,12 +1321,14 @@ async function runBacktestJob(runId: string, body: any) {
   };
 
   try {
-    await db.from("backtest_runs").update({
-      status: "running",
-      started_at: new Date().toISOString(),
-      progress: 5,
-      progress_message: "Parsing configuration...",
-    }).eq("id", runId);
+    if (chunkIndex === 0) {
+      await db.from("backtest_runs").update({
+        status: "running",
+        started_at: new Date().toISOString(),
+        progress: 5,
+        progress_message: "Parsing configuration...",
+      }).eq("id", runId);
+    }
 
     const {
       instruments = DEFAULTS.instruments,
@@ -1390,7 +1413,20 @@ async function runBacktestJob(runId: string, body: any) {
     }
     diagnostics.enabledFactorCount = enabledCount;
 
-    for (const symbol of instruments) {
+    // ── Determine this chunk's symbols ──
+    const supportedInstruments = instruments.filter((s: string) => SUPPORTED_SYMBOLS[s]);
+    const totalChunks = Math.max(1, Math.ceil(supportedInstruments.length / CHUNK_SIZE));
+    const chunkSymbols = supportedInstruments.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
+    console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks}: ${chunkSymbols.length} symbols [${chunkSymbols.join(", ")}]`);
+
+    // Track unsupported only on first chunk to avoid double counting
+    if (chunkIndex === 0) {
+      for (const s of instruments) {
+        if (!SUPPORTED_SYMBOLS[s]) diagnostics.skippedUnsupportedSymbol++;
+      }
+    }
+
+    for (const symbol of chunkSymbols) {
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
       const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
@@ -1411,10 +1447,25 @@ async function runBacktestJob(runId: string, body: any) {
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
-    await updateProgress(30, "Building FOTSI currency strength timeline...");
+    const baseProgress = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    await updateProgress(baseProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: building FOTSI timeline...`);
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
-    try {
+
+    // Try to reuse cached FOTSI timeline from previous chunk
+    let cachedFotsi: any = null;
+    if (chunkIndex > 0) {
+      const { data: runRow } = await db
+        .from("backtest_runs")
+        .select("results")
+        .eq("id", runId)
+        .maybeSingle();
+      cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
+    }
+    if (cachedFotsi && Array.isArray(cachedFotsi)) {
+      for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
+      console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
+    } else try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
       for (let i = 0; i < fotsiPairs.length; i += 7) {
@@ -1451,23 +1502,53 @@ async function runBacktestJob(runId: string, body: any) {
 
     // ── Build BT Rate Map ──
     const btRateMap: Record<string, number> = {};
-    for (const symbol of instruments) {
+    for (const symbol of chunkSymbols) {
       try {
         const rate = await getQuoteToUSDRate(symbol);
         btRateMap[symbol] = rate;
       } catch { btRateMap[symbol] = 1; }
     }
+    // Merge with previously persisted rate map
+    let priorRateMap: Record<string, number> = {};
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      priorRateMap = rr?.results?.partial_state?.btRateMap || {};
+    }
+    Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    await updateProgress(40, "Running scan loop...");
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
+    await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
+
+    // Seed state from prior chunks
     let balance = startingBalance;
     let peakBalance = startingBalance;
-    const openPositions: OpenPosition[] = [];
-    const allTrades: BacktestTrade[] = [];
-    const blockedTrades: BlockedTrade[] = [];
+    let openPositions: OpenPosition[] = [];
+    let allTrades: BacktestTrade[] = [];
+    let blockedTrades: BlockedTrade[] = [];
     let tradeCounter = 0;
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      const ps = rr?.results?.partial_state;
+      if (ps) {
+        balance = ps.balance ?? startingBalance;
+        peakBalance = ps.peakBalance ?? startingBalance;
+        openPositions = ps.openPositions || [];
+        allTrades = ps.allTrades || [];
+        blockedTrades = ps.blockedTrades || [];
+        tradeCounter = ps.tradeCounter || 0;
+        if (ps.diagnostics) {
+          for (const k of Object.keys(ps.diagnostics)) {
+            if (typeof (ps.diagnostics as any)[k] === "number") {
+              (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
+            }
+          }
+        }
+      }
+    }
 
-    const symbolList = instruments.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
+    const symbolList = chunkSymbols.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
     const totalBars = symbolList.reduce((s: number, sym: string) => s + candleData[sym].entry.length, 0);
     let processedBars = 0;
     let lastProgressUpdate = Date.now();
@@ -1495,8 +1576,9 @@ async function runBacktestJob(runId: string, body: any) {
 
         // Progress update (throttled)
         if (Date.now() - lastProgressUpdate > 5000) {
-          const pct = Math.min(90, 40 + Math.round((processedBars / totalBars) * 50));
-          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length}...`);
+          const span = chunkProgressEnd - chunkProgressStart;
+          const pct = Math.min(chunkProgressEnd, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * span));
+          await updateProgress(pct, `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} bar ${i}/${entryCandles.length}...`);
           lastProgressUpdate = Date.now();
         }
 
@@ -2011,20 +2093,48 @@ async function runBacktestJob(runId: string, body: any) {
       }
     }
 
-    // ── Close remaining open positions at last candle close ──
+    // ── If more chunks remain, persist state and chain ──
+    const isLastChunk = chunkIndex + 1 >= totalChunks;
+    if (!isLastChunk) {
+      const partial_state = {
+        balance,
+        peakBalance,
+        openPositions,
+        allTrades,
+        blockedTrades,
+        tradeCounter,
+        diagnostics,
+        btRateMap,
+        fotsiTimeline: [...fotsiTimeline.entries()],
+      };
+      await db.from("backtest_runs").update({
+        progress: chunkProgressEnd,
+        progress_message: `Chunk ${chunkIndex + 1}/${totalChunks} complete — chaining...`,
+        status: "running",
+        results: { partial_state },
+      }).eq("id", runId);
+      console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks} done. Chaining to next.`);
+      await selfInvokeNextChunk(runId, body, chunkIndex + 1);
+      return;
+    }
+
+    // ── Final chunk: close remaining open positions at last candle close ──
     for (const pos of [...openPositions]) {
       const lastCandle = candleData[pos.symbol]?.entry.slice(-1)[0];
-      if (lastCandle) {
-        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, btRateMap);
+      // Fallback: if this position belongs to a previous chunk's symbol, close at entry price (0 PnL).
+      const closePrice = lastCandle ? lastCandle.close : pos.entryPrice;
+      const closeTime = lastCandle ? lastCandle.datetime : new Date(endMs).toISOString();
+      {
+        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, closePrice, pos.size, pos.symbol, btRateMap);
         const comm = pos.size * commissionPerLot * 2;
         allTrades.push({
           id: pos.id,
           symbol: pos.symbol,
           direction: pos.direction,
           entryPrice: pos.entryPrice,
-          exitPrice: lastCandle.close,
+          exitPrice: closePrice,
           entryTime: pos.entryTime,
-          exitTime: lastCandle.datetime,
+          exitTime: closeTime,
           size: pos.size,
           pnl: rawPnl - comm,
           pnlPips,
@@ -2161,6 +2271,21 @@ Deno.serve(async (req: Request) => {
         .limit(limit);
       if (error) return respond({ error: error.message }, 500);
       return respond({ runs: data || [] });
+    }
+
+    if (action === "chunk") {
+      const { runId, chunkIndex } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      if (typeof chunkIndex !== "number") return respond({ error: "chunkIndex required" }, 400);
+      // Run the requested chunk in the background and respond immediately so
+      // the calling invocation doesn't block waiting for this one.
+      const job = runBacktestJob(runId, body, chunkIndex);
+      if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+        (EdgeRuntime as any).waitUntil(job);
+      } else {
+        job.catch(e => console.error("[backtest] chunk job error:", e));
+      }
+      return respond({ runId, chunkIndex, status: "chunk_started" });
     }
 
     // action === "start" (default)
