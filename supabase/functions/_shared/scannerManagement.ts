@@ -333,7 +333,7 @@ export async function manageOpenPositions(
       const spec = SPECS[symbol];
       if (!spec) continue;
 
-      const entryPrice = parseFloat(pos.entry_price);
+      const paperEntryPrice = parseFloat(pos.entry_price);
       const currentPrice = parseFloat(pos.current_price);
       const sl = pos.stop_loss ? parseFloat(pos.stop_loss) : null;
       const tp = pos.take_profit ? parseFloat(pos.take_profit) : null;
@@ -343,6 +343,12 @@ export async function manageOpenPositions(
       let signalData: any = {};
       try { signalData = JSON.parse(pos.signal_reason || "{}"); } catch {};
       const exitFlags = signalData.exitFlags || {};
+
+      // Use broker fill price for BE/trailing/R calculations when available (live mode).
+      // Falls back to paper entry price for paper-only trades or legacy positions.
+      const entryPrice = (signalData.brokerEntryPrice != null && !isNaN(parseFloat(signalData.brokerEntryPrice)))
+        ? parseFloat(signalData.brokerEntryPrice)
+        : paperEntryPrice;
 
       // ── Per-Trade Overrides: individual position settings override global config ──
       // If trade_overrides JSON exists on this position, those values take priority.

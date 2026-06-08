@@ -5532,6 +5532,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (connections && connections.length > 0) {
               const mirrorResults: string[] = [];
               const mirroredConnIds: string[] = []; // Track which connections actually opened the trade — used at close time
+              let brokerFillPrice: number | null = null; // Actual fill price from first successful broker execution
               for (const conn of connections) {
                 try {
                   // ── Circuit Breaker: skip connections that have failed repeatedly ──
@@ -5596,6 +5597,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                             await supabase.from("broker_connections")
                               .update({ detected_commission_per_lot: commPerLot })
                               .eq("id", conn.id);
+                          }
+                        }
+                        // Extract actual broker fill price from OANDA response
+                        if (!brokerFillPrice && fillTx) {
+                          const oandaFillPrice = parseFloat(fillTx.price || fillTx.tradeOpened?.price || "0");
+                          if (oandaFillPrice > 0) {
+                            brokerFillPrice = oandaFillPrice;
+                            console.log(`[broker-fill-price] OANDA [${conn.display_name}]: fill price ${oandaFillPrice}`);
                           }
                         }
                       } catch (commErr: any) {
@@ -5747,12 +5756,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                           try {
                             const orderId = parsed.orderId || parsed.positionId;
                             if (orderId) {
-                              // Fetch the deal associated with this order to get commission
+                              // Fetch the deal associated with this order to get commission + fill price
                               const { res: dealRes, body: dealBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/history-deals/position/${orderId}`);
                               if (dealRes.ok) {
                                 const deals = JSON.parse(dealBody);
                                 const dealArr = Array.isArray(deals) ? deals : [];
                                 for (const deal of dealArr) {
+                                  // Extract actual fill price from deal (first deal with price is the entry)
+                                  if (!brokerFillPrice && deal.price != null) {
+                                    const metaFillPrice = parseFloat(deal.price);
+                                    if (metaFillPrice > 0) {
+                                      brokerFillPrice = metaFillPrice;
+                                      console.log(`[broker-fill-price] MetaApi [${conn.display_name}]: fill price ${metaFillPrice}`);
+                                    }
+                                  }
                                   if (deal.commission !== undefined && deal.volume > 0) {
                                     const dealComm = Math.abs(parseFloat(deal.commission || "0"));
                                     const dealVol = parseFloat(deal.volume || "0");
@@ -5795,8 +5812,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // Persist which broker connections this paper position was actually mirrored to.
               // Close paths use this list to fan out — never iterate ALL active connections.
               if (mirroredConnIds.length > 0) {
+                // Also persist the actual broker fill price in signal_reason for accurate BE/trailing calculations.
+                // Without this, management uses the paper entry price which may differ from broker execution price.
+                const mirrorUpdate: any = { mirrored_connection_ids: mirroredConnIds };
+                if (brokerFillPrice != null) {
+                  // Read existing signal_reason, inject brokerEntryPrice, write back
+                  const { data: posRow } = await supabase.from("paper_positions")
+                    .select("signal_reason").eq("position_id", positionId).eq("user_id", userId).single();
+                  let existingSignal: any = {};
+                  try { existingSignal = JSON.parse(posRow?.signal_reason || "{}"); } catch {}
+                  existingSignal.brokerEntryPrice = brokerFillPrice;
+                  mirrorUpdate.signal_reason = JSON.stringify(existingSignal);
+                  console.log(`[broker-fill-price] Stored brokerEntryPrice=${brokerFillPrice} for ${pair} (paper entry was ${marketEntryPrice})`);
+                }
                 await supabase.from("paper_positions")
-                  .update({ mirrored_connection_ids: mirroredConnIds })
+                  .update(mirrorUpdate)
                   .eq("position_id", positionId).eq("user_id", userId);
               }
             } else {

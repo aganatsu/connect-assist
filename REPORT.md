@@ -1,109 +1,69 @@
-# Task: ICT 2022 Mentorship Implementation (Phases 1-7) — Full Scanner Wiring
+# Task: Fix break-even SL using paper trade price instead of broker fill price
 
-## Branch: manus/ict-weekly-daily
+## Branch: manus/fix-be-broker-fill-price
 
 ## Behavior changes
 
-**In "off" mode (current default): NONE — pure logging, zero trade impact.**
+1. **Break-even SL now uses actual broker fill price** — When a trade is mirrored to MT4/MT5 (MetaAPI) or OANDA, the actual execution fill price is stored in `signal_reason.brokerEntryPrice`. All subsequent BE calculations (R-based activation, max-hold BE, session-end BE) and R-multiple calculations use this broker price instead of the paper entry price. This means the BE SL sent to the broker will now correctly reflect where the broker actually filled, not where the scanner's market data said the price was.
 
-When the user switches gate modes:
-- `"soft"` → score adjustments applied (bonuses for alignment, penalties for misalignment)
-- `"hard"` → trades blocked if they don't meet ICT criteria
+2. **Trailing stop and R-multiple calculations also use broker fill price** — The `computeAdaptiveTrail()` call and R-multiple calculation in `scannerManagement.ts` now use the broker fill price when available, ensuring trailing stop tightening and profit calculations are accurate relative to the actual execution price.
 
-Specific behavior changes when activated:
-
-1. **Weekly Bias Gate** — Trades opposing confirmed weekly bias: -3.0 (soft) or blocked (hard)
-2. **Daily Impulse Containment** — LTF zone NOT inside Daily OB: -3.0 (soft) or blocked (hard)
-3. **Displacement MSS** — Structure break lacks displacement: -2.0 (soft) or blocked (hard)
-4. **Judas Swing** — No prior liquidity sweep: -1.5 (soft) or blocked (hard)
-5. **FVG Invalidation** — All FVGs invalidated/exhausted: proportional penalty (soft) or blocked (hard)
-6. **ICT Kill Zone** — Outside kill zones: -1.0 (soft) or blocked (hard); prime zones: +1.5 bonus (soft)
-7. **ICT Risk Management** — Drawdown halving, daily/weekly loss limits; when limits hit, blocked regardless
+3. **No change for paper-only trades** — Trades that are not mirrored to a broker (paper mode) continue to use `pos.entry_price` as before. Legacy positions without `brokerEntryPrice` in their `signal_reason` also fall back to the paper entry price.
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `_shared/weeklyBiasDOL.ts` | Weekly bias + Draw on Liquidity identification |
-| `_shared/weeklyBiasDOL.test.ts` | 12 tests |
-| `_shared/dailyImpulseOB.ts` | Daily displacement + OB + containment |
-| `_shared/dailyImpulseOB.test.ts` | 12 tests |
-| `_shared/ictHTFIntegration.ts` | Weekly→Daily→Containment orchestration gate |
-| `_shared/ictHTFIntegration.test.ts` | 12 tests |
-| `_shared/ictDisplacementMSS.ts` | MSS displacement validation |
-| `_shared/ictDisplacementMSS.test.ts` | 10 tests |
-| `_shared/ictJudasSwing.ts` | Liquidity sweep before MSS (Judas Swing) |
-| `_shared/ictJudasSwing.test.ts` | 9 tests |
-| `_shared/ictFVGInvalidation.ts` | FVG body-close invalidation + Rule of 2 |
-| `_shared/ictFVGInvalidation.test.ts` | 13 tests |
-| `_shared/ictKillZones.ts` | ICT kill zone time windows (London, NY, Silver Bullet, PM) |
-| `_shared/ictKillZones.test.ts` | 11 tests |
-| `_shared/ictRiskManagement.ts` | Drawdown halving, daily/weekly limits, position sizing |
-| `_shared/ictRiskManagement.test.ts` | 18 tests |
-| `bot-scanner/index.ts` | Full wiring: imports, config defaults, config resolution, weekly candle fetch, all 8 module analysis calls with logging, score adjustments (soft mode), hard gate blocks |
+- `supabase/functions/_shared/scannerManagement.ts` — Added `brokerEntryPrice` resolution logic: reads from `signalData.brokerEntryPrice` when available, falls back to `pos.entry_price` for paper/legacy trades. Renamed original parse to `paperEntryPrice` for clarity.
+- `supabase/functions/bot-scanner/index.ts` — (1) Added `brokerFillPrice` variable in the mirror loop. (2) Extract fill price from MetaAPI deal history (`deal.price`). (3) Extract fill price from OANDA `orderFillTransaction.price`. (4) After successful mirror, persist `brokerEntryPrice` into the position's `signal_reason` JSON alongside `mirrored_connection_ids`.
+- `supabase/functions/_shared/brokerFillPriceBE.test.ts` — New test file with 6 tests.
+
+### Extra caution notes (per project rules):
+
+**bot-scanner/index.ts:** Added broker fill price extraction in the MetaAPI deal history loop (which already existed for commission auto-detect) and in the OANDA fill transaction block (also already existed for commission). After the mirror loop, when persisting `mirrored_connection_ids`, we now also read-modify-write the `signal_reason` JSON to inject `brokerEntryPrice`. This is a read-then-update pattern on the same row that was just inserted moments earlier in the same function execution, so there's no race condition risk. The fill price is only stored when `brokerFillPrice != null` (i.e., when at least one broker successfully filled and returned a price).
+
+**scannerManagement.ts:** Changed `const entryPrice = parseFloat(pos.entry_price)` to first check `signalData.brokerEntryPrice`. The variable `entryPrice` is used in all downstream calculations (BE, trailing, R-multiple, management floor). This is the core fix — all three BE paths (lines ~418, ~457, ~767) and the trailing/R-multiple paths automatically use the correct price because they all reference `entryPrice`.
 
 ## Tests added
 
-**84 new tests across 8 test files (all passing):**
-
-- `weeklyBiasDOL.test.ts` (12): Bias detection, DOL identification, edge cases
-- `dailyImpulseOB.test.ts` (12): Displacement detection, OB identification, containment
-- `ictHTFIntegration.test.ts` (12): Gate modes, alignment scoring, containment
-- `ictDisplacementMSS.test.ts` (10): MSS displacement validation, strength grading
-- `ictJudasSwing.test.ts` (9): Liquidity sweep detection, Judas Swing sequence
-- `ictFVGInvalidation.test.ts` (13): Body close invalidation, Rule of 2, batch validation
-- `ictKillZones.test.ts` (11): Time window detection, DST, gate evaluation
-- `ictRiskManagement.test.ts` (18): Drawdown halving, limits, position sizing
+1. `BE activation uses brokerEntryPrice instead of paper entry_price` — Verifies BE SL is calculated from broker fill (1.08520) not paper entry (1.08500)
+2. `BE activation falls back to paper entry_price when brokerEntryPrice is absent` — Verifies legacy/paper trades still work
+3. `Short trade BE uses brokerEntryPrice correctly` — Verifies short direction BE uses broker fill
+4. `R-multiple calculation uses brokerEntryPrice` — Verifies R is computed from broker fill (prevents premature/late BE activation)
+5. `Invalid brokerEntryPrice (NaN) falls back to paper entry` — Edge case: corrupted data
+6. `brokerEntryPrice=null falls back to paper entry` — Edge case: explicit null
 
 ## Tests run
 
 ```
-ICT module tests: ok | 84 passed | 0 failed
-Full suite: FAILED | 1152 passed | 36 failed
-  - All 36 failures are PRE-EXISTING on main (verified by stashing changes)
-  - Zero new failures introduced by this branch
+ok | 956 passed | 0 failed (14s)
 ```
+
+All 956 tests pass (950 existing + 6 new).
 
 ## Regression check
 
-1. All modules default to `gateMode: "off"` — analysis runs and logs but `passed` is always `true`, `scoreAdjustment` is always `0`
-2. Full test suite: 1152 pass / 36 fail — identical to clean main branch
-3. The only existing file modified is `bot-scanner/index.ts`:
-   - Imports added (non-breaking)
-   - Config defaults added (additive, all "off")
-   - Config resolution added (falls back to DEFAULTS)
-   - Weekly candle fetch added (parallel, doesn't block existing fetches)
-   - All 8 module analysis calls wrapped in try/catch (errors are non-fatal)
-   - Score adjustments add 0 in off mode
-   - Hard gates never trigger in off mode
+- The `entryPrice` variable is only different when `signalData.brokerEntryPrice` is present and valid. For all existing paper-only positions (which have no `brokerEntryPrice` in their `signal_reason`), the behavior is identical to before — `entryPrice` resolves to `parseFloat(pos.entry_price)` via the fallback path.
+- Test 2 explicitly verifies this fallback behavior.
+- The 950 existing tests all pass unchanged, confirming no regression in scoring, gates, or other management logic.
 
 ## Open questions
 
-1. **Account equity**: Risk management module uses hardcoded 10000 placeholder. Need to wire actual account balance from broker API.
-2. **FVG interface compatibility**: `validateFVGBatch` expects `{high, low, direction}`. Need to verify `analysis.fvgs` shape matches.
-3. **Weekly candle API support**: Need to confirm the market data API supports `1w` interval for all configured pairs.
+1. **Existing live positions:** Positions that were already opened and mirrored before this fix will NOT have `brokerEntryPrice` in their `signal_reason`. They will continue using the paper entry price for BE. Should I write a backfill script that queries MetaAPI for the actual fill price of currently-open positions and patches their `signal_reason`?
+
+2. **Limit fill path (zone confirmations):** The limit fill mirror at line ~3010 doesn't fetch deal history, so it can't extract the fill price. However, limit orders fill at the requested price (no slippage), so `actualFillPrice` (which is already stored as `entry_price`) should be accurate. Confirm this is acceptable.
+
+3. **Multiple brokers with different fills:** Currently `brokerFillPrice` takes the first successful broker's fill price. If you have multiple broker connections that fill at different prices, only the first is stored. Is this acceptable, or should we store per-connection fill prices?
 
 ## Suggested PR title and description
 
-**Title:** `feat: ICT 2022 Mentorship full implementation — 8 modules, 84 tests, all wired into scanner`
+**Title:** fix: use actual broker fill price for break-even SL calculations
 
 **Description:**
-Implements the complete ICT 2022 Mentorship trading framework as modular, testable components, all wired into bot-scanner:
+Fixes a bug where break-even stop-loss was calculated using the paper trade entry price instead of the actual broker execution price. When there's slippage between the scanner's market price and the broker's fill, the BE SL was being placed at the wrong level — potentially getting stopped out prematurely or leaving money on the table.
 
-- **Weekly Bias + DOL**: Directional bias from confirmed trend + Draw on Liquidity targets
-- **Daily Impulse + OB + Containment**: Daily displacement, OB identification, LTF zone nesting validation
-- **Displacement MSS**: Energetic break requirement for structure shifts
-- **Judas Swing**: Liquidity sweep confirmation before entry
-- **FVG Invalidation**: Body-close rule + Rule of 2 exhaustion
-- **Kill Zone Filter**: All ICT time windows (London, NY, Silver Bullet x3, PM Session)
-- **Risk Management**: Drawdown halving, daily/weekly limits, position sizing
-
-All modules default to `gateMode: "off"` (log only). Config keys to activate:
-- `ictHTFGateMode`: "off" | "soft" | "hard"
-- `ictDisplacementMSSGateMode`: "off" | "soft" | "hard"
-- `ictJudasSwingGateMode`: "off" | "soft" | "hard"
-- `ictFVGInvalidationGateMode`: "off" | "soft" | "hard"
-- `ictKillZoneGateMode`: "off" | "soft" | "hard"
-- `ictRiskEnabled`: true/false
-
-84 new tests, all passing. Zero regressions. Zero behavior change until config is switched.
+Changes:
+- Extract and store actual fill price from MetaAPI (deal.price) and OANDA (orderFillTransaction.price) after successful mirror
+- Store as `brokerEntryPrice` in position's `signal_reason` JSON (no schema migration needed)
+- `scannerManagement.ts` now uses `brokerEntryPrice` for all BE/trailing/R-multiple calculations when available
+- Falls back to paper entry price for paper-only trades and legacy positions
+- 6 new tests covering all scenarios (broker price, fallback, short, invalid, null)
+- 956/956 tests passing
