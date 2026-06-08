@@ -1289,7 +1289,28 @@ function respond(data: any, status = 200) {
 }
 
 // ─── Background Job Runner ──────────────────────────────────────────
-async function runBacktestJob(runId: string, body: any) {
+const CHUNK_SIZE = 4; // instruments per chunk to stay under edge function CPU limit
+
+async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number) {
+  const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  try {
+    // Fire-and-forget; the receiving invocation will continue work.
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+        "apikey": key,
+      },
+      body: JSON.stringify({ ...body, action: "chunk", runId, chunkIndex }),
+    }).catch(e => console.error(`[backtest:${runId}] self-invoke fetch error:`, e));
+  } catch (e) {
+    console.error(`[backtest:${runId}] self-invoke failed:`, e);
+  }
+}
+
+async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) {
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1300,12 +1321,14 @@ async function runBacktestJob(runId: string, body: any) {
   };
 
   try {
-    await db.from("backtest_runs").update({
-      status: "running",
-      started_at: new Date().toISOString(),
-      progress: 5,
-      progress_message: "Parsing configuration...",
-    }).eq("id", runId);
+    if (chunkIndex === 0) {
+      await db.from("backtest_runs").update({
+        status: "running",
+        started_at: new Date().toISOString(),
+        progress: 5,
+        progress_message: "Parsing configuration...",
+      }).eq("id", runId);
+    }
 
     const {
       instruments = DEFAULTS.instruments,
