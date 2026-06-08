@@ -1289,7 +1289,28 @@ function respond(data: any, status = 200) {
 }
 
 // ─── Background Job Runner ──────────────────────────────────────────
-async function runBacktestJob(runId: string, body: any) {
+const CHUNK_SIZE = 4; // instruments per chunk to stay under edge function CPU limit
+
+async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number) {
+  const url = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
+  const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  try {
+    // Fire-and-forget; the receiving invocation will continue work.
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${key}`,
+        "apikey": key,
+      },
+      body: JSON.stringify({ ...body, action: "chunk", runId, chunkIndex }),
+    }).catch(e => console.error(`[backtest:${runId}] self-invoke fetch error:`, e));
+  } catch (e) {
+    console.error(`[backtest:${runId}] self-invoke failed:`, e);
+  }
+}
+
+async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) {
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1310,13 +1331,15 @@ async function runBacktestJob(runId: string, body: any) {
   };
 
   try {
-    await db.from("backtest_runs").update({
-      status: "running",
-      started_at: new Date().toISOString(),
-      progress: 5,
-      progress_message: "Parsing configuration...",
-      heartbeat_at: new Date().toISOString(),
-    }).eq("id", runId);
+    if (chunkIndex === 0) {
+      await db.from("backtest_runs").update({
+        status: "running",
+        started_at: new Date().toISOString(),
+        progress: 5,
+        progress_message: "Parsing configuration...",
+        heartbeat_at: new Date().toISOString(),
+      }).eq("id", runId);
+    }
 
     const {
       instruments = DEFAULTS.instruments,
@@ -1401,7 +1424,20 @@ async function runBacktestJob(runId: string, body: any) {
     }
     diagnostics.enabledFactorCount = enabledCount;
 
-    for (const symbol of instruments) {
+    // ── Determine this chunk's symbols ──
+    const supportedInstruments = instruments.filter((s: string) => SUPPORTED_SYMBOLS[s]);
+    const totalChunks = Math.max(1, Math.ceil(supportedInstruments.length / CHUNK_SIZE));
+    const chunkSymbols = supportedInstruments.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
+    console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks}: ${chunkSymbols.length} symbols [${chunkSymbols.join(", ")}]`);
+
+    // Track unsupported only on first chunk to avoid double counting
+    if (chunkIndex === 0) {
+      for (const s of instruments) {
+        if (!SUPPORTED_SYMBOLS[s]) diagnostics.skippedUnsupportedSymbol++;
+      }
+    }
+
+    for (const symbol of chunkSymbols) {
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
       const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
@@ -1422,10 +1458,25 @@ async function runBacktestJob(runId: string, body: any) {
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
-    await updateProgress(30, "Building FOTSI currency strength timeline...");
+    const baseProgress = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    await updateProgress(baseProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: building FOTSI timeline...`);
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
-    try {
+
+    // Try to reuse cached FOTSI timeline from previous chunk
+    let cachedFotsi: any = null;
+    if (chunkIndex > 0) {
+      const { data: runRow } = await db
+        .from("backtest_runs")
+        .select("results")
+        .eq("id", runId)
+        .maybeSingle();
+      cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
+    }
+    if (cachedFotsi && Array.isArray(cachedFotsi)) {
+      for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
+      console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
+    } else try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
       for (let i = 0; i < fotsiPairs.length; i += 7) {
@@ -1462,23 +1513,53 @@ async function runBacktestJob(runId: string, body: any) {
 
     // ── Build BT Rate Map ──
     const btRateMap: Record<string, number> = {};
-    for (const symbol of instruments) {
+    for (const symbol of chunkSymbols) {
       try {
         const rate = await getQuoteToUSDRate(symbol);
         btRateMap[symbol] = rate;
       } catch { btRateMap[symbol] = 1; }
     }
+    // Merge with previously persisted rate map
+    let priorRateMap: Record<string, number> = {};
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      priorRateMap = rr?.results?.partial_state?.btRateMap || {};
+    }
+    Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    await updateProgress(40, "Running scan loop...");
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
+    await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
+
+    // Seed state from prior chunks
     let balance = startingBalance;
     let peakBalance = startingBalance;
-    const openPositions: OpenPosition[] = [];
-    const allTrades: BacktestTrade[] = [];
-    const blockedTrades: BlockedTrade[] = [];
+    let openPositions: OpenPosition[] = [];
+    let allTrades: BacktestTrade[] = [];
+    let blockedTrades: BlockedTrade[] = [];
     let tradeCounter = 0;
+    if (chunkIndex > 0) {
+      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
+      const ps = rr?.results?.partial_state;
+      if (ps) {
+        balance = ps.balance ?? startingBalance;
+        peakBalance = ps.peakBalance ?? startingBalance;
+        openPositions = ps.openPositions || [];
+        allTrades = ps.allTrades || [];
+        blockedTrades = ps.blockedTrades || [];
+        tradeCounter = ps.tradeCounter || 0;
+        if (ps.diagnostics) {
+          for (const k of Object.keys(ps.diagnostics)) {
+            if (typeof (ps.diagnostics as any)[k] === "number") {
+              (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
+            }
+          }
+        }
+      }
+    }
 
-    const symbolList = instruments.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
+    const symbolList = chunkSymbols.filter((s: string) => candleData[s] && candleData[s].entry.length >= 100);
     const totalBars = symbolList.reduce((s: number, sym: string) => s + candleData[sym].entry.length, 0);
     let processedBars = 0;
     let lastProgressUpdate = Date.now();
@@ -1531,10 +1612,11 @@ async function runBacktestJob(runId: string, body: any) {
         processedBars++;
         diagnostics.totalCandlesEvaluated++;
 
-        // Progress + heartbeat update (every 10s)
-        if (Date.now() - lastProgressUpdate > 10_000) {
-          const pct = Math.min(89, 40 + Math.round((processedBars / totalBars) * 49));
-          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length} (${allTrades.length} trades)...`);
+        // Progress + heartbeat update (throttled)
+        if (Date.now() - lastProgressUpdate > 5000) {
+          const span = chunkProgressEnd - chunkProgressStart;
+          const pct = Math.min(chunkProgressEnd, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * span));
+          await updateProgress(pct, `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} bar ${i}/${entryCandles.length}...`);
           lastProgressUpdate = Date.now();
         }
 
@@ -2110,20 +2192,48 @@ async function runBacktestJob(runId: string, body: any) {
       (diagnostics as any).symbolErrors = symbolErrors;
     }
 
-    // ── Close remaining open positions at last candle close ──
+    // ── If more chunks remain, persist state and chain ──
+    const isLastChunk = chunkIndex + 1 >= totalChunks;
+    if (!isLastChunk) {
+      const partial_state = {
+        balance,
+        peakBalance,
+        openPositions,
+        allTrades,
+        blockedTrades,
+        tradeCounter,
+        diagnostics,
+        btRateMap,
+        fotsiTimeline: [...fotsiTimeline.entries()],
+      };
+      await db.from("backtest_runs").update({
+        progress: chunkProgressEnd,
+        progress_message: `Chunk ${chunkIndex + 1}/${totalChunks} complete — chaining...`,
+        status: "running",
+        results: { partial_state },
+      }).eq("id", runId);
+      console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks} done. Chaining to next.`);
+      await selfInvokeNextChunk(runId, body, chunkIndex + 1);
+      return;
+    }
+
+    // ── Final chunk: close remaining open positions at last candle close ──
     for (const pos of [...openPositions]) {
       const lastCandle = candleData[pos.symbol]?.entry.slice(-1)[0];
-      if (lastCandle) {
-        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, lastCandle.close, pos.size, pos.symbol, btRateMap);
+      // Fallback: if this position belongs to a previous chunk's symbol, close at entry price (0 PnL).
+      const closePrice = lastCandle ? lastCandle.close : pos.entryPrice;
+      const closeTime = lastCandle ? lastCandle.datetime : new Date(endMs).toISOString();
+      {
+        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, closePrice, pos.size, pos.symbol, btRateMap);
         const comm = pos.size * commissionPerLot * 2;
         allTrades.push({
           id: pos.id,
           symbol: pos.symbol,
           direction: pos.direction,
           entryPrice: pos.entryPrice,
-          exitPrice: lastCandle.close,
+          exitPrice: closePrice,
           entryTime: pos.entryTime,
-          exitTime: lastCandle.datetime,
+          exitTime: closeTime,
           size: pos.size,
           pnl: rawPnl - comm,
           pnlPips,
@@ -2213,69 +2323,32 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const action = body.action || "start";
+    const action = body?.action || "start";
     const db = getAdminClient();
 
-    // ── Auth: extract user ID from JWT ──
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const authHeader = req.headers.get("Authorization");
-    let userId: string | null = null;
-    if (authHeader?.startsWith("Bearer ")) {
-      const token = authHeader.replace("Bearer ", "");
-      if (token !== Deno.env.get("SUPABASE_ANON_KEY")) {
-        const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const { data, error } = await userClient.auth.getUser(token);
-        if (!error && data?.user?.id) {
-          userId = data.user.id;
-        }
-      }
-    }
-
-    // ── Action: start — kick off a new backtest in the background ──
-    if (action === "start") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      // Insert a pending run
-      const { data: run, error: insertErr } = await db.from("backtest_runs").insert({
-        user_id: userId,
-        status: "pending",
-        progress: 0,
-        progress_message: "Queued...",
-        config: body,
-      }).select("id").single();
-      if (insertErr || !run) {
-        console.error("[backtest] Failed to create run:", insertErr);
-        return respond({ error: "Failed to create backtest run" }, 500);
-      }
-      const runId = run.id;
-      console.log(`[backtest] Created run ${runId} for user ${userId}`);
-      // Fire and forget — the heavy work runs in the background
-      const jobPromise = runBacktestJob(runId, body).catch((e) => {
-        console.error(`[backtest:${runId}] background error`, e);
-      });
-      // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
-        // @ts-ignore
-        EdgeRuntime.waitUntil(jobPromise);
-      }
-      return respond({ runId, status: "pending", message: "Backtest started in background" });
+    // Resolve user from JWT for ownership on start/list
+    async function getUserId(): Promise<string | null> {
+      const auth = req.headers.get("Authorization");
+      if (!auth?.startsWith("Bearer ")) return null;
+      const token = auth.replace("Bearer ", "");
+      const { data } = await db.auth.getUser(token);
+      return data?.user?.id || null;
     }
 
     // ── Action: status — poll a specific run ──
     if (action === "status") {
-      if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const runId = body.runId;
-      if (!runId) return respond({ error: "runId required" }, 400);
-      const { data: run, error: fetchErr } = await db.from("backtest_runs")
-        .select("id, status, progress, progress_message, results, error_message, created_at, started_at, completed_at, heartbeat_at")
+      const { runId } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      const { data, error } = await db
+        .from("backtest_runs")
+        .select("id,status,progress,progress_message,results,error_message,created_at,started_at,completed_at,heartbeat_at")
         .eq("id", runId)
-        .eq("user_id", userId)
-        .single();
-      if (fetchErr || !run) return respond({ error: "Run not found" }, 404);
+        .maybeSingle();
+      if (error) return respond({ error: error.message }, 500);
+      if (!data) return respond({ error: "Run not found" }, 404);
       // Detect stale runs: if running but heartbeat is >90s old, mark as failed
-      if (run.status === "running" && run.heartbeat_at) {
-        const heartbeatAge = Date.now() - new Date(run.heartbeat_at).getTime();
+      if (data.status === "running" && data.heartbeat_at) {
+        const heartbeatAge = Date.now() - new Date(data.heartbeat_at).getTime();
         if (heartbeatAge > 90_000) {
           await db.from("backtest_runs").update({
             status: "failed",
@@ -2283,28 +2356,41 @@ Deno.serve(async (req: Request) => {
             progress_message: "Engine timed out (no heartbeat for 90s)",
             error_message: "Backtest engine stopped responding. The run may have exceeded time limits.",
           }).eq("id", runId);
-          run.status = "failed";
-          run.error_message = "Backtest engine stopped responding. The run may have exceeded time limits.";
+          data.status = "failed";
+          data.error_message = "Backtest engine stopped responding. The run may have exceeded time limits.";
         }
       }
-      return respond(run);
+      return respond({
+        runId: data.id,
+        status: data.status,
+        progress: data.progress,
+        message: data.progress_message,
+        results: data.results,
+        error: data.error_message,
+        createdAt: data.created_at,
+        startedAt: data.started_at,
+        completedAt: data.completed_at,
+      });
     }
 
     // ── Action: list — recent runs for the user ──
     if (action === "list") {
+      const userId = await getUserId();
       if (!userId) return respond({ error: "Unauthorized" }, 401);
-      const limit = body.limit || 10;
-      const { data: runs, error: listErr } = await db.from("backtest_runs")
-        .select("id, status, progress, progress_message, error_message, created_at, started_at, completed_at, config")
+      const limit = Math.min(Number(body.limit) || 20, 100);
+      const { data, error } = await db
+        .from("backtest_runs")
+        .select("id,status,progress,created_at,started_at,completed_at,error_message")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(limit);
-      if (listErr) return respond({ error: "Failed to list runs" }, 500);
-      return respond(runs || []);
+      if (error) return respond({ error: error.message }, 500);
+      return respond({ runs: data || [] });
     }
 
     // ── Action: cancel — cancel a running backtest ──
     if (action === "cancel") {
+      const userId = await getUserId();
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const runId = body.runId;
       if (!runId) return respond({ error: "runId required" }, 400);
@@ -2325,9 +2411,55 @@ Deno.serve(async (req: Request) => {
       return respond({ status: "cancelled", runId });
     }
 
-    return respond({ error: "Unknown action. Use: start, status, list, cancel" }, 400);
-  } catch (error: any) {
-    console.error(`[backtest] Handler error: ${error?.message}`, error?.stack);
-    return respond({ error: error?.message || "Backtest failed" }, 500);
+    // ── Action: chunk — run a specific chunk in the background ──
+    if (action === "chunk") {
+      const { runId, chunkIndex } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      if (typeof chunkIndex !== "number") return respond({ error: "chunkIndex required" }, 400);
+      const job = runBacktestJob(runId, body, chunkIndex);
+      if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+        (EdgeRuntime as any).waitUntil(job);
+      } else {
+        job.catch(e => console.error("[backtest] chunk job error:", e));
+      }
+      return respond({ runId, chunkIndex, status: "chunk_started" });
+    }
+
+    // ── Action: start (default) — kick off a new backtest ──
+    const userId = await getUserId();
+    if (!userId) return respond({ error: "Unauthorized" }, 401);
+
+    const { data: inserted, error: insErr } = await db
+      .from("backtest_runs")
+      .insert({
+        user_id: userId,
+        status: "pending",
+        progress: 0,
+        progress_message: "Queued",
+        config: {
+          instruments: body.instruments,
+          startDate: body.startDate,
+          endDate: body.endDate,
+          startingBalance: body.startingBalance,
+          tradingStyle: body.tradingStyle,
+          walkForwardFolds: body.walkForwardFolds ?? 0,
+        },
+      })
+      .select("id")
+      .single();
+    if (insErr || !inserted) return respond({ error: insErr?.message || "Failed to create run" }, 500);
+
+    const runId = inserted.id as string;
+
+    if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+      (EdgeRuntime as any).waitUntil(runBacktestJob(runId, body));
+    } else {
+      runBacktestJob(runId, body).catch(e => console.error("[backtest] Background job error:", e));
+    }
+
+    return respond({ runId, status: "started", message: "Backtest queued" });
+  } catch (err: any) {
+    console.error("[backtest] Handler error:", err);
+    return respond({ error: err?.message || "Internal error" }, 500);
   }
 });
