@@ -1364,12 +1364,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       config.minConfluence = userMinConf;
     }
 
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      throw new Error("Invalid backtest date range. Choose valid start and end dates.");
+    }
+    if (startMs >= endMs) {
+      throw new Error("Invalid backtest date range. Start date must be before end date.");
+    }
+
     console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}, research: ${researchMode}`);
 
     // ── Fetch Historical Data ──
     await updateProgress(10, `Fetching candles for ${instruments.length} instruments...`);
-    const startMs = new Date(startDate).getTime();
-    const endMs = new Date(endDate).getTime();
     const monthsSpan = Math.max(1, (endMs - startMs) / (30 * 24 * 3600 * 1000));
     const range = monthsSpan > 12 ? "2y" : monthsSpan > 6 ? "1y" : monthsSpan > 3 ? "6mo" : "3mo";
 
