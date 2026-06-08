@@ -2273,6 +2273,21 @@ Deno.serve(async (req: Request) => {
       return respond({ runs: data || [] });
     }
 
+    if (action === "chunk") {
+      const { runId, chunkIndex } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      if (typeof chunkIndex !== "number") return respond({ error: "chunkIndex required" }, 400);
+      // Run the requested chunk in the background and respond immediately so
+      // the calling invocation doesn't block waiting for this one.
+      const job = runBacktestJob(runId, body, chunkIndex);
+      if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+        (EdgeRuntime as any).waitUntil(job);
+      } else {
+        job.catch(e => console.error("[backtest] chunk job error:", e));
+      }
+      return respond({ runId, chunkIndex, status: "chunk_started" });
+    }
+
     // action === "start" (default)
     const userId = await getUserId();
     if (!userId) return respond({ error: "Unauthorized" }, 401);
