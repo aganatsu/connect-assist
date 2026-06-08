@@ -1447,10 +1447,25 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
-    await updateProgress(30, "Building FOTSI currency strength timeline...");
+    const baseProgress = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    await updateProgress(baseProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: building FOTSI timeline...`);
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
-    try {
+
+    // Try to reuse cached FOTSI timeline from previous chunk
+    let cachedFotsi: any = null;
+    if (chunkIndex > 0) {
+      const { data: runRow } = await db
+        .from("backtest_runs")
+        .select("results")
+        .eq("id", runId)
+        .maybeSingle();
+      cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
+    }
+    if (cachedFotsi && Array.isArray(cachedFotsi)) {
+      for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
+      console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
+    } else try {
       const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
       const fotsiPairs = getFOTSIPairNames();
       for (let i = 0; i < fotsiPairs.length; i += 7) {
