@@ -1296,7 +1296,17 @@ async function runBacktestJob(runId: string, body: any) {
       progress,
       progress_message: message,
       status: "running",
+      heartbeat_at: new Date().toISOString(),
     }).eq("id", runId).then(() => {});
+  };
+
+  // Check if the run has been cancelled by the user
+  const isCancelled = async (): Promise<boolean> => {
+    const { data } = await db.from("backtest_runs")
+      .select("status")
+      .eq("id", runId)
+      .single();
+    return data?.status === "cancelled";
   };
 
   try {
@@ -1305,6 +1315,7 @@ async function runBacktestJob(runId: string, body: any) {
       started_at: new Date().toISOString(),
       progress: 5,
       progress_message: "Parsing configuration...",
+      heartbeat_at: new Date().toISOString(),
     }).eq("id", runId);
 
     const {
@@ -1472,9 +1483,36 @@ async function runBacktestJob(runId: string, body: any) {
     let processedBars = 0;
     let lastProgressUpdate = Date.now();
 
+    // Cancel check before scan loop
+    if (await isCancelled()) {
+      await db.from("backtest_runs").update({
+        status: "cancelled",
+        completed_at: new Date().toISOString(),
+        progress_message: "Cancelled before scan loop",
+      }).eq("id", runId);
+      return;
+    }
+
+    const symbolErrors: { symbol: string; error: string }[] = [];
+    let completedSymbols = 0;
+
     for (const symbol of symbolList) {
+      // Cancel check between symbols
+      if (completedSymbols > 0 && completedSymbols % 3 === 0) {
+        if (await isCancelled()) {
+          await db.from("backtest_runs").update({
+            status: "cancelled",
+            completed_at: new Date().toISOString(),
+            progress_message: `Cancelled after ${completedSymbols}/${symbolList.length} symbols (${allTrades.length} trades found)`,
+            results: allTrades.length > 0 ? { trades: allTrades.slice(0, 500), partial: true, cancelledAt: symbol } : null,
+          }).eq("id", runId);
+          return;
+        }
+      }
+
+      try { // Per-symbol error isolation
       const { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, smt: smtCandles } = candleData[symbol];
-      if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; continue; }
+      if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; completedSymbols++; continue; }
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
@@ -1493,10 +1531,10 @@ async function runBacktestJob(runId: string, body: any) {
         processedBars++;
         diagnostics.totalCandlesEvaluated++;
 
-        // Progress update (throttled)
-        if (Date.now() - lastProgressUpdate > 5000) {
-          const pct = Math.min(90, 40 + Math.round((processedBars / totalBars) * 50));
-          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length}...`);
+        // Progress + heartbeat update (every 10s)
+        if (Date.now() - lastProgressUpdate > 10_000) {
+          const pct = Math.min(89, 40 + Math.round((processedBars / totalBars) * 49));
+          await updateProgress(pct, `Processing ${symbol} bar ${i}/${entryCandles.length} (${allTrades.length} trades)...`);
           lastProgressUpdate = Date.now();
         }
 
@@ -1532,6 +1570,50 @@ async function runBacktestJob(runId: string, body: any) {
         const relevantDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
         if (relevantDaily.length < 10) continue;
 
+                // ── Portfolio Pre-Gates (cheap checks before expensive analysis) ──
+        // These gates only need portfolio state, not analysis results
+        const preGateFailed = (() => {
+          // Gate 1: Max open positions
+          if (openPositions.length >= config.maxOpenPositions) return "max_positions";
+          // Gate 2: Max per symbol
+          const symCount = openPositions.filter(p => p.symbol === symbol).length;
+          if (symCount >= config.maxPerSymbol) return "max_per_symbol";
+          // Gate 5: Max drawdown (circuit breaker)
+          if (peakBalance > 0 && config.maxDrawdown > 0) {
+            const dd = ((peakBalance - balance) / peakBalance) * 100;
+            if (dd >= config.maxDrawdown) return "max_drawdown";
+          }
+          // Gate 6: Daily loss limit
+          const currentDate = new Date(candleMs).toISOString().slice(0, 10);
+          const todayTrades = allTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
+          const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
+          const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
+          if (dailyLossPct >= config.maxDailyLoss) return "daily_loss";
+          // Gate 8: Cooldown
+          if (config.cooldownMinutes > 0) {
+            const lastOnSym = allTrades.filter(t => t.symbol === symbol).slice(-1)[0];
+            if (lastOnSym) {
+              const lastExitMs = new Date(lastOnSym.exitTime).getTime();
+              const elapsedMin = (candleMs - lastExitMs) / 60000;
+              if (elapsedMin < config.cooldownMinutes) return "cooldown";
+            }
+          }
+          // Gate 9: Consecutive losses
+          if (config.maxConsecutiveLosses > 0) {
+            let consLosses = 0;
+            for (let j = allTrades.length - 1; j >= 0; j--) {
+              if (allTrades[j].pnl < 0) consLosses++;
+              else break;
+            }
+            if (consLosses >= config.maxConsecutiveLosses) return "consecutive_losses";
+          }
+          return null;
+        })();
+        if (preGateFailed) {
+          diagnostics.skippedByPreGate = (diagnostics.skippedByPreGate || 0) + 1;
+          continue;
+        }
+
         // ── Get relevant H4/H1 candles up to this candle time ──
         const relevantH4 = h4Candles.filter(c => {
           const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
@@ -1541,7 +1623,6 @@ async function runBacktestJob(runId: string, body: any) {
           const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
           return cMs < candleMs;
         });
-
         // ── Direction Engine (top-down: Daily → 4H → 1H) ──
         let directionResult: DirectionResult | null = null;
         if (config.useSimpleDirection) {
@@ -2009,6 +2090,24 @@ async function runBacktestJob(runId: string, body: any) {
         openPositions.push(newPos);
         diagnostics.tradesOpened++;
       }
+
+      completedSymbols++;
+      // Update progress after each symbol completes
+      const symPct = Math.min(90, 40 + Math.round((completedSymbols / symbolList.length) * 50));
+      await updateProgress(symPct, `Completed ${symbol} (${completedSymbols}/${symbolList.length}) — ${allTrades.length} trades so far`);
+
+      } catch (symbolErr: any) {
+        // Per-symbol error isolation: log and continue to next symbol
+        console.error(`[backtest:${runId}] Error processing ${symbol}:`, symbolErr?.message);
+        symbolErrors.push({ symbol, error: symbolErr?.message || "Unknown error" });
+        completedSymbols++;
+        continue;
+      }
+    }
+
+    // Log symbol errors in diagnostics
+    if (symbolErrors.length > 0) {
+      (diagnostics as any).symbolErrors = symbolErrors;
     }
 
     // ── Close remaining open positions at last candle close ──
@@ -2108,29 +2207,127 @@ async function runBacktestJob(runId: string, body: any) {
   }
 }
 
-// ─── HTTP Handler ───────────────────────────────────────────────────
+// ─── HTTP Handler (action-based routing) ────────────────────────────
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const body = await req.json();
-    const { runId } = body;
+    const body = await req.json().catch(() => ({}));
+    const action = body.action || "start";
+    const db = getAdminClient();
 
-    if (!runId) {
-      return respond({ error: "runId is required" }, 400);
+    // ── Auth: extract user ID from JWT ──
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const authHeader = req.headers.get("Authorization");
+    let userId: string | null = null;
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.replace("Bearer ", "");
+      if (token !== Deno.env.get("SUPABASE_ANON_KEY")) {
+        const userClient = createClient(supabaseUrl, Deno.env.get("SUPABASE_ANON_KEY")!, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data, error } = await userClient.auth.getUser(token);
+        if (!error && data?.user?.id) {
+          userId = data.user.id;
+        }
+      }
     }
 
-    // Fire-and-forget background execution
-    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
-      EdgeRuntime.waitUntil(runBacktestJob(runId, body));
-    } else {
-      // Fallback: run inline (for local dev)
-      runBacktestJob(runId, body).catch(e => console.error("[backtest] Background job error:", e));
+    // ── Action: start — kick off a new backtest in the background ──
+    if (action === "start") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      // Insert a pending run
+      const { data: run, error: insertErr } = await db.from("backtest_runs").insert({
+        user_id: userId,
+        status: "pending",
+        progress: 0,
+        progress_message: "Queued...",
+        config: body,
+      }).select("id").single();
+      if (insertErr || !run) {
+        console.error("[backtest] Failed to create run:", insertErr);
+        return respond({ error: "Failed to create backtest run" }, 500);
+      }
+      const runId = run.id;
+      console.log(`[backtest] Created run ${runId} for user ${userId}`);
+      // Fire and forget — the heavy work runs in the background
+      const jobPromise = runBacktestJob(runId, body).catch((e) => {
+        console.error(`[backtest:${runId}] background error`, e);
+      });
+      // @ts-ignore - EdgeRuntime is available in Supabase edge runtime
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+        // @ts-ignore
+        EdgeRuntime.waitUntil(jobPromise);
+      }
+      return respond({ runId, status: "pending", message: "Backtest started in background" });
     }
 
-    return respond({ status: "started", runId });
-  } catch (err: any) {
-    console.error("[backtest] Handler error:", err);
-    return respond({ error: err?.message || "Internal error" }, 500);
+    // ── Action: status — poll a specific run ──
+    if (action === "status") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const runId = body.runId;
+      if (!runId) return respond({ error: "runId required" }, 400);
+      const { data: run, error: fetchErr } = await db.from("backtest_runs")
+        .select("id, status, progress, progress_message, results, error_message, created_at, started_at, completed_at, heartbeat_at")
+        .eq("id", runId)
+        .eq("user_id", userId)
+        .single();
+      if (fetchErr || !run) return respond({ error: "Run not found" }, 404);
+      // Detect stale runs: if running but heartbeat is >90s old, mark as failed
+      if (run.status === "running" && run.heartbeat_at) {
+        const heartbeatAge = Date.now() - new Date(run.heartbeat_at).getTime();
+        if (heartbeatAge > 90_000) {
+          await db.from("backtest_runs").update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            progress_message: "Engine timed out (no heartbeat for 90s)",
+            error_message: "Backtest engine stopped responding. The run may have exceeded time limits.",
+          }).eq("id", runId);
+          run.status = "failed";
+          run.error_message = "Backtest engine stopped responding. The run may have exceeded time limits.";
+        }
+      }
+      return respond(run);
+    }
+
+    // ── Action: list — recent runs for the user ──
+    if (action === "list") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const limit = body.limit || 10;
+      const { data: runs, error: listErr } = await db.from("backtest_runs")
+        .select("id, status, progress, progress_message, error_message, created_at, started_at, completed_at, config")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (listErr) return respond({ error: "Failed to list runs" }, 500);
+      return respond(runs || []);
+    }
+
+    // ── Action: cancel — cancel a running backtest ──
+    if (action === "cancel") {
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const runId = body.runId;
+      if (!runId) return respond({ error: "runId required" }, 400);
+      const { data: run, error: fetchErr } = await db.from("backtest_runs")
+        .select("id, status")
+        .eq("id", runId)
+        .eq("user_id", userId)
+        .single();
+      if (fetchErr || !run) return respond({ error: "Run not found" }, 404);
+      if (run.status !== "running" && run.status !== "pending") {
+        return respond({ error: `Cannot cancel run with status: ${run.status}` }, 400);
+      }
+      await db.from("backtest_runs").update({
+        status: "cancelled",
+        completed_at: new Date().toISOString(),
+        progress_message: "Cancelled by user",
+      }).eq("id", runId);
+      return respond({ status: "cancelled", runId });
+    }
+
+    return respond({ error: "Unknown action. Use: start, status, list, cancel" }, 400);
+  } catch (error: any) {
+    console.error(`[backtest] Handler error: ${error?.message}`, error?.stack);
+    return respond({ error: error?.message || "Backtest failed" }, 500);
   }
 });

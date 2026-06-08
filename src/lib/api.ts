@@ -380,6 +380,7 @@ export const backtestApi = {
     error_message: string | null; created_at: string; started_at: string | null;
     completed_at: string | null; config: any;
   }>>("backtest-engine", { action: "list", limit }),
+  cancel: (runId: string) => invokeFunction<{ status: string; message: string }>("backtest-engine", { action: "cancel", runId }),
 };
 
 // ── Bot Scanner (Bot #1 — SMC) ──

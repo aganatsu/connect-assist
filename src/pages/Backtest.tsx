@@ -318,6 +318,17 @@ export default function Backtest() {
           setActiveRunId(null);
           setProgress("");
           setProgressPct(0);
+        } else if (run.status === "cancelled") {
+          stopPolling();
+          setIsRunning(false);
+          setActiveRunId(null);
+          setProgress("Cancelled");
+          setProgressPct(0);
+          // If partial results were saved, show them
+          if (run.results?.trades?.length > 0) {
+            setResults(run.results as BacktestResponse);
+            setActiveTab("overview");
+          }
         }
       } catch (e: any) {
         console.error("Poll error:", e);
@@ -858,6 +869,26 @@ export default function Backtest() {
                   </p>
                 </div>
                 <span className="text-sm font-mono font-bold text-cyan">{progressPct}%</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:bg-destructive/10 text-xs"
+                  onClick={async () => {
+                    if (!activeRunId) return;
+                    try {
+                      await backtestApi.cancel(activeRunId);
+                      stopPolling();
+                      setIsRunning(false);
+                      setProgress("Cancelled by user");
+                      setProgressPct(0);
+                      setActiveRunId(null);
+                    } catch (e: any) {
+                      console.error("Cancel failed:", e);
+                    }
+                  }}
+                >
+                  <XCircle className="h-3 w-3 mr-1" /> Cancel
+                </Button>
               </div>
               <div className="w-full bg-secondary/50 rounded-full h-2 overflow-hidden">
                 <div
