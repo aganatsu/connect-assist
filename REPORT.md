@@ -1,84 +1,69 @@
-# Task: Entry Confirmation Patterns in Trade Detail Breakdown
+# Task: Fix break-even SL using paper trade price instead of broker fill price
 
-## Branch: manus/entry-confirmation-patterns
+## Branch: manus/fix-be-broker-fill-price
 
 ## Behavior changes
 
-The Reversal Candle factor `detail` string now includes the **specific pattern name** instead of the generic "bullish/bearish reversal" text. Additionally, when a CHoCH occurred within the last 5 candles, it is appended to the detail.
+1. **Break-even SL now uses actual broker fill price** — When a trade is mirrored to MT4/MT5 (MetaAPI) or OANDA, the actual execution fill price is stored in `signal_reason.brokerEntryPrice`. All subsequent BE calculations (R-based activation, max-hold BE, session-end BE) and R-multiple calculations use this broker price instead of the paper entry price. This means the BE SL sent to the broker will now correctly reflect where the broker actually filled, not where the scanner's market data said the price was.
 
-**Before:**
-```
-"bullish reversal + displacement at key level (OB) — high-conviction entry"
-```
+2. **Trailing stop and R-multiple calculations also use broker fill price** — The `computeAdaptiveTrail()` call and R-multiple calculation in `scannerManagement.ts` now use the broker fill price when available, ensuring trailing stop tightening and profit calculations are accurate relative to the actual execution price.
 
-**After:**
-```
-"Bullish Engulfing + displacement at key level (OB) — high-conviction entry + CHoCH (bullish, 2 bars ago, close-based)"
-```
-
-**Scoring is UNCHANGED.** The `detected`, `type`, and all point calculations remain identical. Only the `detail` text and the new `pattern` field on the return object are affected. No gates, weights, or trade-taking logic is modified.
+3. **No change for paper-only trades** — Trades that are not mirrored to a broker (paper mode) continue to use `pos.entry_price` as before. Legacy positions without `brokerEntryPrice` in their `signal_reason` also fall back to the paper entry price.
 
 ## Files modified
 
-| File | Change |
-|------|--------|
-| `supabase/functions/_shared/smcAnalysis.ts` | Enhanced `detectReversalCandle()` to return `pattern` field identifying the specific candle pattern (Pin Bar, Engulfing, Inside Bar Breakout, Doji + Follow-Through, Morning Star, Evening Star). Added detection logic for Inside Bar Breakout, Doji + Follow-Through, and Morning/Evening Star. Return type changed from `{ detected, type }` to `{ detected, type, pattern }`. |
-| `supabase/functions/_shared/confluenceScoring.ts` | Updated Reversal Candle factor (Factor 8) detail strings to use `reversalCandle.pattern` when available (falls back to old `type + " reversal"` string). Added CHoCH context appended to detail when a recent CHoCH (<=5 bars) is present. |
-| `supabase/functions/smc-analysis/index.ts` | Updated Factor 9 detail string to use pattern name when available. |
-| `supabase/functions/_shared/entryConfirmationPatterns.test.ts` | **NEW** — 15 tests covering all pattern detections, backward compatibility, and regression checks. |
+- `supabase/functions/_shared/scannerManagement.ts` — Added `brokerEntryPrice` resolution logic: reads from `signalData.brokerEntryPrice` when available, falls back to `pos.entry_price` for paper/legacy trades. Renamed original parse to `paperEntryPrice` for clarity.
+- `supabase/functions/bot-scanner/index.ts` — (1) Added `brokerFillPrice` variable in the mirror loop. (2) Extract fill price from MetaAPI deal history (`deal.price`). (3) Extract fill price from OANDA `orderFillTransaction.price`. (4) After successful mirror, persist `brokerEntryPrice` into the position's `signal_reason` JSON alongside `mirrored_connection_ids`.
+- `supabase/functions/_shared/brokerFillPriceBE.test.ts` — New test file with 6 tests.
 
-## Extra caution: smcAnalysis.ts
+### Extra caution notes (per project rules):
 
-This file is in the restricted list but modification was **explicitly approved** by the user. The change is additive — the `detectReversalCandle()` function now returns a third field (`pattern: string | null`) alongside the existing `detected` and `type` fields. All existing callers that only destructure `{ detected, type }` continue to work unchanged because the new field is simply ignored by them. The detection priority order is: Pin Bar > Engulfing > Inside Bar > Doji > Morning/Evening Star, matching ICT teaching hierarchy (strongest single-candle signals first, then multi-candle patterns).
+**bot-scanner/index.ts:** Added broker fill price extraction in the MetaAPI deal history loop (which already existed for commission auto-detect) and in the OANDA fill transaction block (also already existed for commission). After the mirror loop, when persisting `mirrored_connection_ids`, we now also read-modify-write the `signal_reason` JSON to inject `brokerEntryPrice`. This is a read-then-update pattern on the same row that was just inserted moments earlier in the same function execution, so there's no race condition risk. The fill price is only stored when `brokerFillPrice != null` (i.e., when at least one broker successfully filled and returned a price).
+
+**scannerManagement.ts:** Changed `const entryPrice = parseFloat(pos.entry_price)` to first check `signalData.brokerEntryPrice`. The variable `entryPrice` is used in all downstream calculations (BE, trailing, R-multiple, management floor). This is the core fix — all three BE paths (lines ~418, ~457, ~767) and the trailing/R-multiple paths automatically use the correct price because they all reference `entryPrice`.
 
 ## Tests added
 
-| Test | Assertion |
-|------|-----------|
-| Bullish Pin Bar (Hammer) | Detects long lower wick + small body as "Bullish Pin Bar (Hammer)" |
-| Bearish Pin Bar (Shooting Star) | Detects long upper wick + small body as "Bearish Pin Bar (Shooting Star)" |
-| Bullish Engulfing | Prev bearish engulfed by bullish -> "Bullish Engulfing" |
-| Bearish Engulfing | Prev bullish engulfed by bearish -> "Bearish Engulfing" |
-| Inside Bar Breakout (Bullish) | Prev inside prev2, last breaks high -> "Inside Bar Breakout (Bullish)" |
-| Inside Bar Breakout (Bearish) | Prev inside prev2, last breaks low -> "Inside Bar Breakout (Bearish)" |
-| Doji + Bullish Follow-Through | Prev doji, last decisive bullish -> "Doji + Bullish Follow-Through" |
-| Doji + Bearish Follow-Through | Prev doji, last decisive bearish -> "Doji + Bearish Follow-Through" |
-| Morning Star | 3-candle bullish reversal -> "Morning Star" |
-| Evening Star | 3-candle bearish reversal -> "Evening Star" |
-| No pattern detected | Neutral candles -> `{ detected: false, type: null, pattern: null }` |
-| Backward compat | `pattern` field always present in return |
-| REGRESSION: Pin Bar | Same inputs produce same `detected + type` as before |
-| REGRESSION: Engulfing | Same inputs produce same `detected + type` as before |
-| confluenceScoring integration | Factor detail includes pattern name when Pin Bar detected |
+1. `BE activation uses brokerEntryPrice instead of paper entry_price` — Verifies BE SL is calculated from broker fill (1.08520) not paper entry (1.08500)
+2. `BE activation falls back to paper entry_price when brokerEntryPrice is absent` — Verifies legacy/paper trades still work
+3. `Short trade BE uses brokerEntryPrice correctly` — Verifies short direction BE uses broker fill
+4. `R-multiple calculation uses brokerEntryPrice` — Verifies R is computed from broker fill (prevents premature/late BE activation)
+5. `Invalid brokerEntryPrice (NaN) falls back to paper entry` — Edge case: corrupted data
+6. `brokerEntryPrice=null falls back to paper entry` — Edge case: explicit null
 
 ## Tests run
 
 ```
-$ deno test --no-check --allow-all supabase/functions/_shared/
-ok | 965 passed | 0 failed (15s)
+ok | 956 passed | 0 failed (14s)
 ```
 
-All 965 tests pass (950 existing + 15 new).
+All 956 tests pass (950 existing + 6 new).
 
 ## Regression check
 
-1. **Snapshot tests pass** — `confluenceScoring.test.ts` has 3 snapshot tests (bullish/bearish/ranging fixtures) that verify exact factor output. All 3 pass, confirming the scoring is unchanged for those fixtures.
-2. **Reversal candle alignment tests pass** — The 3 existing tests in `reversalCandleAlignment.test.ts` verify directional alignment logic still works correctly.
-3. **New regression tests** — Two dedicated regression tests confirm that the same Pin Bar and Engulfing inputs produce the same `detected: true, type: "bullish"` output as before (plus the new `pattern` field).
-4. **No weight/gate changes** — The `applyWeightScale` call and factor weight remain at 1.5. No gate definitions are modified.
+- The `entryPrice` variable is only different when `signalData.brokerEntryPrice` is present and valid. For all existing paper-only positions (which have no `brokerEntryPrice` in their `signal_reason`), the behavior is identical to before — `entryPrice` resolves to `parseFloat(pos.entry_price)` via the fallback path.
+- Test 2 explicitly verifies this fallback behavior.
+- The 950 existing tests all pass unchanged, confirming no regression in scoring, gates, or other management logic.
 
 ## Open questions
 
-1. **Frontend display** — The Lovable frontend `TierFactorBreakdown` component already renders `f.detail` directly. The richer detail strings will appear automatically on next deploy. No frontend changes needed. However, you may want to style the pattern name differently (bold, color) — that would be a separate Lovable task.
-2. **CHoCH recency threshold** — I used 5 bars as the cutoff for "recent CHoCH" appended to the detail. If you want this tighter (e.g., 3 bars) or looser (e.g., 8 bars), let me know.
+1. **Existing live positions:** Positions that were already opened and mirrored before this fix will NOT have `brokerEntryPrice` in their `signal_reason`. They will continue using the paper entry price for BE. Should I write a backfill script that queries MetaAPI for the actual fill price of currently-open positions and patches their `signal_reason`?
+
+2. **Limit fill path (zone confirmations):** The limit fill mirror at line ~3010 doesn't fetch deal history, so it can't extract the fill price. However, limit orders fill at the requested price (no slippage), so `actualFillPrice` (which is already stored as `entry_price`) should be accurate. Confirm this is acceptable.
+
+3. **Multiple brokers with different fills:** Currently `brokerFillPrice` takes the first successful broker's fill price. If you have multiple broker connections that fill at different prices, only the first is stored. Is this acceptable, or should we store per-connection fill prices?
 
 ## Suggested PR title and description
 
-**Title:** `feat: entry confirmation patterns in Reversal Candle factor detail`
+**Title:** fix: use actual broker fill price for break-even SL calculations
 
 **Description:**
-Enhances `detectReversalCandle()` to identify and return the specific candle pattern name (Bullish Engulfing, Pin Bar, Inside Bar Breakout, Doji + Follow-Through, Morning/Evening Star) instead of just "bullish"/"bearish". Updates the Reversal Candle factor detail string in `confluenceScoring.ts` and `smc-analysis/index.ts` to display the pattern name. Also appends recent CHoCH context (within 5 bars) to the detail when available.
+Fixes a bug where break-even stop-loss was calculated using the paper trade entry price instead of the actual broker execution price. When there's slippage between the scanner's market price and the broker's fill, the BE SL was being placed at the wrong level — potentially getting stopped out prematurely or leaving money on the table.
 
-**No scoring changes.** All point calculations, weights, and gate logic remain identical. Only the `detail` text is enriched for better trade reasoning visibility.
-
-965 tests pass (15 new).
+Changes:
+- Extract and store actual fill price from MetaAPI (deal.price) and OANDA (orderFillTransaction.price) after successful mirror
+- Store as `brokerEntryPrice` in position's `signal_reason` JSON (no schema migration needed)
+- `scannerManagement.ts` now uses `brokerEntryPrice` for all BE/trailing/R-multiple calculations when available
+- Falls back to paper entry price for paper-only trades and legacy positions
+- 6 new tests covering all scenarios (broker price, fallback, short, invalid, null)
+- 956/956 tests passing
