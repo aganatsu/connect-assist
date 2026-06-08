@@ -501,6 +501,7 @@ function runBacktestSafetyGates(
   spreadPips: number,
   fotsiResult: FOTSIResult | null,
   smtResult: any,
+  session: SessionResult,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -632,8 +633,8 @@ function runBacktestSafetyGates(
 
   // Gate 11: Session filter
   if (config.enabledSessions && config.enabledSessions.length > 0) {
-    const sessionName = analysis.session?.name || "";
-    const sessionEnabled = isSessionEnabled(sessionName, config.enabledSessions);
+    const sessionName = session.name;
+    const sessionEnabled = isSessionEnabled(session, config.enabledSessions);
     gates.push({
       passed: sessionEnabled,
       reason: sessionEnabled ? `Session OK: ${sessionName}` : `Session blocked: ${sessionName} not in [${config.enabledSessions.join(",")}]`,
@@ -1400,12 +1401,15 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedBelowThreshold: 0,
       skippedGateBlocked: 0,
       skippedNoSLTP: 0,
+      skippedImpulseNoZone: 0,
+      skippedImpulseNotAtZone: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
       highestScoreSeen: 0,
       enabledFactorCount: 0,
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
+      gateBlockReasons: {} as Record<string, number>,
     };
 
     // Compute enabledFactorCount
@@ -1560,6 +1564,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           for (const k of Object.keys(ps.diagnostics)) {
             if (typeof (ps.diagnostics as any)[k] === "number") {
               (diagnostics as any)[k] = ((diagnostics as any)[k] || 0) + (ps.diagnostics as any)[k];
+            }
+          }
+          if (ps.diagnostics.gateBlockReasons) {
+            for (const [reason, count] of Object.entries(ps.diagnostics.gateBlockReasons as Record<string, number>)) {
+              diagnostics.gateBlockReasons[reason] = (diagnostics.gateBlockReasons[reason] || 0) + count;
             }
           }
         }
@@ -1766,8 +1775,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
         // Inject HTF data
-        (pairConfig as any)._htfPOIs = (h4OBs.length > 0 || h4FVGs.length > 0 || h4Breakers.length > 0)
-          ? { h4OBs, h4FVGs, h4Breakers } : null;
+        const htfPOIs = [
+          ...h4OBs.map((ob: any) => ({ timeframe: "4H", type: "ob" as const, high: ob.high, low: ob.low, direction: ob.type })),
+          ...h4FVGs.map((fvg: any) => ({ timeframe: "4H", type: "fvg" as const, high: fvg.high, low: fvg.low, direction: fvg.type })),
+          ...h4Breakers.map((breaker: any) => ({
+            timeframe: "4H",
+            type: "breaker" as const,
+            high: breaker.high,
+            low: breaker.low,
+            direction: String(breaker.type).startsWith("bullish") ? "bullish" as const : "bearish" as const,
+          })),
+        ].filter(poi => Number.isFinite(poi.high) && Number.isFinite(poi.low));
+        (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
         (pairConfig as any)._htfFibLevels = htfFibLevels4H;
         (pairConfig as any)._htfPD = htfPD4H;
         (pairConfig as any)._h4Candles = relevantH4.length >= 20 ? relevantH4.slice(-60) : null;
@@ -1860,11 +1879,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
           if (!izData || !izData.hasZone) {
             // No valid impulse zone — skip (hard gate)
-            diagnostics.skippedNoDirection++;
+            diagnostics.skippedImpulseNoZone++;
             continue;
           }
           if (!izData.bestZone?.priceAtZone) {
             // Zone exists but price not there yet — skip
+            diagnostics.skippedImpulseNotAtZone++;
             continue;
           }
           // Price IS at zone — apply bonus
@@ -2083,7 +2103,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
-          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult,
+          allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
         );
 
         const failedGates = gates.filter(g => !g.passed);
@@ -2091,6 +2111,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         if (!allPassed) {
           diagnostics.skippedGateBlocked++;
+          for (const gate of failedGates) {
+            const label = gate.reason.split(":")[0] || gate.reason;
+            diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
+          }
           // Research mode: track what would have happened
           if (researchMode) {
             const cf = computeCounterfactual(symbol, analysis.direction, candle.close, analysis.stopLoss, analysis.takeProfit, entryCandles, i + 1, 200);
@@ -2294,6 +2318,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       trades: allTrades.slice(0, maxTradesStored),
       equityCurve,
       diagnostics,
+      gateBreakdown: Object.fromEntries(
+        Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
+      ),
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
       researchAnalytics: researchAnalytics ? {
         gateEffectiveness: researchAnalytics.gateEffectiveness,

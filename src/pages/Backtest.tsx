@@ -63,6 +63,9 @@ interface BacktestResponse {
     skippedBelowThreshold: number;
     skippedGateBlocked: number;
     skippedNoSLTP: number;
+    skippedImpulseNoZone?: number;
+    skippedImpulseNotAtZone?: number;
+    gateBlockReasons?: Record<string, number>;
     signalsGenerated: number;
     tradesOpened: number;
     // Actionable advice fields
@@ -999,12 +1002,23 @@ export default function Backtest() {
 
           // Advice 5: Gate blocked
           if (d.skippedGateBlocked > 0 && d.signalsGenerated > 0) {
+            const topGate = d.gateBlockReasons ? Object.entries(d.gateBlockReasons).sort(([, a], [, b]) => b - a)[0] : null;
             advice.push({
               priority: 5,
               icon: "\u{1F6E1}\uFE0F",
               title: `${d.skippedGateBlocked} signals blocked by safety gates`,
-              detail: `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
+              detail: topGate ? `Top blocker: ${topGate[0]} (${topGate[1]} times).` : `Signals passed the threshold but were blocked by risk management gates (max positions, drawdown limits, cooldown, etc.).`,
               action: `Check your Risk and Protection settings. Common blockers: max concurrent trades too low, cooldown too long, or max daily drawdown too tight.`,
+            });
+          }
+
+          if ((d.skippedImpulseNoZone || 0) > 0 || (d.skippedImpulseNotAtZone || 0) > 0) {
+            advice.push({
+              priority: 5,
+              icon: "\u{1F4CD}",
+              title: "Impulse zone gate blocked entries",
+              detail: `${(d.skippedImpulseNoZone || 0).toLocaleString()} candles had no valid zone; ${(d.skippedImpulseNotAtZone || 0).toLocaleString()} had a zone but price was not at it.`,
+              action: `Set Impulse Zone gate to Soft/Off for discovery runs, or keep it Hard when you only want exact zone-touch entries.`,
             });
           }
 
