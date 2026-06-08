@@ -2370,11 +2370,15 @@ Deno.serve(async (req: Request) => {
         status: data.status,
         progress: data.progress,
         message: data.progress_message,
+        progress_message: data.progress_message,
         results: data.results,
-        error: data.error_message,
+        error_message: data.error_message,
         createdAt: data.created_at,
+        created_at: data.created_at,
         startedAt: data.started_at,
+        started_at: data.started_at,
         completedAt: data.completed_at,
+        completed_at: data.completed_at,
       });
     }
 
