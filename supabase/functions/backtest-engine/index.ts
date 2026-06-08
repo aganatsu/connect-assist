@@ -1787,8 +1787,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // ── Run Confluence Analysis ──
         let analysis: any;
         try {
-          analysis = runConfluenceAnalysis(analysisCandles, pairConfig, relevantDaily);
+          analysis = runConfluenceAnalysis(analysisCandles, relevantDaily, pairConfig, relevantH1, candleMs);
         } catch (e: any) {
+          diagnostics.confluenceErrors = (diagnostics.confluenceErrors || 0) + 1;
+          if (!diagnostics.firstConfluenceError) {
+            diagnostics.firstConfluenceError = String(e?.message || e);
+          }
           continue;
         }
 
