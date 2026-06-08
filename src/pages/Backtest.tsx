@@ -1618,7 +1618,7 @@ export default function Backtest() {
                       </tbody>
                     </table>
                   </div>
-                  {Object.keys(results.gateBreakdown).length === 0 && (
+                  {Object.keys(results.gateBreakdown ?? {}).length === 0 && (
                     <p className="text-xs text-muted-foreground text-center py-8">No gates were triggered during this backtest period.</p>
                   )}
                 </CardContent>
