@@ -2114,21 +2114,88 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json();
-    const { runId } = body;
+    const action = body?.action || "start";
+    const db = getAdminClient();
 
-    if (!runId) {
-      return respond({ error: "runId is required" }, 400);
+    // Resolve user from JWT for ownership on start/list
+    async function getUserId(): Promise<string | null> {
+      const auth = req.headers.get("Authorization");
+      if (!auth?.startsWith("Bearer ")) return null;
+      const token = auth.replace("Bearer ", "");
+      const { data } = await db.auth.getUser(token);
+      return data?.user?.id || null;
     }
 
-    // Fire-and-forget background execution
-    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
-      EdgeRuntime.waitUntil(runBacktestJob(runId, body));
+    if (action === "status") {
+      const { runId } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      const { data, error } = await db
+        .from("backtest_runs")
+        .select("id,status,progress,progress_message,results,error_message,created_at,started_at,completed_at")
+        .eq("id", runId)
+        .maybeSingle();
+      if (error) return respond({ error: error.message }, 500);
+      if (!data) return respond({ error: "Run not found" }, 404);
+      return respond({
+        runId: data.id,
+        status: data.status,
+        progress: data.progress,
+        message: data.progress_message,
+        results: data.results,
+        error: data.error_message,
+        createdAt: data.created_at,
+        startedAt: data.started_at,
+        completedAt: data.completed_at,
+      });
+    }
+
+    if (action === "list") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const limit = Math.min(Number(body.limit) || 20, 100);
+      const { data, error } = await db
+        .from("backtest_runs")
+        .select("id,status,progress,created_at,started_at,completed_at,error_message")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) return respond({ error: error.message }, 500);
+      return respond({ runs: data || [] });
+    }
+
+    // action === "start" (default)
+    const userId = await getUserId();
+    if (!userId) return respond({ error: "Unauthorized" }, 401);
+
+    const { data: inserted, error: insErr } = await db
+      .from("backtest_runs")
+      .insert({
+        user_id: userId,
+        status: "pending",
+        progress: 0,
+        progress_message: "Queued",
+        config: {
+          instruments: body.instruments,
+          startDate: body.startDate,
+          endDate: body.endDate,
+          startingBalance: body.startingBalance,
+          tradingStyle: body.tradingStyle,
+          walkForwardFolds: body.walkForwardFolds ?? 0,
+        },
+      })
+      .select("id")
+      .single();
+    if (insErr || !inserted) return respond({ error: insErr?.message || "Failed to create run" }, 500);
+
+    const runId = inserted.id as string;
+
+    if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+      (EdgeRuntime as any).waitUntil(runBacktestJob(runId, body));
     } else {
-      // Fallback: run inline (for local dev)
       runBacktestJob(runId, body).catch(e => console.error("[backtest] Background job error:", e));
     }
 
-    return respond({ status: "started", runId });
+    return respond({ runId, status: "started", message: "Backtest queued" });
   } catch (err: any) {
     console.error("[backtest] Handler error:", err);
     return respond({ error: err?.message || "Internal error" }, 500);
