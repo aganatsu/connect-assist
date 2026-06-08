@@ -20,6 +20,7 @@ export type Database = {
           config: Json
           created_at: string
           error_message: string | null
+          heartbeat_at: string | null
           id: string
           progress: number
           progress_message: string | null
@@ -33,6 +34,7 @@ export type Database = {
           config?: Json
           created_at?: string
           error_message?: string | null
+          heartbeat_at?: string | null
           id?: string
           progress?: number
           progress_message?: string | null
@@ -46,6 +48,7 @@ export type Database = {
           config?: Json
           created_at?: string
           error_message?: string | null
+          heartbeat_at?: string | null
           id?: string
           progress?: number
           progress_message?: string | null
