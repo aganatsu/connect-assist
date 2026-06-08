@@ -2093,7 +2093,32 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       }
     }
 
-    // ── Close remaining open positions at last candle close ──
+    // ── If more chunks remain, persist state and chain ──
+    const isLastChunk = chunkIndex + 1 >= totalChunks;
+    if (!isLastChunk) {
+      const partial_state = {
+        balance,
+        peakBalance,
+        openPositions,
+        allTrades,
+        blockedTrades,
+        tradeCounter,
+        diagnostics,
+        btRateMap,
+        fotsiTimeline: [...fotsiTimeline.entries()],
+      };
+      await db.from("backtest_runs").update({
+        progress: chunkProgressEnd,
+        progress_message: `Chunk ${chunkIndex + 1}/${totalChunks} complete — chaining...`,
+        status: "running",
+        results: { partial_state },
+      }).eq("id", runId);
+      console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks} done. Chaining to next.`);
+      await selfInvokeNextChunk(runId, body, chunkIndex + 1);
+      return;
+    }
+
+    // ── Final chunk: close remaining open positions at last candle close ──
     for (const pos of [...openPositions]) {
       const lastCandle = candleData[pos.symbol]?.entry.slice(-1)[0];
       if (lastCandle) {
