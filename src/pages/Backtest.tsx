@@ -916,7 +916,7 @@ export default function Backtest() {
               <AlertTriangle className="h-5 w-5 text-destructive" />
               <div>
                 <p className="text-sm font-medium text-destructive">{error}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Make sure the backtest-engine Edge Function is deployed.</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Review the date range and configuration, then run it again.</p>
               </div>
             </CardContent>
           </Card>
