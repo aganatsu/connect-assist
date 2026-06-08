@@ -248,7 +248,7 @@ function runFullAnalysis(candles: Candle[], dailyCandles?: Candle[]) {
     let detail = "";
     if (reversalCandle.detected) {
       pts = 0.5;
-      detail = `${reversalCandle.type} reversal candle detected`;
+      detail = reversalCandle.pattern ? `${reversalCandle.pattern} detected` : `${reversalCandle.type} reversal candle detected`;
     } else {
       detail = "No reversal candle";
     }

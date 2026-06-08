@@ -2042,23 +2042,68 @@ export function detectJudasSwing(candles: Candle[], atMs?: number): { detected: 
   return none;
 }
 
-export function detectReversalCandle(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null } {
-  if (candles.length < 2) return { detected: false, type: null };
+export function detectReversalCandle(candles: Candle[]): { detected: boolean; type: "bullish" | "bearish" | null; pattern: string | null } {
+  if (candles.length < 2) return { detected: false, type: null, pattern: null };
   const last = candles[candles.length - 1];
   const prev = candles[candles.length - 2];
   const bodySize = Math.abs(last.close - last.open);
   const totalRange = last.high - last.low;
-  if (totalRange === 0) return { detected: false, type: null };
+  if (totalRange === 0) return { detected: false, type: null, pattern: null };
 
   const upperWick = last.high - Math.max(last.open, last.close);
   const lowerWick = Math.min(last.open, last.close) - last.low;
 
-  if (bodySize / totalRange < 0.3 && lowerWick / totalRange > 0.6 && last.close > last.open) return { detected: true, type: "bullish" };
-  if (bodySize / totalRange < 0.3 && upperWick / totalRange > 0.6 && last.close < last.open) return { detected: true, type: "bearish" };
-  if (prev.close < prev.open && last.close > last.open && last.open <= prev.close && last.close >= prev.open) return { detected: true, type: "bullish" };
-  if (prev.close > prev.open && last.close < last.open && last.open >= prev.close && last.close <= prev.open) return { detected: true, type: "bearish" };
+  // Pin Bar / Hammer (long lower wick, small body)
+  if (bodySize / totalRange < 0.3 && lowerWick / totalRange > 0.6 && last.close > last.open) return { detected: true, type: "bullish", pattern: "Bullish Pin Bar (Hammer)" };
+  // Pin Bar / Shooting Star (long upper wick, small body)
+  if (bodySize / totalRange < 0.3 && upperWick / totalRange > 0.6 && last.close < last.open) return { detected: true, type: "bearish", pattern: "Bearish Pin Bar (Shooting Star)" };
+  // Bullish Engulfing
+  if (prev.close < prev.open && last.close > last.open && last.open <= prev.close && last.close >= prev.open) return { detected: true, type: "bullish", pattern: "Bullish Engulfing" };
+  // Bearish Engulfing
+  if (prev.close > prev.open && last.close < last.open && last.open >= prev.close && last.close <= prev.open) return { detected: true, type: "bearish", pattern: "Bearish Engulfing" };
 
-  return { detected: false, type: null };
+  // Inside Bar Breakout (prev contained within prev2, last breaks out)
+  if (candles.length >= 3) {
+    const prev2 = candles[candles.length - 3];
+    const prevInside = prev.high <= prev2.high && prev.low >= prev2.low;
+    if (prevInside) {
+      if (last.close > prev.high && last.close > last.open) return { detected: true, type: "bullish", pattern: "Inside Bar Breakout (Bullish)" };
+      if (last.close < prev.low && last.close < last.open) return { detected: true, type: "bearish", pattern: "Inside Bar Breakout (Bearish)" };
+    }
+  }
+
+  // Doji + Follow-Through (prev is doji, last is decisive)
+  const prevRange = prev.high - prev.low;
+  const prevBody = Math.abs(prev.close - prev.open);
+  if (prevRange > 0 && prevBody / prevRange < 0.1) {
+    // Prev is a doji — check if last candle is a decisive follow-through
+    if (bodySize > prevRange * 0.5 && last.close > last.open) return { detected: true, type: "bullish", pattern: "Doji + Bullish Follow-Through" };
+    if (bodySize > prevRange * 0.5 && last.close < last.open) return { detected: true, type: "bearish", pattern: "Doji + Bearish Follow-Through" };
+  }
+
+  // Morning Star (3-candle bullish reversal)
+  if (candles.length >= 3) {
+    const prev2 = candles[candles.length - 3];
+    const p2Body = Math.abs(prev2.close - prev2.open);
+    const p2Range = prev2.high - prev2.low;
+    if (p2Range > 0 && p2Body / p2Range > 0.4 && prev2.close < prev2.open) {
+      // prev2 is large bearish
+      if (prevBody < p2Body * 0.3 && bodySize > p2Body * 0.5 && last.close > last.open) {
+        const midpoint = (prev2.open + prev2.close) / 2;
+        if (last.close > midpoint) return { detected: true, type: "bullish", pattern: "Morning Star" };
+      }
+    }
+    // Evening Star (3-candle bearish reversal)
+    if (p2Range > 0 && p2Body / p2Range > 0.4 && prev2.close > prev2.open) {
+      // prev2 is large bullish
+      if (prevBody < p2Body * 0.3 && bodySize > p2Body * 0.5 && last.close < last.open) {
+        const midpoint = (prev2.open + prev2.close) / 2;
+        if (last.close < midpoint) return { detected: true, type: "bearish", pattern: "Evening Star" };
+      }
+    }
+  }
+
+  return { detected: false, type: null, pattern: null };
 }
 
 export function calculatePDLevels(dailyCandles: Candle[]) {

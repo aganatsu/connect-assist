@@ -1021,7 +1021,8 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         // Bidirectional: opposing reversal penalizes at 50% of max (1.5 * 0.5 = -0.75 with disp, -0.375 without)
         const hasDisp_opp = displacement.isDisplacement;
         pts = hasDisp_opp ? -0.75 : -0.375;
-        detail = `${reversalCandle.type} reversal OPPOSES ${direction} — penalty ${pts.toFixed(3)} (bidirectional)`;
+        const oppLabel = reversalCandle.pattern || `${reversalCandle.type} reversal`;
+        detail = `${oppLabel} OPPOSES ${direction} — penalty ${pts.toFixed(3)} (bidirectional)`;
       } else {
       const lastC = candles[candles.length - 1];
       const lastMid = (lastC.high + lastC.low) / 2;
@@ -1043,22 +1044,34 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
         if (atOB) levels.push("OB");
         if (atFVG) levels.push("FVG");
         if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversalCandle.type} reversal + displacement at key level (${levels.join(", ")}) — high-conviction entry`;
+        const patLabel1 = reversalCandle.pattern || `${reversalCandle.type} reversal`;
+        detail = `${patLabel1} + displacement at key level (${levels.join(", ")}) — high-conviction entry`;
       } else if (atKeyLevel) {
         pts = 1.0;
         const levels: string[] = [];
         if (atOB) levels.push("OB");
         if (atFVG) levels.push("FVG");
         if (atPDPW) levels.push("PD/PW level");
-        detail = `${reversalCandle.type} reversal at key level (${levels.join(", ")}) — no displacement`;
+        const patLabel2 = reversalCandle.pattern || `${reversalCandle.type} reversal`;
+        detail = `${patLabel2} at key level (${levels.join(", ")}) — no displacement`;
       } else if (hasDisp) {
         pts = 0.5;
-        detail = `${reversalCandle.type} reversal with displacement but not at a key level`;
+        const patLabel3 = reversalCandle.pattern || `${reversalCandle.type} reversal`;
+        detail = `${patLabel3} with displacement but not at a key level`;
       } else {
         pts = 0.25;
-        detail = `${reversalCandle.type} reversal candle detected but not at a key level, no displacement`;
+        const patLabel4 = reversalCandle.pattern || `${reversalCandle.type} reversal`;
+        detail = `${patLabel4} detected but not at a key level, no displacement`;
       }
       } // end reversalAligned
+    }
+    // Append recent CHoCH context to the detail string when available
+    if (structure.choch.length > 0 && reversalCandle.detected) {
+      const lastChoch = structure.choch[structure.choch.length - 1];
+      const recency = candles.length - 1 - lastChoch.index;
+      if (recency <= 5) {
+        detail += ` + CHoCH (${lastChoch.type}, ${recency} bar${recency !== 1 ? "s" : ""} ago${lastChoch.closeBased ? ", close-based" : ""})`;
+      }
     }
     { const s = applyWeightScale(pts, "reversalCandle", 1.5, config); pts = s.pts; score += pts;
     factors.push({ name: "Reversal Candle", present: pts !== 0, weight: pts < 0 ? -Math.abs(s.displayWeight) : s.displayWeight, detail, group: "Price Action", ...(pts < 0 ? { _opposing: true } : {}) } as any); }
