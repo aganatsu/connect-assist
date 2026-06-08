@@ -1400,12 +1400,15 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedBelowThreshold: 0,
       skippedGateBlocked: 0,
       skippedNoSLTP: 0,
+      skippedImpulseNoZone: 0,
+      skippedImpulseNotAtZone: 0,
       signalsGenerated: 0,
       tradesOpened: 0,
       highestScoreSeen: 0,
       enabledFactorCount: 0,
       totalFactorCount: Object.keys(DEFAULT_FACTOR_WEIGHTS).length,
       scoreDistribution: { below20: 0, below40: 0, below60: 0, below80: 0, above80: 0 },
+      gateBlockReasons: {} as Record<string, number>,
     };
 
     // Compute enabledFactorCount
@@ -1766,8 +1769,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
         // Inject HTF data
-        (pairConfig as any)._htfPOIs = (h4OBs.length > 0 || h4FVGs.length > 0 || h4Breakers.length > 0)
-          ? { h4OBs, h4FVGs, h4Breakers } : null;
+        const htfPOIs = [
+          ...h4OBs.map((ob: any) => ({ timeframe: "4H", type: "ob" as const, high: ob.high, low: ob.low, direction: ob.type })),
+          ...h4FVGs.map((fvg: any) => ({ timeframe: "4H", type: "fvg" as const, high: fvg.high, low: fvg.low, direction: fvg.type })),
+          ...h4Breakers.map((breaker: any) => ({
+            timeframe: "4H",
+            type: "breaker" as const,
+            high: breaker.high,
+            low: breaker.low,
+            direction: String(breaker.type).startsWith("bullish") ? "bullish" as const : "bearish" as const,
+          })),
+        ].filter(poi => Number.isFinite(poi.high) && Number.isFinite(poi.low));
+        (pairConfig as any)._htfPOIs = htfPOIs.length > 0 ? htfPOIs : null;
         (pairConfig as any)._htfFibLevels = htfFibLevels4H;
         (pairConfig as any)._htfPD = htfPD4H;
         (pairConfig as any)._h4Candles = relevantH4.length >= 20 ? relevantH4.slice(-60) : null;
