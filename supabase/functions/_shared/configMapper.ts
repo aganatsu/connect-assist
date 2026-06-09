@@ -141,6 +141,8 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
   minZoneScore: 4,
   impulseSlCapMultiplier: 4,
+  cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
+  cascadeZoneDailyATRMult: 2.0,
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -374,6 +376,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
+    cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
+    cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,

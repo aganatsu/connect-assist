@@ -66,6 +66,7 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
+import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
@@ -186,6 +187,8 @@ const DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
   minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
+  cascadeZoneMode: "prefer" as "prefer" | "only" | "off",  // "prefer" = use cascade if Daily zone exists, fallback to parallel; "only" = cascade or skip; "off" = parallel only
+  cascadeZoneDailyATRMult: 2.0,  // ATR multiplier for "price at Daily zone" proximity
   // ── Simple Direction Engine ──
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
@@ -746,6 +749,8 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
+    cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
+    cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? DEFAULTS.cascadeZoneDailyATRMult,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
@@ -4051,6 +4056,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           h4FVGs: h4FVGs ?? [],
           h4Breakers: h4Breakers ?? [],
           htfFibLevels: htfFibLevels4H ?? null,
+          dailyFibLevels: htfFibLevelsD ?? null,
           htfPD: htfPD4H ?? null,
           direction: zoneDirection as "bullish" | "bearish",
         };
@@ -4111,6 +4117,60 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           h1Confirmed: simpleDirectionResult.h1Confirmed,
         } : null,
       };
+    }
+
+    // ── Cascade Zone Engine (Daily → 4H → 1H → 15m top-down) ──
+    // Runs when cascadeZoneMode is "prefer" or "only". Provides a sequential
+    // narrative: Daily zone → 4H confirmation → 1H entry → 15m refinement.
+    let cascadeResult: CascadeResult | null = null;
+    if (pairConfig.cascadeZoneMode !== "off" && analysis.direction && dailyCandles.length >= 30) {
+      try {
+        const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
+        cascadeResult = findCascadeZone(
+          dailyCandles,
+          h4Candles,
+          hourlyCandles,
+          candles, // 15m entry candles
+          cascadeDir as "bullish" | "bearish",
+          analysis.lastPrice,
+          { dailyZoneATRMult: pairConfig.cascadeZoneDailyATRMult },
+        );
+        (detail as any).cascadeZone = {
+          state: cascadeResult.state,
+          reason: cascadeResult.reason,
+          dailyZone: cascadeResult.dailyZone ? {
+            type: cascadeResult.dailyZone.poi.type,
+            high: cascadeResult.dailyZone.high,
+            low: cascadeResult.dailyZone.low,
+            fibLevel: cascadeResult.dailyZone.fibLevel,
+            srConfirmed: cascadeResult.dailyZone.srConfirmed,
+          } : null,
+          dailyZoneDistance: cascadeResult.dailyZoneDistance,
+          confirmation: cascadeResult.confirmation ? {
+            type: cascadeResult.confirmation.type,
+            direction: cascadeResult.confirmation.direction,
+            insideDailyZone: cascadeResult.confirmation.insideDailyZone,
+          } : null,
+          entryZone: cascadeResult.entryZone ? {
+            type: cascadeResult.entryZone.poi.type,
+            high: cascadeResult.entryZone.poi.high,
+            low: cascadeResult.entryZone.poi.low,
+            fibLevel: cascadeResult.entryZone.fibLevel,
+            totalScore: cascadeResult.entryZone.totalScore,
+            ltfRefined: cascadeResult.entryZoneRefined,
+          } : null,
+          entry: cascadeResult.entry,
+          sl: cascadeResult.sl,
+          priceAtEntry: cascadeResult.priceAtEntry,
+          distancePips: cascadeResult.distancePips,
+        };
+        console.log(`[scan ${scanCycleId}] ${pair} Cascade Zone [${cascadeResult.state}]: ${cascadeResult.reason}`);
+      } catch (cascadeErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} Cascade Zone error (non-fatal): ${cascadeErr?.message}`);
+        (detail as any).cascadeZone = { state: "error", reason: `Error: ${cascadeErr?.message}` };
+      }
+    } else {
+      (detail as any).cascadeZone = { state: "off", reason: pairConfig.cascadeZoneMode === "off" ? "Cascade mode disabled" : (!analysis.direction ? "No direction" : "Insufficient daily candles") };
     }
 
     // ── Attach Simple Direction data to detail for dashboard ──

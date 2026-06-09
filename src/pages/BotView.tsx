@@ -36,6 +36,7 @@ import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ImpulseZonePanel } from "@/components/ImpulseZonePanel";
+import { CascadeZonePanel } from "@/components/CascadeZonePanel";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -1394,6 +1395,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                         <>
                           {/* Impulse Zone — PRIMARY gate, shown first in the trade detail breakdown */}
                           {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
+                          {sr.cascadeZone && <CascadeZonePanel data={sr.cascadeZone} />}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1673,6 +1675,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
         <div className="px-1 pb-2 space-y-1.5">
           {/* Impulse Zone Panel — PRIMARY gate, shown first */}
           {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
+          {d.cascadeZone && <CascadeZonePanel data={d.cascadeZone} />}
 
           {/* Tier-Grouped Factors */}
           {d.factors && (
@@ -1840,6 +1843,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
       {/* 4. Impulse Zone Panel — PRIMARY gate info */}
       {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
+      {d.cascadeZone && <CascadeZonePanel data={d.cascadeZone} />}
 
       {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
       {d.factors && (
