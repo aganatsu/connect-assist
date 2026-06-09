@@ -739,6 +739,22 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
                       </p>
                     </FieldGroup>
+                    <FieldGroup label="Cascade Zone Mode" description="Top-down zone detection: Daily → 4H → 1H → 15m. Each level narrows the entry zone for higher conviction trades.">
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={config.strategy?.cascadeZoneMode ?? 'prefer'}
+                          onChange={e => updateField('strategy', 'cascadeZoneMode', e.target.value)}
+                        >
+                          <option value="prefer">Prefer (cascade if Daily zone exists, else fallback)</option>
+                          <option value="only">Only (cascade or skip — no fallback)</option>
+                          <option value="off">Off (use parallel 1H/4H only)</option>
+                        </select>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        "Prefer" uses the cascade when a Daily zone exists, falls back to parallel scoring otherwise. "Only" requires the full Daily→4H→1H story or skips the pair.
+                      </p>
+                    </FieldGroup>
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
