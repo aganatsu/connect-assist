@@ -1365,9 +1365,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
 
-    // Try to reuse cached FOTSI timeline from previous chunk
+    // Try to reuse cached FOTSI timeline from previous chunk OR warmup phase
     let cachedFotsi: any = null;
-    if (chunkIndex > 0) {
+    {
       const { data: runRow } = await db
         .from("backtest_runs")
         .select("results")
@@ -2345,6 +2345,78 @@ Deno.serve(async (req: Request) => {
       return respond({ status: "cancelled", runId });
     }
 
+    // ── Action: warmup — pre-fetch FOTSI timeline in a dedicated invocation ──
+    if (action === "warmup") {
+      const { runId } = body;
+      if (!runId) return respond({ error: "runId is required" }, 400);
+      const warmupJob = async () => {
+        try {
+          await db.from("backtest_runs").update({
+            progress: 5,
+            progress_message: "Warming up: fetching currency strength data...",
+            heartbeat_at: new Date().toISOString(),
+          }).eq("id", runId);
+
+          const { startDate, endDate } = body;
+          const { getFOTSIPairNames } = await import("../_shared/fotsi.ts");
+          const fotsiPairs = getFOTSIPairNames();
+          const fotsiCandleMap: Record<string, Candle[]> = {};
+
+          for (let i = 0; i < fotsiPairs.length; i += 7) {
+            const batch = fotsiPairs.slice(i, i + 7);
+            const results = await Promise.all(
+              batch.map(p => fetchHistoricalCandles(p, "1d", "2y", startDate, endDate).catch(() => []))
+            );
+            for (let j = 0; j < batch.length; j++) {
+              if (results[j].length > 0) fotsiCandleMap[batch[j]] = results[j];
+            }
+            // Heartbeat between batches
+            await db.from("backtest_runs").update({ heartbeat_at: new Date().toISOString() }).eq("id", runId);
+            await new Promise(r => setTimeout(r, 300));
+          }
+
+          // Build daily FOTSI snapshots
+          const fotsiTimeline = new Map<string, any>();
+          const allDates = new Set<string>();
+          for (const candles of Object.values(fotsiCandleMap)) {
+            for (const c of candles) allDates.add(c.datetime.slice(0, 10));
+          }
+          const sortedDates = [...allDates].sort();
+          for (const date of sortedDates) {
+            const dailyMap: Record<string, Candle[]> = {};
+            for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
+              dailyMap[pair] = candles.filter(c => c.datetime.slice(0, 10) <= date);
+            }
+            try {
+              const result = computeFOTSI(dailyMap);
+              fotsiTimeline.set(date, result);
+            } catch { /* skip dates with insufficient data */ }
+          }
+
+          // Persist FOTSI timeline and chain to chunk 0
+          await db.from("backtest_runs").update({
+            progress: 10,
+            progress_message: "FOTSI warmup complete — starting scan...",
+            heartbeat_at: new Date().toISOString(),
+            results: { partial_state: { fotsiTimeline: [...fotsiTimeline.entries()] } },
+          }).eq("id", runId);
+
+          console.log(`[backtest:${runId}] Warmup complete: ${fotsiTimeline.size} FOTSI snapshots cached`);
+          await selfInvokeNextChunk(runId, body, 0);
+        } catch (e: any) {
+          console.warn(`[backtest:${runId}] Warmup failed (non-fatal), chaining to chunk 0 anyway:`, e?.message);
+          // Even if FOTSI warmup fails, proceed — FOTSI is non-fatal
+          await selfInvokeNextChunk(runId, body, 0);
+        }
+      };
+      if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
+        (EdgeRuntime as any).waitUntil(warmupJob());
+      } else {
+        warmupJob().catch(e => console.error("[backtest] warmup job error:", e));
+      }
+      return respond({ runId, status: "warmup_started" });
+    }
+
     // ── Action: chunk — run a specific chunk in the background ──
     if (action === "chunk") {
       const { runId, chunkIndex } = body;
@@ -2385,11 +2457,19 @@ Deno.serve(async (req: Request) => {
 
     const runId = inserted.id as string;
 
-    if (typeof EdgeRuntime !== "undefined" && (EdgeRuntime as any)?.waitUntil) {
-      (EdgeRuntime as any).waitUntil(runBacktestJob(runId, body));
-    } else {
-      runBacktestJob(runId, body).catch(e => console.error("[backtest] Background job error:", e));
-    }
+    // Instead of running chunk 0 directly (which times out fetching FOTSI + candles),
+    // self-invoke a warmup phase that pre-fetches FOTSI, then chains to chunk 0.
+    const warmupUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
+    const warmupKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    fetch(warmupUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${warmupKey}`,
+        "apikey": warmupKey,
+      },
+      body: JSON.stringify({ ...body, action: "warmup", runId }),
+    }).catch(e => console.error(`[backtest:${runId}] warmup invoke error:`, e));
 
     return respond({ runId, status: "started", message: "Backtest queued" });
   } catch (err: any) {

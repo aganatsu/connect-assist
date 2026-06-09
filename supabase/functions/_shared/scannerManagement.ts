@@ -467,6 +467,18 @@ export async function manageOpenPositions(
           updatedFlags.breakEvenActivated = true;
           exitFlagsUpdated = true;
 
+          // FIX: Co-activate trailing stop so next scan cycle enters Phase B (tightening)
+          // instead of Phase A (first-time activation which requires rMultiple >= activationR again).
+          // Without this, if price retraces below activationR before next cycle, trailing never
+          // activates and SL stays at entry+1 pip permanently — causing +1 pip "wins".
+          const proportionalTrailPipsForBE = Math.max(posTrailingPips, riskPips * 0.5);
+          if (posTrailingEnabled && !exitFlags.trailingStopActivated) {
+            updatedFlags.trailingStopActivated = true;
+            updatedFlags.trailingStopLevel = beSL; // Trail reference starts from BE level
+            updatedFlags.trailingStopPips = Math.round(proportionalTrailPipsForBE * 10) / 10;
+            updatedFlags.trailingStopActivation = posTrailingActivation;
+          }
+
           const updatedSignal = {
             ...signalData,
             exitFlags: updatedFlags,
@@ -481,7 +493,10 @@ export async function manageOpenPositions(
             positionId: pos.position_id, symbol, action: "be_enabled",
             reason: attribution.detail, newSL: roundPrice(beSL, spec.pipSize), attribution,
           });
-          console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}`);
+          const trailMsg = (posTrailingEnabled && !exitFlags.trailingStopActivated)
+            ? ` | trailing co-activated (trail: ${proportionalTrailPipsForBE.toFixed(1)} pips)`
+            : '';
+          console.log(`[mgmt ${scanCycleId}] BREAK-EVEN ${symbol} ${pos.direction} | ${rMultiple.toFixed(2)}R / +${profitPipsAbs.toFixed(1)} pips (trigger: ${beActivationR.toFixed(2)}R) | SL→${beSL.toFixed(5)}${trailMsg}`);
           continue;
         }
       }

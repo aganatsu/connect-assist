@@ -820,9 +820,11 @@ export default function BotView() {
               const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
               const history = botTradeHistory;
               const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
-              const avgWin = d.wins > 0 ? history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.wins : 0;
-              const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;
-              const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
+              const grossProfit = history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
+              const grossLoss = Math.abs(history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0));
+              const avgWin = d.wins > 0 ? grossProfit / d.wins : 0;
+              const avgLoss = d.losses > 0 ? -(grossLoss / d.losses) : 0;
+              const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? Infinity : 0);
 
               const Panel = ({ title, children }: { title: string; children: React.ReactNode }) => (
                 <div className="border border-border bg-card">
@@ -1178,9 +1180,11 @@ export default function BotView() {
                 const profitPct = (((parseFloat(d.balance) - 10000) / 10000) * 100);
                 const history = botTradeHistory;
                 const totalRealizedPnl = history.reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
-                const avgWin = d.wins > 0 ? history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.wins : 0;
-                const avgLoss = d.losses > 0 ? history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0) / d.losses : 0;
-                const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0;
+                const grossProfit = history.filter((t: any) => parseFloat(t.pnl) >= 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0);
+                const grossLoss = Math.abs(history.filter((t: any) => parseFloat(t.pnl) < 0).reduce((s: number, t: any) => s + (parseFloat(t.pnl) || 0), 0));
+                const avgWin = d.wins > 0 ? grossProfit / d.wins : 0;
+                const avgLoss = d.losses > 0 ? -(grossLoss / d.losses) : 0;
+                const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? Infinity : 0);
                 return (
                   <>
                     {/* Account */}
