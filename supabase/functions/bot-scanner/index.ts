@@ -8,6 +8,7 @@ import {
   type FOTSIResult, type Currency,
 } from "../_shared/fotsi.ts";
 import { getFOTSIWithCache, setCachedFOTSI } from "../_shared/fotsiCache.ts";
+import { batchGetCachedCandles, batchSetCachedCandles } from "../_shared/candleCache.ts";
 import {
   classifyInstrumentRegime,
   // Types
@@ -3462,6 +3463,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.log(`[scan ${scanCycleId}] Focus pair priority: ${focusPairs.length} focus pairs scanned first: [${focusPairs.join(", ")}]`);
   }
 
+  // ── Persistent Candle Cache: pre-warm daily/weekly from kv_cache ──
+  // Daily candles change once/day, weekly once/week. Loading from DB saves
+  // ~34 TwelveData API calls per cycle, keeping us within the 50/min limit.
+  const cacheableRequests: Array<{ symbol: string; interval: string }> = [];
+  for (const pair of scanOrder) {
+    if (!SUPPORTED_SYMBOLS[pair]) continue;
+    cacheableRequests.push({ symbol: pair, interval: "1d" });
+    if ((config as any).ictHTFEnabled !== false) cacheableRequests.push({ symbol: pair, interval: "1w" });
+  }
+  const persistentCache = await batchGetCachedCandles(supabase, cacheableRequests);
+  // Inject cached candles into the scan-cycle dataCache so cachedFetch() finds them
+  let persistentCacheHits = 0;
+  for (const [mapKey, candles] of persistentCache.entries()) {
+    const [sym, interval] = mapKey.split(":");
+    if (sym && interval && candles.length >= 30) {
+      // Directly seed the scanCache so cachedFetch won't re-fetch from API
+      scanCache.seed(sym, interval, candles, "kv_cache");
+      persistentCacheHits++;
+    }
+  }
+  if (persistentCacheHits > 0) {
+    console.log(`[scan ${scanCycleId}] Persistent candle cache: ${persistentCacheHits}/${cacheableRequests.length} pre-warmed from DB`);
+  }
+
+  // Track which daily/weekly candles were freshly fetched (to persist after scan)
+  const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
+
   for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
@@ -3492,9 +3520,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // Delay between instruments to stay within TwelveData rate limits.
-    // Each instrument fetches 2-4 candle sets in parallel, so spacing
-    // instruments 1s apart keeps us at ~2-4 req/s = well under 50/min.
-    if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 1000));
+    // Each instrument fetches 3-5 candle sets in parallel, so spacing
+    // instruments 1.5s apart keeps us at ~2-3 req/s = well under 50/min.
+    // (Increased from 1s after persistent cache reduced daily/weekly fetches.)
+    if (scanDetails.length > 0) await new Promise(r => setTimeout(r, 1500));
 
     // Clone config per-instrument to prevent style mutation (Fix #6)
     let pairConfig = { ...config };
@@ -3534,6 +3563,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
       continue;
+    }
+
+    // Track freshly-fetched daily/weekly candles for persistent cache write-back
+    if (dailyCandles.length >= 30 && !persistentCache.has(`${pair}:1d`)) {
+      freshlyFetchedCandles.push({ symbol: pair, interval: "1d", candles: dailyCandles });
+    }
+    if (weeklyCandles && weeklyCandles.length >= 30 && !persistentCache.has(`${pair}:1w`)) {
+      freshlyFetchedCandles.push({ symbol: pair, interval: "1w", candles: weeklyCandles });
     }
 
     // Apply asset-class profile adjustments
@@ -6074,7 +6111,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const sourceTally = endScanSourceTally();
   const throttleStats = resetThrottleStats();
   const cacheStats = scanCache.stats();
-  console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors (${scanCache.size()} unique keys)`);
+  console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors, ${cacheStats.seeded} seeded (${scanCache.size()} unique keys)`);
+
+  // Persist freshly-fetched daily/weekly candles to kv_cache for next cycle
+  if (freshlyFetchedCandles.length > 0) {
+    await batchSetCachedCandles(supabase, freshlyFetchedCandles);
+    console.log(`[scan ${scanCycleId}] Persistent candle cache: wrote ${freshlyFetchedCandles.length} entries to DB`);
+  }
+
   scanCache.clear();
   // ── Rejection telemetry: classify each scanDetail so we can see why pairs died ──
   const rejectionSummary = (() => {
@@ -6154,7 +6198,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       managementActions: managementActions.filter(a => a.action !== "no_change"),
       rateLimitThrottles: throttleStats.throttleCount,
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
-      dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors },
+      dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
       pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,

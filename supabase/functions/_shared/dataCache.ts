@@ -45,6 +45,13 @@ export interface ScanCache {
    */
   get(symbol: string, interval: string, range: string): Promise<Candle[]>;
 
+  /**
+   * Pre-seed the cache with externally-sourced candles (e.g. from persistent
+   * kv_cache). Subsequent get() calls for the same key will return these
+   * candles without triggering a fetch. Source is tracked for stats.
+   */
+  seed(symbol: string, interval: string, candles: Candle[], source?: string): void;
+
   /** Number of unique (symbol, interval) entries currently cached. */
   size(): number;
 
@@ -52,7 +59,7 @@ export interface ScanCache {
   clear(): void;
 
   /** Return cache hit/miss stats for logging. */
-  stats(): { hits: number; misses: number; errors: number };
+  stats(): { hits: number; misses: number; errors: number; seeded: number };
 }
 
 export function createScanCache(fetchFn: FetchCandlesFn): ScanCache {
@@ -64,6 +71,7 @@ export function createScanCache(fetchFn: FetchCandlesFn): ScanCache {
   let hits = 0;
   let misses = 0;
   let errors = 0;
+  let seeded = 0;
 
   function makeKey(symbol: string, interval: string): string {
     return `${symbol}|${interval}`;
@@ -117,17 +125,26 @@ export function createScanCache(fetchFn: FetchCandlesFn): ScanCache {
     return resolved.size;
   }
 
+  function seed(symbol: string, interval: string, candles: Candle[], _source?: string): void {
+    const key = makeKey(symbol, interval);
+    if (!resolved.has(key) && candles.length > 0) {
+      resolved.set(key, candles);
+      seeded++;
+    }
+  }
+
   function clear(): void {
     resolved.clear();
     inflight.clear();
     hits = 0;
     misses = 0;
     errors = 0;
+    seeded = 0;
   }
 
-  function stats(): { hits: number; misses: number; errors: number } {
-    return { hits, misses, errors };
+  function stats(): { hits: number; misses: number; errors: number; seeded: number } {
+    return { hits, misses, errors, seeded };
   }
 
-  return { get, size, clear, stats };
+  return { get, seed, size, clear, stats };
 }
