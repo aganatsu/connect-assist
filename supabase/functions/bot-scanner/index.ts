@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { mapNestedToFlat } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -663,9 +664,16 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
     data = res.data;
   }
-  if (!data?.config_json) return { ...DEFAULTS, enableOB: true, enableFVG: true, enableLiquiditySweep: true, enableStructureBreak: true, cooldownMinutes: 0, closeOnReverse: false, trailingStopEnabled: false, partialTPEnabled: false, maxHoldEnabled: false, maxHoldHours: 0, killZoneOnly: false, maxConsecutiveLosses: 0, protectionMaxDailyLossDollar: 0 };
+  // Delegate to shared mapper (single source of truth for field resolution)
+  return mapNestedToFlat(data?.config_json || null);
+}
 
-  const raw = data.config_json as any;
+// ─── LEGACY loadConfig body preserved as reference (DO NOT USE) ──────
+// The mapping logic below has been extracted to _shared/configMapper.ts.
+// Keeping as dead code for one release cycle to aid debugging if needed.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _legacyLoadConfigMapping(_raw: any) {
+  const raw = _raw;
   const strategy = raw.strategy || {};
   const risk = raw.risk || {};
   const entry = raw.entry || {};
