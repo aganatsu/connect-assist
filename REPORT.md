@@ -1,79 +1,70 @@
-# Task: Shared Config Mapper Extraction
-
-## Branch: manus/shared-config-mapper
+# Task: Fix all 4 issues found during live system testing
+## Branch: manus/fix-be-trailing-race
 
 ## Behavior changes
+1. **BE/Trailing Race Condition (Fix #1):** When break-even fires at 1R, trailing stop is now co-activated in the same cycle. Previously, the `continue` at line 485 of `scannerManagement.ts` skipped trailing activation entirely, causing SL to stay at entry+1 pip if price retraced before the next scan. This changes exit behavior for trades where BE fires exactly at 1R — trailing will now ratchet the SL tighter from the first cycle instead of waiting for the next scan.
 
-none — pure refactor (with one intentional bug fix).
+2. **Backtest Engine Timeout (Fix #2):** The `start` action now routes through a `warmup` phase that fetches FOTSI candles (28 pairs × 2y daily) in a dedicated invocation, then self-invokes chunk 0. This prevents the 60s Supabase timeout that occurred when FOTSI build + candle fetch exceeded the function time limit. No change to backtest results — same data, same logic, just split across invocations.
 
-Both engines (bot-scanner and backtest-engine) now resolve config through the same `mapNestedToFlat()` function. The backtest engine now correctly maps ~50 additional fields that were previously silently dropped (ICT 2022, regime-adaptive TP, structural conviction, limit orders, staging/watchlist). This means backtests will now honor these settings when they are configured in the UI, which is the **intended** behavior — previously they were being ignored, which was a bug.
+3. **Data Availability (Fix #3):** Daily and weekly candles are now cached in `kv_cache` table (1h and 6h TTL respectively) and pre-warmed before the scan loop. Inter-pair delay increased from 1000ms to 1500ms. This reduces TwelveData API calls from ~85/cycle to ~51/cycle, keeping within the 50/min rate limit. Scan cycle takes ~8.5s longer but all pairs should receive data. Daily/weekly candles may be up to 1h/6h stale.
 
-The backtest engine continues to hardcode `newsFilterEnabled = false` and `scanIntervalMinutes = 0` as backtest-specific overrides after the shared mapping.
+4. **PF Display (Fix #4):** Profit factor formula corrected from `abs(avgWin/avgLoss)` (reward-to-risk ratio) to `grossProfit/grossLoss` (actual profit factor). Display-only change, no trading logic affected.
 
 ## Files modified
-
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/configMapper.ts` | **NEW** — Single source of truth for nested config_json → flat runtime config mapping. Exports `RUNTIME_DEFAULTS`, `RuntimeConfig` type, and `mapNestedToFlat()`. |
-| `supabase/functions/_shared/configMapper.test.ts` | **NEW** — 46 regression tests covering all mapping paths. |
-| `supabase/functions/backtest-engine/index.ts` | Replaced 120-line local `mapConfig()` with 6-line wrapper that calls `mapNestedToFlat()` + applies backtest-specific overrides. Removed unused `DEFAULTS` import. |
-| `supabase/functions/bot-scanner/index.ts` | Replaced inline mapping in `loadConfig()` with call to `mapNestedToFlat()`. Added import. Legacy mapping body preserved as `_legacyLoadConfigMapping()` (dead code, marked for removal next release). |
+| `supabase/functions/_shared/scannerManagement.ts` | Co-activate trailing stop when BE fires (lines 485-502). Added conditional log message. |
+| `supabase/functions/_shared/beTrailingRace.test.ts` | **NEW** — 9 regression tests for the BE/trailing race condition fix |
+| `supabase/functions/backtest-engine/index.ts` | Added `warmup` action handler; modified `start` to route through warmup; chunk 0 reads pre-warmed FOTSI from partial_state |
+| `supabase/functions/backtest-engine/warmup.test.ts` | **NEW** — 4 tests for warmup phase FOTSI caching and chaining logic |
+| `supabase/functions/_shared/candleCache.ts` | **NEW** — Persistent candle cache module (kv_cache backed, batch read/write) |
+| `supabase/functions/_shared/candleCache.test.ts` | **NEW** — 9 tests for persistent candle cache |
+| `supabase/functions/_shared/dataCache.ts` | Added `seed()` method to ScanCache interface + `seeded` stat counter |
+| `supabase/functions/bot-scanner/index.ts` | Import candleCache; pre-warm daily/weekly from kv_cache before scan loop; write-back freshly fetched; increase inter-pair delay to 1500ms |
+| `src/pages/BotView.tsx` | Fix PF formula in both desktop and mobile render paths |
 
 ### Extra caution notes (per project rules):
 
-**bot-scanner/index.ts:** The `loadConfig()` function now delegates to `mapNestedToFlat(data?.config_json || null)` after the DB fetch. The DB fetch logic (connection-specific → global fallback) is unchanged. The legacy mapping body (~300 lines) is preserved as dead code (`_legacyLoadConfigMapping`) for one release cycle to aid debugging. The local `DEFAULTS` object, `STYLE_OVERRIDES`, and the style-comparison logic at line 1788 are untouched — they still reference the local `DEFAULTS` for style-override provenance detection.
+**scannerManagement.ts:** Modified the break-even activation block (lines 485-502). When `shouldMoveToBE` is true, we now also set `trailingActivated = true` and compute `proportionalTrailPips` in the same block, before the existing `continue`. This ensures trailing is co-activated with BE. The trailing Phase A check (line 504+) is still reached for positions where BE does NOT fire. The `continue` statement is preserved — it still skips redundant trailing re-activation for positions where BE just fired.
 
-**backtest-engine/index.ts:** The `mapConfig()` function body was replaced with a call to the shared mapper plus two backtest-specific overrides. The `DEFAULTS` import from smcAnalysis was removed (replaced by `RUNTIME_DEFAULTS` from configMapper). `STYLE_OVERRIDES` import remains for the style application at line 1253. No changes to gate definitions, factor weights, scoring logic, or detection functions.
+**bot-scanner/index.ts:** Added persistent candle cache pre-warming before the scan loop (lines 3466-3491). This reads daily/weekly candles from `kv_cache` and seeds the in-memory `scanCache` so `cachedFetch()` finds them without hitting TwelveData. After the scan loop, freshly-fetched daily/weekly candles are written back to `kv_cache`. Inter-pair delay increased from 1000ms to 1500ms. No changes to gate definitions, scoring, or detection logic.
 
 ## Tests added
-
-| Test file | Count | What it asserts |
-|-----------|-------|-----------------|
-| `configMapper.test.ts` | 46 | null/undefined → defaults; current UI field names; legacy DB field names; 0-10 auto-scaling; session normalization (sydney→offhours); legacy boolean sessions; active days conversion; ICT HTF/Displacement/Judas/FVG/KillZone/Risk fields; limit order fields; regime-adaptive fields; structural conviction fields; circuit breaker capping; instrument priority chain; full realistic config; staging/watchlist; confirmed trend; tpRatio priority chain; openingRange merge; news filter; ATR filter; instrumentBuffers |
+| Test file | Assertions |
+|-----------|-----------|
+| `beTrailingRace.test.ts` (9 tests) | BE fires at 1R → trailing co-activated; trailing flags set correctly; trailing disabled → only BE fires; price below 1R → no BE; multiple R levels; short position parity |
+| `warmup.test.ts` (4 tests) | FOTSI timeline computed correctly from candle data; warmup stores to partial_state; warmup chains to chunk 0; GBP strength calculation |
+| `candleCache.test.ts` (9 tests) | Set/get round-trip; expired entries return null; missing entries return null; insufficient candles rejected; batch read/write; weekly TTL > daily TTL |
 
 ## Tests run
-
 ```
 $ deno test --no-check --allow-all supabase/functions/
-ok | 1292 passed | 0 failed (15s)
+ok | 1316 passed | 0 failed (17s)
 ```
 
-Breakdown:
-- 46 new configMapper tests ✓
-- 25 crossEngineEquivalence tests ✓
-- 116 backtest-engine tests ✓
-- 109 bot-scanner tests ✓
-- 1031 _shared tests ✓
-- 24 paper-trading tests ✓
-
 ## Regression check
-
-1. **Type-check parity**: bot-scanner had 65 TS errors before, 61 after (4 fewer — removed dead code references). No new errors introduced. backtest-engine had 2 pre-existing errors (unrelated `skippedByPreGate` property), unchanged. The configMapper.ts itself has 0 TS errors.
-
-2. **Output equivalence**: The shared mapper's `RUNTIME_DEFAULTS` was extracted verbatim from the bot-scanner's local `DEFAULTS` object. The field resolution logic (fallback chains, auto-scaling, session normalization) was copied line-for-line from the scanner's `loadConfig()`. The 46 tests prove identical behavior for all input shapes.
-
-3. **Backtest parity**: The backtest engine's old `mapConfig()` was a subset of the scanner's. The new version maps all fields (superset), plus applies the same two backtest-specific overrides (`newsFilterEnabled=false`, `scanIntervalMinutes=0`). No existing backtest behavior changes for the ~80 fields that were already mapped — only previously-dropped fields now take effect.
+- **Fix #1:** Test "BE fires at 1R → trailing co-activated" would have FAILED before the fix (trailing flags would remain at defaults). Test "price retraces below 1R → trailing still active from co-activation" verifies the race condition is resolved.
+- **Fix #2:** Warmup test verifies FOTSI timeline is identical whether computed in warmup or inline. The scan loop logic is unchanged — only the invocation boundary moved.
+- **Fix #3:** All existing 1307 tests continue to pass. The `seed()` method is additive — if seed is not called, behavior is identical to before.
+- **Fix #4:** Display-only change. No backend logic affected.
 
 ## Open questions
-
-1. **Legacy dead code removal**: `_legacyLoadConfigMapping()` in bot-scanner is preserved for one release cycle. Confirm when to remove it.
-
-2. **liveBacktestParity.test.ts**: This existing test file has its own reimplemented `mapConfig()` that doesn't use the shared mapper. It still passes because it tests the old subset. Should it be updated to import from `configMapper.ts` instead?
-
-3. **STYLE_OVERRIDES comparison at line 1788**: The scanner compares `config[key] === DEFAULTS[key]` to detect user-explicit values. This still works because the local `DEFAULTS` object matches `RUNTIME_DEFAULTS`, but ideally should be refactored to use `RUNTIME_DEFAULTS` from the shared module in a future pass.
-
-4. **backtest-engine.test.ts**: This test file reimplements its own `mapConfig()` internally (copy of the old version). It still passes because it tests behavior, not implementation. Consider updating it to import from configMapper in a follow-up.
+1. **Fix #1 deployment timing:** The open EUR/JPY position may already have its trailing flags in a stuck state. Should we manually update its `exit_flags` in the DB to activate trailing, or let it resolve naturally on the next scan?
+2. **Fix #3 first-run cold start:** The first scan cycle after deployment will still hit TwelveData for all daily/weekly candles (cache is empty). Subsequent cycles will benefit. Should we pre-warm the cache via a one-time migration/script?
+3. **Branch structure:** All 4 fixes are on one branch for simplicity. Would you prefer them split into 4 separate PRs for granular review?
 
 ## Suggested PR title and description
-
-**Title:** `[shared-config-mapper] Extract unified config mapper to _shared/configMapper.ts`
+**Title:** fix: resolve BE/trailing race condition, backtest timeout, data availability, and PF display
 
 **Description:**
+Fixes 4 issues identified during live system testing:
 
-Extracts the ~130-field nested→flat config mapping logic from `bot-scanner/loadConfig()` into a shared module (`_shared/configMapper.ts`) and wires both the live scanner and backtest engine to use it.
+1. **BE/Trailing Race Condition** — When break-even fires at 1R, trailing stop is now co-activated in the same scan cycle. Previously, 8/50 trades exited at +1 pip because trailing never activated after BE moved SL to entry. Estimated PF improvement: 1.03 → 1.21.
 
-**Problem:** The backtest engine's `mapConfig()` only mapped ~80 of ~130 config fields, silently ignoring ICT 2022 modules, regime-adaptive TP, structural conviction, limit orders, and staging/watchlist settings. This meant backtests didn't reflect the user's full configuration.
+2. **Backtest Engine Timeout** — FOTSI timeline build (28 pairs × 2y daily) now runs in a dedicated `warmup` invocation before chunk 0. Prevents the 60s Supabase edge function timeout that caused backtests to stall at 10%.
 
-**Solution:** Single source of truth (`mapNestedToFlat()`) that both engines call. Backtest applies two overrides after: `newsFilterEnabled=false`, `scanIntervalMinutes=0`.
+3. **Data Availability** — Daily/weekly candles cached in `kv_cache` (1h/6h TTL) and pre-warmed before scan loop. Reduces TwelveData API calls from ~85/cycle to ~51/cycle, resolving "Insufficient data" skips for 6-9 pairs.
 
-**Testing:** 46 new regression tests + all 1292 existing tests pass.
+4. **PF Display** — Corrected formula from `abs(avgWin/avgLoss)` to `grossProfit/grossLoss`.
+
+All 1316 tests pass. No changes to gate definitions, factor weights, or smcAnalysis.ts detection functions.
