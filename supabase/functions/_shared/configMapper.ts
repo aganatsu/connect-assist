@@ -139,6 +139,7 @@ export const RUNTIME_DEFAULTS = {
   impulseZonePenalty: 2.0,
   impulseZoneBonus: 1.0,
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
+  minZoneScore: 4,
   impulseSlCapMultiplier: 4,
 
   // ── Simple Direction Engine ──
@@ -371,6 +372,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? RUNTIME_DEFAULTS.impulseZonePenalty,
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? RUNTIME_DEFAULTS.impulseZoneBonus,
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
+    minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
 
     // ── Simple Direction Engine ──

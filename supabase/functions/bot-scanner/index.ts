@@ -184,6 +184,7 @@ const DEFAULTS = {
   impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
   impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
+  minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
   // ── Simple Direction Engine ──
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
@@ -743,6 +744,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
+    minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
@@ -4490,6 +4492,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // Price IS at zone — apply bonus and proceed
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] ✅ ${pair}: Impulse Zone CONFIRMED — price at zone. Proceeding with entry evaluation.`);
+
+      // ── Zone Score Gate: reject weak zones below minimum quality threshold ──
+      const minZoneScore = pairConfig.minZoneScore ?? 4;
+      if (izData.bestZone.totalScore < minZoneScore) {
+        detail.status = "skipped_weak_zone";
+        detail.skipReason = `Zone Score Gate: zone score ${izData.bestZone.totalScore.toFixed(1)}/9 < minimum ${minZoneScore} — low-conviction zone rejected`;
+        console.log(`[scan ${scanCycleId}] ⛔ ${pair}: ZONE SCORE GATE — score ${izData.bestZone.totalScore.toFixed(1)}/9 < ${minZoneScore}. Skipping.`);
+        scanDetails.push(detail);
+        continue;
+      }
 
       // ── Impulse Zone → Tier 1 Credit ──────────────────────────────────
       // The impulse zone engine validates FVG/OB within the impulse leg at a Fib level,

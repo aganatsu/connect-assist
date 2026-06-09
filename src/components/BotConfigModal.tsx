@@ -730,6 +730,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.confluenceThreshold ?? 55}%</span>
                       </div>
                     </FieldGroup>
+                    <FieldGroup label="Min Zone Score" description="Minimum impulse zone quality score (0–9) to accept a trade. Zones below this threshold are rejected as low-conviction.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.minZoneScore ?? 4]} onValueChange={v => updateField('strategy', 'minZoneScore', v[0])} min={0} max={9} step={0.5} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.minZoneScore ?? 4}/9</span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
+                      </p>
+                    </FieldGroup>
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
