@@ -222,7 +222,8 @@ export function checkPriceAtDailyZone(
   }
 
   const atZone = insideZone || distance <= threshold;
-  const distancePips = distance * 10000; // Approximate for 5-digit pairs
+  const pipMultiplier = currentPrice > 50 ? 100 : 10000; // JPY pairs (3-digit) vs standard (5-digit)
+  const distancePips = distance * pipMultiplier;
 
   return { atZone, insideZone, distancePips };
 }
