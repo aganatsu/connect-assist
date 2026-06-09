@@ -4464,14 +4464,77 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
+    // ── CASCADE ZONE GATE (Daily → 4H → 1H → 15m story-based) ──
+    // When cascadeZoneMode is "prefer" or "only", the cascade state determines
+    // whether the trade proceeds. The Daily impulse is where the story starts.
+    // States that ALLOW trade: "triggered" (price at entry) or "ready" (limit order)
+    // States that BLOCK trade: everything else (no story, waiting, no confirmation, etc.)
+    let cascadeGatePassed = false;
+    if (cascadeResult && pairConfig.cascadeZoneMode !== "off") {
+      const cascadeState = cascadeResult.state;
+      const isTradeReady = cascadeState === "triggered" || cascadeState === "ready";
+      
+      if (pairConfig.cascadeZoneMode === "only") {
+        // STRICT: cascade story must be complete or skip entirely
+        if (!isTradeReady) {
+          // Determine appropriate status based on cascade state
+          if (cascadeState === "waiting_for_price") {
+            detail.status = "watching_zone";
+            detail.skipReason = `Cascade Gate (only): Daily zone found but price is ${cascadeResult.dailyZoneDistance?.toFixed(1) ?? "?"} pips away. Waiting for price to retrace.`;
+            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — Daily zone exists, price ${cascadeResult.dailyZoneDistance?.toFixed(1)}p away. Watchlisted.`);
+          } else if (cascadeState === "at_daily_zone" || cascadeState === "no_confirmation") {
+            detail.status = "watching_zone";
+            detail.skipReason = `Cascade Gate (only): Price at Daily zone but no 4H displacement or 1H CHoCH yet. Watching for confirmation.`;
+            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — at Daily zone, awaiting 4H/1H confirmation.`);
+          } else if (cascadeState === "confirmed" || cascadeState === "no_entry_zone") {
+            detail.status = "watching_zone";
+            detail.skipReason = `Cascade Gate (only): 4H/1H confirmed inside Daily zone but no 1H entry zone found yet.`;
+            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — confirmed but no entry zone yet.`);
+          } else {
+            // no_daily_impulse, no_daily_zone
+            detail.status = "skipped_no_impulse_zone";
+            detail.skipReason = `Cascade Gate (only): ${cascadeResult.reason}. No Daily story — no trade.`;
+            console.log(`[scan ${scanCycleId}] ⛔ ${pair}: CASCADE GATE (only) — ${cascadeState}: ${cascadeResult.reason}. Skipping.`);
+          }
+          scanDetails.push(detail);
+          continue;
+        }
+        // Cascade story is complete — proceed with this trade
+        cascadeGatePassed = true;
+        console.log(`[scan ${scanCycleId}] ✅ ${pair}: CASCADE GATE PASSED [${cascadeState}] — Daily story complete. Proceeding.`);
+      } else {
+        // PREFER: use cascade if story is complete, otherwise fall through to impulse zone gate
+        if (isTradeReady) {
+          cascadeGatePassed = true;
+          console.log(`[scan ${scanCycleId}] ✅ ${pair}: CASCADE ZONE [${cascadeState}] — Daily story complete. Using cascade entry.`);
+        } else {
+          // Cascade story not complete — fall through to existing impulse zone gate
+          console.log(`[scan ${scanCycleId}] ${pair}: CASCADE ZONE [${cascadeState}] — story incomplete, falling through to impulse zone gate.`);
+        }
+      }
+    }
+
     // ── Impulse Zone Gate (configurable: hard / soft / off) ──
     // "hard" mode: no valid zone OR price not at zone → skip pair entirely (sniper approach)
     // "soft" mode: penalty/bonus scoring adjustment (legacy behavior)
     // "off" mode: impulse zone is purely informational
+    // NOTE: If cascade gate already passed, skip the impulse zone gate entirely
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
-    if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
+    if (cascadeGatePassed) {
+      // Cascade story is complete — use cascade entry/SL instead of impulse zone
+      impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
+      console.log(`[scan ${scanCycleId}] ✅ ${pair}: Cascade gate passed — bypassing impulse zone gate. Using cascade entry.`);
+      // Override entry/SL with cascade values if available
+      if (cascadeResult?.entry) {
+        (detail as any).cascadeOverride = {
+          entry: cascadeResult.entry,
+          sl: cascadeResult.sl,
+          source: "cascade_daily_story",
+        };
+      }
+    } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
       // HARD GATE: impulse zone is the primary entry framework
       if (!izData || !izData.hasZone) {
         // No valid impulse zone found — skip this pair entirely
@@ -5074,6 +5137,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
         }
 
+        // ── Cascade Zone SL/Entry Override ──
+        // When cascade gate passed (Daily story complete), use the cascade-derived SL
+        // which is based on the Daily zone structure (below Daily OB for longs, above for shorts).
+        // This provides the strongest structural protection since it's anchored to Daily.
+        if (cascadeGatePassed && cascadeResult?.sl) {
+          const cascadeSL = cascadeResult.sl;
+          const cascadeSlDistance = Math.abs(analysis.lastPrice - cascadeSL);
+          const cascadeSlPips = cascadeSlDistance / spec.pipSize;
+          const maxCascadeSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
+          if (cascadeSlPips >= effectiveMinSlPips && cascadeSlPips <= maxCascadeSlPips) {
+            console.log(`[${pair}] Cascade Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${cascadeSlPips.toFixed(1)}p (Daily zone structure)`);
+            sl = cascadeSL;
+            // Recalculate TP based on cascade SL for proper R:R
+            const cascadeRisk = Math.abs(analysis.lastPrice - sl);
+            tp = analysis.direction === "long"
+              ? analysis.lastPrice + cascadeRisk * config.tpRatio
+              : analysis.lastPrice - cascadeRisk * config.tpRatio;
+            detail.cascadeZoneSLOverride = {
+              originalSLPips: actualSlDistance / spec.pipSize,
+              cascadeSLPips: cascadeSlPips,
+              source: "daily_zone_structure",
+            };
+          } else if (cascadeSlPips > maxCascadeSlPips) {
+            console.log(`[${pair}] Cascade Zone SL too wide (${cascadeSlPips.toFixed(1)}p > max ${maxCascadeSlPips}p). Keeping current SL.`);
+          }
+        }
         // ── Regime-Adaptive TP Adjustment ──
         // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
         // Runs AFTER all SL/TP calculations but BEFORE the MIN_TP_PIPS gate.
@@ -5342,6 +5431,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const zoneType = izData.bestZone.type?.toUpperCase() || "ZONE";
           limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
+        }
+        // ── Cascade Zone Entry Override ──
+        // When cascade gate passed, the cascade provides a precise entry from the
+        // Daily→4H→1H→15m story. This takes priority over the impulse zone entry.
+        if (cascadeGatePassed && cascadeResult?.entry) {
+          const cascadeEntry = cascadeResult.entry;
+          const cascadeEntryZone = cascadeResult.entryZone;
+          const zoneLow = cascadeEntryZone?.poi.low ?? cascadeEntry;
+          const zoneHigh = cascadeEntryZone?.poi.high ?? cascadeEntry;
+          const zoneType = cascadeEntryZone?.poi.type?.toUpperCase() || "CASCADE";
+          limitEntry = { price: cascadeEntry, zoneType: `CASCADE-${zoneType}`, zoneLow, zoneHigh };
+          console.log(`[${pair}] Cascade Zone entry override: limit at ${cascadeEntry.toFixed(5)} (Daily→4H→1H ${zoneType})`);
         }
         // ── Market Fill at Zone (Option C) ──────────────────────────────────
         // When izGateMode="hard" AND price IS at the zone (STRICT) AND marketFillAtZone
