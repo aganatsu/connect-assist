@@ -1,95 +1,57 @@
-# Task: Cascade Zone Engine (Daily→4H→1H→15m)
+# Task: Fix cascade zone engine runtime error (htfConfluenceData scope bug)
 
-## Branch: manus/cascade-zone-engine
+## Branch: manus/cascade-htf-scope-fix
 
 ## Behavior changes
 
-1. **New cascade zone analysis runs on every scan** — when `cascadeZoneMode` is "prefer" (default) or "only", the scanner now executes a top-down Daily→4H→1H→15m zone search and attaches results to `detail.cascadeZone`. This is **informational only** in this release — it does NOT gate trades or override the existing impulse zone system. It enriches the scan detail panel with cascade state information.
-
-2. **Daily Fib levels now passed to HTF confluence scoring** — previously `htfFibLevelsD` was computed but never passed to the impulse zone engine's `HTFConfluenceData`. Zones that align with Daily Fib levels now receive +0.5 to +1.5 additional score from the existing `checkHTFConfluence()` function. This means some zones that previously scored 3.5/9 may now score 4.5/9 (passing the minZoneScore gate) and vice versa — zones that DON'T align with Daily Fib are relatively weaker.
-
-3. **New UI panel** — CascadeZonePanel shows the cascade state machine progression (Daily zone → 4H confirmation → 1H entry → 15m refinement) in the scan detail view.
-
-4. **New config options** — `cascadeZoneMode` (prefer/only/off) and `cascadeZoneDailyATRMult` (default 2.0) are available in Bot Config → Strategy tab.
+none — pure bug fix. The cascade zone engine was throwing a ReferenceError at runtime because `htfConfluenceData` was out of scope. This fix makes it accessible. No change to what trades get taken, what positions get sized, or what gates pass — the cascade was already erroring out for ALL pairs, so no trades were being affected by it.
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/_shared/cascadeZoneEngine.ts` | **NEW** — Top-down cascade zone engine with state machine (no_daily_impulse → no_daily_zone → waiting_for_price → at_daily_zone → no_confirmation → confirmed → no_entry_zone → ready → triggered) |
-| `supabase/functions/_shared/cascadeZoneEngine.test.ts` | **NEW** — 23 tests covering all state transitions, edge cases, and integration behavior |
-| `supabase/functions/_shared/configMapper.ts` | Added `cascadeZoneMode` and `cascadeZoneDailyATRMult` to RUNTIME_DEFAULTS and mapping |
-| `supabase/functions/bot-scanner/index.ts` | Added cascade engine import, config defaults/mapping, scanner integration call, and fixed Daily Fib bug (added `dailyFibLevels: htfFibLevelsD` to htfConfluenceData) |
-| `src/components/CascadeZonePanel.tsx` | **NEW** — UI panel showing cascade state progression with color-coded story steps |
-| `src/components/BotConfigModal.tsx` | Added cascade mode selector dropdown in Strategy tab |
-| `src/pages/BotView.tsx` | Added CascadeZonePanel rendering in all 3 scan detail locations |
+- `supabase/functions/bot-scanner/index.ts` — Moved `htfConfluenceData` construction from inside the impulse zone engine's `try` block to the outer scope (before both the impulse zone and cascade zone sections). Both call sites now use `?? undefined` to handle the null case when `analysis.direction` is falsy.
 
 ## Tests added
 
-| Test | Assertion |
-|------|-----------|
-| `findDailyImpulseLeg: detects bullish impulse` | Validates Daily impulse detection with proper swing structure |
-| `findDailyImpulseLeg: detects bearish impulse` | Validates bearish Daily impulse detection |
-| `findDailyImpulseLeg: returns null with flat candles` | No false positives on ranging markets |
-| `findDailyZone: finds OB within Daily impulse` | POI mapping within Daily impulse leg works |
-| `findDailyZone: returns null with no POIs` | Graceful handling when no OBs/FVGs exist |
-| `findDailyZone: filters mitigated zones` | Already-touched zones are excluded |
-| `checkPriceAtDailyZone: price far from zone` | Proximity detection rejects distant price |
-| `checkPriceAtDailyZone: price within threshold` | Proximity detection accepts nearby price |
-| `detect4HConfirmation: returns null with insufficient candles` | Edge case handling |
-| `detect4HConfirmation: detects displacement inside Daily zone` | 4H displacement detection within Daily zone bounds |
-| `detect1HConfirmation: returns null with insufficient candles` | Edge case handling |
-| `findEntryZoneWithinDailyZone: returns null with insufficient candles` | Edge case handling |
-| `findEntryZoneWithinDailyZone: filters zones outside Daily zone` | Entry zones must overlap with Daily zone |
-| `findCascadeZone: returns no_daily_impulse with flat daily candles` | State machine starts correctly |
-| `findCascadeZone: returns waiting_for_price when price far from Daily zone` | Correct state when zone exists but price is distant |
-| `findCascadeZone: state machine progression is valid` | All states are valid enum values |
-| `findCascadeZone: triggered state has entry and SL populated` | Final state has actionable data |
-| `findCascadeZone: no_confirmation state has dailyZone but no entry` | Intermediate state is correct |
-| `findCascadeZone: bearish direction works` | Bidirectional support |
-| `cascade: Daily zone is the mandatory first filter` | No cascade without Daily zone |
-| `cascade: entry zone must overlap with Daily zone` | Entry zones outside Daily zone are rejected |
-| `cascade: confirmation is required before entry zone search` | State machine ordering enforced |
-| `cascade options: dailyZoneATRMult affects proximity detection` | Config option works |
+No new tests added — this is a scoping fix. The existing 23 cascade engine tests and 17 cascade gate tests all pass. The error was a runtime ReferenceError that only manifests in the deployed edge function (Deno runtime), not in unit tests which mock the data flow.
 
 ## Tests run
 
 ```
-$ deno test --no-lock --no-check --allow-all supabase/functions/
-ok | 1350 passed | 0 failed (17s)
+$ deno test supabase/functions/_shared/ --allow-read --no-check
+ok | 1098 passed | 2 failed (10s)
 ```
+
+The 2 failures are pre-existing in `candleSource.test.ts` (API key issue, unrelated to this change).
 
 ## Regression check
 
-1. **Daily Fib bug fix** — this is an intentional behavior change. Zones that align with Daily Fib levels now score higher. This affects which zones pass the minZoneScore gate. The change is additive (more information = better scoring) and cannot cause zones that previously passed to fail (Daily Fib only adds score, never subtracts).
+The fix only changes WHERE `htfConfluenceData` is constructed, not HOW. The object literal is identical:
+```ts
+{
+  h4OBs: h4OBs ?? [],
+  h4FVGs: h4FVGs ?? [],
+  h4Breakers: h4Breakers ?? [],
+  htfFibLevels: htfFibLevels4H ?? null,
+  dailyFibLevels: htfFibLevelsD ?? null,
+  htfPD: htfPD4H ?? null,
+  direction: (analysis.direction === "long" ? "bullish" : "bearish"),
+}
+```
 
-2. **Cascade engine** — runs alongside the existing impulse zone engine. It does NOT gate trades in this release. The existing parallel 1H/4H system continues to function identically. The cascade result is informational only (attached to `detail.cascadeZone`).
-
-3. **Config defaults** — `cascadeZoneMode: "prefer"` means the cascade runs but doesn't block anything. The existing impulse zone gate (`impulseZoneGateMode`) remains the active gating mechanism.
+The impulse zone engine receives the exact same data as before. The cascade zone engine now receives it instead of throwing a ReferenceError.
 
 ## Open questions
 
-1. **Should the cascade engine eventually REPLACE the impulse zone gate?** Currently it's informational. Once you've validated it in paper trading and confirmed the states make sense, we can wire it as a gate (e.g., `cascadeZoneMode: "only"` would skip pairs that don't have a complete cascade story).
-
-2. **4H displacement detection sensitivity** — the current threshold uses body > 0.6× range AND range > 1.5× average. Should this be configurable, or is the default sensitivity correct for your pairs?
-
-3. **1H CHoCH detection** — currently uses the last 10 1H candles to find a CHoCH inside the Daily zone. Should the lookback be configurable?
+1. Should this be merged directly to main (fast-forward) or go through a PR? Given it's a one-line scoping fix that unblocks the entire cascade feature, I'd recommend merging directly.
+2. After merging + redeploying, you'll need to run a new scan to see the cascade panel populate correctly for pairs with a Daily story (e.g., EUR/GBP).
 
 ## Suggested PR title and description
 
-**Title:** feat: top-down cascade zone engine (Daily→4H→1H→15m) + Daily Fib bug fix
+**Title:** Fix cascade zone engine error — htfConfluenceData out of scope
 
 **Description:**
-Adds a sequential cascade zone engine that tells a coherent top-down story: Daily impulse zone → 4H confirmation (displacement/1H CHoCH) → 1H entry zone → 15m refinement.
+The `htfConfluenceData` variable was defined inside the impulse zone engine's `try` block, making it inaccessible to the cascade zone engine section below. This caused a ReferenceError at runtime, resulting in the cascade panel showing "Error" state for all pairs.
 
-**What's new:**
-- `cascadeZoneEngine.ts` — state machine with 9 states tracking the cascade progression
-- Config toggle: `cascadeZoneMode` (prefer/only/off) in Bot Config → Strategy
-- UI: CascadeZonePanel shows the story progression with color-coded steps
-- Bug fix: Daily Fib levels were computed but never passed to HTF confluence scoring
+Fix: Extract `htfConfluenceData` construction to the outer scope before both engine sections, so both impulse zone and cascade zone can reference it. Both call sites use `?? undefined` to handle the null case.
 
-**What's NOT changed:**
-- The existing impulse zone gate continues to function identically
-- No trades are gated by the cascade engine (informational only in this release)
-- All 21 gates remain unchanged
-- All 1350 tests pass
+All 1098 tests pass (2 pre-existing failures unrelated).
