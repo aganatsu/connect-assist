@@ -1,8 +1,10 @@
 /**
  * CascadeZonePanel — Displays the top-down cascade zone state in the scan detail panel.
- * Shows the story: Daily impulse leg → Daily zone → 4H confirmation → 1H entry → 15m refinement.
+ * Shows the story: Daily impulse leg → Daily zone → 4H confirmation → 1H entry (full scoring) → 15m refinement.
  *
- * Expects `cascadeZone` data from the scan detail object (detail.cascadeZone).
+ * Now integrated with the impulse zone engine: when the cascade reaches the entry step,
+ * it runs the FULL impulse zone engine (scoring out of 11, S/R, HTF confluence, LTF refinement)
+ * constrained to zones within the Daily zone bounds.
  */
 
 interface CascadeZoneData {
@@ -37,6 +39,14 @@ interface CascadeZoneData {
     fibLevel: number;
     totalScore: number;
     ltfRefined: boolean;
+    srConfirmed?: boolean;
+    htfConfluence?: number;
+  } | null;
+  multiTFResult: {
+    selectedTF: string;
+    totalZonesFound: number;
+    reason: string;
+    score: number | null;
   } | null;
   entry: number | null;
   sl: number | null;
@@ -69,7 +79,7 @@ const STATE_LABELS: Record<string, string> = {
   at_daily_zone: "📍 At Daily Zone",
   waiting_for_price: "⏳ Waiting for Price",
   no_confirmation: "🔍 No Confirmation Yet",
-  no_entry_zone: "🔍 No 1H Entry Zone",
+  no_entry_zone: "🔍 No Entry Zone in Daily Bounds",
   no_daily_impulse: "— No Daily Impulse",
   no_daily_zone: "— No Daily Zone",
   off: "OFF",
@@ -175,21 +185,45 @@ export function CascadeZonePanel({ data }: Props) {
           )}
         </div>
 
-        {/* 1H Entry Zone */}
-        <div className="flex items-center gap-2">
-          <span className={data.entryZone ? "text-green-400" : "text-zinc-600"}>
+        {/* Entry Zone (from integrated impulse zone engine) */}
+        <div className="flex items-start gap-2">
+          <span className={data.entryZone ? "text-green-400 mt-0.5" : "text-zinc-600 mt-0.5"}>
             {data.entryZone ? "●" : "○"}
           </span>
-          <span className="text-zinc-400">Entry Zone:</span>
-          {data.entryZone ? (
-            <span className="text-zinc-200">
-              1H {data.entryZone.type.toUpperCase()} @ Fib {(data.entryZone.fibLevel * 100).toFixed(1)}%
-              <span className="text-cyan-400 ml-1">(score: {data.entryZone.totalScore.toFixed(1)}/9)</span>
-              {data.entryZone.ltfRefined && <span className="text-purple-400 ml-1">15m refined</span>}
-            </span>
-          ) : (
-            <span className="text-zinc-600">Not yet</span>
-          )}
+          <div>
+            <span className="text-zinc-400">Entry Zone:</span>
+            {data.entryZone ? (
+              <div className="text-zinc-200 mt-0.5">
+                <span>
+                  {data.multiTFResult?.selectedTF ?? "1H"} {data.entryZone.type.toUpperCase()} @ Fib {(data.entryZone.fibLevel * 100).toFixed(1)}%
+                </span>
+                <span className="text-cyan-400 ml-1 font-semibold">(score: {data.entryZone.totalScore.toFixed(1)}/11)</span>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {data.entryZone.srConfirmed && (
+                    <span className="px-1.5 py-0.5 rounded bg-green-900/50 text-green-400 text-[10px]">S/R ✓</span>
+                  )}
+                  {data.entryZone.htfConfluence != null && data.entryZone.htfConfluence > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 text-[10px]">HTF +{data.entryZone.htfConfluence.toFixed(1)}</span>
+                  )}
+                  {data.entryZone.ltfRefined && (
+                    <span className="px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-400 text-[10px]">15m Refined</span>
+                  )}
+                  {data.multiTFResult && (
+                    <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[10px]">
+                      {data.multiTFResult.totalZonesFound} zones found in Daily bounds
+                    </span>
+                  )}
+                </div>
+                <span className="text-zinc-500 text-[10px] block mt-0.5">
+                  [{data.entryZone.low.toFixed(5)}–{data.entryZone.high.toFixed(5)}]
+                </span>
+              </div>
+            ) : (
+              <span className="text-zinc-600 ml-1">
+                {data.state === "no_entry_zone" ? "No zones within Daily bounds" : "Not yet"}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Entry details */}

@@ -4133,7 +4133,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           candles, // 15m entry candles
           cascadeDir as "bullish" | "bearish",
           analysis.lastPrice,
-          { dailyZoneATRMult: pairConfig.cascadeZoneDailyATRMult },
+          {
+            dailyZoneATRMult: pairConfig.cascadeZoneDailyATRMult,
+            htfData: htfConfluenceData,
+            zoneEngineOpts: { strictATRMult: pairConfig.marketFillStrictATRMult },
+          },
         );
         (detail as any).cascadeZone = {
           state: cascadeResult.state,
@@ -4171,6 +4175,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             fibLevel: cascadeResult.entryZone.fibLevel,
             totalScore: cascadeResult.entryZone.totalScore,
             ltfRefined: cascadeResult.entryZoneRefined,
+            srConfirmed: cascadeResult.entryZone.srConfirmed,
+            htfConfluence: cascadeResult.entryZone.htfConfluence,
+          } : null,
+          // Full impulse zone engine result within Daily bounds
+          multiTFResult: cascadeResult.multiTFResult ? {
+            selectedTF: cascadeResult.multiTFResult.selectedTF,
+            totalZonesFound: cascadeResult.multiTFResult.totalZonesFound,
+            reason: cascadeResult.multiTFResult.reason,
+            score: cascadeResult.multiTFResult.bestZone?.zone?.totalScore ?? null,
           } : null,
           entry: cascadeResult.entry,
           sl: cascadeResult.sl,

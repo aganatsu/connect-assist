@@ -804,6 +804,25 @@ export function findBestEntryZone(
     };
   }
 
+  // Step 3b: Filter by Daily zone bounds (if provided)
+  if (options?.dailyZoneBounds) {
+    const bounds = options.dailyZoneBounds;
+    rankedZones = rankedZones.filter(z => {
+      const zHigh = z.poi.high;
+      const zLow = z.poi.low;
+      // Overlap check: max(zone.low, daily.low) <= min(zone.high, daily.high)
+      return Math.max(zLow, bounds.low) <= Math.min(zHigh, bounds.high);
+    });
+    if (rankedZones.length === 0) {
+      return {
+        bestZone: null,
+        impulse,
+        allZones: [],
+        reason: `POIs found at Fib levels but none overlap with Daily zone [${bounds.low.toFixed(5)}-${bounds.high.toFixed(5)}]`,
+      };
+    }
+  }
+
   // Step 4: Check historical S/R
   rankedZones = checkHistoricalSR(htfCandles, rankedZones, impulse.startIndex);
 
@@ -933,6 +952,12 @@ export function findBestEntryZone(
 export interface ZoneEngineOptions {
   /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
   strictATRMult?: number;
+  /**
+   * Daily zone bounds filter. When provided, only zones that overlap with these
+   * bounds are kept. This integrates the cascade (Daily→4H→1H) approach:
+   * the Daily zone defines WHERE to look, the impulse zone engine does the detailed work.
+   */
+  dailyZoneBounds?: { high: number; low: number };
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────

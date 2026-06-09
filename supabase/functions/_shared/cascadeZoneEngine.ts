@@ -24,9 +24,9 @@ import {
 } from "./smcAnalysis.ts";
 import {
   findImpulseLeg, mapImpulsePOIs, overlayFibOnPOIs, checkHistoricalSR,
-  refineLowerTF, rankAndSelectBestZone,
+  refineLowerTF, rankAndSelectBestZone, findBestEntryZoneMultiTF,
 } from "./impulseZoneEngine.ts";
-import type { ImpulseLeg, ImpulsePOI, RankedPOI, BestZone } from "./impulseZoneEngine.ts";
+import type { ImpulseLeg, ImpulsePOI, RankedPOI, BestZone, HTFConfluenceData, ZoneEngineOptions, MultiTFZoneResult } from "./impulseZoneEngine.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +77,9 @@ export interface CascadeResult {
   entryZone: RankedPOI | null;
   entryZoneRefined: boolean;  // Whether 15m refinement was applied
 
+  // Full impulse zone engine result (integrated — runs within Daily bounds)
+  multiTFResult: MultiTFZoneResult | null;
+
   // Final entry details
   entry: number | null;       // Precise entry price
   sl: number | null;          // Stop loss price
@@ -94,6 +97,10 @@ export interface CascadeOptions {
   minDailyFibDepth?: number;
   /** Whether to require S/R confirmation on Daily zone. Default: false */
   requireDailySR?: boolean;
+  /** HTF confluence data to pass to the impulse zone engine (4H OBs, FVGs, etc.) */
+  htfData?: HTFConfluenceData;
+  /** Zone engine options (strictATRMult, etc.) — passed through to impulse zone engine */
+  zoneEngineOpts?: ZoneEngineOptions;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -444,6 +451,7 @@ export function findCascadeZone(
     confirmation: null,
     entryZone: null,
     entryZoneRefined: false,
+    multiTFResult: null,
     entry: null,
     sl: null,
     priceAtEntry: false,
@@ -470,6 +478,7 @@ export function findCascadeZone(
       confirmation: null,
       entryZone: null,
       entryZoneRefined: false,
+      multiTFResult: null,
       entry: null,
       sl: null,
       priceAtEntry: false,
@@ -497,6 +506,7 @@ export function findCascadeZone(
       confirmation: null,
       entryZone: null,
       entryZoneRefined: false,
+      multiTFResult: null,
       entry: null,
       sl: null,
       priceAtEntry: false,
@@ -504,18 +514,35 @@ export function findCascadeZone(
     };
   }
 
-  // ── Step 4: Find 1H entry zone within the Daily zone ──
-  const entryResult = findEntryZoneWithinDailyZone(h1Candles, dailyZone, direction);
+  // ── Step 4: Run the FULL impulse zone engine within Daily zone bounds ──
+  // This gives us: full scoring (out of 11), S/R, HTF confluence, LTF refinement,
+  // multi-TF selection — all constrained to zones that overlap with the Daily zone.
+  const zoneOpts: ZoneEngineOptions = {
+    ...(options?.zoneEngineOpts ?? {}),
+    dailyZoneBounds: { high: dailyZone.high, low: dailyZone.low },
+    strictATRMult: options?.entryStrictATRMult ?? ENTRY_STRICT_ATR_MULT_DEFAULT,
+  };
 
-  if (!entryResult.zone) {
+  const multiTFResult = findBestEntryZoneMultiTF(
+    h1Candles,
+    h4Candles,
+    entryCandles,
+    direction,
+    currentPrice,
+    options?.htfData ?? undefined,
+    zoneOpts,
+  );
+
+  if (!multiTFResult.bestZone) {
     return {
       state: "no_entry_zone",
-      reason: `Confirmed (${confirmation.type}) but ${entryResult.reason}`,
+      reason: `Confirmed (${confirmation.type}) but no zone within Daily bounds: ${multiTFResult.reason}`,
       dailyZone,
       dailyZoneDistance: 0,
       confirmation,
       entryZone: null,
       entryZoneRefined: false,
+      multiTFResult,
       entry: null,
       sl: null,
       priceAtEntry: false,
@@ -523,47 +550,31 @@ export function findCascadeZone(
     };
   }
 
-  // ── Step 5: Refine on 15m ──
-  let entryZone = entryResult.zone;
-  let refined = false;
-  if (entryCandles.length >= 10) {
-    entryZone = refineLowerTF(entryCandles, entryZone);
-    refined = entryZone.ltfRefined;
-  }
+  // Extract the best zone from the integrated engine
+  const bestZone = multiTFResult.bestZone;
+  const entryZone = bestZone.zone;
+  const refined = entryZone.ltfRefined;
 
-  // ── Step 6: Calculate entry and SL ──
+  // Entry and SL from the integrated engine
   const entry = entryZone.refinedEntry ?? (direction === "bullish" ? entryZone.poi.high : entryZone.poi.low);
   const sl = entryZone.refinedSL ?? (direction === "bullish" ? dailyZone.low : dailyZone.high);
 
-  // ── Step 7: Check if price is at the entry zone ──
-  const entryATR = calculateATR(h1Candles);
-  const strictMult = options?.entryStrictATRMult ?? ENTRY_STRICT_ATR_MULT_DEFAULT;
-  const strictThreshold = entryATR * strictMult;
-
-  const entryHigh = entryZone.poi.high;
-  const entryLow = entryZone.poi.low;
-  const insideEntry = currentPrice >= entryLow && currentPrice <= entryHigh;
-
-  let entryDistance = 0;
-  if (!insideEntry) {
-    if (currentPrice > entryHigh) entryDistance = currentPrice - entryHigh;
-    else entryDistance = entryLow - currentPrice;
-  }
-
-  const priceAtEntry = insideEntry || entryDistance <= strictThreshold;
-  const entryDistancePips = entryDistance * 10000;
+  // Price proximity is already computed by the engine
+  const priceAtEntry = bestZone.priceAtZoneStrict || bestZone.priceInsideZone;
+  const entryDistancePips = bestZone.distancePips;
 
   // Determine final state
   const state: CascadeState = priceAtEntry ? "triggered" : "ready";
 
   return {
     state,
-    reason: `Cascade complete: Daily ${dailyZone.poi.type.toUpperCase()} @ Fib ${(dailyZone.fibLevel * 100).toFixed(1)}% → ${confirmation.type} confirmed → 1H ${entryZone.poi.type.toUpperCase()} @ Fib ${(entryZone.fibLevel * 100).toFixed(1)}%${refined ? " (15m refined)" : ""} — ${priceAtEntry ? "TRIGGERED" : `${entryDistancePips.toFixed(1)} pips to entry`}`,
+    reason: `Cascade complete: Daily ${dailyZone.poi.type.toUpperCase()} @ Fib ${(dailyZone.fibLevel * 100).toFixed(1)}% → ${confirmation.type} confirmed → ${multiTFResult.selectedTF} ${entryZone.poi.type.toUpperCase()} @ Fib ${(entryZone.fibLevel * 100).toFixed(1)}% (score ${entryZone.totalScore}/11)${refined ? " (15m refined)" : ""} — ${priceAtEntry ? "TRIGGERED" : `${entryDistancePips.toFixed(1)} pips to entry`}`,
     dailyZone,
     dailyZoneDistance: 0,
     confirmation,
     entryZone,
     entryZoneRefined: refined,
+    multiTFResult,
     entry,
     sl,
     priceAtEntry,
