@@ -4045,24 +4045,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
     };
 
+    // Build HTF confluence data from already-computed 4H analysis (shared by both impulse zone and cascade engines)
+    const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
+      h4OBs: h4OBs ?? [],
+      h4FVGs: h4FVGs ?? [],
+      h4Breakers: h4Breakers ?? [],
+      htfFibLevels: htfFibLevels4H ?? null,
+      dailyFibLevels: htfFibLevelsD ?? null,
+      htfPD: htfPD4H ?? null,
+      direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
+    } : null;
+
     // ── Impulse Zone Engine (informational — enriches scan detail, does NOT gate trades) ──
     // Runs on 1H + 4H candles to find the best entry zone based on impulse structure.
     if (analysis.direction && hourlyCandles.length >= 20) {
       try {
         const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        // Build HTF confluence data from already-computed 4H analysis
-        const htfConfluenceData: HTFConfluenceData = {
-          h4OBs: h4OBs ?? [],
-          h4FVGs: h4FVGs ?? [],
-          h4Breakers: h4Breakers ?? [],
-          htfFibLevels: htfFibLevels4H ?? null,
-          dailyFibLevels: htfFibLevelsD ?? null,
-          htfPD: htfPD4H ?? null,
-          direction: zoneDirection as "bullish" | "bearish",
-        };
         const zoneEngineOpts: ZoneEngineOptions = { strictATRMult: pairConfig.marketFillStrictATRMult };
         const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
-          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData, zoneEngineOpts,
+          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData ?? undefined, zoneEngineOpts,
         );
         (detail as any).impulseZone = {
           hasZone: !!zoneResult.bestZone,
@@ -4135,7 +4136,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           {
             dailyZoneATRMult: pairConfig.cascadeZoneDailyATRMult,
-            htfData: htfConfluenceData,
+            htfData: htfConfluenceData ?? undefined,
             zoneEngineOpts: { strictATRMult: pairConfig.marketFillStrictATRMult },
           },
         );
