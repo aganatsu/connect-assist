@@ -4138,6 +4138,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         (detail as any).cascadeZone = {
           state: cascadeResult.state,
           reason: cascadeResult.reason,
+          dailyImpulse: cascadeResult.dailyZone ? {
+            direction: cascadeResult.dailyZone.impulse.direction,
+            high: cascadeResult.dailyZone.impulse.high,
+            low: cascadeResult.dailyZone.impulse.low,
+            bosPrice: cascadeResult.dailyZone.impulse.bosPrice,
+            startDate: dailyCandles[cascadeResult.dailyZone.impulse.startIndex]?.time
+              ? new Date(dailyCandles[cascadeResult.dailyZone.impulse.startIndex].time * 1000).toISOString().slice(0, 10)
+              : null,
+            endDate: dailyCandles[cascadeResult.dailyZone.impulse.endIndex]?.time
+              ? new Date(dailyCandles[cascadeResult.dailyZone.impulse.endIndex].time * 1000).toISOString().slice(0, 10)
+              : null,
+            spanBars: cascadeResult.dailyZone.impulse.endIndex - cascadeResult.dailyZone.impulse.startIndex,
+          } : null,
           dailyZone: cascadeResult.dailyZone ? {
             type: cascadeResult.dailyZone.poi.type,
             high: cascadeResult.dailyZone.high,

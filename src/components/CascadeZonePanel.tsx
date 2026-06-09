@@ -1,6 +1,6 @@
 /**
  * CascadeZonePanel — Displays the top-down cascade zone state in the scan detail panel.
- * Shows the story: Daily zone → 4H confirmation → 1H entry → 15m refinement.
+ * Shows the story: Daily impulse leg → Daily zone → 4H confirmation → 1H entry → 15m refinement.
  *
  * Expects `cascadeZone` data from the scan detail object (detail.cascadeZone).
  */
@@ -8,6 +8,15 @@
 interface CascadeZoneData {
   state: string;
   reason: string;
+  dailyImpulse: {
+    direction: "bullish" | "bearish";
+    high: number;
+    low: number;
+    bosPrice: number;
+    startDate: string | null;
+    endDate: string | null;
+    spanBars: number;
+  } | null;
   dailyZone: {
     type: "ob" | "fvg";
     high: number;
@@ -73,6 +82,12 @@ export function CascadeZonePanel({ data }: Props) {
   const stateColor = STATE_COLORS[data.state] ?? "text-zinc-400";
   const stateLabel = STATE_LABELS[data.state] ?? data.state;
 
+  // Calculate impulse range in pips for display
+  const impulsePips = data.dailyImpulse
+    ? Math.abs(data.dailyImpulse.high - data.dailyImpulse.low) *
+      (data.dailyImpulse.high > 50 ? 100 : 10000) // JPY pairs vs standard
+    : 0;
+
   return (
     <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800">
       <div className="flex items-center justify-between mb-2">
@@ -82,6 +97,38 @@ export function CascadeZonePanel({ data }: Props) {
 
       {/* Story progression */}
       <div className="space-y-1.5 text-[11px]">
+        {/* Daily Impulse Leg */}
+        <div className="flex items-start gap-2">
+          <span className={data.dailyImpulse ? "text-green-400 mt-0.5" : "text-zinc-600 mt-0.5"}>
+            {data.dailyImpulse ? "●" : "○"}
+          </span>
+          <div>
+            <span className="text-zinc-400">Daily Impulse:</span>
+            {data.dailyImpulse ? (
+              <div className="text-zinc-200 mt-0.5">
+                <span className={data.dailyImpulse.direction === "bullish" ? "text-green-400" : "text-red-400"}>
+                  {data.dailyImpulse.direction === "bullish" ? "↑" : "↓"} {data.dailyImpulse.direction.toUpperCase()}
+                </span>
+                <span className="text-zinc-400 ml-2">
+                  {data.dailyImpulse.low.toFixed(5)} → {data.dailyImpulse.high.toFixed(5)}
+                </span>
+                <span className="text-cyan-400 ml-2">({impulsePips.toFixed(0)} pips)</span>
+                <div className="text-zinc-500 mt-0.5">
+                  BOS: {data.dailyImpulse.bosPrice.toFixed(5)}
+                  {data.dailyImpulse.startDate && data.dailyImpulse.endDate && (
+                    <span className="ml-2">
+                      {data.dailyImpulse.startDate} → {data.dailyImpulse.endDate}
+                      <span className="text-zinc-600 ml-1">({data.dailyImpulse.spanBars} bars)</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <span className="text-zinc-600 ml-1">None found</span>
+            )}
+          </div>
+        </div>
+
         {/* Daily Zone */}
         <div className="flex items-center gap-2">
           <span className={data.dailyZone ? "text-green-400" : "text-zinc-600"}>
