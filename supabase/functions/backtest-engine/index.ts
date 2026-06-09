@@ -44,7 +44,6 @@ import {
   ATR_SL_FLOOR_MULTIPLIER,
   SUPPORTED_SYMBOLS,
   SMT_PAIRS,
-  DEFAULTS,
   STYLE_OVERRIDES,
   ASSET_PROFILES,
   getAssetProfile,
@@ -83,6 +82,7 @@ import {
   resolveWeightScale,
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../_shared/configMapper.ts";
 import {
   detectSession,
   normalizeSessionFilter,
@@ -343,126 +343,17 @@ async function fetchHistoricalCandles(
   } catch { return []; }
 }
 
-// ─── Config Mapping (mirrors loadConfig from bot-scanner) ───────────
+// ─── Config Mapping (delegates to shared configMapper) ──────────────
+// The shared mapper handles ALL field resolution (current UI + legacy DB).
+// Backtest-specific overrides are applied after the shared mapping.
 function mapConfig(raw: any): any {
-  const strategy = raw?.strategy || {};
-  const risk = raw?.risk || {};
-  const entry = raw?.entry || {};
-  const exit = raw?.exit || {};
-  const instruments = raw?.instruments || {};
-  const sessions = raw?.sessions || {};
-  const protection = raw?.protection || {};
-
-  return {
-    ...DEFAULTS,
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence;
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) return raw_mc * 10;
-      return raw_mc;
-    })(),
-    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
-    htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
-    enableOB: strategy.useOrderBlocks ?? true,
-    enableFVG: strategy.useFVG ?? true,
-    enableLiquiditySweep: strategy.useLiquiditySweep ?? true,
-    enableStructureBreak: strategy.useStructureBreak ?? true,
-    useDisplacement: strategy.useDisplacement ?? true,
-    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
-    useUnicornModel: strategy.useUnicornModel ?? true,
-    useSilverBullet: strategy.useSilverBullet ?? true,
-    useMacroWindows: strategy.useMacroWindows ?? true,
-    useSMT: strategy.useSMT ?? true,
-    useVWAP: strategy.useVWAP ?? true,
-    vwapProximityPips: strategy.vwapProximityPips ?? 15,
-    onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
-    onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
-    riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
-    positionSizingMethod: risk.positionSizingMethod ?? raw?.positionSizingMethod ?? "percent_risk",
-    fixedLotSize: risk.fixedLotSize ?? raw?.fixedLotSize ?? 0.1,
-    atrVolatilityMultiplier: risk.atrVolatilityMultiplier ?? 1.5,
-    maxDailyLoss: risk.maxDailyDrawdown ?? DEFAULTS.maxDailyLoss,
-    maxOpenPositions: risk.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
-    minRiskReward: risk.minRR ?? DEFAULTS.minRiskReward,
-    maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
-    portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
-    cooldownMinutes: entry.cooldownMinutes ?? 0,
-    closeOnReverse: entry.closeOnReverse ?? false,
-    slBufferPips: entry.slBufferPips ?? DEFAULTS.slBufferPips,
-    instrumentBuffers: (raw?.instrumentBuffers || entry.instrumentBuffers || {}) as Record<string, { slBufferPips?: number }>,
-    slMethod: exit.stopLossMethod ?? DEFAULTS.slMethod,
-    fixedSLPips: exit.fixedSLPips ?? DEFAULTS.fixedSLPips,
-    slATRMultiple: exit.slATRMultiple ?? DEFAULTS.slATRMultiple,
-    slATRPeriod: exit.slATRPeriod ?? DEFAULTS.slATRPeriod,
-    tpMethod: exit.takeProfitMethod ?? DEFAULTS.tpMethod,
-    fixedTPPips: exit.fixedTPPips ?? DEFAULTS.fixedTPPips,
-    tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? DEFAULTS.tpRatio,
-    tpATRMultiple: exit.tpATRMultiple ?? DEFAULTS.tpATRMultiple,
-    trailingStopEnabled: exit.trailingStop ?? false,
-    trailingStopPips: exit.trailingStopPips ?? 15,
-    trailingStopActivation: exit.trailingStopActivation ?? "after_1r",
-    breakEvenEnabled: exit.breakEven ?? DEFAULTS.breakEvenEnabled,
-    breakEvenPips: exit.breakEvenTriggerPips ?? DEFAULTS.breakEvenPips,
-    partialTPEnabled: exit.partialTP ?? false,
-    partialTPPercent: exit.partialTPPercent ?? 50,
-    partialTPLevel: exit.partialTPLevel ?? 1.0,
-    maxHoldHours: exit.timeExitHours ?? 0,
-    enabledSessions: (
-      Array.isArray(sessions.filter) ? normalizeSessionFilter(sessions.filter)
-        : Array.isArray(raw?.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions)
-        : [...DEFAULTS.enabledSessions]
-    ),
-    killZoneOnly: sessions.killZoneOnly ?? false,
-    enabledDays: DEFAULTS.enabledDays,
-    maxDrawdown: Math.min(risk.maxDrawdown ?? DEFAULTS.maxDrawdown, protection.circuitBreakerPct ?? 100),
-    maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
-    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? 0,
-    openingRange: { ...DEFAULTS.openingRange, ...(raw?.openingRange || {}) },
-    tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw?.tradingStyle || {}) },
-    factorWeights: raw?.factorWeights || {},
-    spreadFilterEnabled: instruments.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
-    maxSpreadPips: instruments.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
-    newsFilterEnabled: false, // Disabled in backtest
-    // Factor toggles
-    useVolumeProfile: strategy.useVolumeProfile ?? raw?.useVolumeProfile ?? DEFAULTS.useVolumeProfile,
-    useTrendDirection: strategy.useTrendDirection ?? raw?.useTrendDirection ?? DEFAULTS.useTrendDirection,
-    useDailyBias: strategy.useDailyBias ?? raw?.useDailyBias ?? DEFAULTS.useDailyBias,
-    useAMD: strategy.useAMD ?? raw?.useAMD ?? DEFAULTS.useAMD,
-    useFOTSI: strategy.useFOTSI ?? raw?.useFOTSI ?? DEFAULTS.useFOTSI,
-    // Direction engine
-    useSimpleDirection: strategy.useSimpleDirection ?? raw?.useSimpleDirection ?? true,
-    simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw?.simpleDirectionH4ChochLookback ?? 10,
-    simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw?.simpleDirectionH1BosLookback ?? 8,
-    // Regime scoring
-    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw?.regimeScoringEnabled ?? DEFAULTS.regimeScoringEnabled,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw?.regimeScoringStrength ?? DEFAULTS.regimeScoringStrength,
-    // Advanced tuning
-    obLookbackCandles: strategy.obLookbackCandles ?? raw?.obLookbackCandles ?? DEFAULTS.obLookbackCandles,
-    fvgMinSizePips: strategy.fvgMinSizePips ?? raw?.fvgMinSizePips ?? DEFAULTS.fvgMinSizePips,
-    fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw?.fvgOnlyUnfilled ?? DEFAULTS.fvgOnlyUnfilled,
-    structureLookback: strategy.structureLookback ?? raw?.structureLookback ?? DEFAULTS.structureLookback,
-    liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw?.liquidityPoolMinTouches ?? DEFAULTS.liquidityPoolMinTouches,
-    equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw?.equalHighsLowsSensitivity ?? 3,
-    // Bidirectional conflict
-    conflictThresholdRaise: strategy.conflictThresholdRaise ?? raw?.conflictThresholdRaise ?? 4,
-    conflictBlockAt: strategy.conflictBlockAt ?? raw?.conflictBlockAt ?? 6,
-    // ATR filter
-    atrFilterEnabled: strategy.atrFilterEnabled ?? raw?.atrFilterEnabled ?? false,
-    atrFilterMin: strategy.atrFilterMin ?? raw?.atrFilterMin ?? 0,
-    atrFilterMax: strategy.atrFilterMax ?? raw?.atrFilterMax ?? 0,
-    // Impulse zone
-    impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw?.impulseZoneEnabled ?? true,
-    impulseZoneGateMode: strategy.impulseZoneGateMode ?? raw?.impulseZoneGateMode ?? "hard",
-    impulseZoneBonus: strategy.impulseZoneBonus ?? raw?.impulseZoneBonus ?? 1.0,
-    impulseZonePenalty: strategy.impulseZonePenalty ?? raw?.impulseZonePenalty ?? 2.0,
-    // Correlation filter
-    correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw?.correlationFilterEnabled ?? true,
-    maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw?.maxCorrelatedPositions ?? 2,
-    // SMT opposite veto
-    smtOppositeVeto: strategy.smtOppositeVeto ?? raw?.smtOppositeVeto ?? true,
-    // Internal state
-    _currentSymbol: "",
-    _smtResult: null as any,
-  };
+  const config = mapNestedToFlat(raw);
+  // Backtest-specific overrides:
+  // 1. News filter is always disabled in backtests (no historical news data)
+  config.newsFilterEnabled = false;
+  // 2. Scan interval is irrelevant in backtests (we iterate bar-by-bar)
+  config.scanIntervalMinutes = 0;
+  return config;
 }
 
 
@@ -1342,7 +1233,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     }
 
     const {
-      instruments = DEFAULTS.instruments,
+      instruments = RUNTIME_DEFAULTS.instruments,
       startDate,
       endDate,
       startingBalance = 10000,
