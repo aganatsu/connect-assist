@@ -66,6 +66,7 @@ import {
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
+import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
@@ -4118,6 +4119,75 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           h1Confirmed: simpleDirectionResult.h1Confirmed,
         } : null,
       };
+    }
+
+    // ── Unified Zone Engine (story-driven: D→4H→1H with liquidity + confirmation) ──
+    // Composes impulse zone + liquidity + confirmation into one narrative.
+    // Entry direction = impulse direction (continuation, not reversal).
+    if (analysis.direction && hourlyCandles.length >= 20) {
+      try {
+        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
+        // Combine liquidity pools from the relevant timeframes
+        const combinedLiqPools = [
+          ...htfLiquidityPoolsD,
+          ...htfLiquidityPools4H,
+          ...htfLiquidityPools1H,
+        ];
+        // Use 4H candles as confirmation TF for Daily zones, 1H for 4H zones
+        const confirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
+        const ltfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
+
+        const unifiedResult: UnifiedZoneResult = findUnifiedZone(
+          hourlyCandles,
+          h4Candles,
+          candles, // 15m entry candles
+          unifiedDir as "bullish" | "bearish",
+          analysis.lastPrice,
+          combinedLiqPools,
+          htfConfluenceData ?? undefined,
+          { strictATRMult: pairConfig.marketFillStrictATRMult },
+          dailyCandles.length >= 30 ? dailyCandles : undefined,
+          confirmCandles,
+          ltfConfirmCandles,
+        );
+
+        (detail as any).unifiedZone = {
+          hasZone: unifiedResult.hasZone,
+          state: unifiedResult.state,
+          selectedTF: unifiedResult.selectedTF,
+          unifiedScore: unifiedResult.unifiedScore,
+          scoreBreakdown: unifiedResult.scoreBreakdown,
+          impulse: unifiedResult.impulse,
+          zone: unifiedResult.zone,
+          price: unifiedResult.price,
+          liquidity: unifiedResult.liquidity ? {
+            liquidityScore: unifiedResult.liquidity.liquidityScore,
+            summary: unifiedResult.liquidity.summary,
+            nearbyPools: unifiedResult.liquidity.nearbyPools.length,
+            sweepEvent: unifiedResult.liquidity.sweepEvent ? {
+              level: unifiedResult.liquidity.sweepEvent.level,
+              type: unifiedResult.liquidity.sweepEvent.type,
+              rejected: unifiedResult.liquidity.sweepEvent.rejected,
+            } : null,
+          } : null,
+          confirmation: unifiedResult.confirmation ? {
+            type: unifiedResult.confirmation.type,
+            score: unifiedResult.confirmation.score,
+            entryReady: unifiedResult.confirmation.entryReady,
+            direction: unifiedResult.confirmation.direction,
+            detail: unifiedResult.confirmation.detail,
+          } : null,
+          entry: unifiedResult.entry,
+          storySummary: unifiedResult.storySummary,
+          reason: unifiedResult.reason,
+        };
+        console.log(`[scan ${scanCycleId}] ${pair} Unified Zone [${unifiedResult.state}|${unifiedResult.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14 — ${unifiedResult.reason.slice(0, 100)}`);
+      } catch (unifiedErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} Unified Zone error (non-fatal): ${unifiedErr?.message}`);
+        (detail as any).unifiedZone = { hasZone: false, state: "error", reason: `Error: ${unifiedErr?.message}` };
+      }
+    } else {
+      (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: !analysis.direction ? "No direction" : "Insufficient candles" };
     }
 
     // ── Cascade Zone Engine (Daily → 4H → 1H → 15m top-down) ──
