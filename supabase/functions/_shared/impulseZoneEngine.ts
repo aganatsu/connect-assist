@@ -29,6 +29,10 @@ export interface ImpulseLeg {
   endIndex: number;     // Index of the BOS candle
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
+  timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
+  startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
+  endDate?: string;     // ISO date of the BOS candle
+  spanBars?: number;    // Number of candles in the impulse leg
 }
 
 export interface ImpulsePOI {
@@ -122,13 +126,15 @@ const PRICE_AT_ZONE_STRICT_ATR_MULT = 0.3;
  * and do NOT invalidate the impulse.
  *
  *
- * @param candles - 1H or 4H candles (must have structure analysis available)
+ * @param candles - 1H, 4H, or Daily candles (must have structure analysis available)
  * @param direction - The bias direction we're looking for
+ * @param timeframe - Optional: which timeframe these candles represent (for metadata)
  * @returns ImpulseLeg or null if no valid impulse found
  */
 export function findImpulseLeg(
   candles: Candle[],
   direction: "bullish" | "bearish",
+  timeframe?: "D" | "4H" | "1H",
 ): ImpulseLeg | null {
   if (candles.length < 20) return null;
 
@@ -142,7 +148,23 @@ export function findImpulseLeg(
   // Try each BOS from most recent to oldest
   for (const bos of allBreaks) {
     const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
-    if (impulse && impulse.isValid) return impulse;
+    if (impulse && impulse.isValid) {
+      // Enrich with timeframe metadata if provided
+      if (timeframe) {
+        impulse.timeframe = timeframe;
+      }
+      // Extract dates from candle datetimes
+      const startCandle = candles[impulse.startIndex];
+      const endCandle = candles[impulse.endIndex];
+      if (startCandle?.datetime) {
+        impulse.startDate = startCandle.datetime.slice(0, 10);
+      }
+      if (endCandle?.datetime) {
+        impulse.endDate = endCandle.datetime.slice(0, 10);
+      }
+      impulse.spanBars = impulse.endIndex - impulse.startIndex;
+      return impulse;
+    }
   }
 
   return null;
@@ -967,24 +989,26 @@ export interface ZoneEngineOptions {
  */
 export interface MultiTFZoneResult {
   bestZone: BestZone | null;
-  selectedTF: "1H" | "4H" | null;  // Which timeframe produced the winning zone
+  selectedTF: "D" | "1H" | "4H" | null;  // Which timeframe produced the winning zone
   reason: string;
   h1Result: ZoneEngineResult;
   h4Result: ZoneEngineResult | null; // null when 4H candles not available
-  allZones: RankedPOI[];            // Combined zones from both TFs
+  dailyResult?: ZoneEngineResult | null; // null when Daily candles not available
+  allZones: RankedPOI[];            // Combined zones from all TFs
 }
 
 /**
- * findBestEntryZoneMultiTF — Runs the zone engine on both 1H and 4H candles,
- * then selects the best zone across both timeframes.
+ * findBestEntryZoneMultiTF — Runs the zone engine on Daily, 4H, and 1H candles
+ * using a waterfall approach: Daily first, then 4H, then 1H.
  *
- * Selection logic:
- *   1. If only one TF produces a valid zone, use that one.
- *   2. If both produce zones, prefer the one with:
- *      a. Higher totalScore
- *      b. On tie: deeper fibDepth (more premium zone)
- *      c. On tie: 4H wins (higher timeframe = more significant)
- *   3. If neither produces a zone, return null with combined reasons.
+ * Selection logic (waterfall — Daily always wins when available):
+ *   1. If Daily candles provided and Daily impulse+zone found → use Daily (A+ setup)
+ *   2. Otherwise, if 4H produces a valid zone → use 4H (B+ setup)
+ *   3. Otherwise, if 1H produces a valid zone → use 1H (C+ setup)
+ *   4. If neither produces a zone, return null with combined reasons.
+ *
+ * When multiple TFs produce zones and no Daily zone exists, pick the best
+ * using score → fibDepth → HTF preference (same as before).
  *
  * @param h1Candles  - 1H candles (always available)
  * @param h4Candles  - 4H candles (may be empty if multiTFRegime disabled)
@@ -992,6 +1016,8 @@ export interface MultiTFZoneResult {
  * @param direction  - Trade direction
  * @param currentPrice - Current market price for proximity check
  * @param htfData - Optional HTF confluence data (4H OBs, FVGs, Breakers, Fib, P/D)
+ * @param options - Optional engine options
+ * @param dailyCandles - Optional Daily candles for top-down analysis
  */
 export function findBestEntryZoneMultiTF(
   h1Candles: Candle[],
@@ -1001,7 +1027,28 @@ export function findBestEntryZoneMultiTF(
   currentPrice: number,
   htfData?: HTFConfluenceData,
   options?: ZoneEngineOptions,
+  dailyCandles?: Candle[],
 ): MultiTFZoneResult {
+  // ── WATERFALL: Try Daily first (A+ setup) ──
+  let dailyResult: ZoneEngineResult | null = null;
+  if (dailyCandles && dailyCandles.length >= 20) {
+    dailyResult = findBestEntryZone(dailyCandles, entryCandles, direction, currentPrice, htfData, options);
+    // If Daily produces a valid zone, it wins immediately (highest conviction)
+    if (dailyResult.bestZone) {
+      const allZones: RankedPOI[] = [...dailyResult.allZones];
+      return {
+        bestZone: dailyResult.bestZone,
+        selectedTF: "D",
+        reason: `Daily zone selected (A+ setup): ${dailyResult.reason}`,
+        h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options),
+        h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options) : null,
+        dailyResult,
+        allZones,
+      };
+    }
+  }
+
+  // ── FALLBACK: Run 1H and 4H (existing logic) ──
   // Always run 1H
   const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options);
 
@@ -1011,10 +1058,13 @@ export function findBestEntryZoneMultiTF(
     h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options);
   }
 
-  // Combine all zones from both TFs for transparency
+  // Combine all zones from all TFs for transparency
   const allZones: RankedPOI[] = [...h1Result.allZones];
   if (h4Result) {
     allZones.push(...h4Result.allZones);
+  }
+  if (dailyResult) {
+    allZones.push(...dailyResult.allZones);
   }
 
   // Selection logic
@@ -1026,12 +1076,14 @@ export function findBestEntryZoneMultiTF(
     const reasons: string[] = [`1H: ${h1Result.reason}`];
     if (h4Result) reasons.push(`4H: ${h4Result.reason}`);
     else reasons.push("4H: Not available (insufficient candles)");
+    if (dailyResult) reasons.push(`Daily: ${dailyResult.reason}`);
     return {
       bestZone: null,
       selectedTF: null,
       reason: `No valid zone on any timeframe. ${reasons.join("; ")}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1044,6 +1096,7 @@ export function findBestEntryZoneMultiTF(
       reason: `1H zone selected (4H ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1056,6 +1109,7 @@ export function findBestEntryZoneMultiTF(
       reason: `4H zone selected (1H found no zone): ${h4Result!.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1071,6 +1125,7 @@ export function findBestEntryZoneMultiTF(
       reason: `4H zone wins (score ${h4Score} > 1H score ${h1Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1082,6 +1137,7 @@ export function findBestEntryZoneMultiTF(
       reason: `1H zone wins (score ${h1Score} > 4H score ${h4Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1097,6 +1153,7 @@ export function findBestEntryZoneMultiTF(
       reason: `4H zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1108,6 +1165,7 @@ export function findBestEntryZoneMultiTF(
       reason: `1H zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
+      dailyResult,
       allZones,
     };
   }
@@ -1119,6 +1177,7 @@ export function findBestEntryZoneMultiTF(
     reason: `4H zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
     h1Result,
     h4Result,
+    dailyResult,
     allZones,
   };
 }
