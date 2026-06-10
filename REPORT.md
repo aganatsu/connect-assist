@@ -1,57 +1,73 @@
-# Task: Fix cascade zone engine runtime error (htfConfluenceData scope bug)
-
-## Branch: manus/cascade-htf-scope-fix
-
+# Task: Unified Impulse Zone Engine
+## Branch: manus/unified-impulse-engine
 ## Behavior changes
-
-none — pure bug fix. The cascade zone engine was throwing a ReferenceError at runtime because `htfConfluenceData` was out of scope. This fix makes it accessible. No change to what trades get taken, what positions get sized, or what gates pass — the cascade was already erroring out for ALL pairs, so no trades were being affected by it.
+none — purely additive. The unified zone engine runs alongside the existing impulse zone and cascade zone engines. It stores results in `detail.unifiedZone` but does NOT affect any gates, scoring, or trade decisions. The existing `impulseZone` and `cascadeZone` outputs remain unchanged.
 
 ## Files modified
 
-- `supabase/functions/bot-scanner/index.ts` — Moved `htfConfluenceData` construction from inside the impulse zone engine's `try` block to the outer scope (before both the impulse zone and cascade zone sections). Both call sites now use `?? undefined` to handle the null case when `analysis.direction` is falsy.
+| File | Description |
+|------|-------------|
+| `supabase/functions/_shared/impulseZoneEngine.ts` | Extended `ImpulseLeg` interface with `timeframe`, `startDate`, `endDate`, `spanBars` (optional, backward-compatible). Added `dailyCandles` parameter to `findBestEntryZoneMultiTF` with Daily-first waterfall logic. Added `dailyResult` to `MultiTFZoneResult`. |
+| `supabase/functions/_shared/zoneLiquidity.ts` | **NEW** — Zone-specific liquidity pool detection. Finds BSL/SSL near zone edges, classifies as entry_trigger/target, detects sweeps with recency check, scores +1.0/+2.5/+3.0. |
+| `supabase/functions/_shared/zoneLiquidity.test.ts` | **NEW** — 11 tests for zone liquidity module. |
+| `supabase/functions/_shared/confirmationHierarchy.ts` | **NEW** — Ranked confirmation evaluation: Sweep+CHoCH (2.5) > LTF CHoCH (2.0) > Displacement (1.5) > Inducement (1.0) > None (0). Close-based CHoCH only. |
+| `supabase/functions/_shared/confirmationHierarchy.test.ts` | **NEW** — 8 tests for confirmation hierarchy. |
+| `supabase/functions/_shared/unifiedZoneEngine.ts` | **NEW** — Composes impulse zone + liquidity + confirmation into one story. Entry direction = impulse direction (continuation). Scoring /14. State machine: no_zone → watching → at_zone → confirmed → triggered. |
+| `supabase/functions/_shared/unifiedZoneEngine.test.ts` | **NEW** — 8 tests for unified zone engine. |
+| `supabase/functions/bot-scanner/index.ts` | Added import for `findUnifiedZone`. Added unified zone call after existing impulse zone section (~line 4124). Stores result in `detail.unifiedZone`. Non-fatal try/catch. Does NOT modify any existing logic. |
+| `src/components/UnifiedZonePanel.tsx` | **NEW** — Frontend panel displaying the unified story: Impulse → Zone → Price → Liquidity → Confirmation → Entry with progressive bullets. |
+| `src/pages/BotView.tsx` | Added import and rendering of `UnifiedZonePanel` in all 3 detail view locations (alongside existing panels). |
+| `docs/UNIFIED_IMPULSE_ENGINE_SPEC.md` | **NEW** — Full design spec document for the unified engine architecture. |
+
+## Extra caution note: bot-scanner/index.ts
+The change to bot-scanner is purely **additive**: a new `findUnifiedZone()` call is inserted between the existing impulse zone section and the cascade zone section. It writes to a new field `detail.unifiedZone` that did not previously exist. The existing impulse zone logic, cascade zone logic, gates, and trade decision flow are completely untouched. The call is wrapped in try/catch so any error is non-fatal and logged.
 
 ## Tests added
 
-No new tests added — this is a scoping fix. The existing 23 cascade engine tests and 17 cascade gate tests all pass. The error was a runtime ReferenceError that only manifests in the deployed edge function (Deno runtime), not in unit tests which mock the data flow.
+| Test | Assertion |
+|------|-----------|
+| `zoneLiquidity.test.ts` — 11 tests | BSL/SSL detection near zone, sweep detection, rejection scoring, distance filtering, pool strength filtering, direction classification, multiple pool sorting |
+| `confirmationHierarchy.test.ts` — 8 tests | No signals → none, insufficient candles → none, sweep+CHoCH → 2.5, inducement → 1.0, wrong direction ignored, displacement detection, hierarchy ordering |
+| `unifiedZoneEngine.test.ts` — 8 tests | Flat market → no_zone, zone found → watching, liquidity scoring, continuation direction, score breakdown structure, Daily TF bonus, story summary, state transitions |
 
 ## Tests run
-
 ```
-$ deno test supabase/functions/_shared/ --allow-read --no-check
-ok | 1098 passed | 2 failed (10s)
+$ deno test supabase/functions/_shared/ --no-check
+FAILED | 1107 passed | 20 failed (12s)
 ```
-
-The 2 failures are pre-existing in `candleSource.test.ts` (API key issue, unrelated to this change).
+All 20 failures are **pre-existing** (verified by running on clean main — identical result). The 72 tests for new/modified modules all pass:
+```
+$ deno test impulseZoneEngine.test.ts zoneLiquidity.test.ts confirmationHierarchy.test.ts unifiedZoneEngine.test.ts --no-check
+ok | 72 passed | 0 failed (544ms)
+```
 
 ## Regression check
-
-The fix only changes WHERE `htfConfluenceData` is constructed, not HOW. The object literal is identical:
-```ts
-{
-  h4OBs: h4OBs ?? [],
-  h4FVGs: h4FVGs ?? [],
-  h4Breakers: h4Breakers ?? [],
-  htfFibLevels: htfFibLevels4H ?? null,
-  dailyFibLevels: htfFibLevelsD ?? null,
-  htfPD: htfPD4H ?? null,
-  direction: (analysis.direction === "long" ? "bullish" : "bearish"),
-}
-```
-
-The impulse zone engine receives the exact same data as before. The cascade zone engine now receives it instead of throwing a ReferenceError.
+- Ran full test suite on clean `main` (stash/unstash): same 1107 passed / 20 failed
+- Ran full test suite with changes: same 1107 passed / 20 failed
+- Zero new failures introduced
+- The unified engine is additive — it does not modify any existing gate logic, scoring, or trade decisions
+- Existing `impulseZone` and `cascadeZone` outputs are produced identically
 
 ## Open questions
-
-1. Should this be merged directly to main (fast-forward) or go through a PR? Given it's a one-line scoping fix that unblocks the entire cascade feature, I'd recommend merging directly.
-2. After merging + redeploying, you'll need to run a new scan to see the cascade panel populate correctly for pairs with a Daily story (e.g., EUR/GBP).
+1. **When to wire gates to unified score?** Currently the unified engine is display-only. Once you confirm the panel looks correct in live scans, we can wire the gate system to use `unifiedScore` instead of (or in addition to) the standalone impulse zone score. This should be a separate task.
+2. **Remove cascade panel?** The cascade panel still renders alongside the unified panel. Once you're satisfied the unified panel shows the same (or better) information, we can remove the cascade panel and engine.
+3. **5m candle data for confirmation?** The confirmation hierarchy currently uses the candles passed to it (4H or 1H). For finer-grained CHoCH detection within zones, 5m data would help. Need to verify TwelveData availability.
+4. **Sweep timeout default:** Set to 10 candles on the confirmation timeframe. May need tuning with backtest data.
 
 ## Suggested PR title and description
 
-**Title:** Fix cascade zone engine error — htfConfluenceData out of scope
+**Title:** feat: Unified Impulse Zone Engine (story-driven, continuation entries, liquidity + confirmation)
 
 **Description:**
-The `htfConfluenceData` variable was defined inside the impulse zone engine's `try` block, making it inaccessible to the cascade zone engine section below. This caused a ReferenceError at runtime, resulting in the cascade panel showing "Error" state for all pairs.
+Implements the Unified Zone Engine that composes the impulse zone engine, liquidity detection, and confirmation hierarchy into a single story-driven system.
 
-Fix: Extract `htfConfluenceData` construction to the outer scope before both engine sections, so both impulse zone and cascade zone can reference it. Both call sites use `?? undefined` to handle the null case.
+Key changes:
+- Entry direction = impulse direction (continuation, "don't catch a falling knife")
+- Daily → 4H → 1H waterfall (Daily wins when zone found)
+- Liquidity: detects BSL/SSL near zone, scores sweeps (+1.0 to +3.0)
+- Confirmation hierarchy: Sweep+CHoCH (2.5) > CHoCH (2.0) > Displacement (1.5) > Inducement (1.0)
+- Unified scoring /14 (base + liquidity + confirmation + TF bonus)
+- New frontend panel with progressive story bullets
+- **Purely additive** — no behavior change to existing gates or trade decisions
 
-All 1098 tests pass (2 pre-existing failures unrelated).
+This is Phase 1 (display-only). Phase 2 will wire gates to the unified score once validated in live scans.
