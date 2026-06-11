@@ -1,73 +1,81 @@
-# Task: Unified Impulse Zone Engine
-## Branch: manus/unified-impulse-engine
+# Task: Unified Gate Wiring
+## Branch: manus/unified-gate-wiring
 ## Behavior changes
-none — purely additive. The unified zone engine runs alongside the existing impulse zone and cascade zone engines. It stores results in `detail.unifiedZone` but does NOT affect any gates, scoring, or trade decisions. The existing `impulseZone` and `cascadeZone` outputs remain unchanged.
+
+1. **New gate: Unified Zone Gate** — When the unified engine's state is `triggered` or `confirmed` AND `entryReady === true`, the unified gate passes and becomes the primary signal source. This bypasses the impulse zone hard gate (same as cascade gate already does).
+
+2. **Signal source size multiplier** — Trades sourced from the unified engine get full size (1.0x). Trades from the standalone fallback (impulse zone engine alone) get half size (0.5x). This applies to both market orders and limit orders.
+
+3. **Unified SL override** — When the unified gate passes and provides `entry.slPrice`, the SL is overridden to the unified engine's value (subject to the same min/max pip guards as cascade SL). TP is recalculated for proper R:R.
+
+4. **Unified entry override** — When the unified gate passes and provides `entry.entryPrice`, the limit entry is overridden to the unified engine's value (takes priority over cascade entry override).
+
+5. **signalSource label** — Every trade detail now includes `signalSource: "unified" | "standalone"` for downstream analytics and debugging.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/impulseZoneEngine.ts` | Extended `ImpulseLeg` interface with `timeframe`, `startDate`, `endDate`, `spanBars` (optional, backward-compatible). Added `dailyCandles` parameter to `findBestEntryZoneMultiTF` with Daily-first waterfall logic. Added `dailyResult` to `MultiTFZoneResult`. |
-| `supabase/functions/_shared/zoneLiquidity.ts` | **NEW** — Zone-specific liquidity pool detection. Finds BSL/SSL near zone edges, classifies as entry_trigger/target, detects sweeps with recency check, scores +1.0/+2.5/+3.0. |
-| `supabase/functions/_shared/zoneLiquidity.test.ts` | **NEW** — 11 tests for zone liquidity module. |
-| `supabase/functions/_shared/confirmationHierarchy.ts` | **NEW** — Ranked confirmation evaluation: Sweep+CHoCH (2.5) > LTF CHoCH (2.0) > Displacement (1.5) > Inducement (1.0) > None (0). Close-based CHoCH only. |
-| `supabase/functions/_shared/confirmationHierarchy.test.ts` | **NEW** — 8 tests for confirmation hierarchy. |
-| `supabase/functions/_shared/unifiedZoneEngine.ts` | **NEW** — Composes impulse zone + liquidity + confirmation into one story. Entry direction = impulse direction (continuation). Scoring /14. State machine: no_zone → watching → at_zone → confirmed → triggered. |
-| `supabase/functions/_shared/unifiedZoneEngine.test.ts` | **NEW** — 8 tests for unified zone engine. |
-| `supabase/functions/bot-scanner/index.ts` | Added import for `findUnifiedZone`. Added unified zone call after existing impulse zone section (~line 4124). Stores result in `detail.unifiedZone`. Non-fatal try/catch. Does NOT modify any existing logic. |
-| `src/components/UnifiedZonePanel.tsx` | **NEW** — Frontend panel displaying the unified story: Impulse → Zone → Price → Liquidity → Confirmation → Entry with progressive bullets. |
-| `src/pages/BotView.tsx` | Added import and rendering of `UnifiedZonePanel` in all 3 detail view locations (alongside existing panels). |
-| `docs/UNIFIED_IMPULSE_ENGINE_SPEC.md` | **NEW** — Full design spec document for the unified engine architecture. |
-
-## Extra caution note: bot-scanner/index.ts
-The change to bot-scanner is purely **additive**: a new `findUnifiedZone()` call is inserted between the existing impulse zone section and the cascade zone section. It writes to a new field `detail.unifiedZone` that did not previously exist. The existing impulse zone logic, cascade zone logic, gates, and trade decision flow are completely untouched. The call is wrapped in try/catch so any error is non-fatal and logged.
+| `supabase/functions/bot-scanner/index.ts` | Added unified gate check (before cascade gate), modified impulse zone gate bypass to include `unifiedGatePassed`, added unified SL override (after cascade SL override), added signal source size multiplier (before positionId), added unified entry override (after cascade entry override), applied size multiplier to limit order path |
+| `supabase/functions/_shared/unifiedGateWiring.test.ts` | New test file: 15 tests covering gate decision logic and size multiplier behavior |
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `zoneLiquidity.test.ts` — 11 tests | BSL/SSL detection near zone, sweep detection, rejection scoring, distance filtering, pool strength filtering, direction classification, multiple pool sorting |
-| `confirmationHierarchy.test.ts` — 8 tests | No signals → none, insufficient candles → none, sweep+CHoCH → 2.5, inducement → 1.0, wrong direction ignored, displacement detection, hierarchy ordering |
-| `unifiedZoneEngine.test.ts` — 8 tests | Flat market → no_zone, zone found → watching, liquidity scoring, continuation direction, score breakdown structure, Daily TF bonus, story summary, state transitions |
+| `Unified Gate: passes when state=triggered AND entryReady=true` | Gate passes, signalSource = "unified" |
+| `Unified Gate: passes when state=confirmed AND entryReady=true` | Gate passes, signalSource = "unified" |
+| `Unified Gate: fails when state=watching` | Gate fails, signalSource = "standalone" |
+| `Unified Gate: fails when entryReady=false even if state=triggered` | Gate fails, signalSource = "standalone" |
+| `Unified Gate: fails when hasZone=false` | Gate fails, signalSource = "standalone" |
+| `Unified Gate: fails when unifiedZoneData is null` | Gate fails, signalSource = "standalone" |
+| `Unified Gate: fails when unifiedZoneData is undefined` | Gate fails, signalSource = "standalone" |
+| `Unified Gate: fails when confirmation is null` | Gate fails, signalSource = "standalone" |
+| `Size Multiplier: unified signal gets full size (1.0x)` | 0.10 -> 0.10 |
+| `Size Multiplier: standalone signal gets half size (0.5x)` | 0.10 -> 0.05 |
+| `Size Multiplier: standalone rounds to 2 decimal places` | 0.07 -> 0.04 |
+| `Size Multiplier: standalone floors at 0.01 minimum` | 0.01 -> 0.01 (floor) |
+| `Size Multiplier: very small standalone still gets 0.01` | 0.005 -> 0.01 (floor) |
+| `Size Multiplier: unified preserves large size` | 1.50 -> 1.50 |
+| `Size Multiplier: standalone halves large size correctly` | 1.50 -> 0.75 |
 
 ## Tests run
+
 ```
-$ deno test supabase/functions/_shared/ --no-check
-FAILED | 1107 passed | 20 failed (12s)
+ok | 1142 passed | 0 failed (15s)
 ```
-All 20 failures are **pre-existing** (verified by running on clean main — identical result). The 72 tests for new/modified modules all pass:
-```
-$ deno test impulseZoneEngine.test.ts zoneLiquidity.test.ts confirmationHierarchy.test.ts unifiedZoneEngine.test.ts --no-check
-ok | 72 passed | 0 failed (544ms)
-```
+
+(1127 existing + 15 new tests)
+
+Note: There is a pre-existing flaky test in `zoneLiquidity.test.ts` that intermittently fails on different test cases between runs. This is unrelated to our changes (confirmed by running on stashed/clean state).
 
 ## Regression check
-- Ran full test suite on clean `main` (stash/unstash): same 1107 passed / 20 failed
-- Ran full test suite with changes: same 1107 passed / 20 failed
-- Zero new failures introduced
-- The unified engine is additive — it does not modify any existing gate logic, scoring, or trade decisions
-- Existing `impulseZone` and `cascadeZone` outputs are produced identically
+
+- **Gate logic**: The unified gate is additive — it only fires when `unifiedZoneData` meets all three conditions (hasZone + state + entryReady). When the unified engine is not ready (which is the current state for most pairs until the unified engine produces results), `unifiedGatePassed = false` and the code falls through to the existing cascade/impulse zone logic unchanged.
+- **Size impact**: When `signalSource = "standalone"` (which is the default when unified engine hasn't produced a ready signal), size is halved. This IS a behavior change — existing trades will be half-sized until the unified engine starts producing confirmed signals. This is intentional per the task design (standalone = lower conviction = lower size).
+- **Brace balance**: Verified programmatically — 2750 open braces, 2750 close braces.
+- **All 21 gates untouched**: The unified gate is evaluated BEFORE the 21 safety gates. It does not modify any gate definition or threshold.
 
 ## Open questions
-1. **When to wire gates to unified score?** Currently the unified engine is display-only. Once you confirm the panel looks correct in live scans, we can wire the gate system to use `unifiedScore` instead of (or in addition to) the standalone impulse zone score. This should be a separate task.
-2. **Remove cascade panel?** The cascade panel still renders alongside the unified panel. Once you're satisfied the unified panel shows the same (or better) information, we can remove the cascade panel and engine.
-3. **5m candle data for confirmation?** The confirmation hierarchy currently uses the candles passed to it (4H or 1H). For finer-grained CHoCH detection within zones, 5m data would help. Need to verify TwelveData availability.
-4. **Sweep timeout default:** Set to 10 candles on the confirmation timeframe. May need tuning with backtest data.
+
+1. **Immediate size reduction**: The 0.5x standalone multiplier will immediately halve all trade sizes until the unified engine starts producing `entryReady: true` signals. Is this the desired behavior for the transition period, or should there be a config flag to disable the multiplier during rollout?
+
+2. **Unified vs Cascade priority**: Currently, when BOTH unified and cascade gates pass, the unified entry/SL override runs AFTER cascade (so unified wins). Is this the correct priority order?
+
+3. **Pre-existing flaky test**: `zoneLiquidity.test.ts` has an intermittent failure (different test each run). This is unrelated to our changes but worth investigating separately.
 
 ## Suggested PR title and description
 
-**Title:** feat: Unified Impulse Zone Engine (story-driven, continuation entries, liquidity + confirmation)
+**Title:** Wire unified engine as primary signal source with 0.5x standalone fallback
 
 **Description:**
-Implements the Unified Zone Engine that composes the impulse zone engine, liquidity detection, and confirmation hierarchy into a single story-driven system.
+Adds the unified zone engine as the primary signal source in bot-scanner's trade decision flow. When the unified engine's state is `triggered`/`confirmed` and `entryReady === true`, it becomes the signal source with full position size. Otherwise, the existing cascade/impulse zone path is used as a standalone fallback at 0.5x size.
 
-Key changes:
-- Entry direction = impulse direction (continuation, "don't catch a falling knife")
-- Daily → 4H → 1H waterfall (Daily wins when zone found)
-- Liquidity: detects BSL/SSL near zone, scores sweeps (+1.0 to +3.0)
-- Confirmation hierarchy: Sweep+CHoCH (2.5) > CHoCH (2.0) > Displacement (1.5) > Inducement (1.0)
-- Unified scoring /14 (base + liquidity + confirmation + TF bonus)
-- New frontend panel with progressive story bullets
-- **Purely additive** — no behavior change to existing gates or trade decisions
+Changes:
+- Unified gate check before cascade gate
+- Unified SL/entry overrides (after cascade overrides, so unified takes priority)
+- Signal source size multiplier: 1.0x unified, 0.5x standalone
+- `signalSource` label on trade detail for analytics
+- 15 new tests
 
-This is Phase 1 (display-only). Phase 2 will wire gates to the unified score once validated in live scans.
+**BEHAVIOR CHANGE**: All trades will be half-sized until the unified engine starts producing ready signals. This is by design — standalone signals have lower conviction.
