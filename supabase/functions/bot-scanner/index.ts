@@ -67,7 +67,6 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
-import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
@@ -189,8 +188,6 @@ const DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
   minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
-  cascadeZoneMode: "prefer" as "prefer" | "only" | "off",  // "prefer" = use cascade if Daily zone exists, fallback to parallel; "only" = cascade or skip; "off" = parallel only
-  cascadeZoneDailyATRMult: 2.0,  // ATR multiplier for "price at Daily zone" proximity
   // ── Simple Direction Engine ──
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
@@ -751,8 +748,6 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
-    cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
-    cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? DEFAULTS.cascadeZoneDailyATRMult,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
@@ -4068,7 +4063,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
     };
 
-    // Build HTF confluence data from already-computed 4H analysis (shared by both impulse zone and cascade engines)
+    // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
     const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
       h4OBs: h4OBs ?? [],
       h4FVGs: h4FVGs ?? [],
@@ -4204,85 +4199,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       };
     }
 
-    // ── Cascade Zone Engine (Daily → 4H → 1H → 15m top-down) ──
-    // Runs when cascadeZoneMode is "prefer" or "only". Provides a sequential
-    // narrative: Daily zone → 4H confirmation → 1H entry → 15m refinement.
-    let cascadeResult: CascadeResult | null = null;
-    if (pairConfig.cascadeZoneMode !== "off" && analysis.direction && dailyCandles.length >= 30) {
-      try {
-        const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
-        cascadeResult = findCascadeZone(
-          dailyCandles,
-          h4Candles,
-          hourlyCandles,
-          candles, // 15m entry candles
-          cascadeDir as "bullish" | "bearish",
-          analysis.lastPrice,
-          {
-            dailyZoneATRMult: pairConfig.cascadeZoneDailyATRMult,
-            htfData: htfConfluenceData ?? undefined,
-            zoneEngineOpts: { strictATRMult: pairConfig.marketFillStrictATRMult },
-          },
-        );
-        (detail as any).cascadeZone = {
-          state: cascadeResult.state,
-          reason: cascadeResult.reason,
-          dailyImpulse: cascadeResult.dailyZone ? {
-            direction: cascadeResult.dailyZone.impulse.direction,
-            high: cascadeResult.dailyZone.impulse.high,
-            low: cascadeResult.dailyZone.impulse.low,
-            bosPrice: cascadeResult.dailyZone.impulse.bosPrice,
-            startDate: dailyCandles[cascadeResult.dailyZone.impulse.startIndex]?.datetime
-              ? dailyCandles[cascadeResult.dailyZone.impulse.startIndex].datetime.slice(0, 10)
-              : null,
-            endDate: dailyCandles[cascadeResult.dailyZone.impulse.endIndex]?.datetime
-              ? dailyCandles[cascadeResult.dailyZone.impulse.endIndex].datetime.slice(0, 10)
-              : null,
-            spanBars: cascadeResult.dailyZone.impulse.endIndex - cascadeResult.dailyZone.impulse.startIndex,
-          } : null,
-          dailyZone: cascadeResult.dailyZone ? {
-            type: cascadeResult.dailyZone.poi.type,
-            high: cascadeResult.dailyZone.high,
-            low: cascadeResult.dailyZone.low,
-            fibLevel: cascadeResult.dailyZone.fibLevel,
-            srConfirmed: cascadeResult.dailyZone.srConfirmed,
-          } : null,
-          dailyZoneDistance: cascadeResult.dailyZoneDistance,
-          confirmation: cascadeResult.confirmation ? {
-            type: cascadeResult.confirmation.type,
-            direction: cascadeResult.confirmation.direction,
-            insideDailyZone: cascadeResult.confirmation.insideDailyZone,
-          } : null,
-          entryZone: cascadeResult.entryZone ? {
-            type: cascadeResult.entryZone.poi.type,
-            high: cascadeResult.entryZone.poi.high,
-            low: cascadeResult.entryZone.poi.low,
-            fibLevel: cascadeResult.entryZone.fibLevel,
-            totalScore: cascadeResult.entryZone.totalScore,
-            ltfRefined: cascadeResult.entryZoneRefined,
-            srConfirmed: cascadeResult.entryZone.srConfirmed,
-            htfConfluence: cascadeResult.entryZone.htfConfluence,
-          } : null,
-          // Full impulse zone engine result within Daily bounds
-          multiTFResult: cascadeResult.multiTFResult ? {
-            selectedTF: cascadeResult.multiTFResult.selectedTF,
-            totalZonesFound: cascadeResult.multiTFResult.totalZonesFound,
-            reason: cascadeResult.multiTFResult.reason,
-            score: cascadeResult.multiTFResult.bestZone?.zone?.totalScore ?? null,
-          } : null,
-          entry: cascadeResult.entry,
-          sl: cascadeResult.sl,
-          priceAtEntry: cascadeResult.priceAtEntry,
-          distancePips: cascadeResult.distancePips,
-        };
-        console.log(`[scan ${scanCycleId}] ${pair} Cascade Zone [${cascadeResult.state}]: ${cascadeResult.reason}`);
-      } catch (cascadeErr: any) {
-        console.warn(`[scan ${scanCycleId}] ${pair} Cascade Zone error (non-fatal): ${cascadeErr?.message}`);
-        (detail as any).cascadeZone = { state: "error", reason: `Error: ${cascadeErr?.message}` };
-      }
-    } else {
-      (detail as any).cascadeZone = { state: "off", reason: pairConfig.cascadeZoneMode === "off" ? "Cascade mode disabled" : (!analysis.direction ? "No direction" : "Insufficient daily candles") };
-    }
 
     // ── Attach Simple Direction data to detail for dashboard ──
     if (simpleDirectionResult) {
@@ -4625,7 +4541,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ── UNIFIED ZONE GATE (primary signal source) ──
     // The unified engine composes impulse zone + liquidity + confirmation into one story.
     // When its state is 'triggered' or 'confirmed' AND entryReady=true, it becomes the
-    // primary signal source. Otherwise, fall through to cascade/impulse zone gates.
+    // primary signal source. Otherwise, fall through to impulse zone gate.
     let unifiedGatePassed = false;
     const unifiedZoneData = (detail as any).unifiedZone;
     if (unifiedZoneData?.hasZone &&
@@ -4638,76 +4554,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       (detail as any).signalSource = "standalone";
     }
 
-    // ── CASCADE ZONE GATE (Daily → 4H → 1H → 15m story-based) ──
-    // When cascadeZoneMode is "prefer" or "only", the cascade state determines
-    // whether the trade proceeds. The Daily impulse is where the story starts.
-    // States that ALLOW trade: "triggered" (price at entry) or "ready" (limit order)
-    // States that BLOCK trade: everything else (no story, waiting, no confirmation, etc.)
-    let cascadeGatePassed = false;
-    if (cascadeResult && pairConfig.cascadeZoneMode !== "off") {
-      const cascadeState = cascadeResult.state;
-      const isTradeReady = cascadeState === "triggered" || cascadeState === "ready";
-      
-      if (pairConfig.cascadeZoneMode === "only") {
-        // STRICT: cascade story must be complete or skip entirely
-        if (!isTradeReady) {
-          // Determine appropriate status based on cascade state
-          if (cascadeState === "waiting_for_price") {
-            detail.status = "watching_zone";
-            detail.skipReason = `Cascade Gate (only): Daily zone found but price is ${cascadeResult.dailyZoneDistance?.toFixed(1) ?? "?"} pips away. Waiting for price to retrace.`;
-            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — Daily zone exists, price ${cascadeResult.dailyZoneDistance?.toFixed(1)}p away. Watchlisted.`);
-          } else if (cascadeState === "at_daily_zone" || cascadeState === "no_confirmation") {
-            detail.status = "watching_zone";
-            detail.skipReason = `Cascade Gate (only): Price at Daily zone but no 4H displacement or 1H CHoCH yet. Watching for confirmation.`;
-            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — at Daily zone, awaiting 4H/1H confirmation.`);
-          } else if (cascadeState === "confirmed" || cascadeState === "no_entry_zone") {
-            detail.status = "watching_zone";
-            detail.skipReason = `Cascade Gate (only): 4H/1H confirmed inside Daily zone but no 1H entry zone found yet.`;
-            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: CASCADE GATE — confirmed but no entry zone yet.`);
-          } else {
-            // no_daily_impulse, no_daily_zone
-            detail.status = "skipped_no_impulse_zone";
-            detail.skipReason = `Cascade Gate (only): ${cascadeResult.reason}. No Daily story — no trade.`;
-            console.log(`[scan ${scanCycleId}] ⛔ ${pair}: CASCADE GATE (only) — ${cascadeState}: ${cascadeResult.reason}. Skipping.`);
-          }
-          scanDetails.push(detail);
-          continue;
-        }
-        // Cascade story is complete — proceed with this trade
-        cascadeGatePassed = true;
-        console.log(`[scan ${scanCycleId}] ✅ ${pair}: CASCADE GATE PASSED [${cascadeState}] — Daily story complete. Proceeding.`);
-      } else {
-        // PREFER: use cascade if story is complete, otherwise fall through to impulse zone gate
-        if (isTradeReady) {
-          cascadeGatePassed = true;
-          console.log(`[scan ${scanCycleId}] ✅ ${pair}: CASCADE ZONE [${cascadeState}] — Daily story complete. Using cascade entry.`);
-        } else {
-          // Cascade story not complete — fall through to existing impulse zone gate
-          console.log(`[scan ${scanCycleId}] ${pair}: CASCADE ZONE [${cascadeState}] — story incomplete, falling through to impulse zone gate.`);
-        }
-      }
-    }
-
     // ── Impulse Zone Gate (configurable: hard / soft / off) ──
     // "hard" mode: no valid zone OR price not at zone → skip pair entirely (sniper approach)
     // "soft" mode: penalty/bonus scoring adjustment (legacy behavior)
     // "off" mode: impulse zone is purely informational
-    // NOTE: If cascade gate already passed, skip the impulse zone gate entirely
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
-    if (unifiedGatePassed || cascadeGatePassed) {
-      // Unified or Cascade story is complete — use their entry/SL instead of impulse zone
+    if (unifiedGatePassed) {
+      // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
-      console.log(`[scan ${scanCycleId}] \u2705 ${pair}: ${unifiedGatePassed ? "Unified" : "Cascade"} gate passed \u2014 bypassing impulse zone gate.`);
-      // Override entry/SL with cascade values if available
-      if (cascadeResult?.entry) {
-        (detail as any).cascadeOverride = {
-          entry: cascadeResult.entry,
-          sl: cascadeResult.sl,
-          source: "cascade_daily_story",
-        };
-      }
+      console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
       // HARD GATE: impulse zone is the primary entry framework
       if (!izData || !izData.hasZone) {
@@ -5319,35 +5176,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
         }
 
-        // ── Cascade Zone SL/Entry Override ──
-        // When cascade gate passed (Daily story complete), use the cascade-derived SL
-        // which is based on the Daily zone structure (below Daily OB for longs, above for shorts).
-        // This provides the strongest structural protection since it's anchored to Daily.
-        if (cascadeGatePassed && cascadeResult?.sl) {
-          const cascadeSL = cascadeResult.sl;
-          const cascadeSlDistance = Math.abs(analysis.lastPrice - cascadeSL);
-          const cascadeSlPips = cascadeSlDistance / spec.pipSize;
-          const maxCascadeSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
-          if (cascadeSlPips >= effectiveMinSlPips && cascadeSlPips <= maxCascadeSlPips) {
-            console.log(`[${pair}] Cascade Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${cascadeSlPips.toFixed(1)}p (Daily zone structure)`);
-            sl = cascadeSL;
-            // Recalculate TP based on cascade SL for proper R:R
-            const cascadeRisk = Math.abs(analysis.lastPrice - sl);
-            tp = analysis.direction === "long"
-              ? analysis.lastPrice + cascadeRisk * config.tpRatio
-              : analysis.lastPrice - cascadeRisk * config.tpRatio;
-            detail.cascadeZoneSLOverride = {
-              originalSLPips: actualSlDistance / spec.pipSize,
-              cascadeSLPips: cascadeSlPips,
-              source: "daily_zone_structure",
-            };
-          } else if (cascadeSlPips > maxCascadeSlPips) {
-            console.log(`[${pair}] Cascade Zone SL too wide (${cascadeSlPips.toFixed(1)}p > max ${maxCascadeSlPips}p). Keeping current SL.`);
-          }
-        }
         // ── Unified Zone SL Override ──
         // When unified gate passed, use the unified engine's SL (based on impulse origin
-        // from the best timeframe in the story). Takes priority over cascade SL.
+        // from the best timeframe in the story).
         if (unifiedGatePassed && unifiedZoneData?.entry?.slPrice) {
           const unifiedSL = unifiedZoneData.entry.slPrice;
           const unifiedSlDistance = Math.abs(analysis.lastPrice - unifiedSL);
@@ -5635,9 +5466,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
         // ── Limit Order: Place pending order instead of market order if enabled and zone found ──
         // Consolidation: Skip legacy OB/FVG scan when a zone engine will override the entry.
-        // Priority: unified > cascade > impulse > legacy. Only compute legacy if no zone engine fired.
+        // Priority: unified > impulse > legacy. Only compute legacy if no zone engine fired.
         const zoneEngineWillOverride = (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice)
-          || (cascadeGatePassed && cascadeResult?.entry)
           || (izGateMode === "hard" && izData?.bestZone);
         let limitEntry = zoneEngineWillOverride ? null : computeLimitEntryPrice(analysis, pair, analysis.direction);
         // ── Impulse Zone Entry Override ──
@@ -5660,21 +5490,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           limitEntry = { price: zoneMid, zoneType: `IZ-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Impulse Zone entry (midpoint): limit at ${zoneMid.toFixed(5)} (${zoneType} zone)`);
         }
-        // ── Cascade Zone Entry Override ──
-        // When cascade gate passed, the cascade provides a precise entry from the
-        // Daily→4H→1H→15m story. This takes priority over the impulse zone entry.
-        if (cascadeGatePassed && cascadeResult?.entry) {
-          const cascadeEntry = cascadeResult.entry;
-          const cascadeEntryZone = cascadeResult.entryZone;
-          const zoneLow = cascadeEntryZone?.poi.low ?? cascadeEntry;
-          const zoneHigh = cascadeEntryZone?.poi.high ?? cascadeEntry;
-          const zoneType = cascadeEntryZone?.poi.type?.toUpperCase() || "CASCADE";
-          limitEntry = { price: cascadeEntry, zoneType: `CASCADE-${zoneType}`, zoneLow, zoneHigh };
-          console.log(`[${pair}] Cascade Zone entry override: limit at ${cascadeEntry.toFixed(5)} (Daily→4H→1H ${zoneType})`);
-        }
         // ── Unified Zone Entry Override ──
         // When unified gate passed, the unified engine provides a precise entry from the
-        // best timeframe story (Daily\u21924H\u21921H). This takes priority over cascade entry.
+        // best timeframe story (Daily\u21924H\u21921H). This takes priority over impulse zone entry.
         if (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice) {
           const unifiedEntry = unifiedZoneData.entry.entryPrice;
           const zonePOI = unifiedZoneData.zone;
