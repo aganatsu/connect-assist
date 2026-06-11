@@ -1089,9 +1089,6 @@ export default function BotView() {
           {/* Scan content — conditionally rendered */}
           {showScanPanel && (
           <>
-          <div className="px-2 pt-1">
-            <RejectionSummaryPanel summary={latestMeta?.rejectionSummary} />
-          </div>
           <div className="flex-1 flex flex-col md:flex-row gap-0 min-h-0 border-t border-border">
             {/* Left: Latest Scan Pairs (60%) */}
             <div className="w-full md:w-[60%] flex flex-col min-h-0 md:border-r border-border max-h-64 md:max-h-none">
