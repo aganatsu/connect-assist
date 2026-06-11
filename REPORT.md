@@ -1,84 +1,69 @@
-# Task: Consolidate Decision Domains
-
-## Branch: manus/consolidate-decision-domains
+# Task: Consolidate Zone Engines
+## Branch: manus/consolidate-zone-engines
 
 ## Behavior changes
 
-1. **Direction (Gate 1 + Gate 20)**: When `computeDirectionVerdict()` returns a result, Gate 1 (HTF Bias) and Gate 20 (Regime Alignment) now delegate to the verdict instead of running their own independent logic. The verdict uses the same inputs (confirmedTrend, simpleDirection, regime, weeklyBias, gamePlanBias) but applies a weighted-agreement model instead of individual pass/fail checks. Net effect: trades that previously passed Gate 1 but failed Gate 20 (or vice versa) now get a unified decision. Confidence below 30% with shouldBlock=true will block; otherwise both gates auto-pass with a score adjustment applied.
+1. **Impulse zone detection now uses Daily candles** — Previously, `detail.impulseZone` was derived from a separate `findBestEntryZoneMultiTF` call that only received 1H + 4H candles. Now it's derived from the unified engine's `multiTFResult`, which includes Daily candles. This means the impulse zone gate may now detect Daily impulses that were previously invisible to it.
 
-2. **Confirmation**: `zoneConfirmation.ts` now delegates to `confirmationHierarchy.evaluateConfirmation()` first when zone bounds are provided. If the hierarchy returns a definitive result, it's used directly (mapped to ConfirmationSignal format). Falls through to legacy tier logic only when hierarchy returns not-ready. Net effect: confirmation signals are now consistent between unifiedZoneEngine and standalone zone-confirmation-scanner.
+2. **One zone per pair instead of two** — Previously, the frontend showed two separate panels (Impulse Zone + Unified Zone) that could display different impulses from different timeframes. Now there is one "Zone Story" panel showing a single coherent narrative from the same source.
 
-3. **Session (Gate 12)**: When ICT Kill Zone gate (Gate 13) is active, Gate 12 (Kill Zone Only) auto-passes because ICT KZ is strictly more restrictive. Legacy session check only runs when ICT KZ is disabled. Net effect: no trades are affected because ICT KZ was already blocking the same sessions; this just removes the redundant check.
+3. **Zone selection may differ** — Because the waterfall now includes Daily (which always wins when available), pairs that previously showed a 1H zone may now show a Daily zone instead. This is intentional — Daily zones are higher conviction.
 
-4. **Sizing**: Added `size = Math.max(0.01, size)` floor after the correlation multiplier in both market fill and limit order paths. Net effect: prevents the theoretical edge case where correlation multiplier × small position = 0.00 lots (which would fail at broker).
-
-5. **Risk (Gates 7 + 8)**: When prop firm mode is active, Gates 7 (daily loss limit) and 8 (max drawdown) auto-pass because the prop firm gate already enforces stricter thresholds. Net effect: no trades affected (prop firm thresholds are always tighter), but removes redundant computation.
-
-6. **SL**: Added info-level log when impulse SL is tighter than the current SL (shows what's "left on the table"). No behavior change — the priority chain (unified > cascade > impulse > base) is unchanged.
-
-7. **Entry**: When a zone engine (unified or impulse) will override the entry price anyway, the legacy `computeLimitEntryPrice()` OB/FVG scan is skipped. Net effect: saves ~50 iterations per pair per scan cycle when zone engines are active; identical trade outcomes because the zone engine entry would have overwritten the legacy result.
-
-8. **Frontend**: Direction Verdict is now displayed in BotView scan result expanded rows and detail panels. Also persisted in `signal_reason` JSON for closed trade history.
+4. **No change to gate pass logic** — The impulse zone gate still checks the same fields (`izData.hasZone`, `izData.bestZone.priceAtZone`, etc.). The unified gate still checks the same conditions. Only the data source changed (from separate call to unified engine's multiTFResult).
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/directionVerdict.ts` | NEW: Single source of truth for direction. Weighted-agreement model across 5 sources. |
-| `supabase/functions/_shared/directionVerdict.test.ts` | NEW: 30 tests covering all verdict paths, blocking, confidence thresholds, score adjustments. |
-| `supabase/functions/_shared/zoneConfirmation.ts` | Updated: delegates to confirmationHierarchy first when zone bounds provided. |
-| `supabase/functions/_shared/zoneConfirmation.test.ts` | Updated: added tests for hierarchy delegation path. |
-| `supabase/functions/_shared/tickZoneConfirmation.ts` | DELETED: dead code (was never imported anywhere). |
-| `supabase/functions/_shared/tickZoneConfirmation.test.ts` | DELETED: tests for dead code. |
-| `supabase/functions/bot-scanner/index.ts` | Updated: wired directionVerdict as active direction source; Gate 1/20 delegate to verdict; Gate 12 session consolidation; Gate 7/8 prop firm subsumption; sizing floor; entry skip optimization; SL info log; directionVerdict added to signal_reason JSON. |
-| `supabase/functions/zone-confirmation-scanner/index.ts` | Updated: passes zone bounds to detectZoneConfirmation. |
-| `src/pages/BotView.tsx` | Updated: inline Direction Verdict display in 3 locations (closed trades, live scan detail, detail panel). |
-| `docs/DIRECTION_SOURCE_MAP.md` | NEW: documentation of all 6 direction sources and consolidation plan. |
-| `docs/SYSTEM_REDUNDANCY_AUDIT.md` | NEW: full audit of all 7 competing decision domains. |
+| `supabase/functions/bot-scanner/index.ts` | Removed separate `findBestEntryZoneMultiTF` call; derive `detail.impulseZone` from unified engine's `multiTFResult`. Cleaned import. |
+| `src/components/ZoneStoryPanel.tsx` | **NEW** — Consolidated panel replacing both ImpulseZonePanel and UnifiedZonePanel. Single narrative: Impulse → Zone → Price → Liquidity → Confirmation → Entry. |
+| `src/pages/BotView.tsx` | Replaced all 3 usages of ImpulseZonePanel + UnifiedZonePanel with single ZoneStoryPanel. Updated import. |
+| `supabase/functions/_shared/zoneConsolidation.test.ts` | **NEW** — Regression test verifying derivation equivalence. |
+| `RFC_ZONE_CONSOLIDATION.md` | **NEW** — Architecture spec documenting the consolidation approach. |
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `directionVerdict.test.ts` — 30 tests | Covers: all-agree long/short, mixed signals, neutral fallback, blocking conditions (low confidence, conflict), score adjustment calculation, agreement ratio, source weight handling, edge cases (null inputs, single source). |
-| `zoneConfirmation.test.ts` — hierarchy delegation tests | Verifies that when zone bounds are provided and hierarchy returns a definitive result, it's used directly without falling through to legacy logic. |
+| `Zone Consolidation: unified engine's multiTFResult matches standalone call` | Verifies that calling `findBestEntryZoneMultiTF` directly produces the same result as extracting `multiTFResult` from `findUnifiedZone` — proving the consolidation is data-equivalent. |
+| `Zone Consolidation: izData derivation from multiTFResult has all required fields` | Verifies all 16+ fields needed by gates and frontend are present in the derived izData object. |
+| `Zone Consolidation: no zone case — izData.hasZone is false, bestZone is null` | Verifies graceful handling when no impulse/zone is found. |
 
 ## Tests run
 
 ```
-FAILED | 1403 passed | 2 failed (12s)
+ok | 1430 passed | 0 failed (16s)
 ```
-
-The 2 failures are pre-existing `candleSource.test.ts` failover tests that require `TWELVE_DATA_API_KEY` environment variable (not available in test environment). These failures existed before this branch and are unrelated to any changes made.
 
 ## Regression check
 
-- **Direction**: The verdict module uses the same inputs that Gate 1 and Gate 20 previously used independently. When all sources agree, the verdict produces the same pass/block decision. When sources disagree, the weighted model provides a more nuanced decision than the previous binary gates. Regression test in `directionVerdict.test.ts` verifies that unanimous-agree inputs produce identical outcomes to the old gate logic.
-- **Confirmation**: The hierarchy delegation only activates when zone bounds are provided AND the hierarchy returns a definitive result. Legacy path is preserved as fallback. Existing confirmation tests still pass.
-- **Session/Risk/Sizing/SL/Entry**: All consolidations are "when X is active, Y auto-passes" patterns or additive-only changes (logging, floor). No existing logic paths are removed — they're gated behind conditions that make them redundant.
-- **Frontend**: Display-only change. No backend logic affected.
+1. **Data equivalence test** — The `zoneConsolidation.test.ts` proves that `unifiedResult.multiTFResult` produces identical output to a standalone `findBestEntryZoneMultiTF` call with the same inputs (same candles, same direction, same price).
+
+2. **Field completeness test** — All 16+ fields accessed by `izData.*` in the gate logic are verified to exist with correct types after derivation from multiTFResult.
+
+3. **Live scan verification** — After deploying the previous task's changes (which used the same unified engine), we observed a live scan where both BTC/USD and EUR/USD correctly showed zone data from the unified engine with no errors.
 
 ## Open questions
 
-1. The `detail.directionVerdict` stored in `details_json` includes `{verdict, confidence, agreement, shouldBlock, scoreAdjustment, summary}` but NOT the individual `sources[]` array (to keep payload size reasonable). If the user wants per-source breakdown in the UI, we'd need to add `sources` to the stored object. Currently the summary string contains the agreement count (e.g., "4/5 sources").
+1. **Cascade Zone Engine removal** — Deferred to Phase B (follow-up task). The cascade engine (119 references) is still active behind its config flag. Once this branch is stable in production, a follow-up task should remove it entirely since the unified engine now handles the Daily → 4H → 1H waterfall.
 
-2. The 2 pre-existing test failures (`candleSource.test.ts` failover tests) should be fixed separately by either mocking the env check or adding `--allow-env` to the test command.
+2. **Old panel files** — `ImpulseZonePanel.tsx` and `UnifiedZonePanel.tsx` are no longer imported but still exist in the repo. They can be deleted in a cleanup commit once the new panel is verified in production.
+
+3. **Daily candle availability** — The consolidation assumes Daily candles are available for the unified engine call. If a pair doesn't have Daily data, the waterfall falls back to 4H → 1H (same as before). Verify this works for all 16 pairs in the watchlist.
 
 ## Suggested PR title and description
 
-**Title:** Consolidate 7 competing decision domains into single sources of truth
+**Title:** `feat: consolidate impulse zone + unified zone into single engine call`
 
 **Description:**
-Eliminates all "multiple competing sources for the same decision" patterns across the trading bot's 7 decision domains:
+Removes the separate `findBestEntryZoneMultiTF` call from bot-scanner and derives `detail.impulseZone` from the unified engine's `multiTFResult` instead. This fixes the "two different impulses" problem where the 1H impulse zone engine and the Daily unified zone engine detected different impulses for the same pair.
 
-- **Direction**: New `directionVerdict.ts` module replaces independent Gate 1 + Gate 20 checks with a weighted-agreement model across 5 direction sources
-- **Confirmation**: `zoneConfirmation.ts` now delegates to `confirmationHierarchy` first (same engine used by unifiedZoneEngine)
-- **Session**: Gate 12 auto-passes when ICT Kill Zone gate is active (it subsumes it)
-- **Sizing**: Added 0.01 lot floor after correlation multiplier
-- **Risk**: Gates 7/8 auto-pass when prop firm mode is active (stricter thresholds already enforced)
-- **SL**: Info log when impulse SL is tighter (no behavior change)
-- **Entry**: Skip legacy OB/FVG scan when zone engine will override anyway
+Frontend: merges the two zone panels (ImpulseZonePanel + UnifiedZonePanel) into a single "Zone Story" panel that tells one coherent narrative from impulse detection through to entry.
 
-Frontend: Direction Verdict badge now shown in scan result detail views.
+**Key changes:**
+- Single zone engine call per pair (unified engine includes Daily → 4H → 1H waterfall)
+- One panel in the UI instead of two competing displays
+- All gate logic unchanged (same field names, same conditions)
+- 3 regression tests proving data equivalence
 
-Tests: 1403 passing (2 pre-existing failures unrelated to this PR).
+**Behavior impact:** Zone selection may now prefer Daily impulses over 1H (higher conviction). No change to gate pass thresholds or scoring weights.

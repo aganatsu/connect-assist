@@ -35,8 +35,7 @@ import { WatchlistPanel } from "@/components/WatchlistPanel";
 import PendingOrdersPanel from "@/components/PendingOrdersPanel";
 import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
-import { ImpulseZonePanel } from "@/components/ImpulseZonePanel";
-import { UnifiedZonePanel } from "@/components/UnifiedZonePanel";
+import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -1393,9 +1392,8 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
 
                       {hasRichData ? (
                         <>
-                          {/* Impulse Zone — PRIMARY gate, shown first in the trade detail breakdown */}
-                          {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
-                          {sr.unifiedZone && <UnifiedZonePanel data={sr.unifiedZone} />}
+                          {/* Zone Story — consolidated impulse + unified zone narrative */}
+                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} />
                           {/* ── Direction Verdict ── */}
                           {sr.directionVerdict && !sr.directionVerdict.error && (
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1698,9 +1696,8 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       </button>
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
-          {/* Impulse Zone Panel — PRIMARY gate, shown first */}
-          {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
-          {d.unifiedZone && <UnifiedZonePanel data={d.unifiedZone} />}
+          {/* Zone Story — consolidated impulse + unified zone narrative */}
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1891,9 +1888,8 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
         </p>
       )}
 
-      {/* 4. Impulse Zone Panel — PRIMARY gate info */}
-      {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
-      {d.unifiedZone && <UnifiedZonePanel data={d.unifiedZone} />}
+      {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">
