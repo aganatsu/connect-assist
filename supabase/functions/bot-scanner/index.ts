@@ -2851,13 +2851,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
-          // Run zone confirmation detection (tiered: T1=CHoCH, T2=CHoCH+support, T3=reversal pattern)
+          // Run zone confirmation detection (delegates to confirmationHierarchy first, falls back to legacy tiers)
           const confirmationSignal = detectZoneConfirmation(
             confirm5mCandles,
             pending.direction as "long" | "short",
             DEFAULT_ZONE_CONFIRMATION_CONFIG,
             zoneTouchIdx,
             pending.symbol,
+            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
           );
 
           if (!confirmationSignal) {

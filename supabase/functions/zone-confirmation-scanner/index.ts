@@ -344,6 +344,7 @@ Deno.serve(async (req) => {
           DEFAULT_ZONE_CONFIRMATION_CONFIG,
           zoneTouchIdx,
           pending.symbol,
+          (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
         );
 
         if (!confirmationSignal) {
