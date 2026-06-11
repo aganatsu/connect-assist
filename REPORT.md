@@ -1,60 +1,39 @@
-# Task: Remove Cascade Zone Engine (Phase B)
-
-## Branch: manus/remove-cascade-engine
-
+# Task: Fix BTC Pips Calculation Bug
+## Branch: manus/fix-btc-pips-calculation
 ## Behavior changes
-
-1. The `cascadeZoneMode` config option is no longer read — effectively always "off"
-2. Pairs that previously required cascade story completion (mode="only") now use the unified gate or fall through to impulse zone gate directly
-3. Pairs where unified gate was already passing see zero change (unified always took priority over cascade)
-4. The cascade zone config dropdown is removed from the bot settings UI
-5. `detail.cascadeZone` is no longer populated in scan results (frontend never displayed it after the ZoneStoryPanel consolidation)
+1. BTC/USD "pips away" display now shows correct values (~22,000 instead of 78,006,400)
+2. BTC/USD impulse range display now shows correct pips (~18,942 instead of 1,894,245)
+3. XAU/USD pips display now uses correct pip size (0.01) instead of heuristic
+4. All forex pairs unchanged (default pipSize=0.0001 matches old hardcoded *10000)
 
 ## Files modified
-
-| File | Change |
-|------|--------|
-| `supabase/functions/bot-scanner/index.ts` | Removed import, 2 DEFAULTS, 2 config resolution lines, 80-line call block, 50-line gate block, SL override block, entry override block, zoneEngineWillOverride reference — total -724 lines |
-| `src/components/BotConfigModal.tsx` | Removed cascade zone mode dropdown (16 lines) |
-| `src/components/CascadeZonePanel.tsx` | Deleted (unused component) |
-| `supabase/functions/_shared/cascadeGate.test.ts` | Deleted (tests the removed gate) |
+- `supabase/functions/_shared/impulseZoneEngine.ts` — Added `pipSize` to `ZoneEngineOptions`, replaced `distanceToZone * 10000` with `distanceToZone / pipSize`
+- `supabase/functions/_shared/unifiedZoneEngine.ts` — Replaced heuristic `pipMultiplier = currentPrice > 50 ? 100 : 10000` with `1 / pipSize` from options; renamed param in `buildEntryStory`
+- `supabase/functions/bot-scanner/index.ts` — Pass `pipSize: SPECS[pair].pipSize` in options to `findUnifiedZone`
+- `supabase/functions/_shared/impulseZoneEngine.test.ts` — Added 2 regression tests
 
 ## Tests added
-
-None new — this is a pure removal. The cascade engine library file (`cascadeZoneEngine.ts`) and its unit tests (`cascadeZoneEngine.test.ts`) are retained since the module itself is still valid code.
+- `findBestEntryZone — pipSize option correctly scales distancePips for BTC (pipSize=1)` — proves BTC pips are 10000x smaller with pipSize=1 vs default
+- `findBestEntryZone — pipSize option correctly scales distancePips for XAU (pipSize=0.01)` — proves gold pips are 100x smaller with pipSize=0.01 vs default
 
 ## Tests run
-
 ```
-$ deno test supabase/ --allow-all --no-check
-ok | 1413 passed | 0 failed (16s)
+ok | 1415 passed | 0 failed (20s)
 ```
-
-(17 fewer than the 1430 from the previous branch — those 17 were in the deleted `cascadeGate.test.ts`)
 
 ## Regression check
-
-- The unified gate already took priority over cascade for SL, entry, and gate pass decisions
-- With cascade removed, the unified gate is now the sole "story-based" gate — same behavior for all pairs where unified was active
-- For pairs where cascade was the only active gate (mode="only" without unified passing), they now fall through to the impulse zone hard gate — which is the correct behavior since the impulse zone data now comes FROM the unified engine (per the consolidate-zone-engines branch)
+- Default pipSize (0.0001) produces identical results to old `* 10000` formula: `distance / 0.0001 === distance * 10000`
+- All 45 existing impulseZoneEngine tests pass (they don't pass pipSize, so use default)
+- All 8 unifiedZoneEngine tests pass
+- All 3 zoneConsolidation tests pass
 
 ## Open questions
-
-1. Should we also delete the `cascadeZoneEngine.ts` library file? It's 400 lines of dead code but harmless. Keeping it preserves the option to re-enable later.
-2. Any pairs in your bot_configs table that have `cascadeZoneMode: "only"` will now fall through to the impulse zone gate instead of blocking. Verify this is acceptable for your setup.
+None.
 
 ## Suggested PR title and description
-
-**Title:** `refactor: remove cascade zone engine from bot-scanner (Phase B)`
+**Title:** Fix BTC/XAU pips calculation — use instrument pipSize instead of hardcoded multiplier
 
 **Description:**
-Removes the cascade zone engine integration from bot-scanner, completing the zone engine consolidation started in `manus/consolidate-zone-engines`.
+The zone engine hardcoded `distanceToZone * 10000` for pip conversion, which is correct for forex (pipSize=0.0001) but wildly wrong for BTC (pipSize=1, showed 78M pips instead of 22K) and inaccurate for gold (pipSize=0.01, used heuristic `*100` which was close but not exact).
 
-The cascade engine is now redundant because:
-- The unified zone engine already performs the same Daily → 4H → 1H waterfall
-- The unified gate always took priority over cascade for SL/entry overrides
-- The impulse zone data now derives from the unified engine's multiTFResult
-
-This removes 732 lines of dead code paths, simplifying the gate flow from `unified > cascade > impulse` to `unified > impulse`.
-
-The cascade engine library (`cascadeZoneEngine.ts`) is retained as a standalone module in case it's needed later.
+Fix: Add `pipSize` to `ZoneEngineOptions`, pass it from `SPECS[pair].pipSize` in bot-scanner, and use `distance / pipSize` everywhere. Default remains 0.0001 for backward compatibility.

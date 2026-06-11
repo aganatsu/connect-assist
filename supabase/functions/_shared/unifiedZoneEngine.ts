@@ -208,8 +208,8 @@ export function findUnifiedZone(
   const zonePOI = bestZone.zone;
 
   // ── Step 2: Build impulse story ──
-  const pipMultiplier = currentPrice > 50 ? 100 : 10000;
-  const impulsePips = Math.abs(impulse.high - impulse.low) * pipMultiplier;
+  const pipSize = options?.pipSize ?? 0.0001;
+  const impulsePips = Math.abs(impulse.high - impulse.low) / pipSize;
   const impulseStory: ImpulseStory = {
     direction: impulse.direction,
     high: impulse.high,
@@ -302,7 +302,7 @@ export function findUnifiedZone(
   // ── Step 9: Build entry story (only when confirmed) ──
   let entry: EntryStory | null = null;
   if (state === "confirmed" || state === "triggered") {
-    entry = buildEntryStory(direction, zonePOI, impulse, currentPrice, pipMultiplier, cfg.minRR);
+    entry = buildEntryStory(direction, zonePOI, impulse, currentPrice, 1 / pipSize, cfg.minRR);
   }
 
   // ── Step 10: Build story summary ──
@@ -358,7 +358,7 @@ function buildEntryStory(
   zonePOI: RankedPOI,
   impulse: ImpulseLeg,
   currentPrice: number,
-  pipMultiplier: number,
+  pipMult: number,
   minRR: number,
 ): EntryStory | null {
   const entryDirection: "long" | "short" = direction === "bullish" ? "long" : "short";
@@ -383,13 +383,13 @@ function buildEntryStory(
     if (slPrice < impulse.low) slPrice = impulse.low;
   }
 
-  const riskPips = Math.abs(entryPrice - slPrice) * pipMultiplier;
+  const riskPips = Math.abs(entryPrice - slPrice) * pipMult;
 
   // TP: BOS level (the level where the impulse broke structure)
   // For bearish: target is the low of the impulse (BOS level)
   // For bullish: target is the high of the impulse (BOS level)
   const tpPrice = impulse.bosPrice;
-  const rewardPips = tpPrice ? Math.abs(entryPrice - tpPrice) * pipMultiplier : null;
+  const rewardPips = tpPrice ? Math.abs(entryPrice - tpPrice) * pipMult : null;
   const rrRatio = (rewardPips && riskPips > 0) ? Math.round((rewardPips / riskPips) * 100) / 100 : null;
 
   // Check minimum R:R
