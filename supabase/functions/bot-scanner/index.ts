@@ -69,7 +69,8 @@ import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceDat
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
@@ -4560,6 +4561,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           fotsiPenalty = -2.0; // Heavy penalty but not a hard block
         }
       }
+    }
+    // ── DIRECTION VERDICT (single source of truth for direction) ──
+    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
+    // into one verdict. Currently log-only — does NOT replace existing direction logic.
+    let directionVerdict: DirectionVerdictResult | null = null;
+    try {
+      const gpCtx = (pairConfig as any)._gamePlanContext;
+      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
+        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+        : null;
+      directionVerdict = computeDirectionVerdict({
+        confirmedTrend: ctResult,
+        simpleDirection: simpleDirectionResult ? {
+          direction: simpleDirectionResult.direction,
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+          reason: simpleDirectionResult.reason,
+        } : null,
+        regime: analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.regime,
+          confidence: analysis.regimeInfo.confidence,
+          directionalBias: analysis.regimeInfo.bias,
+        } : null,
+        weeklyBias: ictHTFResult?.weeklyBias ? {
+          bias: ictHTFResult.weeklyBias.bias,
+          confidence: ictHTFResult.weeklyBias.confidence,
+        } : null,
+        gamePlanBias: gpCtx ? {
+          bias: gpCtx.bias,
+          confidence: gpCtx.biasConfidence ?? 50,
+        } : null,
+      });
+      (detail as any).directionVerdict = {
+        verdict: directionVerdict.verdict,
+        confidence: directionVerdict.confidence,
+        agreement: directionVerdict.agreement,
+        shouldBlock: directionVerdict.shouldBlock,
+        scoreAdjustment: directionVerdict.scoreAdjustment,
+        summary: directionVerdict.summary,
+      };
+      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict: ${directionVerdict.summary}`);
+    } catch (dvErr: any) {
+      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
+      (detail as any).directionVerdict = { error: dvErr?.message };
     }
     // ── UNIFIED ZONE GATE (primary signal source) ──
     // The unified engine composes impulse zone + liquidity + confirmation into one story.
