@@ -4561,6 +4561,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
+    // ── UNIFIED ZONE GATE (primary signal source) ──
+    // The unified engine composes impulse zone + liquidity + confirmation into one story.
+    // When its state is 'triggered' or 'confirmed' AND entryReady=true, it becomes the
+    // primary signal source. Otherwise, fall through to cascade/impulse zone gates.
+    let unifiedGatePassed = false;
+    const unifiedZoneData = (detail as any).unifiedZone;
+    if (unifiedZoneData?.hasZone &&
+        (unifiedZoneData.state === "triggered" || unifiedZoneData.state === "confirmed") &&
+        unifiedZoneData.confirmation?.entryReady === true) {
+      unifiedGatePassed = true;
+      (detail as any).signalSource = "unified";
+      console.log(`[scan ${scanCycleId}] \u2705 ${pair}: UNIFIED GATE PASSED [${unifiedZoneData.state}] \u2014 score ${unifiedZoneData.unifiedScore}/14, confirmation: ${unifiedZoneData.confirmation.type}`);
+    } else {
+      (detail as any).signalSource = "standalone";
+    }
+
     // ── CASCADE ZONE GATE (Daily → 4H → 1H → 15m story-based) ──
     // When cascadeZoneMode is "prefer" or "only", the cascade state determines
     // whether the trade proceeds. The Daily impulse is where the story starts.
@@ -4619,10 +4635,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
-    if (cascadeGatePassed) {
-      // Cascade story is complete — use cascade entry/SL instead of impulse zone
+    if (unifiedGatePassed || cascadeGatePassed) {
+      // Unified or Cascade story is complete — use their entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
-      console.log(`[scan ${scanCycleId}] ✅ ${pair}: Cascade gate passed — bypassing impulse zone gate. Using cascade entry.`);
+      console.log(`[scan ${scanCycleId}] \u2705 ${pair}: ${unifiedGatePassed ? "Unified" : "Cascade"} gate passed \u2014 bypassing impulse zone gate.`);
       // Override entry/SL with cascade values if available
       if (cascadeResult?.entry) {
         (detail as any).cascadeOverride = {
@@ -5260,6 +5276,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.log(`[${pair}] Cascade Zone SL too wide (${cascadeSlPips.toFixed(1)}p > max ${maxCascadeSlPips}p). Keeping current SL.`);
           }
         }
+        // ── Unified Zone SL Override ──
+        // When unified gate passed, use the unified engine's SL (based on impulse origin
+        // from the best timeframe in the story). Takes priority over cascade SL.
+        if (unifiedGatePassed && unifiedZoneData?.entry?.slPrice) {
+          const unifiedSL = unifiedZoneData.entry.slPrice;
+          const unifiedSlDistance = Math.abs(analysis.lastPrice - unifiedSL);
+          const unifiedSlPips = unifiedSlDistance / spec.pipSize;
+          const maxUnifiedSlPips = staticMinSlPips * (pairConfig.impulseSlCapMultiplier ?? 4);
+          if (unifiedSlPips >= effectiveMinSlPips && unifiedSlPips <= maxUnifiedSlPips) {
+            console.log(`[${pair}] Unified Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${unifiedSlPips.toFixed(1)}p (unified story [${unifiedZoneData.selectedTF}])`);
+            sl = unifiedSL;
+            // Recalculate TP based on unified SL for proper R:R
+            const unifiedRisk = Math.abs(analysis.lastPrice - sl);
+            tp = analysis.direction === "long"
+              ? analysis.lastPrice + unifiedRisk * config.tpRatio
+              : analysis.lastPrice - unifiedRisk * config.tpRatio;
+            (detail as any).unifiedZoneSLOverride = {
+              originalSLPips: actualSlDistance / spec.pipSize,
+              unifiedSLPips: unifiedSlPips,
+              source: `unified_${unifiedZoneData.selectedTF}_story`,
+            };
+          } else if (unifiedSlPips > maxUnifiedSlPips) {
+            console.log(`[${pair}] Unified Zone SL too wide (${unifiedSlPips.toFixed(1)}p > max ${maxUnifiedSlPips}p). Keeping current SL.`);
+          }
+        }
+
         // ── Regime-Adaptive TP Adjustment ──
         // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
         // Runs AFTER all SL/TP calculations but BEFORE the MIN_TP_PIPS gate.
@@ -5378,6 +5420,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (sizingResult.adjustments.length > 0) {
           console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
+        // ── Signal Source Size Multiplier ──
+        // Unified signal = full conviction (1.0x). Standalone fallback = half size (0.5x).
+        // This reflects the higher confidence when the full story (impulse + liquidity +
+        // confirmation) aligns vs just the impulse zone engine alone.
+        if ((detail as any).signalSource !== "unified") {
+          const standaloneMultiplier = 0.5;
+          const prevSize = size;
+          size = Math.round(size * standaloneMultiplier * 100) / 100;
+          if (size < 0.01) size = 0.01; // Floor at minimum lot
+          console.log(`[${pair}] Signal source: standalone \u2014 size reduced ${prevSize} \u2192 ${size} (\u00d7${standaloneMultiplier})`);
+        } else {
+          console.log(`[${pair}] Signal source: unified \u2014 full size ${size} (\u00d71.0)`);
+        }
+
         const positionId = crypto.randomUUID().slice(0, 8);
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
@@ -5541,6 +5597,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           limitEntry = { price: cascadeEntry, zoneType: `CASCADE-${zoneType}`, zoneLow, zoneHigh };
           console.log(`[${pair}] Cascade Zone entry override: limit at ${cascadeEntry.toFixed(5)} (Daily→4H→1H ${zoneType})`);
         }
+        // ── Unified Zone Entry Override ──
+        // When unified gate passed, the unified engine provides a precise entry from the
+        // best timeframe story (Daily\u21924H\u21921H). This takes priority over cascade entry.
+        if (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice) {
+          const unifiedEntry = unifiedZoneData.entry.entryPrice;
+          const zonePOI = unifiedZoneData.zone;
+          const zoneLow = zonePOI?.low ?? unifiedEntry;
+          const zoneHigh = zonePOI?.high ?? unifiedEntry;
+          const zoneType = `UNIFIED-${(unifiedZoneData.selectedTF || "1H").toUpperCase()}`;
+          limitEntry = { price: unifiedEntry, zoneType, zoneLow, zoneHigh };
+          console.log(`[${pair}] Unified Zone entry override: limit at ${unifiedEntry.toFixed(5)} (${unifiedZoneData.selectedTF} story, score ${unifiedZoneData.unifiedScore}/14)`);
+        }
+
         // ── Market Fill at Zone (Option C) ──────────────────────────────────
         // When izGateMode="hard" AND price IS at the zone (STRICT) AND marketFillAtZone
         // is enabled, skip the pending order path and fill at market price immediately.
@@ -5625,7 +5694,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             volCtx,
             propFirmCtx,
           );
-          const limitSize = limitSizingResult.lots;
+          let limitSize = limitSizingResult.lots;
+          // Apply signal source size multiplier to limit orders too
+          if ((detail as any).signalSource !== "unified") {
+            limitSize = Math.round(limitSize * 0.5 * 100) / 100;
+            if (limitSize < 0.01) limitSize = 0.01;
+          }
 
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
