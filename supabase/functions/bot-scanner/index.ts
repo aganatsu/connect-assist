@@ -1262,18 +1262,23 @@ async function runSafetyGates(
 
   // Gate 12: Kill Zone Only
   if (config.killZoneOnly) {
-    const assetProfile = getAssetProfile(symbol);
-    if (!assetProfile.skipSessionGate) {
-      // S3 Fix: Use cachedSession from analysis instead of calling detectSession again.
-      // The analysis object carries the session snapshot from the scan-cycle level.
-      const sess = analysis.cachedSession || detectSession(config);
-      if (!sess.isKillZone) {
-        gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
-      } else {
-        gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
-      }
+    // Consolidation: ICT Kill Zone subsumes this gate when active (it has more granular windows).
+    // Only apply legacy kill zone check when ICT KZ is disabled.
+    const ictKZActive = config.ictKillZoneEnabled && config.ictKillZoneGateMode !== "off";
+    if (ictKZActive) {
+      gates.push({ passed: true, reason: `Kill zone delegated to ICT KZ (mode=${config.ictKillZoneGateMode})` });
     } else {
-      gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+      const assetProfile = getAssetProfile(symbol);
+      if (!assetProfile.skipSessionGate) {
+        const sess = analysis.cachedSession || detectSession(config);
+        if (!sess.isKillZone) {
+          gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
+        } else {
+          gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
+        }
+      } else {
+        gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+      }
     }
   }
 
