@@ -1367,7 +1367,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
@@ -1396,6 +1396,31 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {/* Impulse Zone — PRIMARY gate, shown first in the trade detail breakdown */}
                           {sr.impulseZone && <ImpulseZonePanel data={sr.impulseZone} />}
                           {sr.unifiedZone && <UnifiedZonePanel data={sr.unifiedZone} />}
+                          {/* ── Direction Verdict ── */}
+                          {sr.directionVerdict && !sr.directionVerdict.error && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-sm ${
+                                sr.directionVerdict.verdict === "long" ? "bg-success/15 text-success border border-success/30" :
+                                sr.directionVerdict.verdict === "short" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                                "bg-muted/30 text-muted-foreground border border-border"
+                              }`}>
+                                {sr.directionVerdict.verdict === "long" ? "↑ LONG" : sr.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
+                              </span>
+                              <span className={`text-[9px] font-mono font-bold ${
+                                sr.directionVerdict.confidence >= 70 ? "text-success" :
+                                sr.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
+                              }`}>{sr.directionVerdict.confidence}%</span>
+                              <span className="text-[8px] text-muted-foreground">{Math.round(sr.directionVerdict.agreement * 100)}% agree</span>
+                              {sr.directionVerdict.shouldBlock && (
+                                <span className="text-[8px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
+                              )}
+                              {sr.directionVerdict.scoreAdjustment !== 0 && (
+                                <span className={`text-[8px] font-mono ${sr.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
+                                  adj: {sr.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{sr.directionVerdict.scoreAdjustment.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          )}
                           {/* ── Regime Detection ── */}
                           {sr.regimeData && (
                             <div className="rounded border border-violet-500/30 bg-badge-info px-2 py-1.5 space-y-1">
@@ -1676,6 +1701,31 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
           {/* Impulse Zone Panel — PRIMARY gate, shown first */}
           {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
           {d.unifiedZone && <UnifiedZonePanel data={d.unifiedZone} />}
+          {/* Direction Verdict */}
+          {d.directionVerdict && !d.directionVerdict.error && (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-sm ${
+                d.directionVerdict.verdict === "long" ? "bg-success/15 text-success border border-success/30" :
+                d.directionVerdict.verdict === "short" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                "bg-muted/30 text-muted-foreground border border-border"
+              }`}>
+                {d.directionVerdict.verdict === "long" ? "↑ LONG" : d.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
+              </span>
+              <span className={`text-[9px] font-mono font-bold ${
+                d.directionVerdict.confidence >= 70 ? "text-success" :
+                d.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
+              }`}>{d.directionVerdict.confidence}%</span>
+              <span className="text-[8px] text-muted-foreground">{Math.round(d.directionVerdict.agreement * 100)}% agree</span>
+              {d.directionVerdict.shouldBlock && (
+                <span className="text-[8px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
+              )}
+              {d.directionVerdict.scoreAdjustment !== 0 && (
+                <span className={`text-[8px] font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
+                  adj: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Tier-Grouped Factors */}
           {d.factors && (
@@ -1844,6 +1894,31 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       {/* 4. Impulse Zone Panel — PRIMARY gate info */}
       {d.impulseZone && <ImpulseZonePanel data={d.impulseZone} isLiveContext />}
       {d.unifiedZone && <UnifiedZonePanel data={d.unifiedZone} />}
+      {/* Direction Verdict */}
+      {d.directionVerdict && !d.directionVerdict.error && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-sm ${
+            d.directionVerdict.verdict === "long" ? "bg-success/15 text-success border border-success/30" :
+            d.directionVerdict.verdict === "short" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+            "bg-muted/30 text-muted-foreground border border-border"
+          }`}>
+            {d.directionVerdict.verdict === "long" ? "↑ LONG" : d.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
+          </span>
+          <span className={`text-[10px] font-mono font-bold ${
+            d.directionVerdict.confidence >= 70 ? "text-success" :
+            d.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
+          }`}>{d.directionVerdict.confidence}%</span>
+          <span className="text-[9px] text-muted-foreground">{Math.round(d.directionVerdict.agreement * 100)}% agree</span>
+          {d.directionVerdict.shouldBlock && (
+            <span className="text-[9px] font-bold text-destructive bg-destructive/10 px-1 rounded">BLOCKED</span>
+          )}
+          {d.directionVerdict.scoreAdjustment !== 0 && (
+            <span className={`text-[9px] font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
+              adj: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* 5. Tier Factor Breakdown — T1, T2, T3 with pass/fail */}
       {d.factors && (
