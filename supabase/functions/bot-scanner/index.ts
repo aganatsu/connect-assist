@@ -5321,6 +5321,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
+            } else if (impulseSlDistance <= actualSlDistance) {
+              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(actualSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
             }
           }
         }
