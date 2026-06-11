@@ -69,7 +69,8 @@ import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceDat
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
 import { runICTHTFAnalysis, type ICTHTFResult, type ICTHTFConfig, DEFAULT_ICT_HTF_CONFIG } from "../_shared/ictHTFIntegration.ts";
@@ -989,50 +990,49 @@ async function runSafetyGates(
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
+  directionVerdict?: DirectionVerdictResult | null,
+  propFirmActive?: boolean,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
-  // Gate 1: HTF Bias Alignment
-  // Uses cachedDailyStructure from analysis to avoid redundant computation
-  //
-  // RELATIONSHIP TO FALLING KNIFE GUARD (confluenceScoring.ts):
-  // The falling knife guard fires EARLIER (during direction determination) at 75% regime confidence,
-  // but ONLY when direction comes from P/D zone mean-reversion (fractals balanced, no daily BOS).
-  // Gate 1 fires HERE at 60% regime confidence for ANY ranging-market trade regardless of direction source.
-  // The 60-74% gap is intentional: Gate 1 catches trades where direction came from fractals or BOS
-  // but the regime still opposes. The falling knife guard catches the more dangerous P/D-only scenario
-  // at a higher threshold because it nullifies direction entirely (no trade generated at all).
-  if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
+  // Gate 1: Direction Verdict (consolidated HTF Bias + Regime + Weekly + GP)
+  // When directionVerdict is available, it replaces the legacy HTF bias check, regime gate,
+  // falling knife guard, and game plan filter with a single confidence-based decision.
+  // Legacy fallback preserved for when verdict computation fails.
+  if (directionVerdict) {
+    if (directionVerdict.shouldBlock) {
+      gates.push({ passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    } else {
+      gates.push({ passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    }
+  } else if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
+    // Legacy fallback: original Gate 1 logic when verdict unavailable
     const htfStructure = analysis.cachedDailyStructure || analyzeMarketStructure(dailyCandles!);
     const htfTrend = htfStructure.trend;
     const entryBias = direction === "long" ? "bullish" : "bearish";
     const hardVeto = config.htfBiasHardVeto;
     if (hardVeto) {
-      // Hard veto: must match exactly. Ranging blocks everything. No exceptions.
       if (htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
+        gates.push({ passed: false, reason: `[legacy] HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
       } else {
-        gates.push({ passed: true, reason: `HTF bias aligned (hard veto): Daily ${htfTrend}` });
+        gates.push({ passed: true, reason: `[legacy] HTF bias aligned (hard veto): Daily ${htfTrend}` });
       }
     } else {
-      // Soft mode: ranging allowed, only mismatch blocks
       if (htfTrend !== "ranging" && htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+        gates.push({ passed: false, reason: `[legacy] HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
       } else if (htfTrend === "ranging" && analysis.regimeInfo) {
-        // Fix 4: When daily structure is ranging, consult regime directional bias.
-        // If regime has ≥60% confidence in a direction opposite to entry, block the trade.
-        const regBias = analysis.regimeInfo.bias; // "bullish" | "bearish" | "neutral"
-        const regConf = analysis.regimeInfo.confidence ?? 0; // 0-1 scale
+        const regBias = analysis.regimeInfo.bias;
+        const regConf = analysis.regimeInfo.confidence ?? 0;
         const entryOpposesRegime =
           (regBias === "bullish" && direction === "short") ||
           (regBias === "bearish" && direction === "long");
         if (entryOpposesRegime && regConf >= 0.60) {
-          gates.push({ passed: false, reason: `HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
+          gates.push({ passed: false, reason: `[legacy] HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
         } else {
-          gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
+          gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
         }
       } else {
-        gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
+        gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend}` });
       }
     }
   } else {
@@ -1182,24 +1182,36 @@ async function runSafetyGates(
   }
 
   // Gate 7: Daily loss limit
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
-  const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
-  const dailyLoss = actualBase - balance;
-  const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
-  if (dailyLossPercent >= config.maxDailyLoss) {
-    gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+  // Consolidation: When prop firm gate is active, it already enforces stricter daily loss
+  // thresholds with graduated severity. Skip redundant check.
+  if (propFirmActive) {
+    gates.push({ passed: true, reason: `Daily loss delegated to prop firm gate (stricter thresholds)` });
   } else {
-    gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
+    const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
+    const dailyLoss = actualBase - balance;
+    const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
+    if (dailyLossPercent >= config.maxDailyLoss) {
+      gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+    }
   }
 
   // Gate 8: Max drawdown
-  const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
-  const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
-  if (drawdownPercent >= config.maxDrawdown) {
-    gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+  // Consolidation: When prop firm gate is active, it already enforces stricter drawdown
+  // thresholds (trailing or fixed). Skip redundant check.
+  if (propFirmActive) {
+    gates.push({ passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
   } else {
-    gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+    const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
+    const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
+    if (drawdownPercent >= config.maxDrawdown) {
+      gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+    }
   }
 
   // Gate 9: Min confluence (redundant but per spec)
@@ -1263,18 +1275,23 @@ async function runSafetyGates(
 
   // Gate 12: Kill Zone Only
   if (config.killZoneOnly) {
-    const assetProfile = getAssetProfile(symbol);
-    if (!assetProfile.skipSessionGate) {
-      // S3 Fix: Use cachedSession from analysis instead of calling detectSession again.
-      // The analysis object carries the session snapshot from the scan-cycle level.
-      const sess = analysis.cachedSession || detectSession(config);
-      if (!sess.isKillZone) {
-        gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
-      } else {
-        gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
-      }
+    // Consolidation: ICT Kill Zone subsumes this gate when active (it has more granular windows).
+    // Only apply legacy kill zone check when ICT KZ is disabled.
+    const ictKZActive = config.ictKillZoneEnabled && config.ictKillZoneGateMode !== "off";
+    if (ictKZActive) {
+      gates.push({ passed: true, reason: `Kill zone delegated to ICT KZ (mode=${config.ictKillZoneGateMode})` });
     } else {
-      gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+      const assetProfile = getAssetProfile(symbol);
+      if (!assetProfile.skipSessionGate) {
+        const sess = analysis.cachedSession || detectSession(config);
+        if (!sess.isKillZone) {
+          gates.push({ passed: false, reason: `Kill Zone Only: ${sess.name} session not in kill zone` });
+        } else {
+          gates.push({ passed: true, reason: `In ${sess.name} kill zone` });
+        }
+      } else {
+        gates.push({ passed: true, reason: `Kill zone gate skipped for ${symbol} (crypto)` });
+      }
     }
   }
 
@@ -1513,8 +1530,12 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 20: Regime Alignment (separate gate, not a score penalty)
-  if (analysis.tieredScoring) {
+  // Gate 20: Regime Alignment — subsumed by Direction Verdict (Gate 1) when active.
+  // When verdict is available, regime check is already incorporated into the verdict's
+  // confidence calculation and veto logic. Gate always passes to avoid double-blocking.
+  if (directionVerdict) {
+    gates.push({ passed: true, reason: `Regime gate: subsumed by Direction Verdict (regime context: ${directionVerdict.sources.find(s => s.name === "regime")?.detail || "N/A"})` });
+  } else if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
     if (!ts.regimeGatePassed) {
       gates.push({ passed: false, reason: ts.regimeGateReason });
@@ -2848,13 +2869,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
-          // Run zone confirmation detection (tiered: T1=CHoCH, T2=CHoCH+support, T3=reversal pattern)
+          // Run zone confirmation detection (delegates to confirmationHierarchy first, falls back to legacy tiers)
           const confirmationSignal = detectZoneConfirmation(
             confirm5mCandles,
             pending.direction as "long" | "short",
             DEFAULT_ZONE_CONFIRMATION_CONFIG,
             zoneTouchIdx,
             pending.symbol,
+            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
           );
 
           if (!confirmationSignal) {
@@ -4561,6 +4583,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
+    // ── DIRECTION VERDICT (single source of truth for direction) ──
+    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
+    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
+    let directionVerdict: DirectionVerdictResult | null = null;
+    try {
+      const gpCtx = (pairConfig as any)._gamePlanContext;
+      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
+        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+        : null;
+      directionVerdict = computeDirectionVerdict({
+        confirmedTrend: ctResult,
+        simpleDirection: simpleDirectionResult ? {
+          direction: simpleDirectionResult.direction,
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+          reason: simpleDirectionResult.reason,
+        } : null,
+        regime: analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.regime,
+          confidence: analysis.regimeInfo.confidence,
+          directionalBias: analysis.regimeInfo.bias,
+        } : null,
+        weeklyBias: ictHTFResult?.weeklyBias ? {
+          bias: ictHTFResult.weeklyBias.bias,
+          confidence: ictHTFResult.weeklyBias.confidence,
+        } : null,
+        gamePlanBias: gpCtx ? {
+          bias: gpCtx.bias,
+          confidence: gpCtx.biasConfidence ?? 50,
+        } : null,
+      });
+      (detail as any).directionVerdict = {
+        verdict: directionVerdict.verdict,
+        confidence: directionVerdict.confidence,
+        agreement: directionVerdict.agreement,
+        shouldBlock: directionVerdict.shouldBlock,
+        scoreAdjustment: directionVerdict.scoreAdjustment,
+        summary: directionVerdict.summary,
+      };
+      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict: ${directionVerdict.summary}`);
+    } catch (dvErr: any) {
+      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
+      (detail as any).directionVerdict = { error: dvErr?.message };
+    }
     // ── UNIFIED ZONE GATE (primary signal source) ──
     // The unified engine composes impulse zone + liquidity + confirmation into one story.
     // When its state is 'triggered' or 'confirmed' AND entryReady=true, it becomes the
@@ -4946,7 +5015,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     // "off" mode: no adjustment at all
-    const ictHTFScoreAdj = ictHTFResult?.scoreAdjustment ?? 0;
+    // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
+    // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
+    const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
+    const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
     const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
@@ -4959,7 +5031,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj;
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
     }
@@ -4969,7 +5041,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (ictMSSAdj !== 0 || ictJudasAdj !== 0 || ictFVGAdj !== 0 || ictKZAdj !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} ICT modules scoring: MSS=${ictMSSAdj.toFixed(1)} Judas=${ictJudasAdj.toFixed(1)} FVG=${ictFVGAdj.toFixed(1)} KZ=${ictKZAdj.toFixed(1)} (total=${ictTotalAdj.toFixed(1)}%, effective=${effectiveScore.toFixed(1)}%)`);
     }
-
+    if (verdictScoreAdj !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
+    }
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
     // When many factors actively oppose the trade, raise the bar or block entirely.
     const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -5117,7 +5191,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
-        rateMap, convictionCandles,
+        rateMap, convictionCandles, directionVerdict,
+        propFirmGateResult?.enabled || false,
       );
       // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
       // Previously a binary veto that blocked trades opposing the game plan bias.
@@ -5246,6 +5321,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               };
             } else if (impulseSlPips > maxImpulseSlPips) {
               console.log(`[${pair}] Impulse Zone SL too wide (${impulseSlPips.toFixed(1)}p > max ${maxImpulseSlPips}p). Keeping structure SL.`);
+            } else if (impulseSlDistance <= actualSlDistance) {
+              console.log(`[${pair}] ℹ️ Impulse Zone SL tighter than current (${impulseSlPips.toFixed(1)}p < ${(actualSlDistance / spec.pipSize).toFixed(1)}p). Keeping wider SL for safety.`);
             }
           }
         }
@@ -5415,6 +5492,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         let size = sizingResult.lots;
         if (correlationSizeMultiplier < 1.0) {
           size = Math.round(size * correlationSizeMultiplier * 100) / 100;
+          if (size < 0.01) size = 0.01; // Floor at minimum lot
           console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
         }
         if (sizingResult.adjustments.length > 0) {
@@ -5564,7 +5642,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
 
         // ── Limit Order: Place pending order instead of market order if enabled and zone found ──
-        let limitEntry = computeLimitEntryPrice(analysis, pair, analysis.direction);
+        // Consolidation: Skip legacy OB/FVG scan when a zone engine will override the entry.
+        // Priority: unified > cascade > impulse > legacy. Only compute legacy if no zone engine fired.
+        const zoneEngineWillOverride = (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice)
+          || (cascadeGatePassed && cascadeResult?.entry)
+          || (izGateMode === "hard" && izData?.bestZone);
+        let limitEntry = zoneEngineWillOverride ? null : computeLimitEntryPrice(analysis, pair, analysis.direction);
         // ── Impulse Zone Entry Override ──
         // When hard gate is active and zone has a refined entry, use the zone's entry level
         // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
@@ -5723,7 +5806,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -5841,7 +5924,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",

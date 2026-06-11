@@ -30,6 +30,7 @@
  */
 
 import { analyzeMarketStructure, type Candle } from "./smcAnalysis.ts";
+import { evaluateConfirmation, type ConfirmationResult } from "./confirmationHierarchy.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -184,6 +185,60 @@ function detectSupportingSignals(
   return { signals, hasEngulfing, hasRejectionWick, hasFVG, hasVolumeSpike };
 }
 
+// ─── Hierarchy → Signal Adapter ─────────────────────────────────────────────
+
+/**
+ * Maps a ConfirmationResult from confirmationHierarchy to the ConfirmationSignal
+ * format expected by callers. Returns null if the mapping isn't possible.
+ */
+function mapHierarchyToSignal(
+  result: ConfirmationResult,
+  candles: Candle[],
+  direction: "long" | "short",
+): ConfirmationSignal | null {
+  const idx = result.confirmationIndex;
+  if (idx === null || idx < 0 || idx >= candles.length) return null;
+
+  const candle = candles[idx];
+  if (!candle) return null;
+
+  const range = candle.high - candle.low;
+  const displacement = range > 0 ? Math.abs(candle.close - candle.open) / range : 0;
+
+  // Map hierarchy types to zoneConfirmation types
+  const typeMap: Record<string, { type: ConfirmationType; tier: 1 | 2 | 3; closeBased: boolean }> = {
+    sweep_choch: {
+      type: direction === "short" ? "bearish_choch" : "bullish_choch",
+      tier: 1,
+      closeBased: true,
+    },
+    ltf_choch: {
+      type: direction === "short" ? "bearish_choch" : "bullish_choch",
+      tier: 1,
+      closeBased: true,
+    },
+    displacement: {
+      type: direction === "short" ? "bearish_reversal_pattern" : "bullish_reversal_pattern",
+      tier: 3,
+      closeBased: false,
+    },
+  };
+
+  const mapping = typeMap[result.type];
+  if (!mapping) return null;
+
+  return {
+    type: mapping.type,
+    tier: mapping.tier,
+    price: candle.close,
+    candleIndex: idx,
+    displacement,
+    significance: undefined,
+    closeBased: mapping.closeBased,
+    supportingSignals: [result.type, result.detail],
+  };
+}
+
 // ─── Main Detection Function (Tiered) ───────────────────────────────────────
 
 /**
@@ -205,9 +260,32 @@ export function detectZoneConfirmation(
   config: ZoneConfirmationConfig = DEFAULT_ZONE_CONFIRMATION_CONFIG,
   zoneTouchIndex?: number,
   symbol?: string,
+  /** Optional zone bounds — when provided, delegates to confirmationHierarchy first */
+  zoneBounds?: { zoneHigh: number; zoneLow: number },
 ): ConfirmationSignal | null {
   if (candles5m.length < 10) return null;
 
+  // ── PRIMARY: Delegate to confirmationHierarchy when zone bounds available ──
+  // This unifies CHoCH detection logic into one place.
+  if (zoneBounds && candles5m.length >= 15) {
+    const hierarchyDir = direction === "long" ? "bullish" : "bearish";
+    const hierarchyResult = evaluateConfirmation({
+      confirmationCandles: candles5m,
+      zoneHigh: zoneBounds.zoneHigh,
+      zoneLow: zoneBounds.zoneLow,
+      direction: hierarchyDir,
+      maxLookback: config.maxLookbackCandles,
+    });
+    // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level)
+    if (hierarchyResult.entryReady && hierarchyResult.type !== "none") {
+      const mapped = mapHierarchyToSignal(hierarchyResult, candles5m, direction);
+      if (mapped) return mapped;
+    }
+  }
+
+  // ── FALLBACK: Legacy tier detection (Tier 2 wick+support, Tier 3 reversal) ──
+  // These patterns are not covered by confirmationHierarchy (which only does
+  // close-based CHoCH and displacement). Keep them for broader coverage.
   const effectiveDisplacement = getMinDisplacement(config, symbol);
   const requiredChochType = direction === "short" ? "bearish" : "bullish";
   const minIndex = candles5m.length - 1 - config.maxLookbackCandles;

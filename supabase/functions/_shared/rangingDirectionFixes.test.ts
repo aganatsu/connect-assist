@@ -291,39 +291,39 @@ Deno.test("Fix 3: Ranging market structure detail mentions 'capped'", () => {
 // FIX 4: Gate 1 regime-aware (source verification)
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("Fix 4: bot-scanner Gate 1 contains regime veto logic", () => {
-  // Read the source file and verify the regime-aware gate logic exists
+Deno.test("Fix 4: bot-scanner Gate 1 contains regime veto logic (legacy fallback)", () => {
+  // Read the source file and verify the regime-aware gate logic exists in the legacy fallback path
   const source = Deno.readTextFileSync(
     new URL("../bot-scanner/index.ts", import.meta.url).pathname
   );
 
-  // Verify the Fix 4 comment exists
-  assertStringIncludes(source, "Fix 4: When daily structure is ranging, consult regime directional bias");
+  // Verify the Direction Verdict consolidation is active
+  assertStringIncludes(source, "Direction Verdict (consolidated HTF Bias + Regime + Weekly + GP)");
 
-  // Verify the regime veto reason string exists
-  assertStringIncludes(source, "HTF regime veto: Daily ranging but regime is");
+  // Verify the legacy fallback regime veto reason string still exists
+  assertStringIncludes(source, "[legacy] HTF regime veto: Daily ranging but regime is");
 
-  // Verify the 60% threshold is present
+  // Verify the 60% threshold is present in legacy fallback
   assertStringIncludes(source, "regConf >= 0.60");
 
-  // Verify it checks both directions
+  // Verify it checks both directions in legacy fallback
   assertStringIncludes(source, 'regBias === "bullish" && direction === "short"');
   assertStringIncludes(source, 'regBias === "bearish" && direction === "long"');
 });
 
-Deno.test("Fix 4: Gate 1 regime veto is inside the soft-mode ranging branch", () => {
+Deno.test("Fix 4: Gate 1 Direction Verdict replaces legacy regime veto", () => {
   const source = Deno.readTextFileSync(
     new URL("../bot-scanner/index.ts", import.meta.url).pathname
   );
 
-  // The regime veto should come AFTER the "Soft mode: ranging allowed" comment
-  const softModeIdx = source.indexOf("Soft mode: ranging allowed");
-  const regimeVetoIdx = source.indexOf("HTF regime veto:");
-  assert(softModeIdx > 0, "Soft mode comment should exist");
-  assert(regimeVetoIdx > 0, "Regime veto reason should exist");
+  // The Direction Verdict gate should come BEFORE the legacy fallback
+  const verdictIdx = source.indexOf("if (directionVerdict)");
+  const legacyIdx = source.indexOf("[legacy] HTF regime veto:");
+  assert(verdictIdx > 0, "Direction Verdict gate should exist");
+  assert(legacyIdx > 0, "Legacy fallback should still exist");
   assert(
-    regimeVetoIdx > softModeIdx,
-    "Fix 4: Regime veto should be inside the soft-mode branch (after the comment)"
+    verdictIdx < legacyIdx,
+    "Direction Verdict should be checked before legacy fallback"
   );
 });
 
