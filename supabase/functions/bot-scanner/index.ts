@@ -65,7 +65,7 @@ import {
   runPropFirmGate, propFirmEmergencyClose,
   type PropFirmGateResult,
 } from "../_shared/propFirmGate.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
+import { type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
@@ -4079,73 +4079,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
     } : null;
 
-    // ── Impulse Zone Engine (informational — enriches scan detail, does NOT gate trades) ──
-    // Runs on 1H + 4H candles to find the best entry zone based on impulse structure.
-    if (analysis.direction && hourlyCandles.length >= 20) {
-      try {
-        const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        const zoneEngineOpts: ZoneEngineOptions = { strictATRMult: pairConfig.marketFillStrictATRMult };
-        const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
-          hourlyCandles, h4Candles, candles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData ?? undefined, zoneEngineOpts,
-        );
-        (detail as any).impulseZone = {
-          hasZone: !!zoneResult.bestZone,
-          selectedTF: zoneResult.selectedTF,
-          reason: zoneResult.reason,
-          impulse: zoneResult.bestZone?.impulse ? {
-            high: zoneResult.bestZone.impulse.high,
-            low: zoneResult.bestZone.impulse.low,
-            direction: zoneResult.bestZone.impulse.direction,
-          } : null,
-          bestZone: zoneResult.bestZone ? {
-            type: zoneResult.bestZone.zone.poi.type,
-            high: zoneResult.bestZone.zone.poi.high,
-            low: zoneResult.bestZone.zone.poi.low,
-            fibLevel: zoneResult.bestZone.zone.fibLevel,
-            fibDepth: zoneResult.bestZone.zone.fibDepth,
-            totalScore: zoneResult.bestZone.zone.totalScore,
-            srConfirmed: zoneResult.bestZone.zone.srConfirmed,
-            ltfRefined: zoneResult.bestZone.zone.ltfRefined,
-            ltfType: zoneResult.bestZone.zone.ltfType || null,
-            refinedEntry: zoneResult.bestZone.zone.refinedEntry || null,
-            refinedSL: zoneResult.bestZone.zone.refinedSL || null,
-            htfConfluenceScore: zoneResult.bestZone.zone.htfConfluenceScore,
-            htfLayers: zoneResult.bestZone.zone.htfLayers,
-            priceAtZone: zoneResult.bestZone.priceAtZone,
-            priceInsideZone: zoneResult.bestZone.priceInsideZone,
-            priceAtZoneStrict: zoneResult.bestZone.priceAtZoneStrict,
-            sideOk: zoneResult.bestZone.sideOk,
-            distanceToZone: zoneResult.bestZone.distanceToZone,
-            distancePips: zoneResult.bestZone.distancePips,
-          } : null,
-          allZonesCount: zoneResult.allZones.length,
-          h1HasZone: !!zoneResult.h1Result.bestZone,
-          h4HasZone: !!zoneResult.h4Result?.bestZone,
-          scoringEnabled: pairConfig.impulseZoneEnabled !== false,
-        };
-        console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone [${zoneResult.selectedTF || "none"}]: ${zoneResult.reason}`);
-      } catch (zoneErr: any) {
-        console.warn(`[scan ${scanCycleId}] ${pair} Impulse Zone error (non-fatal): ${zoneErr?.message}`);
-        (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
-      }
-    } else {
-      const dirReason = !analysis.direction && simpleDirectionResult?.reason
-        ? `No direction: ${simpleDirectionResult.reason}`
-        : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
-      (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
-        directionDetail: simpleDirectionResult ? {
-          bias: simpleDirectionResult.bias,
-          biasSource: simpleDirectionResult.biasSource,
-          h4Retrace: simpleDirectionResult.h4Retrace,
-          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
-          h1Confirmed: simpleDirectionResult.h1Confirmed,
-        } : null,
-      };
-    }
-
-    // ── Unified Zone Engine (story-driven: D→4H→1H with liquidity + confirmation) ──
-    // Composes impulse zone + liquidity + confirmation into one narrative.
-    // Entry direction = impulse direction (continuation, not reversal).
+    // ── Consolidated Zone Engine (story-driven: D→4H→1H with liquidity + confirmation) ──
+    // Single zone detection system: finds the Daily impulse first (A+ setup), then 4H, then 1H.
+    // Produces both the unified story (detail.unifiedZone) AND the gate data (detail.impulseZone)
+    // from one call. This ensures both views always agree on which impulse and zone are active.
     if (analysis.direction && hourlyCandles.length >= 20) {
       try {
         const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
@@ -4173,6 +4110,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           ltfConfirmCandles,
         );
 
+        // Store the full unified story for the frontend narrative panel
         (detail as any).unifiedZone = {
           hasZone: unifiedResult.hasZone,
           state: unifiedResult.state,
@@ -4203,13 +4141,67 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           storySummary: unifiedResult.storySummary,
           reason: unifiedResult.reason,
         };
-        console.log(`[scan ${scanCycleId}] ${pair} Unified Zone [${unifiedResult.state}|${unifiedResult.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14 — ${unifiedResult.reason.slice(0, 100)}`);
-      } catch (unifiedErr: any) {
-        console.warn(`[scan ${scanCycleId}] ${pair} Unified Zone error (non-fatal): ${unifiedErr?.message}`);
-        (detail as any).unifiedZone = { hasZone: false, state: "error", reason: `Error: ${unifiedErr?.message}` };
+
+        // Derive izData (detail.impulseZone) from the unified result's multiTFResult
+        // for backward compatibility with the 58 downstream references to izData.*
+        const multiTF = unifiedResult.multiTFResult;
+        (detail as any).impulseZone = {
+          hasZone: !!multiTF.bestZone,
+          selectedTF: multiTF.selectedTF,
+          reason: multiTF.reason,
+          impulse: multiTF.bestZone?.impulse ? {
+            high: multiTF.bestZone.impulse.high,
+            low: multiTF.bestZone.impulse.low,
+            direction: multiTF.bestZone.impulse.direction,
+          } : null,
+          bestZone: multiTF.bestZone ? {
+            type: multiTF.bestZone.zone.poi.type,
+            high: multiTF.bestZone.zone.poi.high,
+            low: multiTF.bestZone.zone.poi.low,
+            fibLevel: multiTF.bestZone.zone.fibLevel,
+            fibDepth: multiTF.bestZone.zone.fibDepth,
+            totalScore: multiTF.bestZone.zone.totalScore,
+            srConfirmed: multiTF.bestZone.zone.srConfirmed,
+            ltfRefined: multiTF.bestZone.zone.ltfRefined,
+            ltfType: multiTF.bestZone.zone.ltfType || null,
+            refinedEntry: multiTF.bestZone.zone.refinedEntry || null,
+            refinedSL: multiTF.bestZone.zone.refinedSL || null,
+            htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
+            htfLayers: multiTF.bestZone.zone.htfLayers,
+            priceAtZone: multiTF.bestZone.priceAtZone,
+            priceInsideZone: multiTF.bestZone.priceInsideZone,
+            priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
+            sideOk: multiTF.bestZone.sideOk,
+            distanceToZone: multiTF.bestZone.distanceToZone,
+            distancePips: multiTF.bestZone.distancePips,
+          } : null,
+          allZonesCount: multiTF.allZones.length,
+          h1HasZone: !!multiTF.h1Result.bestZone,
+          h4HasZone: !!multiTF.h4Result?.bestZone,
+          dailyHasZone: !!multiTF.dailyResult?.bestZone,
+          scoringEnabled: pairConfig.impulseZoneEnabled !== false,
+        };
+
+        console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
+      } catch (zoneErr: any) {
+        console.warn(`[scan ${scanCycleId}] ${pair} Zone Engine error (non-fatal): ${zoneErr?.message}`);
+        (detail as any).unifiedZone = { hasZone: false, state: "error", reason: `Error: ${zoneErr?.message}` };
+        (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
       }
     } else {
-      (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: !analysis.direction ? "No direction" : "Insufficient candles" };
+      const dirReason = !analysis.direction && simpleDirectionResult?.reason
+        ? `No direction: ${simpleDirectionResult.reason}`
+        : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
+      (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: dirReason };
+      (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
+        directionDetail: simpleDirectionResult ? {
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+        } : null,
+      };
     }
 
     // ── Cascade Zone Engine (Daily → 4H → 1H → 15m top-down) ──
