@@ -49,14 +49,24 @@ async function metaFetch(accountId: string, authToken: string, pathBuilder: (bas
   for (const region of order) {
     const url = pathBuilder(metaBaseUrl(region, accountId));
     const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const res = await fetch(url, { ...init, headers });
-    const body = await res.text();
-    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-    lastBody = body; lastStatus = res.status;
-    if (!/region|not connected to broker/i.test(body)) {
-      return { res: new Response(body, { status: res.status }), body };
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+      const body = await res.text();
+      if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
+      lastBody = body; lastStatus = res.status;
+      if (!/region|not connected to broker/i.test(body)) {
+        return { res: new Response(body, { status: res.status }), body };
+      }
+      console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+    } catch (err) {
+      lastBody = `network error: ${(err as Error).message}`;
+      lastStatus = 504;
+      console.warn(`MetaAPI ${region} network error, trying next: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
     }
-    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
   }
   return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
