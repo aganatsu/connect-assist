@@ -5642,7 +5642,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
 
         // ── Limit Order: Place pending order instead of market order if enabled and zone found ──
-        let limitEntry = computeLimitEntryPrice(analysis, pair, analysis.direction);
+        // Consolidation: Skip legacy OB/FVG scan when a zone engine will override the entry.
+        // Priority: unified > cascade > impulse > legacy. Only compute legacy if no zone engine fired.
+        const zoneEngineWillOverride = (unifiedGatePassed && unifiedZoneData?.entry?.entryPrice)
+          || (cascadeGatePassed && cascadeResult?.entry)
+          || (izGateMode === "hard" && izData?.bestZone);
+        let limitEntry = zoneEngineWillOverride ? null : computeLimitEntryPrice(analysis, pair, analysis.direction);
         // ── Impulse Zone Entry Override ──
         // When hard gate is active and zone has a refined entry, use the zone's entry level
         // instead of the nearest OB/FVG from Tier 1. This ensures the limit order targets
