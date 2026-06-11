@@ -990,50 +990,48 @@ async function runSafetyGates(
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
+  directionVerdict?: DirectionVerdictResult | null,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
-  // Gate 1: HTF Bias Alignment
-  // Uses cachedDailyStructure from analysis to avoid redundant computation
-  //
-  // RELATIONSHIP TO FALLING KNIFE GUARD (confluenceScoring.ts):
-  // The falling knife guard fires EARLIER (during direction determination) at 75% regime confidence,
-  // but ONLY when direction comes from P/D zone mean-reversion (fractals balanced, no daily BOS).
-  // Gate 1 fires HERE at 60% regime confidence for ANY ranging-market trade regardless of direction source.
-  // The 60-74% gap is intentional: Gate 1 catches trades where direction came from fractals or BOS
-  // but the regime still opposes. The falling knife guard catches the more dangerous P/D-only scenario
-  // at a higher threshold because it nullifies direction entirely (no trade generated at all).
-  if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
+  // Gate 1: Direction Verdict (consolidated HTF Bias + Regime + Weekly + GP)
+  // When directionVerdict is available, it replaces the legacy HTF bias check, regime gate,
+  // falling knife guard, and game plan filter with a single confidence-based decision.
+  // Legacy fallback preserved for when verdict computation fails.
+  if (directionVerdict) {
+    if (directionVerdict.shouldBlock) {
+      gates.push({ passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    } else {
+      gates.push({ passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    }
+  } else if (config.htfBiasRequired && (analysis.cachedDailyStructure || (dailyCandles && dailyCandles.length >= 10))) {
+    // Legacy fallback: original Gate 1 logic when verdict unavailable
     const htfStructure = analysis.cachedDailyStructure || analyzeMarketStructure(dailyCandles!);
     const htfTrend = htfStructure.trend;
     const entryBias = direction === "long" ? "bullish" : "bearish";
     const hardVeto = config.htfBiasHardVeto;
     if (hardVeto) {
-      // Hard veto: must match exactly. Ranging blocks everything. No exceptions.
       if (htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
+        gates.push({ passed: false, reason: `[legacy] HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked` });
       } else {
-        gates.push({ passed: true, reason: `HTF bias aligned (hard veto): Daily ${htfTrend}` });
+        gates.push({ passed: true, reason: `[legacy] HTF bias aligned (hard veto): Daily ${htfTrend}` });
       }
     } else {
-      // Soft mode: ranging allowed, only mismatch blocks
       if (htfTrend !== "ranging" && htfTrend !== entryBias) {
-        gates.push({ passed: false, reason: `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
+        gates.push({ passed: false, reason: `[legacy] HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}` });
       } else if (htfTrend === "ranging" && analysis.regimeInfo) {
-        // Fix 4: When daily structure is ranging, consult regime directional bias.
-        // If regime has ≥60% confidence in a direction opposite to entry, block the trade.
-        const regBias = analysis.regimeInfo.bias; // "bullish" | "bearish" | "neutral"
-        const regConf = analysis.regimeInfo.confidence ?? 0; // 0-1 scale
+        const regBias = analysis.regimeInfo.bias;
+        const regConf = analysis.regimeInfo.confidence ?? 0;
         const entryOpposesRegime =
           (regBias === "bullish" && direction === "short") ||
           (regBias === "bearish" && direction === "long");
         if (entryOpposesRegime && regConf >= 0.60) {
-          gates.push({ passed: false, reason: `HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
+          gates.push({ passed: false, reason: `[legacy] HTF regime veto: Daily ranging but regime is ${regBias} (${(regConf * 100).toFixed(0)}% conf) — ${direction} entry blocked` });
         } else {
-          gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
+          gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend} (regime: ${regBias} ${(regConf * 100).toFixed(0)}%)` });
         }
       } else {
-        gates.push({ passed: true, reason: `HTF bias aligned: Daily ${htfTrend}` });
+        gates.push({ passed: true, reason: `[legacy] HTF bias aligned: Daily ${htfTrend}` });
       }
     }
   } else {
@@ -1514,8 +1512,12 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 20: Regime Alignment (separate gate, not a score penalty)
-  if (analysis.tieredScoring) {
+  // Gate 20: Regime Alignment — subsumed by Direction Verdict (Gate 1) when active.
+  // When verdict is available, regime check is already incorporated into the verdict's
+  // confidence calculation and veto logic. Gate always passes to avoid double-blocking.
+  if (directionVerdict) {
+    gates.push({ passed: true, reason: `Regime gate: subsumed by Direction Verdict (regime context: ${directionVerdict.sources.find(s => s.name === "regime")?.detail || "N/A"})` });
+  } else if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
     if (!ts.regimeGatePassed) {
       gates.push({ passed: false, reason: ts.regimeGateReason });
@@ -4564,7 +4566,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
     // ── DIRECTION VERDICT (single source of truth for direction) ──
     // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
-    // into one verdict. Currently log-only — does NOT replace existing direction logic.
+    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
     let directionVerdict: DirectionVerdictResult | null = null;
     try {
       const gpCtx = (pairConfig as any)._gamePlanContext;
@@ -4994,7 +4996,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     }
     // "off" mode: no adjustment at all
-    const ictHTFScoreAdj = ictHTFResult?.scoreAdjustment ?? 0;
+    // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
+    // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
+    const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
+    const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
     const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
@@ -5007,7 +5012,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj;
+    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
     }
@@ -5017,7 +5022,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (ictMSSAdj !== 0 || ictJudasAdj !== 0 || ictFVGAdj !== 0 || ictKZAdj !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} ICT modules scoring: MSS=${ictMSSAdj.toFixed(1)} Judas=${ictJudasAdj.toFixed(1)} FVG=${ictFVGAdj.toFixed(1)} KZ=${ictKZAdj.toFixed(1)} (total=${ictTotalAdj.toFixed(1)}%, effective=${effectiveScore.toFixed(1)}%)`);
     }
-
+    if (verdictScoreAdj !== 0) {
+      console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
+    }
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
     // When many factors actively oppose the trade, raise the bar or block entirely.
     const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -5165,7 +5172,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
-        rateMap, convictionCandles,
+        rateMap, convictionCandles, directionVerdict,
       );
       // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
       // Previously a binary veto that blocked trades opposing the game plan bias.
