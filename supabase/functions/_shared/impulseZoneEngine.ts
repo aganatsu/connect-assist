@@ -894,8 +894,9 @@ export function findBestEntryZone(
     }
   }
 
-  // Approximate pips (works for 5-digit pairs; gold uses 2-digit so this is rough)
-  const distancePips = distanceToZone * 10000; // Good enough for display
+  // Convert distance to pips using the instrument's pip size
+  const pipSize = options?.pipSize ?? 0.0001;
+  const distancePips = distanceToZone / pipSize;
 
   // ── Loose proximity (existing behavior — for watchlist/awareness) ──
   let priceAtZone = false;
@@ -980,6 +981,8 @@ export interface ZoneEngineOptions {
    * the Daily zone defines WHERE to look, the impulse zone engine does the detailed work.
    */
   dailyZoneBounds?: { high: number; low: number };
+  /** Pip size for the instrument (e.g. 0.0001 for EUR/USD, 1 for BTC/USD, 0.01 for XAU/USD). Default: 0.0001 */
+  pipSize?: number;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────

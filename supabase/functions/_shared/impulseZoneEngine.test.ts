@@ -1155,3 +1155,73 @@ Deno.test("flattened fib scoring — 50% zone with max confluence can compete", 
   assertEquals(best.fibDepth, 0.5);
   assertEquals(best.totalScore, 5);
 });
+
+// ─── BTC Pips Calculation Fix ────────────────────────────────────────────────
+Deno.test("findBestEntryZone — pipSize option correctly scales distancePips for BTC (pipSize=1)", () => {
+  // Build a bearish impulse on BTC-like prices (60000-80000 range)
+  const candles = [];
+  // Create a clear bearish impulse: starts at 78000, drops to 60000
+  for (let i = 0; i < 50; i++) {
+    const progress = i / 49;
+    const price = 78000 - progress * 18000; // 78000 → 60000
+    candles.push({
+      open: price + 200,
+      high: price + 500,
+      low: price - 500,
+      close: price,
+      time: 1700000000 + i * 3600,
+      volume: 100,
+      datetime: `2024-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+    });
+  }
+  // Current price at 70000 (in the middle of the impulse range)
+  const currentPrice = 70000;
+  
+  // Without pipSize option (default 0.0001) — would give huge pips for BTC
+  const resultDefault = findBestEntryZone(candles, candles, "bearish", currentPrice);
+  
+  // With pipSize=1 (correct for BTC)
+  const resultBTC = findBestEntryZone(candles, candles, "bearish", currentPrice, undefined, { pipSize: 1 });
+  
+  if (resultDefault.bestZone && resultBTC.bestZone) {
+    // BTC result should have distancePips that is 10000x smaller than default
+    const ratio = resultDefault.bestZone.distancePips / resultBTC.bestZone.distancePips;
+    // ratio should be 10000 (0.0001 vs 1)
+    assertEquals(ratio, 10000, "pipSize=1 should produce 10000x fewer pips than default 0.0001");
+    // BTC pips should be reasonable (not millions)
+    assert(resultBTC.bestZone.distancePips < 100000, `BTC distancePips should be < 100000, got ${resultBTC.bestZone.distancePips}`);
+  }
+});
+
+Deno.test("findBestEntryZone — pipSize option correctly scales distancePips for XAU (pipSize=0.01)", () => {
+  // Build a bearish impulse on gold-like prices (2400-2700 range)
+  const candles = [];
+  for (let i = 0; i < 50; i++) {
+    const progress = i / 49;
+    const price = 2700 - progress * 300; // 2700 → 2400
+    candles.push({
+      open: price + 2,
+      high: price + 5,
+      low: price - 5,
+      close: price,
+      time: 1700000000 + i * 3600,
+      volume: 100,
+      datetime: `2024-01-${String(i + 1).padStart(2, "0")}T00:00:00Z`,
+    });
+  }
+  const currentPrice = 2550;
+  
+  // With pipSize=0.01 (correct for gold)
+  const resultGold = findBestEntryZone(candles, candles, "bearish", currentPrice, undefined, { pipSize: 0.01 });
+  
+  // With default pipSize=0.0001
+  const resultDefault = findBestEntryZone(candles, candles, "bearish", currentPrice);
+  
+  if (resultDefault.bestZone && resultGold.bestZone) {
+    // Gold result should have distancePips that is 100x smaller than default
+    const ratio = resultDefault.bestZone.distancePips / resultGold.bestZone.distancePips;
+    assertEquals(ratio, 100, "pipSize=0.01 should produce 100x fewer pips than default 0.0001");
+    // Gold pips should be reasonable (not millions)
+    assert(resultGold.bestZone.distancePips < 50000, `Gold distancePips should be < 50000, got ${resultGold.bestZone.distancePips}`);
+  }
+});

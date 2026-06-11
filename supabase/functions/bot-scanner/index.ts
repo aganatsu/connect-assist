@@ -4099,7 +4099,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           combinedLiqPools,
           htfConfluenceData ?? undefined,
-          { strictATRMult: pairConfig.marketFillStrictATRMult },
+          { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
           dailyCandles.length >= 30 ? dailyCandles : undefined,
           confirmCandles,
           ltfConfirmCandles,
