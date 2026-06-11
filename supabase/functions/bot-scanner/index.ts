@@ -5476,6 +5476,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         let size = sizingResult.lots;
         if (correlationSizeMultiplier < 1.0) {
           size = Math.round(size * correlationSizeMultiplier * 100) / 100;
+          if (size < 0.01) size = 0.01; // Floor at minimum lot
           console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
         }
         if (sizingResult.adjustments.length > 0) {
