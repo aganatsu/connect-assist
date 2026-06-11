@@ -991,6 +991,7 @@ async function runSafetyGates(
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
   directionVerdict?: DirectionVerdictResult | null,
+  propFirmActive?: boolean,
 ): Promise<GateResult[]> {
   const gates: GateResult[] = [];
 
@@ -1181,24 +1182,36 @@ async function runSafetyGates(
   }
 
   // Gate 7: Daily loss limit
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
-  const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
-  const dailyLoss = actualBase - balance;
-  const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
-  if (dailyLossPercent >= config.maxDailyLoss) {
-    gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+  // Consolidation: When prop firm gate is active, it already enforces stricter daily loss
+  // thresholds with graduated severity. Skip redundant check.
+  if (propFirmActive) {
+    gates.push({ passed: true, reason: `Daily loss delegated to prop firm gate (stricter thresholds)` });
   } else {
-    gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const dailyPnlBase = parseFloat(account.daily_pnl_base || account.balance || "10000");
+    const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
+    const dailyLoss = actualBase - balance;
+    const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
+    if (dailyLossPercent >= config.maxDailyLoss) {
+      gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
+    }
   }
 
   // Gate 8: Max drawdown
-  const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
-  const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
-  if (drawdownPercent >= config.maxDrawdown) {
-    gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+  // Consolidation: When prop firm gate is active, it already enforces stricter drawdown
+  // thresholds (trailing or fixed). Skip redundant check.
+  if (propFirmActive) {
+    gates.push({ passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
   } else {
-    gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+    const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
+    const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
+    if (drawdownPercent >= config.maxDrawdown) {
+      gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
+    } else {
+      gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
+    }
   }
 
   // Gate 9: Min confluence (redundant but per spec)
@@ -5179,6 +5192,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
         rateMap, convictionCandles, directionVerdict,
+        propFirmGateResult?.enabled || false,
       );
       // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
       // Previously a binary veto that blocked trades opposing the game plan bias.
