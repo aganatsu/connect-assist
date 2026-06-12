@@ -676,3 +676,39 @@ Deno.test("mapNestedToFlat: instrumentBuffers from top-level raw", () => {
   });
   assertEquals(result.instrumentBuffers, { "BTC/USD": { slBufferPips: 50 } });
 });
+
+// ─── Test: requireUnifiedZone field ────────────────────────────────
+
+Deno.test("mapNestedToFlat: requireUnifiedZone defaults to false", () => {
+  const result = mapNestedToFlat(null);
+  assertEquals(result.requireUnifiedZone, false);
+});
+
+Deno.test("mapNestedToFlat: requireUnifiedZone from strategy section", () => {
+  const result = mapNestedToFlat({
+    strategy: { requireUnifiedZone: true },
+  });
+  assertEquals(result.requireUnifiedZone, true);
+});
+
+Deno.test("mapNestedToFlat: requireUnifiedZone from top-level raw", () => {
+  const result = mapNestedToFlat({
+    requireUnifiedZone: true,
+  });
+  assertEquals(result.requireUnifiedZone, true);
+});
+
+Deno.test("mapNestedToFlat: requireUnifiedZone=false explicitly set", () => {
+  const result = mapNestedToFlat({
+    strategy: { requireUnifiedZone: false },
+  });
+  assertEquals(result.requireUnifiedZone, false);
+});
+
+Deno.test("mapNestedToFlat: strategy.requireUnifiedZone takes priority over raw", () => {
+  const result = mapNestedToFlat({
+    requireUnifiedZone: false,
+    strategy: { requireUnifiedZone: true },
+  });
+  assertEquals(result.requireUnifiedZone, true);
+});

@@ -4565,6 +4565,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
+    } else if (pairConfig.requireUnifiedZone) {
+      // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm
+      detail.status = "skipped_require_unified";
+      detail.skipReason = "Require Unified Zone: unified zone engine did not reach triggered/confirmed state \u2014 no standalone fallback allowed";
+      console.log(`[scan ${scanCycleId}] \u26d4 ${pair}: REQUIRE UNIFIED ZONE \u2014 unified gate not passed, standalone fallback disabled. Skipping.`);
+      scanDetails.push(detail);
+      continue;
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
       // HARD GATE: impulse zone is the primary entry framework
       if (!izData || !izData.hasZone) {
