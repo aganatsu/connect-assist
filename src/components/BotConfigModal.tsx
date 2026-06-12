@@ -740,6 +740,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </p>
                     </FieldGroup>
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
+                    <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity sweep → CHoCH). Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
                       <ToggleField label="Fair Value Gaps" description="Identify FVG imbalances" checked={config.strategy?.useFVG ?? true} onChange={v => updateField('strategy', 'useFVG', v)} />

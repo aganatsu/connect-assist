@@ -143,6 +143,7 @@ export const RUNTIME_DEFAULTS = {
   impulseSlCapMultiplier: 4,
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
+  requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -378,6 +379,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
+    requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,
