@@ -1389,6 +1389,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         for (let j = 0; j < batch.length; j++) {
           if (results[j].length > 0) fotsiCandleMap[batch[j]] = results[j];
         }
+        // Heartbeat between FOTSI fetch batches
+        await updateProgress(
+          Math.min(chunkProgressStart + 2, chunkProgressEnd),
+          `Chunk ${chunkIndex + 1}/${totalChunks}: fetching FOTSI batch ${Math.floor(i / 7) + 1}...`
+        );
         await new Promise(r => setTimeout(r, 500));
       }
       // Build daily FOTSI snapshots
@@ -1397,7 +1402,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         for (const c of candles) allDates.add(c.datetime.slice(0, 10));
       }
       const sortedDates = [...allDates].sort();
-      for (const date of sortedDates) {
+      let fotsiHeartbeat = Date.now();
+      for (let di = 0; di < sortedDates.length; di++) {
+        const date = sortedDates[di];
         // Build candle map up to this date (no lookahead)
         const dailyMap: Record<string, Candle[]> = {};
         for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
@@ -1407,6 +1414,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           const result = computeFOTSI(dailyMap);
           fotsiTimeline.set(date, result);
         } catch { /* skip dates with insufficient data */ }
+        // Heartbeat every 10s during FOTSI timeline build
+        if (Date.now() - fotsiHeartbeat > 10_000) {
+          await updateProgress(
+            Math.min(chunkProgressStart + 3, chunkProgressEnd),
+            `Chunk ${chunkIndex + 1}/${totalChunks}: building FOTSI ${di + 1}/${sortedDates.length}...`
+          );
+          fotsiHeartbeat = Date.now();
+        }
       }
       console.log(`[backtest] FOTSI timeline: ${fotsiTimeline.size} daily snapshots`);
     } catch (e: any) {
@@ -2276,18 +2291,35 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
       if (error) return respond({ error: error.message }, 500);
       if (!data) return respond({ error: "Run not found" }, 404);
-      // Detect stale runs: if running but heartbeat is >90s old, mark as failed
+      // Detect stale runs: if running but heartbeat is >300s old, mark as failed.
+      // Edge functions have a 400s wall-clock limit on paid plans; 90s was too aggressive
+      // and caused false timeouts during heavy computation phases (FOTSI build, scan loop).
       if (data.status === "running" && data.heartbeat_at) {
         const heartbeatAge = Date.now() - new Date(data.heartbeat_at).getTime();
-        if (heartbeatAge > 90_000) {
+        if (heartbeatAge > 300_000) {
           await db.from("backtest_runs").update({
             status: "failed",
             completed_at: new Date().toISOString(),
-            progress_message: "Engine timed out (no heartbeat for 90s)",
+            progress_message: "Engine timed out (no heartbeat for 5 min)",
             error_message: "Backtest engine stopped responding. The run may have exceeded time limits.",
           }).eq("id", runId);
           data.status = "failed";
           data.error_message = "Backtest engine stopped responding. The run may have exceeded time limits.";
+        }
+      }
+      // Also detect stale pending runs: if pending for >120s without any heartbeat, likely the
+      // warmup invocation failed silently (e.g., cold start, network issue).
+      if (data.status === "pending" && !data.heartbeat_at) {
+        const createdAge = Date.now() - new Date(data.created_at).getTime();
+        if (createdAge > 120_000) {
+          await db.from("backtest_runs").update({
+            status: "failed",
+            completed_at: new Date().toISOString(),
+            progress_message: "Engine never started (warmup may have failed)",
+            error_message: "Backtest engine failed to start. Please try again.",
+          }).eq("id", runId);
+          data.status = "failed";
+          data.error_message = "Backtest engine failed to start. Please try again.";
         }
       }
       return respond({
@@ -2382,7 +2414,9 @@ Deno.serve(async (req: Request) => {
             for (const c of candles) allDates.add(c.datetime.slice(0, 10));
           }
           const sortedDates = [...allDates].sort();
-          for (const date of sortedDates) {
+          let lastHeartbeat = Date.now();
+          for (let di = 0; di < sortedDates.length; di++) {
+            const date = sortedDates[di];
             const dailyMap: Record<string, Candle[]> = {};
             for (const [pair, candles] of Object.entries(fotsiCandleMap)) {
               dailyMap[pair] = candles.filter(c => c.datetime.slice(0, 10) <= date);
@@ -2391,6 +2425,14 @@ Deno.serve(async (req: Request) => {
               const result = computeFOTSI(dailyMap);
               fotsiTimeline.set(date, result);
             } catch { /* skip dates with insufficient data */ }
+            // Heartbeat every 10s during FOTSI timeline build to prevent stale detection
+            if (Date.now() - lastHeartbeat > 10_000) {
+              await db.from("backtest_runs").update({
+                heartbeat_at: new Date().toISOString(),
+                progress_message: `Building FOTSI timeline: ${di + 1}/${sortedDates.length} dates...`,
+              }).eq("id", runId);
+              lastHeartbeat = Date.now();
+            }
           }
 
           // Persist FOTSI timeline and chain to chunk 0
