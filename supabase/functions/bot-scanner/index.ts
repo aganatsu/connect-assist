@@ -68,7 +68,7 @@ import {
 import { type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
@@ -405,6 +405,7 @@ function adjustSLTPForSpread(
 // trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips).
 const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
   scalper: {
+    scanIntervalMinutes: 5,
     entryTimeframe: "5m",
     htfTimeframe: "1h",
     tpRatio: 1.5,
@@ -422,6 +423,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     maxHoldHours: 4,
   },
   day_trader: {
+    scanIntervalMinutes: 15,
     entryTimeframe: "15min",
     htfTimeframe: "1day",
     tpRatio: 2.0,
@@ -441,6 +443,7 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     maxHoldHours: 24,
   },
   swing_trader: {
+    scanIntervalMinutes: 60,
     entryTimeframe: "1h",
     htfTimeframe: "1w",
     tpRatio: 3.0,
@@ -3562,6 +3565,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const smtPair = pairConfig.useSMT !== false ? SMT_PAIRS[pair] : undefined;
     const smtFlag = smtPair && SUPPORTED_SYMBOLS[smtPair] ? 1 : 0;
     const multiTFRegimeEnabled = (pairConfig as any).multiTFRegimeEnabled !== false; // ON by default
+    // Style-aware: scalper needs 15m for structure TF, swing needs weekly for bias TF
+    const needsM15 = resolvedStyle === "scalper" && entryInterval !== "15m";
+    const needsWeekly = resolvedStyle === "swing_trader" || pairConfig.ictHTFEnabled !== false;
     const fetchPromises: Promise<Candle[]>[] = [
       cachedFetch(pair, entryInterval, entryRange),
       cachedFetch(pair, "1d", "1y"),
@@ -3570,10 +3576,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (multiTFRegimeEnabled) fetchPromises.push(cachedFetch(pair, "4h", "1mo"));
     // Always fetch 1H for HTF POI detection (also used by Opening Range if enabled)
     fetchPromises.push(cachedFetch(pair, "1h", "5d"));
+    // Scalper structure TF: fetch 15m candles (separate from 5m entry)
+    if (needsM15) fetchPromises.push(cachedFetch(pair, "15m", "5d"));
     if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
-    // Fetch weekly candles for ICT HTF framework (cached — same data reused across pairs)
-    const ictHTFActive = pairConfig.ictHTFEnabled !== false;
-    if (ictHTFActive) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
+    // Fetch weekly candles for ICT HTF framework OR swing_trader bias (cached — same data reused across pairs)
+    if (needsWeekly) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -3581,9 +3588,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const h4Offset = multiTFRegimeEnabled ? 1 : 0;
     // 1H candles always fetched (index = 2 + h4Offset)
     const hourlyCandles: Candle[] = fetched[2 + h4Offset] || [];
-    const smtCandles = smtFlag ? fetched[3 + h4Offset] : null;
-    // Weekly candles (last in fetch array when ICT HTF is active)
-    const weeklyCandles: Candle[] | null = ictHTFActive ? (fetched[fetched.length - 1] || null) : null;
+    // 15m candles for scalper structure TF (only fetched when needsM15)
+    const m15Offset = needsM15 ? 1 : 0;
+    const m15Candles: Candle[] = needsM15 ? (fetched[3 + h4Offset] || []) : [];
+    const smtCandles = smtFlag ? fetched[3 + h4Offset + m15Offset] : null;
+    // Weekly candles (last in fetch array when needed)
+    const weeklyCandles: Candle[] | null = needsWeekly ? (fetched[fetched.length - 1] || null) : null;
+    // Legacy alias for ICT HTF active check (used downstream)
+    const ictHTFActive = pairConfig.ictHTFEnabled !== false;
 
     if (candles.length < 30) {
       scanDetails.push({ pair, status: "skipped", reason: "Insufficient data" });
@@ -3760,22 +3772,68 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
+    // Style-aware: scalper uses 1H/15m/5m, swing uses Weekly/Daily/4H, day_trader uses Daily/4H/1H (original)
     let simpleDirectionResult: DirectionResult | null = null;
+    let styleDirectionResult: StyleDirectionResult | null = null;
     if (pairConfig.useSimpleDirection) {
       try {
-        simpleDirectionResult = determineDirection(
-          dailyCandles.length >= 20 ? dailyCandles : null,
-          h4Candles.length >= 20 ? h4Candles : null,
-          hourlyCandles.length >= 20 ? hourlyCandles : null,
-          {
-            h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
-            h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
-            useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
-            fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
-            trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
-          },
-        );
-        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection: ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | 4H-retrace=${simpleDirectionResult.h4Retrace} | 4H-choch-against=${simpleDirectionResult.h4ChochAgainst} | 1H-confirmed=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
+        const dirConfig = {
+          h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
+          h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
+          useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
+          fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
+          trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
+        };
+
+        if (resolvedStyle === "scalper") {
+          // Scalper: bias=1H, structure=15m, confirm=5m (entry candles)
+          const tfLabels = STYLE_TF_LABELS.scalper;
+          styleDirectionResult = determineDirectionStyleAware(
+            hourlyCandles.length >= 20 ? hourlyCandles : null,
+            m15Candles.length >= 20 ? m15Candles : null,
+            candles.length >= 20 ? candles : null,
+            { ...dirConfig, ...tfLabels },
+          );
+          // Map StyleDirectionResult to DirectionResult for downstream compatibility
+          simpleDirectionResult = {
+            direction: styleDirectionResult.direction,
+            bias: styleDirectionResult.bias,
+            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            h4Retrace: styleDirectionResult.structureRetrace,
+            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
+            h1Confirmed: styleDirectionResult.confirmBOS,
+            reason: `[scalper] ${styleDirectionResult.reason}`,
+          };
+        } else if (resolvedStyle === "swing_trader") {
+          // Swing: bias=Weekly, structure=Daily, confirm=4H
+          const tfLabels = STYLE_TF_LABELS.swing_trader;
+          styleDirectionResult = determineDirectionStyleAware(
+            weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : null,
+            dailyCandles.length >= 20 ? dailyCandles : null,
+            h4Candles.length >= 20 ? h4Candles : null,
+            { ...dirConfig, ...tfLabels },
+          );
+          // Map StyleDirectionResult to DirectionResult for downstream compatibility
+          simpleDirectionResult = {
+            direction: styleDirectionResult.direction,
+            bias: styleDirectionResult.bias,
+            biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
+            h4Retrace: styleDirectionResult.structureRetrace,
+            h4ChochAgainst: styleDirectionResult.structureChochAgainst,
+            h1Confirmed: styleDirectionResult.confirmBOS,
+            reason: `[swing] ${styleDirectionResult.reason}`,
+          };
+        } else {
+          // Day trader (default): bias=Daily, structure=4H, confirm=1H — original function
+          simpleDirectionResult = determineDirection(
+            dailyCandles.length >= 20 ? dailyCandles : null,
+            h4Candles.length >= 20 ? h4Candles : null,
+            hourlyCandles.length >= 20 ? hourlyCandles : null,
+            dirConfig,
+          );
+        }
+
+        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | struct-retrace=${simpleDirectionResult.h4Retrace} | struct-choch-against=${simpleDirectionResult.h4ChochAgainst} | confirm-bos=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
         // Pass override direction to confluenceScoring
         if (simpleDirectionResult.direction !== null) {
           (pairConfig as any)._overrideDirection = simpleDirectionResult.direction;
@@ -4074,11 +4132,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
     } : null;
 
-    // ── Consolidated Zone Engine (story-driven: D→4H→1H with liquidity + confirmation) ──
-    // Single zone detection system: finds the Daily impulse first (A+ setup), then 4H, then 1H.
-    // Produces both the unified story (detail.unifiedZone) AND the gate data (detail.impulseZone)
-    // from one call. This ensures both views always agree on which impulse and zone are active.
-    if (analysis.direction && hourlyCandles.length >= 20) {
+    // ── Consolidated Zone Engine (story-driven waterfall with liquidity + confirmation) ──
+    // Style-aware candle mapping for findUnifiedZone:
+    //   findUnifiedZone(h1Candles, h4Candles, entryCandles, ..., dailyCandles?, confirmCandles?, ltfConfirmCandles?)
+    //   Scalper:     h1=5m(entry), h4=15m, entry=5m, daily=1H, confirm=15m, ltfConfirm=5m
+    //   Day Trader:  h1=1H, h4=4H, entry=15m, daily=Daily, confirm=4H/1H, ltfConfirm=1H/15m
+    //   Swing:       h1=4H, h4=Daily, entry=1H, daily=Weekly, confirm=Daily, ltfConfirm=4H
+    // The slot names (h1, h4, daily) are just positional — the engine is TF-agnostic.
+    const hasMinZoneCandles = resolvedStyle === "scalper"
+      ? candles.length >= 20
+      : resolvedStyle === "swing_trader"
+        ? h4Candles.length >= 20
+        : hourlyCandles.length >= 20;
+    if (analysis.direction && hasMinZoneCandles) {
       try {
         const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
         // Combine liquidity pools from the relevant timeframes
@@ -4087,22 +4153,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           ...htfLiquidityPools4H,
           ...htfLiquidityPools1H,
         ];
-        // Use 4H candles as confirmation TF for Daily zones, 1H for 4H zones
-        const confirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
-        const ltfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
+
+        // Style-aware candle slot mapping
+        let zoneH1Candles: Candle[];
+        let zoneH4Candles: Candle[];
+        let zoneEntryCandles: Candle[];
+        let zoneDailyCandles: Candle[] | undefined;
+        let zoneConfirmCandles: Candle[];
+        let zoneLtfConfirmCandles: Candle[];
+
+        if (resolvedStyle === "scalper") {
+          // Scalper waterfall: 1H → 15m → 5m (entry)
+          zoneH1Candles = candles;              // 5m = lowest structural TF slot
+          zoneH4Candles = m15Candles;           // 15m = mid structural TF slot
+          zoneEntryCandles = candles;           // 5m entry
+          zoneDailyCandles = hourlyCandles.length >= 20 ? hourlyCandles : undefined; // 1H = highest TF slot
+          zoneConfirmCandles = m15Candles.length >= 15 ? m15Candles : candles;
+          zoneLtfConfirmCandles = candles;
+        } else if (resolvedStyle === "swing_trader") {
+          // Swing waterfall: Weekly → Daily → 4H (entry=1H)
+          zoneH1Candles = h4Candles;            // 4H = lowest structural TF slot
+          zoneH4Candles = dailyCandles;         // Daily = mid structural TF slot
+          zoneEntryCandles = candles;           // 1H entry
+          zoneDailyCandles = weeklyCandles && weeklyCandles.length >= 20 ? weeklyCandles : undefined; // Weekly = highest TF slot
+          zoneConfirmCandles = dailyCandles.length >= 15 ? dailyCandles : h4Candles;
+          zoneLtfConfirmCandles = h4Candles;
+        } else {
+          // Day trader (default): Daily → 4H → 1H (entry=15m)
+          zoneH1Candles = hourlyCandles;
+          zoneH4Candles = h4Candles;
+          zoneEntryCandles = candles;           // 15m entry
+          zoneDailyCandles = dailyCandles.length >= 30 ? dailyCandles : undefined;
+          zoneConfirmCandles = dailyCandles.length >= 30 ? h4Candles : hourlyCandles;
+          zoneLtfConfirmCandles = dailyCandles.length >= 30 ? hourlyCandles : candles;
+        }
 
         const unifiedResult: UnifiedZoneResult = findUnifiedZone(
-          hourlyCandles,
-          h4Candles,
-          candles, // 15m entry candles
+          zoneH1Candles,
+          zoneH4Candles,
+          zoneEntryCandles,
           unifiedDir as "bullish" | "bearish",
           analysis.lastPrice,
           combinedLiqPools,
           htfConfluenceData ?? undefined,
           { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
-          dailyCandles.length >= 30 ? dailyCandles : undefined,
-          confirmCandles,
-          ltfConfirmCandles,
+          zoneDailyCandles,
+          zoneConfirmCandles,
+          zoneLtfConfirmCandles,
         );
 
         // Store the full unified story for the frontend narrative panel
@@ -4215,7 +4312,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // ── ICT HTF Framework: Weekly Bias + Daily Impulse + Containment (log-only in "off" mode) ──
     let ictHTFResult: ICTHTFResult | null = null;
-    if (ictHTFActive && analysis.direction) {
+    const shouldRunICTHTF = resolvedStyle === "swing_trader" || ictHTFActive;
+    if (shouldRunICTHTF && analysis.direction) {
       try {
         // Build LTF zone from impulse zone engine result (if available)
         const izData = (detail as any).impulseZone;
