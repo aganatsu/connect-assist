@@ -1203,6 +1203,8 @@ async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number)
 }
 
 async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) {
+  const INVOCATION_START = Date.now();
+  const MAX_INVOCATION_MS = 280_000; // 280s — leave 120s buffer before Supabase 400s wall-clock limit
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1456,7 +1458,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     let allTrades: BacktestTrade[] = [];
     let blockedTrades: BlockedTrade[] = [];
     let tradeCounter = 0;
-    if (chunkIndex > 0) {
+    let resumeSymbolIndex = 0; // For time-boxing: which symbol to resume from
+    let resumeBarIndex = -1;   // For time-boxing: which bar to resume from (-1 = start from beginning)
+    // Always attempt to read partial_state: handles both multi-chunk continuation AND time-box re-invocation
+    {
       const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
       const ps = rr?.results?.partial_state;
       if (ps) {
@@ -1466,6 +1471,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         allTrades = ps.allTrades || [];
         blockedTrades = ps.blockedTrades || [];
         tradeCounter = ps.tradeCounter || 0;
+        resumeSymbolIndex = ps.resumeSymbolIndex || 0;
+        resumeBarIndex = ps.resumeBarIndex ?? -1;
         if (ps.diagnostics) {
           for (const k of Object.keys(ps.diagnostics)) {
             if (typeof (ps.diagnostics as any)[k] === "number") {
@@ -1499,7 +1506,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     const symbolErrors: { symbol: string; error: string }[] = [];
     let completedSymbols = 0;
 
-    for (const symbol of symbolList) {
+    for (let symIdx = 0; symIdx < symbolList.length; symIdx++) {
+      const symbol = symbolList[symIdx];
+      // Skip symbols already completed in a prior time-boxed invocation
+      if (symIdx < resumeSymbolIndex) { completedSymbols++; continue; }
+
       // Cancel check between symbols
       if (completedSymbols > 0 && completedSymbols % 3 === 0) {
         if (await isCancelled()) {
@@ -1525,7 +1536,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
         return cMs >= startMs;
       });
-      const effectiveStart = Math.max(startIdx, lookback);
+      let effectiveStart = Math.max(startIdx, lookback);
+
+      // If resuming mid-symbol from a time-boxed invocation, skip to the resume bar
+      if (symIdx === resumeSymbolIndex && resumeBarIndex > 0) {
+        effectiveStart = resumeBarIndex;
+      }
 
       for (let i = effectiveStart; i < entryCandles.length; i++) {
         const candle = entryCandles[i];
@@ -1540,6 +1556,34 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           const pct = Math.min(chunkProgressEnd, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * span));
           await updateProgress(pct, `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} bar ${i}/${entryCandles.length}...`);
           lastProgressUpdate = Date.now();
+
+          // ── TIME-BOX CHECK: if approaching wall-clock limit, persist state and self-invoke ──
+          if (Date.now() - INVOCATION_START > MAX_INVOCATION_MS) {
+            console.log(`[backtest:${runId}] Time-box hit at ${symbol} bar ${i}/${entryCandles.length}. Persisting and chaining.`);
+            const partial_state = {
+              balance,
+              peakBalance,
+              openPositions,
+              allTrades,
+              blockedTrades,
+              tradeCounter,
+              diagnostics,
+              btRateMap,
+              fotsiTimeline: [...fotsiTimeline.entries()],
+              resumeSymbolIndex: symIdx,
+              resumeBarIndex: i,
+            };
+            await db.from("backtest_runs").update({
+              progress: Math.min(chunkProgressEnd - 1, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * (chunkProgressEnd - chunkProgressStart))),
+              progress_message: `Time-box: continuing ${symbol} from bar ${i}...`,
+              status: "running",
+              heartbeat_at: new Date().toISOString(),
+              results: { partial_state },
+            }).eq("id", runId);
+            // Self-invoke the SAME chunk to continue from where we left off
+            await selfInvokeNextChunk(runId, body, chunkIndex);
+            return;
+          }
         }
 
         // ── Process exits first ──
