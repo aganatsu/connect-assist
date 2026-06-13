@@ -619,3 +619,271 @@ export function determineDirection(
     reason: `${biasSource} ${bias} → ${direction} | ${h4Check.reason} | ${h1Check.reason} → direction maintained (no opposing 1H CHoCH)`,
   };
 }
+
+
+// ── Style-Aware Direction Engine ──────────────────────────────────────────────
+// Generic multi-TF direction determination that adapts to any trading style.
+// The original determineDirection() is preserved as-is for backward compatibility.
+//
+// Style mapping:
+//   Scalper:     biasCandles=1H,  structureCandles=15m, confirmCandles=5m
+//   Day Trader:  biasCandles=Daily, structureCandles=4H, confirmCandles=1H  (same as original)
+//   Swing:       biasCandles=Weekly, structureCandles=Daily, confirmCandles=4H
+
+export interface StyleDirectionConfig extends DirectionConfig {
+  /** Label for the bias TF (used in reason strings) */
+  biasTFLabel?: string;
+  /** Label for the structure TF (used in reason strings) */
+  structureTFLabel?: string;
+  /** Label for the confirmation TF (used in reason strings) */
+  confirmTFLabel?: string;
+}
+
+export interface StyleDirectionResult {
+  direction: "long" | "short" | null;
+  bias: "bullish" | "bearish" | null;
+  biasSource: string | null;           // now a generic label (e.g., "1h", "daily", "weekly")
+  structureRetrace: boolean;           // structure TF is pulling back without CHoCH
+  structureChochAgainst: boolean;      // structure TF CHoCH against bias → hard block
+  confirmBOS: boolean;                 // confirmation TF BOS in bias direction
+  reason: string;
+}
+
+/**
+ * determineDirectionStyleAware — Generic multi-TF direction for any trading style.
+ *
+ * Flow (same logic as original, just with generic TF labels):
+ *   1. Bias TF sets the macro direction (confirmedTrend or structure-based)
+ *   2. Structure TF confirms structure intact (retrace, no CHoCH against)
+ *   3. Confirm TF provides BOS/CHoCH in bias direction
+ *
+ * @param biasCandles      - Highest TF candles for macro bias (Daily for day_trader, 1H for scalper, Weekly for swing)
+ * @param structureCandles - Mid TF candles for structure check (4H for day_trader, 15m for scalper, Daily for swing)
+ * @param confirmCandles   - Lowest TF candles for entry confirmation (1H for day_trader, 5m for scalper, 4H for swing)
+ * @param config           - Direction config with optional TF labels
+ */
+export function determineDirectionStyleAware(
+  biasCandles: Candle[] | null,
+  structureCandles: Candle[] | null,
+  confirmCandles: Candle[] | null,
+  config?: StyleDirectionConfig,
+): StyleDirectionResult {
+  const chochLookback = config?.h4ChochLookback ?? DEFAULTS.h4ChochLookback;
+  const bosLookback = config?.h1BosLookback ?? DEFAULTS.h1BosLookback;
+  const minBosForFallback = config?.h4MinBosForFallback ?? DEFAULTS.h4MinBosForFallback;
+  const fibFactor = config?.fibFactor ?? DEFAULTS.fibFactor;
+  const trendSwingLookback = config?.trendSwingLookback ?? DEFAULTS.trendSwingLookback;
+  const useConfirmedTrend = config?.useConfirmedTrend ?? DEFAULTS.useConfirmedTrend;
+
+  const biasTF = config?.biasTFLabel ?? "bias";
+  const structureTF = config?.structureTFLabel ?? "structure";
+  const confirmTF = config?.confirmTFLabel ?? "confirm";
+
+  const noDirection: StyleDirectionResult = {
+    direction: null, bias: null, biasSource: null,
+    structureRetrace: false, structureChochAgainst: false, confirmBOS: false,
+    reason: "",
+  };
+
+  // ── Step 1: Determine bias from highest TF ──
+  let bias: "bullish" | "bearish" | null = null;
+  let biasSource: string | null = null;
+
+  if (biasCandles && biasCandles.length >= 20) {
+    let biasTrend: "bullish" | "bearish" | "ranging";
+    let biasTrendReason: string;
+    if (useConfirmedTrend) {
+      const ct = confirmedTrend(biasCandles, fibFactor, trendSwingLookback);
+      biasTrend = ct.trend;
+      biasTrendReason = `[confirmedTrend] ${ct.reason}`;
+    } else {
+      const biasStructure = analyzeMarketStructure(biasCandles);
+      biasTrend = biasStructure.trend;
+      biasTrendReason = `[legacyTrend] last-2-swings`;
+    }
+    bias = trendToBias(biasTrend);
+
+    if (bias) {
+      biasSource = biasTF;
+    } else {
+      // Bias TF is ranging → fall back to structure TF
+      if (structureCandles && structureCandles.length >= 20) {
+        let structTrend: "bullish" | "bearish" | "ranging";
+        let structTrendReason: string;
+        if (useConfirmedTrend) {
+          const ct = confirmedTrend(structureCandles, fibFactor, trendSwingLookback);
+          structTrend = ct.trend;
+          structTrendReason = `[confirmedTrend] ${ct.reason}`;
+        } else {
+          const structStruct = analyzeMarketStructure(structureCandles);
+          structTrend = structStruct.trend;
+          structTrendReason = `[legacyTrend] last-2-swings`;
+        }
+        const structBias = trendToBias(structTrend);
+
+        if (structBias) {
+          // Verify structure TF has clear structure: enough BOS, no recent CHoCH against
+          const structStructure = analyzeMarketStructure(structureCandles);
+          const recentBos = structStructure.bos.filter(b => b.type === structBias);
+          const recentChochAgainst = recentBreaks(
+            structStructure.choch, structureCandles.length, chochLookback
+          ).filter(c => c.type === (structBias === "bullish" ? "bearish" : "bullish"));
+
+          if (recentBos.length >= minBosForFallback && recentChochAgainst.length === 0) {
+            bias = structBias;
+            biasSource = structureTF;
+          } else {
+            const { highsStr, lowsStr } = formatSwingPrices(structStructure);
+            return {
+              ...noDirection,
+              reason: `${biasTF} ranging (${biasTrendReason}) | ${structureTF} ${structBias} but weak structure (${recentBos.length} BOS, ${recentChochAgainst.length} opposing CHoCH) [${highsStr}, ${lowsStr}] → no trade`,
+            };
+          }
+        } else {
+          return {
+            ...noDirection,
+            reason: `${biasTF} ranging (${biasTrendReason}) | ${structureTF} also ranging (${structTrendReason}) → no directional edge, no trade`,
+          };
+        }
+      } else {
+        return {
+          ...noDirection,
+          reason: `${biasTF} ranging (${biasTrendReason}) | insufficient ${structureTF} candles for fallback → no trade`,
+        };
+      }
+    }
+  } else if (!biasCandles || biasCandles.length < 20) {
+    return {
+      ...noDirection,
+      reason: `Insufficient ${biasTF} candles (${biasCandles?.length ?? 0}, need 20) → cannot determine bias`,
+    };
+  }
+
+  // At this point we have a bias and biasSource
+  const direction = biasToDirction(bias!);
+
+  // ── Step 2: Check structure TF — retrace or CHoCH against? ──
+  if (!structureCandles || structureCandles.length < 20) {
+    if (!confirmCandles || confirmCandles.length < 20) {
+      return {
+        direction, bias: bias!, biasSource: biasSource!,
+        structureRetrace: false, structureChochAgainst: false, confirmBOS: false,
+        reason: `${biasSource} ${bias} bias → ${direction}, but no ${structureTF}/${confirmTF} data for confirmation`,
+      };
+    }
+    // Have confirm TF but no structure TF
+    const confirmStructure = analyzeMarketStructure(confirmCandles);
+    const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback);
+    return {
+      direction: confirmCheck.confirmed ? direction : null,
+      bias: bias!, biasSource: biasSource!,
+      structureRetrace: false, structureChochAgainst: false,
+      confirmBOS: confirmCheck.confirmed,
+      reason: confirmCheck.confirmed
+        ? `${biasSource} ${bias} → ${direction} | No ${structureTF} data | ${confirmTF}: ${confirmCheck.reason}`
+        : `${biasSource} ${bias} but ${confirmTF} not confirmed: ${confirmCheck.reason} → no trade`,
+    };
+  }
+
+  const structStructure = analyzeMarketStructure(structureCandles);
+  const structCheck = is4HRetracing(structStructure, bias!, structureCandles, chochLookback);
+
+  // ── Hard block: structure TF CHoCH against bias ──
+  if (structCheck.chochAgainst) {
+    return {
+      direction: null, bias: bias!, biasSource: biasSource!,
+      structureRetrace: false, structureChochAgainst: true, confirmBOS: false,
+      reason: `${biasSource} ${bias} bias BUT ${structureTF}: ${structCheck.reason} → BLOCKED`,
+    };
+  }
+
+  // ── Hard block: structure TF trend opposes bias ──
+  if (structStructure.trend !== "ranging" && structStructure.trend !== bias) {
+    return {
+      direction: null, bias: bias!, biasSource: biasSource!,
+      structureRetrace: false, structureChochAgainst: true, confirmBOS: false,
+      reason: `${biasSource} ${bias} bias BUT ${structureTF} trend is ${structStructure.trend} (opposes bias) → BLOCKED`,
+    };
+  }
+
+  // ── Step 3: Check confirmation TF ──
+  if (!confirmCandles || confirmCandles.length < 20) {
+    return {
+      direction,
+      bias: bias!, biasSource: biasSource!,
+      structureRetrace: structCheck.retracing, structureChochAgainst: false, confirmBOS: false,
+      reason: `${biasSource} ${bias} → ${direction} | ${structureTF}: ${structCheck.reason} | No ${confirmTF} data for confirmation`,
+    };
+  }
+
+  const confirmStructure = analyzeMarketStructure(confirmCandles);
+  const confirmCheck = is1HConfirmed(confirmStructure, bias!, confirmCandles, bosLookback);
+
+  // ── Final decision ──
+  if (structCheck.retracing && confirmCheck.confirmed) {
+    return {
+      direction, bias: bias!, biasSource: biasSource!,
+      structureRetrace: true, structureChochAgainst: false, confirmBOS: true,
+      reason: `✓ ${biasSource} ${bias} → ${direction} | ${structureTF}: ${structCheck.reason} | ${confirmTF}: ${confirmCheck.reason}`,
+    };
+  }
+
+  if (!structCheck.retracing && confirmCheck.confirmed) {
+    return {
+      direction, bias: bias!, biasSource: biasSource!,
+      structureRetrace: false, structureChochAgainst: false, confirmBOS: true,
+      reason: `${biasSource} ${bias} → ${direction} | ${structureTF}: ${structCheck.reason} | ${confirmTF}: ${confirmCheck.reason} (continuation, not pullback)`,
+    };
+  }
+
+  // ── Hysteresis: check for confirm TF CHoCH AGAINST bias ──
+  const oppositeType = bias === "bullish" ? "bearish" : "bullish";
+  const recentConfirmChoch = recentBreaks(confirmStructure.choch, confirmCandles.length, bosLookback);
+  const confirmChochAgainst = recentConfirmChoch.filter(c => c.type === oppositeType);
+  const hasOpposingSignal = confirmChochAgainst.length > 0;
+
+  if (structCheck.retracing && !confirmCheck.confirmed) {
+    if (hasOpposingSignal) {
+      const chochPrices = confirmChochAgainst.map(c => c.price.toFixed(5)).join(", ");
+      return {
+        direction: null, bias: bias!, biasSource: biasSource!,
+        structureRetrace: true, structureChochAgainst: false, confirmBOS: false,
+        reason: `${biasSource} ${bias} | ${structureTF}: ${structCheck.reason} | ${confirmTF} CHoCH against bias (${confirmChochAgainst.length} ${oppositeType} at ${chochPrices}) → direction nullified`,
+      };
+    }
+    return {
+      direction, bias: bias!, biasSource: biasSource!,
+      structureRetrace: true, structureChochAgainst: false, confirmBOS: false,
+      reason: `${biasSource} ${bias} → ${direction} | ${structureTF}: ${structCheck.reason} | ${confirmTF}: ${confirmCheck.reason} → direction maintained (no opposing ${confirmTF} CHoCH)`,
+    };
+  }
+
+  // Structure not retracing, confirm not confirmed
+  if (hasOpposingSignal) {
+    const chochPrices = confirmChochAgainst.map(c => c.price.toFixed(5)).join(", ");
+    return {
+      direction: null, bias: bias!, biasSource: biasSource!,
+      structureRetrace: false, structureChochAgainst: false, confirmBOS: false,
+      reason: `${biasSource} ${bias} | ${structureTF}: ${structCheck.reason} | ${confirmTF} CHoCH against bias (${confirmChochAgainst.length} ${oppositeType} at ${chochPrices}) → direction nullified`,
+    };
+  }
+  return {
+    direction, bias: bias!, biasSource: biasSource!,
+    structureRetrace: false, structureChochAgainst: false, confirmBOS: false,
+    reason: `${biasSource} ${bias} → ${direction} | ${structureTF}: ${structCheck.reason} | ${confirmTF}: ${confirmCheck.reason} → direction maintained (no opposing ${confirmTF} CHoCH)`,
+  };
+}
+
+// ── Style-to-TF Mapping Helper ──
+
+export interface StyleTFMapping {
+  biasTFLabel: string;
+  structureTFLabel: string;
+  confirmTFLabel: string;
+}
+
+export const STYLE_TF_LABELS: Record<string, StyleTFMapping> = {
+  scalper: { biasTFLabel: "1H", structureTFLabel: "15m", confirmTFLabel: "5m" },
+  day_trader: { biasTFLabel: "Daily", structureTFLabel: "4H", confirmTFLabel: "1H" },
+  swing_trader: { biasTFLabel: "Weekly", structureTFLabel: "Daily", confirmTFLabel: "4H" },
+};
