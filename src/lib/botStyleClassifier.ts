@@ -26,14 +26,14 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
   scalper: {
     entryTimeframe: "5m",
     htfTimeframe: "1h",
-    tpRatio: 1.5,
+    tpRatio: 2.0,
     slBufferPips: 1,
     confluenceThreshold: 40,
-    trailingStopEnabled: true,
-    trailingStopPips: 8,              // minimum trail; proportional (0.5× SL) may be larger
-    trailingStopActivation: "after_1r",  // let scalps reach 1R before trailing
-    breakEvenEnabled: true,
-    breakEvenPips: 8,                 // fallback; R-based trigger (min 1R) takes precedence
+    trailingStopEnabled: false,        // validated: 5m noise cuts winners short
+    trailingStopPips: 8,
+    trailingStopActivation: "after_1r",
+    breakEvenEnabled: false,           // validated: let trades run to TP/SL
+    breakEvenPips: 8,
     partialTPEnabled: false,
     partialTPPercent: 50,
     partialTPLevel: 1.0,
@@ -60,15 +60,15 @@ export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
     htfTimeframe: "1w",
     tpRatio: 3.0,
     slBufferPips: 5,
-    confluenceThreshold: 65,
-    trailingStopEnabled: true,
-    trailingStopPips: 25,             // minimum trail; proportional (0.5× SL) may be larger
-    trailingStopActivation: "after_2r", // let swings develop before trailing
-    breakEvenEnabled: true,
-    breakEvenPips: 40,                // fallback; R-based trigger (min 1R) takes precedence
-    partialTPEnabled: true,
-    partialTPPercent: 33,             // take 33% at 1R (keep more for the big move)
-    partialTPLevel: 1.0,              // lock in profit at 1R
+    confluenceThreshold: 40,          // validated: cascade selectivity is the real filter
+    trailingStopEnabled: false,        // validated: BE/trailing killed XAU/USD wins
+    trailingStopPips: 25,
+    trailingStopActivation: "after_2r",
+    breakEvenEnabled: false,           // validated: 75% WR without BE, 0% with BE on XAU
+    breakEvenPips: 40,
+    partialTPEnabled: false,           // validated: let full position run to 3R TP
+    partialTPPercent: 33,
+    partialTPLevel: 1.0,
     maxHoldHours: 0,  // no limit for swings
   },
 };
