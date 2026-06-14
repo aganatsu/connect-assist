@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Settings, Link2, Shield, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy, Wand2 } from "lucide-react";
+import { Settings, Link2, Palette, Info, Plus, Trash2, Zap, Sun, Moon, Monitor, Wrench, List, Copy, Wand2 } from "lucide-react";
 import { brokerApi, brokerExecApi, settingsApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -17,10 +17,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 
-type SettingsTab = "risk" | "bot" | "preferences" | "about";
+type SettingsTab = "bot" | "preferences" | "about";
 
 const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: "risk", label: "Risk Management", icon: Shield },
   { id: "bot", label: "Bot Configuration", icon: Zap },
   { id: "preferences", label: "Preferences", icon: Palette },
   { id: "about", label: "About", icon: Info },
@@ -28,7 +27,7 @@ const TABS: { id: SettingsTab; label: string; icon: React.ComponentType<{ classN
 
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("risk");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("bot");
   const { signOut } = useAuth();
 
   return (
@@ -53,7 +52,6 @@ export default function SettingsPage() {
           </div>
         </div>
         <div className="flex-1 md:max-w-2xl min-w-0">
-          {activeTab === "risk" && <RiskSettings />}
           {activeTab === "bot" && <BotConfigSettings />}
           {activeTab === "preferences" && <PreferencesSettings />}
           {activeTab === "about" && <AboutSettings />}
@@ -460,45 +458,7 @@ function BrokerSettings() {
   );
 }
 
-function RiskSettings() {
-  const queryClient = useQueryClient();
-  const { data: settings } = useQuery({ queryKey: ["user-settings"], queryFn: () => settingsApi.get() });
-  const risk = settings?.risk_settings_json || {};
-  const [maxRisk, setMaxRisk] = useState(risk.maxRiskPerTrade ?? 1);
-  const [maxDD, setMaxDD] = useState(risk.maxDailyDrawdown ?? 3);
-  const [maxPos, setMaxPos] = useState(risk.maxOpenPositions ?? 5);
-  const [defaultRR, setDefaultRR] = useState(risk.defaultRR ?? 3);
 
-  useEffect(() => {
-    if (settings?.risk_settings_json) {
-      const r = settings.risk_settings_json;
-      setMaxRisk(r.maxRiskPerTrade ?? 1);
-      setMaxDD(r.maxDailyDrawdown ?? 3);
-      setMaxPos(r.maxOpenPositions ?? 5);
-      setDefaultRR(r.defaultRR ?? 3);
-    }
-  }, [settings]);
-
-  const saveMutation = useMutation({
-    mutationFn: () => settingsApi.upsert({ maxRiskPerTrade: maxRisk, maxDailyDrawdown: maxDD, maxOpenPositions: maxPos, defaultRR }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Risk settings saved"); },
-  });
-
-  return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-bold">Risk Management</h2>
-      <Card><CardContent className="pt-4 space-y-4">
-        {[
-          { label: "Max Risk per Trade (%)", value: maxRisk, set: setMaxRisk },
-          { label: "Max Daily Drawdown (%)", value: maxDD, set: setMaxDD },
-          { label: "Max Open Positions", value: maxPos, set: setMaxPos },
-          { label: "Default Risk:Reward", value: defaultRR, set: setDefaultRR },
-        ].map(f => (<div key={f.label}><Label className="text-xs">{f.label}</Label><Input type="number" value={f.value} onChange={e => f.set(parseFloat(e.target.value) || 0)} className="mt-1" /></div>))}
-        <Button onClick={() => saveMutation.mutate()}>Save Risk Settings</Button>
-      </CardContent></Card>
-    </div>
-  );
-}
 
 function BotConfigSettings() {
   const [modalOpen, setModalOpen] = useState(false);
