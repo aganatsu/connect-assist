@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Zap, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles } from "lucide-react";
+import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -591,26 +591,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         </div>
 
         {/* Presets Bar */}
+        {customPresets.length > 0 && (
         <div className="px-6 py-3 border-b border-border bg-secondary/30">
-          {/* Quick Presets (full config snapshots) */}
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><Zap className="h-3 w-3 text-primary" /> Quick Presets</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 md:gap-3">
-            {Object.entries(PRESETS).map(([key, preset]) => (
-              <button key={key} onClick={() => {
-                applyPresetConfig(preset.config, `${key.charAt(0).toUpperCase() + key.slice(1)} → ${STYLE_META[preset.tradingStyle].icon} ${STYLE_META[preset.tradingStyle].label}`);
-              }} className="p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-bold capitalize">{key}</p>
-                  <span className="text-[10px] text-muted-foreground">{STYLE_META[preset.tradingStyle].icon} {STYLE_META[preset.tradingStyle].label}</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-0.5">{preset.description}</p>
-              </button>
-            ))}
-          </div>
-
           {/* My Presets */}
-          {customPresets.length > 0 && (
-            <div className="mt-3">
+            <div>
               <button
                 onClick={() => setShowMyPresets(!showMyPresets)}
                 className="flex items-center gap-1 text-[10px] text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors w-full"
@@ -643,8 +627,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 </div>
               )}
             </div>
-          )}
         </div>
+        )}
 
         {/* Save Preset Dialog */}
         <Dialog open={showSavePresetDialog} onOpenChange={setShowSavePresetDialog}>
@@ -787,7 +771,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         return (
                           <button
                             key={mode}
-                            onClick={() => updateField("tradingStyle", "mode", mode)}
+                            onClick={() => {
+                              const presetKey = mode === "scalper" ? "aggressive" : mode === "day_trader" ? "moderate" : "conservative";
+                              applyPresetConfig(PRESETS[presetKey].config, `${STYLE_META[mode].icon} ${STYLE_META[mode].label}`);
+                            }}
                             className={`p-4 border text-left transition-colors ${isActive ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
                           >
                             <div className="flex items-center gap-2 mb-1">
@@ -815,7 +802,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       })}
                     </div>
                     <p className="text-[10px] text-muted-foreground italic">
-                      Selecting a style via Quick Presets sets ALL parameters (strategy, risk, instruments, sessions, protection). You can fine-tune afterwards.
+                      Clicking a style sets ALL parameters (strategy, risk, instruments, sessions, protection). You can fine-tune in the other tabs afterwards.
                     </p>
                   </div>
                 )}
