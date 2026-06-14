@@ -257,11 +257,51 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     description: "Low risk, swing trading",
     tradingStyle: "swing_trader" as const,
     config: {
-      ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 40, regimeScoringStrength: 1.5 },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 1.5, maxDailyLoss: 3, maxOpenPositions: 2, minRiskReward: 2.5 },
-      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30 },
-      exit: { ...BASE_CONFIG.exit, tpRRRatio: 3.0, trailingStopEnabled: false, trailingStopPips: 20, breakEvenEnabled: false, breakEvenTriggerPips: 15, partialTPEnabled: false, timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 120 },
+      strategy: {
+        enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
+        confluenceThreshold: 40, htfBiasRequired: true, obLookbackCandles: 20,
+        fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
+        liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
+        regimeScoringEnabled: true, regimeScoringStrength: 1.5,
+        normalizedScoring: true,
+      },
+      risk: {
+        riskPerTrade: 1.5, maxDailyLoss: 3, maxDrawdown: 20, positionSizingMethod: "percent_risk",
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 2, maxPositionsPerSymbol: 1,
+        allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 2.5,
+        conflictThresholdRaise: 4, conflictBlockAt: 6,
+      },
+      entry: {
+        defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "15m",
+        trailingEntry: false, trailingEntryPips: 5, maxSlippagePips: 3,
+        closeOnReverse: false, cooldownMinutes: 30,
+      },
+      exit: {
+        stopLossMethod: "structure", fixedSLPips: 50, slATRMultiple: 1.5, slATRPeriod: 14,
+        takeProfitMethod: "rr_ratio", fixedTPPips: 150, tpRRRatio: 3.0, tpATRMultiple: 3.0,
+        trailingStopEnabled: false, trailingStopPips: 25, trailingStopActivation: "after_2r",
+        partialTPEnabled: false, partialTPPercent: 33, partialTPLevel: 1.0,
+        breakEvenEnabled: false, breakEvenTriggerPips: 40,
+        timeBasedExitEnabled: false, maxHoldEnabled: false, maxHoldHours: 120,
+      },
+      instruments: {
+        allowedInstruments: {
+          "EUR/USD": true, "GBP/USD": true, "USD/JPY": false, "GBP/JPY": true,
+          "AUD/USD": false, "USD/CAD": false, "EUR/GBP": false, "NZD/USD": false,
+          "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
+        },
+        spreadFilterEnabled: true, maxSpreadPips: 0, volatilityFilterEnabled: false,
+        minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8, maxCorrelatedPositions: 1,
+      },
+      sessions: {
+        filter: ["london", "newyork"],
+        activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
+        newsFilterEnabled: true, newsFilterPauseMinutes: 60,
+      },
+      protection: { maxDailyLoss: 500, maxConsecutiveLosses: 2, circuitBreakerPct: 20 },
+      account: { startingBalance: 10000, leverage: 100, mode: "paper" },
+      openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+      factorWeights: {},
       tradingStyle: { mode: "swing_trader" },
     },
   },
@@ -269,10 +309,51 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     description: "Balanced day trading",
     tradingStyle: "day_trader" as const,
     config: {
-      ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 55 },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxDailyLoss: 3, maxOpenPositions: 4, minRiskReward: 1.5 },
-      exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: true, breakEvenTriggerPips: 20, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 24 },
+      strategy: {
+        enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
+        confluenceThreshold: 55, htfBiasRequired: true, obLookbackCandles: 20,
+        fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
+        liquidityPoolMinTouches: 2, premiumDiscountEnabled: true, onlyBuyInDiscount: true, onlySellInPremium: true,
+        regimeScoringEnabled: true, regimeScoringStrength: 1.0,
+        normalizedScoring: true,
+      },
+      risk: {
+        riskPerTrade: 1, maxDailyLoss: 3, maxDrawdown: 15, positionSizingMethod: "percent_risk",
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 4, maxPositionsPerSymbol: 2,
+        allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
+        conflictThresholdRaise: 4, conflictBlockAt: 6,
+      },
+      entry: {
+        defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",
+        trailingEntry: false, trailingEntryPips: 5, maxSlippagePips: 2,
+        closeOnReverse: true, cooldownMinutes: 15,
+      },
+      exit: {
+        stopLossMethod: "structure", fixedSLPips: 25, slATRMultiple: 1.5, slATRPeriod: 14,
+        takeProfitMethod: "rr_ratio", fixedTPPips: 50, tpRRRatio: 2.0, tpATRMultiple: 2.0,
+        trailingStopEnabled: true, trailingStopPips: 15, trailingStopActivation: "after_1.5r",
+        partialTPEnabled: true, partialTPPercent: 50, partialTPLevel: 1.0,
+        breakEvenEnabled: true, breakEvenTriggerPips: 20,
+        timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 24,
+      },
+      instruments: {
+        allowedInstruments: {
+          "EUR/USD": true, "GBP/USD": true, "USD/JPY": true, "GBP/JPY": true,
+          "AUD/USD": true, "USD/CAD": true, "EUR/GBP": false, "NZD/USD": false,
+          "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
+        },
+        spreadFilterEnabled: true, maxSpreadPips: 0, volatilityFilterEnabled: false,
+        minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8, maxCorrelatedPositions: 1,
+      },
+      sessions: {
+        filter: ["london", "newyork"],
+        activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
+        newsFilterEnabled: true, newsFilterPauseMinutes: 30,
+      },
+      protection: { maxDailyLoss: 300, maxConsecutiveLosses: 3, circuitBreakerPct: 15 },
+      account: { startingBalance: 10000, leverage: 100, mode: "paper" },
+      openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+      factorWeights: {},
       tradingStyle: { mode: "day_trader" },
     },
   },
@@ -280,12 +361,51 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
     description: "High frequency scalping",
     tradingStyle: "scalper" as const,
     config: {
-      ...BASE_CONFIG,
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 40, regimeScoringEnabled: false },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxDailyLoss: 3, maxOpenPositions: 6, minRiskReward: 1.5 },
-      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 5 },
-      exit: { ...BASE_CONFIG.exit, tpRRRatio: 2.0, trailingStopEnabled: false, breakEvenEnabled: false, timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4 },
-      sessions: { ...BASE_CONFIG.sessions, filter: ["asian", "london", "newyork", "offhours"] },
+      strategy: {
+        enableBOS: true, enableCHoCH: true, enableOB: true, enableFVG: true, enableLiquiditySweep: true,
+        confluenceThreshold: 40, htfBiasRequired: true, obLookbackCandles: 20,
+        fvgMinSizePips: 5, fvgOnlyUnfilled: true, structureLookback: 50,
+        liquidityPoolMinTouches: 2, premiumDiscountEnabled: false, onlyBuyInDiscount: false, onlySellInPremium: false,
+        regimeScoringEnabled: false, regimeScoringStrength: 1.0,
+        normalizedScoring: true,
+      },
+      risk: {
+        riskPerTrade: 0.5, maxDailyLoss: 3, maxDrawdown: 10, positionSizingMethod: "percent_risk",
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 3, maxPositionsPerSymbol: 1,
+        allowSameDirectionStacking: false, maxPortfolioHeat: 5, minRiskReward: 1.5,
+        conflictThresholdRaise: 4, conflictBlockAt: 6,
+      },
+      entry: {
+        defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "1m",
+        trailingEntry: false, trailingEntryPips: 3, maxSlippagePips: 1,
+        closeOnReverse: true, cooldownMinutes: 5,
+      },
+      exit: {
+        stopLossMethod: "structure", fixedSLPips: 10, slATRMultiple: 1.5, slATRPeriod: 14,
+        takeProfitMethod: "rr_ratio", fixedTPPips: 20, tpRRRatio: 2.0, tpATRMultiple: 2.0,
+        trailingStopEnabled: false, trailingStopPips: 8, trailingStopActivation: "after_1r",
+        partialTPEnabled: false, partialTPPercent: 50, partialTPLevel: 1.0,
+        breakEvenEnabled: false, breakEvenTriggerPips: 8,
+        timeBasedExitEnabled: true, maxHoldEnabled: true, maxHoldHours: 4,
+      },
+      instruments: {
+        allowedInstruments: {
+          "EUR/USD": true, "GBP/USD": false, "USD/JPY": false, "GBP/JPY": false,
+          "AUD/USD": false, "USD/CAD": false, "EUR/GBP": false, "NZD/USD": false,
+          "XAU/USD": false, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
+        },
+        spreadFilterEnabled: true, maxSpreadPips: 0, volatilityFilterEnabled: false,
+        minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8, maxCorrelatedPositions: 1,
+      },
+      sessions: {
+        filter: ["london", "newyork"],
+        activeDays: { mon: true, tue: true, wed: true, thu: true, fri: true },
+        newsFilterEnabled: true, newsFilterPauseMinutes: 15,
+      },
+      protection: { maxDailyLoss: 300, maxConsecutiveLosses: 4, circuitBreakerPct: 10 },
+      account: { startingBalance: 10000, leverage: 100, mode: "paper" },
+      openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
+      factorWeights: {},
       tradingStyle: { mode: "scalper" },
     },
   },
@@ -695,7 +815,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       })}
                     </div>
                     <p className="text-[10px] text-muted-foreground italic">
-                      Style sets default parameters. You can still fine-tune individual settings in the other tabs — manual overrides take precedence.
+                      Selecting a style via Quick Presets sets ALL parameters (strategy, risk, instruments, sessions, protection). You can fine-tune afterwards.
                     </p>
                   </div>
                 )}
