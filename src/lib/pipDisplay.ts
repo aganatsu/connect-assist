@@ -45,10 +45,15 @@ export function getDisplayConfig(symbol: string): DisplayConfig {
     case "forex":
       return { label: "pips", decimals: 1, multiplier: 1 };
     case "crypto":
+      // Crypto: show the actual price move in dollars as "pts"
+      return { label: "pts", decimals: 2, multiplier: inst.pipSize };
     case "index":
+      // Indices: convert raw to points
+      return { label: "pts", decimals: 1, multiplier: inst.pipSize };
     case "commodity":
-      // Always display as raw pips for consistency
-      return { label: "pips", decimals: 1, multiplier: 1 };
+      // Commodities (gold/silver/oil): show in standard pips
+      // Gold: 1 pip = $0.10 (10x the pipSize of 0.01), so multiplier = pipSize * 10
+      return { label: "pips", decimals: 1, multiplier: inst.pipSize * 10 };
     default:
       return { label: "pips", decimals: 1, multiplier: 1 };
   }
