@@ -78,6 +78,7 @@ import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig
 import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
 import { validateFVGBatch, type BatchFVGValidationResult, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
+import { updateConviction, buildConvictionKey, saveConvictionState, loadConvictionState, type ConvictionInput, type ThesisConvictionState, type ConvictionResult, type ConvictionConfig, DEFAULT_CONVICTION_CONFIG } from "../_shared/thesisConviction.ts";
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
@@ -279,6 +280,13 @@ const DEFAULTS = {
   // ── Entry/HTF timeframes (set by style) ──
   entryTimeframe: "15min",
   htfTimeframe: "1day",
+  // ── Thesis Conviction Tracker ──
+  thesisConvictionEnabled: true,       // Enable thesis conviction tracking
+  thesisConvictionMode: "shadow" as "shadow" | "active", // "shadow" = log only; "active" = modulate impulse credit
+  thesisConvictionDecayPerCycle: 8,    // Points lost per cycle when evidence opposes thesis
+  thesisConvictionRecoveryPerCycle: 5, // Points gained per cycle when evidence supports thesis
+  thesisConvictionRevokeThreshold: 50, // Below this → impulse credit revoked (in active mode)
+  thesisConvictionKillThreshold: 30,   // Below this → thesis killed entirely (in active mode)
 };
 // ─── Resolve symbol name with per-symbol overrides or default suffix ──
 // normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
@@ -981,10 +989,16 @@ function _legacyLoadConfigMapping(_raw: any) {
     limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
-    marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
+        marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
     marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? DEFAULTS.marketFillStrictATRMult,
+    // ── Thesis Conviction Tracker ──
+    thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? DEFAULTS.thesisConvictionEnabled,
+    thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? DEFAULTS.thesisConvictionMode) as "shadow" | "active",
+    thesisConvictionDecayPerCycle: strategy.thesisConvictionDecayPerCycle ?? raw.thesisConvictionDecayPerCycle ?? DEFAULTS.thesisConvictionDecayPerCycle,
+    thesisConvictionRecoveryPerCycle: strategy.thesisConvictionRecoveryPerCycle ?? raw.thesisConvictionRecoveryPerCycle ?? DEFAULTS.thesisConvictionRecoveryPerCycle,
+    thesisConvictionRevokeThreshold: strategy.thesisConvictionRevokeThreshold ?? raw.thesisConvictionRevokeThreshold ?? DEFAULTS.thesisConvictionRevokeThreshold,
+    thesisConvictionKillThreshold: strategy.thesisConvictionKillThreshold ?? raw.thesisConvictionKillThreshold ?? DEFAULTS.thesisConvictionKillThreshold,
   };
-
   return merged;
 }
 
@@ -992,7 +1006,7 @@ function _legacyLoadConfigMapping(_raw: any) {
 
 async function runSafetyGates(
   supabase: any, userId: string, symbol: string, direction: string,
-  analysis: any, config: typeof DEFAULTS, account: any, openPositions: any[],
+  analysis: any, config: any, account: any, openPositions: any[],
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
@@ -2301,6 +2315,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const stagedMap = new Map<string, any>();
   for (const s of activeStagedSetups) {
     stagedMap.set(`${s.symbol}:${s.direction}`, s);
+  }
+  // ── Thesis Conviction Tracker: in-memory state per pair+direction ──
+  // Persisted to kv_cache at end of scan cycle. Loaded from kv_cache at start.
+  const convictionStates = new Map<string, ThesisConvictionState>();
+  if ((config as any).thesisConvictionEnabled) {
+    try {
+      const { data: kvRows } = await supabase
+        .from("kv_cache")
+        .select("key, value, expires_at")
+        .like("key", `thesis_conviction:${userId}:${BOT_ID}:%`);
+      if (kvRows) {
+        const now = Date.now();
+        for (const row of kvRows) {
+          try {
+            // Skip expired entries
+            if (row.expires_at && new Date(row.expires_at).getTime() < now) continue;
+            convictionStates.set(row.key, JSON.parse(row.value));
+          } catch { /* skip corrupt entries */ }
+        }
+      }
+      if (convictionStates.size > 0) {
+        console.log(`[conviction] Loaded ${convictionStates.size} thesis conviction states from kv_cache`);
+      }
+    } catch (e: any) {
+      console.warn(`[conviction] Failed to load conviction states: ${e?.message}`);
+    }
   }
 
   // ── Build rateMap for cross-pair lot sizing & PnL conversion ──
@@ -5052,9 +5092,64 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (verdictScoreAdj !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
     }
+    // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──
+    const opposingFactorCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+    let convictionResult: ConvictionResult | null = null;
+    if ((config as any).thesisConvictionEnabled && analysis.direction) {
+      try {
+        const convKey = buildConvictionKey(userId, BOT_ID, pair, analysis.direction);
+        const prevState = convictionStates.get(convKey) || null;
+        const gpCtx = (pairConfig as any)._gamePlanContext;
+        const convInput: ConvictionInput = {
+          symbol: pair,
+          direction: analysis.direction,
+          directionVerdict: directionVerdict || null,
+          regime4H: analysis.regime4HInfo ? {
+            regime: analysis.regime4HInfo.regime,
+            bias: analysis.regime4HInfo.bias,
+            confidence: analysis.regime4HInfo.confidence,
+          } : null,
+          fotsiAlignment: analysis.fotsiAlignment ? {
+            label: analysis.fotsiAlignment.label,
+            score: analysis.fotsiAlignment.score,
+          } : null,
+          opposingFactorCount: opposingFactorCount,
+          gamePlanBias: gpCtx ? {
+            bias: gpCtx.bias,
+            confidence: gpCtx.biasConfidence ?? 50,
+          } : null,
+        };
+        const convictionUpdate = updateConviction(prevState, convInput, {
+          ...DEFAULT_CONVICTION_CONFIG,
+          decayPerOpposingSource: (config as any).thesisConvictionDecayPerCycle ?? DEFAULT_CONVICTION_CONFIG.decayPerOpposingSource,
+          recoveryPerAlignedSource: (config as any).thesisConvictionRecoveryPerCycle ?? DEFAULT_CONVICTION_CONFIG.recoveryPerAlignedSource,
+          revokeThreshold: (config as any).thesisConvictionRevokeThreshold ?? DEFAULT_CONVICTION_CONFIG.revokeThreshold,
+        });
+        convictionResult = convictionUpdate.result;
+        // Update in-memory state for persistence at end of cycle
+        convictionStates.set(convKey, convictionUpdate.state);
+        // Shadow mode: log the conviction score and what it WOULD have done
+        const creditDecision = convictionResult.impulseCreditDecision;
+        if (convictionResult.conviction < 80 || creditDecision !== "granted") {
+          console.log(`[conviction${(config as any).thesisConvictionMode === "shadow" ? ":shadow" : ""}] ${pair} ${analysis.direction}: conviction=${convictionResult.conviction.toFixed(0)}%, cycles=${convictionResult.cycleCount}, credit=${creditDecision}, scoreAdj=${convictionResult.scoreAdjustment.toFixed(1)}, summary=${convictionResult.summary}`);
+        }
+        // Attach to scan detail for logging/debugging
+        (detail as any).thesisConviction = {
+          conviction: convictionResult.conviction,
+          cycleCount: convictionResult.cycleCount,
+          creditDecision,
+          scoreAdjustment: convictionResult.scoreAdjustment,
+          summary: convictionResult.summary,
+          thesisDegrading: convictionResult.thesisDegrading,
+          mode: (config as any).thesisConvictionMode,
+        };
+      } catch (tcErr: any) {
+        console.warn(`[conviction] ${pair} error (non-fatal): ${tcErr?.message}`);
+      }
+    }
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
     // When many factors actively oppose the trade, raise the bar or block entirely.
-    const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
+    const opposingCount = opposingFactorCount;
     let conflictAdjustedMinConfluence = adjustedMinConfluence;
     let conflictHardBlock = false;
     if (opposingCount >= conflictBlockAt) {
@@ -6542,6 +6637,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   scanCache.clear();
+  // ── Persist thesis conviction states to kv_cache ──
+  if ((config as any).thesisConvictionEnabled && convictionStates.size > 0) {
+    try {
+      const savePromises: Promise<void>[] = [];
+      for (const [_key, state] of convictionStates.entries()) {
+        savePromises.push(saveConvictionState(supabase, userId, BOT_ID, state));
+      }
+      await Promise.allSettled(savePromises);
+      console.log(`[conviction] Persisted ${convictionStates.size} conviction states to kv_cache`);
+    } catch (e: any) {
+      console.warn(`[conviction] Failed to persist conviction states: ${e?.message}`);
+    }
+  }
   // ── Rejection telemetry: classify each scanDetail so we can see why pairs died ──
   const rejectionSummary = (() => {
     const izSubReason = (r?: string): string => {
