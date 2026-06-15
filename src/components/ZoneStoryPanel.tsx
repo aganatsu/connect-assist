@@ -11,6 +11,8 @@
  * Data comes from detail.unifiedZone (the story) and detail.impulseZone (gate data).
  */
 
+import { formatPipDisplay, getPipLabel } from "@/lib/pipDisplay";
+
 interface ZoneStoryData {
   hasZone: boolean;
   state: string;
@@ -116,6 +118,8 @@ interface Props {
   gateData?: ImpulseGateData | null | undefined;
   /** When true, live-action badges ("Hunting 5m CHoCH") are shown. */
   isLiveContext?: boolean;
+  /** Trading symbol (e.g. "EUR/USD", "ETH/USD") — used for asset-aware pip/$/pts labels. */
+  symbol?: string;
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -138,8 +142,21 @@ const STATE_LABELS: Record<string, string> = {
   error: "⚠ Error",
 };
 
-export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false }: Props) {
+export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol }: Props) {
   if (!unifiedData) return null;
+
+  // Asset-aware formatter — falls back to plain "X pips" if no symbol provided
+  const fmtPips = (raw: number | null | undefined, opts: { showSign?: boolean; absolute?: boolean; decimals?: number } = {}) => {
+    if (raw == null) return "—";
+    if (symbol) {
+      return formatPipDisplay(raw, symbol, { showSign: opts.showSign ?? false, absolute: opts.absolute });
+    }
+    const d = opts.decimals ?? 1;
+    return `${opts.absolute ? Math.abs(raw) : raw}`.includes(".")
+      ? `${(opts.absolute ? Math.abs(raw) : raw).toFixed(d)} pips`
+      : `${(opts.absolute ? Math.abs(raw) : raw).toFixed(d)} pips`;
+  };
+  const pipLabel = symbol ? getPipLabel(symbol) : "pips";
 
   const stateColor = STATE_COLORS[unifiedData.state] ?? "text-zinc-400";
   const stateLabel = STATE_LABELS[unifiedData.state] ?? unifiedData.state;
