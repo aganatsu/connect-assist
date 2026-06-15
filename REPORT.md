@@ -1,99 +1,91 @@
-# Task: Add 3 Missing Gates to Backtest Engine
-
-## Branch: manus/backtest-gate-improvements
-
+# Task: Thesis Conviction Tracker
+## Branch: manus/thesis-conviction-tracker
 ## Behavior changes
 
-1. **Direction Verdict gate** — Trades are now blocked in the backtest when `computeDirectionVerdict()` returns `shouldBlock: true`. This occurs when (a) no directional signal exists from either confirmedTrend or simpleDirection, or (b) the regime strongly opposes the spine direction with high confidence. Impact: 6 blocks for scalper, 0 for day_trader, 0 for swing_trader.
+**BEHAVIOR CHANGES: none — shadow mode only (log output, no trade impact)**
 
-2. **Premium/Discount Zone gate** — Longs are blocked when price is in the premium zone (>55% of swing range), shorts are blocked when price is in the discount zone (<45%). Impact: 141 blocks for scalper, 10 for day_trader, 16 for swing_trader.
+The thesis conviction tracker runs in `shadow` mode by default. It evaluates conviction per pair+direction each scan cycle and logs the result, but does NOT:
+- Block any trades
+- Revoke impulse-zone credit
+- Adjust effective scores
+- Kill any thesis
 
-3. **Structural Conviction gate** — Trades are blocked when the conviction timeframe's fractal structure shows zero support for the trade direction, or when opposing fractals overwhelm supporting ones by 2.5x or more. Impact: 2 blocks for scalper, 4 for day_trader, 32 for swing_trader.
+To activate trade impact, set `thesisConvictionMode: "active"` in bot_configs. This is intentionally NOT done in this PR.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `run-backtest-local.ts` | Added 3 new gates (Direction Verdict, Premium/Discount, Structural Conviction) after the existing Regime Gate. Also fixed pre-existing type errors with `StyleTFMapping` property access and `StyleDirectionResult` cast. |
-| `tests/backtest_gates_test.ts` | New test file with 17 unit tests covering all 3 gates. |
-| `backtest_comparison.md` | Backtest results comparison across all 3 trading styles showing gate impact. |
-| `REPORT.md` | This report. |
+| `supabase/functions/_shared/thesisConviction.ts` | **NEW** — Core conviction tracker module (480 lines). Evaluates 5 evidence sources, computes conviction score, determines impulse credit decision. Includes persistence helpers for kv_cache. |
+| `supabase/functions/_shared/thesisConviction.test.ts` | **NEW** — 12 unit tests covering all conviction scenarios including XAU regression test. |
+| `supabase/functions/bot-scanner/index.ts` | Integration: imports module, adds config defaults, loads/persists conviction state, evaluates per pair in scan loop, logs results. Changed `runSafetyGates` config param from `typeof DEFAULTS` to `any` (was already used loosely; resolves type mismatch with pairConfig). |
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| Gate A: Direction Verdict — does NOT block when confirmedTrend is strong | Spine direction wins over disagreeing simpleDirection |
-| Gate A: Direction Verdict — passes when all sources agree | No block when all sources aligned |
-| Gate A: Direction Verdict — BLOCKS when no directional signal at all | Blocks when both confirmedTrend and simpleDirection are null |
-| Gate A: Direction Verdict — blocks when regime vetoes | Regime veto fires when strong_trend at 90% conf opposes spine |
-| Gate B: Premium/Discount — candles ending in premium zone detected correctly | `calculatePremiumDiscount` returns "premium" for swing-high candles |
-| Gate B: Premium/Discount — candles ending in discount zone detected correctly | Returns "discount" for swing-low candles |
-| Gate B: Premium/Discount — gate logic blocks long in premium | Long + premium = block |
-| Gate B: Premium/Discount — gate logic blocks short in discount | Short + discount = block |
-| Gate B: Premium/Discount — gate logic passes long in discount | Long + discount = pass |
-| Gate B: Premium/Discount — gate logic passes short in premium | Short + premium = pass |
-| Gate C: Structural Conviction — analyzeMarketStructure returns structureToFractal | Verifies the return shape has all expected fields |
-| Gate C: Structural Conviction — blocks when opposite overwhelms (2.5x ratio) | 0.3/0.1 = 3.0 >= 2.5 -> block |
-| Gate C: Structural Conviction — passes when direction has adequate support | 0.3/0.4 = 0.75 < 2.5 -> pass |
-| Gate C: Structural Conviction — blocks when zero direction + strong opposite | 0% direction + 50% opposite -> block |
-| Gate C: Structural Conviction — does not block when direction is non-zero and ratio is low | 0.2/0.3 = 0.67 -> pass |
-| confirmedTrend — returns valid trend for uptrend candles | Returns bullish/bearish/ranging (valid enum) |
-| confirmedTrend — returns valid trend for downtrend candles | Returns bullish/bearish/ranging (valid enum) |
+| `updateConviction: first cycle with all aligned evidence → conviction stays high` | First cycle with supporting evidence keeps conviction at 100 |
+| `updateConviction: opposing regime + verdict decays conviction` | Opposing 4H regime + verdict reduces conviction by expected amount |
+| `updateConviction: 4 cycles of opposing evidence → impulse credit revoked` | After minCyclesForRevoke with sustained opposing evidence, credit = "revoked" |
+| `updateConviction: conviction recovers when evidence flips back to supporting` | Conviction increases when evidence turns supportive after decay |
+| `updateConviction: accelerated decay after 3 consecutive declines` | Decay multiplier kicks in after acceleratedDecayAfter consecutive declines |
+| `XAU regression: short thesis degrades as bullish evidence accumulates` | Simulates today's XAU failure — 4 cycles of bullish evidence against short thesis → credit revoked |
+| `updateConviction: first cycle cannot revoke even with all opposing evidence` | minCyclesForRevoke prevents premature revocation |
+| `evaluateEvidence: handles null directionVerdict, regime, fotsi, gamePlan` | Null inputs produce delta=0 (fail-open) |
+| `updateConviction: history capped at maxHistory (12)` | History array never exceeds maxHistory length |
+| `buildConvictionKey: produces correct key format` | Key format matches `thesis_conviction:{userId}:{botId}:{symbol}:{direction}` |
+| `updateConviction: score adjustment reflects conviction level` | scoreAdjustment matches expected penalty for each conviction zone |
+| `evaluateEvidence: neutral verdict direction doesn't oppose thesis` | Neutral verdict doesn't count as opposing evidence |
 
 ## Tests run
 
 ```
-$ deno test --allow-read --allow-write --allow-env tests/backtest_gates_test.ts
+$ deno test --no-check supabase/functions/_shared/thesisConviction.test.ts tests/backtest_gates_test.ts
+
+running 12 tests from ./supabase/functions/_shared/thesisConviction.test.ts
+ok | 12 passed | 0 failed (52ms)
+
 running 17 tests from ./tests/backtest_gates_test.ts
-ok | 17 passed | 0 failed (30ms)
+ok | 17 passed | 0 failed (22ms)
+
+TOTAL: ok | 29 passed | 0 failed (209ms)
 ```
 
-Full test suite (excluding unrelated src/ component imports):
-```
-$ deno test --no-check --allow-read --allow-write --allow-env --allow-net tests/ supabase/functions/
-FAILED | 1467 passed | 2 failed (18s)
-```
-
-The 2 failures are **pre-existing and flaky** (also fail on `main` — `zoneLiquidity.test.ts` filter test and an order-dependent impulse test that passes when run individually). Our changes introduce zero new failures.
+Type check: 60 errors in bot-scanner (vs 61 on main — net reduction of 1 pre-existing error).
+thesisConviction.ts: 0 type errors.
 
 ## Regression check
 
-1. **Type safety**: `deno check run-backtest-local.ts` passes with 0 errors (was 8 pre-existing errors before our type fixes).
-2. **Pre-existing tests**: The full test suite (1467 tests) passes identically on our branch vs main (main has 1 flaky failure, our branch has 2 flaky failures — the extra one is order-dependent and passes individually).
-3. **Backtest output**: All 3 styles produce valid results with the new gates active. The gates block trades as expected (see `backtest_comparison.md`). No existing trades are affected beyond being filtered by the new gates — the underlying scoring, SL/TP, and trade management logic is untouched.
-4. **Gate logic matches live bot**: Each gate's thresholds and conditions are ported directly from `bot-scanner/index.ts` (lines 1048-1068 for P/D, 1068-1120 for Structural Conviction, 4641-4695 for Direction Verdict).
-
-## Backtest results with new gates
-
-| Metric | Scalper | Day Trader | Swing Trader |
-|--------|---------|------------|--------------|
-| Trades | 72 | 10 | 3 |
-| Win Rate | 50% | 50% | 0% |
-| Final Balance | $11,932 | $9,707 | $9,556 |
-| P&L | +$1,932 | -$293 | -$444 |
-| Max Drawdown | 3.4% | 5.0% | 4.4% |
-| Gate blocks (new) | 149 | 14 | 48 |
+- **Shadow mode guarantees zero trade impact** — the module logs only, never modifies effectiveScore or blocks trades
+- `runSafetyGates` type change from `typeof DEFAULTS` to `any` is safe because:
+  - The function already accesses config fields via string keys and optional chaining
+  - The actual runtime object always contains all DEFAULTS fields (spread at construction)
+  - This resolves a pre-existing type mismatch (pairConfig has extra fields not in DEFAULTS)
+- Pre-existing test count: 61 type errors on main → 60 on branch (improvement)
+- All 29 tests pass (12 new conviction + 17 existing backtest gate tests)
 
 ## Open questions
 
-1. **Direction Verdict gate fires very rarely** (6 times for scalper, 0 for day/swing). In the live bot, it also fires rarely because the direction engine already filters heavily upstream. Is this acceptable, or should the blockThreshold be adjusted for backtesting?
+1. **kv_cache table**: Does the `kv_cache` table have a `key` column (not `user_id` + `key` composite)? The module uses `key` as the primary upsert target with the format `thesis_conviction:{userId}:{botId}:{symbol}:{direction}`. If the table uses a composite key, the persistence helpers need adjustment.
 
-2. **Premium/Discount uses entry-TF candles** (5m for scalper, 1H for day_trader, 4H for swing). The live bot uses the same approach. However, for scalper this means P/D is computed on very short-term swings. Should we also check the higher-TF P/D (which is already computed as `htfPD4H` at line 542)?
+2. **Activation timeline**: When do you want to switch from `shadow` to `active` mode? Recommend running shadow for 1-2 weeks to collect conviction data, then reviewing the logs to validate it would have caught bad trades without blocking good ones.
 
-3. **Pre-existing type errors fixed**: The `StyleTFMapping` property access bug (`labels.bias` -> `labels.biasTFLabel`) and the unsafe cast (`as DirectionResult` -> `as unknown as DirectionResult`) were pre-existing on main. These are now fixed on our branch. Should these fixes be cherry-picked to main separately?
+3. **Config mapper**: The thesis conviction config fields are in bot-scanner's DEFAULTS but NOT in `_shared/configMapper.ts` RUNTIME_DEFAULTS. This means they're only configurable via direct bot_configs JSON edits, not via the UI config mapper. Should I add them to configMapper.ts as well?
 
 ## Suggested PR title and description
 
-**Title:** `[backtest-gate-improvements] Add Direction Verdict, Premium/Discount, and Structural Conviction gates to backtest engine`
+**Title:** `[thesis-conviction-tracker] Add thesis conviction tracker — shadow mode`
 
 **Description:**
-Ports 3 gates from the live bot-scanner to `run-backtest-local.ts` to improve backtest fidelity:
+Adds a new shared module (`thesisConviction.ts`) that tracks evidence for/against each active trading thesis across scan cycles. The tracker evaluates 5 evidence sources (direction verdict, 4H regime, opposing factors, FOTSI, game plan bias) and computes a conviction score (0-100) that determines whether impulse-zone credit should be granted, reduced, or revoked.
 
-- **Direction Verdict** — blocks trades when directional confidence is too low or regime strongly opposes
-- **Premium/Discount Zone** — blocks longs in premium (>55%), shorts in discount (<45%)
-- **Structural Conviction** — blocks when conviction-TF fractal structure opposes trade direction (2.5x ratio threshold)
+**Motivation:** Today's XAU trades (2 SL hits at 8:30am) entered a valid zone but the thesis had degraded over 3+ hours as bullish evidence accumulated against the short bias. No single gate catches "the thesis is dying slowly" — this module fills that gap.
 
-Also fixes pre-existing type errors in the style-aware direction logic (`StyleTFMapping` property access, `DirectionResult` cast).
+**Key design decisions:**
+- Shadow mode by default (logs only, no trade impact)
+- Fail-open on any error (non-critical path)
+- Persistence via kv_cache with 8h TTL
+- Config-flagged for instant disable
+- 12 unit tests including XAU regression scenario
 
-Includes 17 new unit tests and backtest comparison results for all 3 trading styles. All pre-existing tests continue to pass.
+**To activate:** Set `thesisConvictionMode: "active"` in bot_configs after reviewing shadow logs.
