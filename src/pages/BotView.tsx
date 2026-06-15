@@ -312,7 +312,39 @@ export default function BotView() {
     return Array.isArray(dj) ? dj : [];
   })();
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
-  const latestDetailsClean: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
+  const latestDetailsCleanRaw: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
+  // Group/sort by status so the most actionable rows surface first.
+  const STATUS_PRIORITY: Record<string, number> = {
+    trade_placed: 0,
+    trade_placed_from_watchlist: 1,
+    limit_order_placed: 2,
+    zone_setup_active: 2,
+    limit_order_from_watchlist: 3,
+    zone_setup_from_watchlist: 3,
+    staged_confirming: 4,
+    staged_watching: 5,
+    staged_new: 6,
+    staged_invalidated: 7,
+    rejected: 8,
+    below_threshold: 9,
+    skipped: 10,
+  };
+  const statusRank = (s: string | undefined) => {
+    if (!s) return 99;
+    if (s in STATUS_PRIORITY) return STATUS_PRIORITY[s];
+    if (s.startsWith("staged_")) return 6;
+    return 50;
+  };
+  const latestDetailsClean: any[] = [...latestDetailsCleanRaw].sort((a, b) => {
+    const ra = statusRank(a?.status);
+    const rb = statusRank(b?.status);
+    if (ra !== rb) return ra - rb;
+    // Tie-break by score desc, then pair name for stability
+    const sa = typeof a?.score === "number" ? a.score : -1;
+    const sb = typeof b?.score === "number" ? b.score : -1;
+    if (sa !== sb) return sb - sa;
+    return String(a?.pair || "").localeCompare(String(b?.pair || ""));
+  });
   const latestSource: CandleSource = (latestMeta?.candleSource as CandleSource) ?? "unknown";
 
   // Extract FOTSI strengths: prefer __meta.fotsiStrengths (new), fallback to reconstructing from per-pair fotsi alignment data (legacy)
