@@ -258,7 +258,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               <span className="text-zinc-400 ml-2">
                 {fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}
               </span>
-              <span className="text-cyan-400 ml-2">({unifiedData.impulse.pips.toFixed(0)} pips)</span>
+              <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
               <div className="text-zinc-500 mt-0.5">
                 BOS: {fmt(unifiedData.impulse.bosPrice)}
                 {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
@@ -327,7 +327,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
             ) : unifiedData.price.atZone ? (
               <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
             ) : (
-              <span className="text-orange-400">{unifiedData.price.distancePips.toFixed(1)} pips away</span>
+              <span className="text-orange-400">{fmtPips(unifiedData.price.distancePips, { absolute: true })} away</span>
             )}
           </span>
         </StoryBullet>
@@ -384,8 +384,8 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 <span className="text-green-400 font-mono ml-2">TP: {fmt(unifiedData.entry.tpPrice)}</span>
               )}
               <div className="flex gap-2 mt-0.5 text-[10px]">
-                <span className="text-zinc-500">Risk: {unifiedData.entry.riskPips.toFixed(1)} pips</span>
-                {unifiedData.entry.rewardPips && <span className="text-zinc-500">Reward: {unifiedData.entry.rewardPips.toFixed(1)} pips</span>}
+                <span className="text-zinc-500">Risk: {fmtPips(unifiedData.entry.riskPips, { absolute: true })}</span>
+                {unifiedData.entry.rewardPips && <span className="text-zinc-500">Reward: {fmtPips(unifiedData.entry.rewardPips, { absolute: true })}</span>}
                 {unifiedData.entry.rrRatio && (
                   <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
                     R:R {unifiedData.entry.rrRatio}:1
