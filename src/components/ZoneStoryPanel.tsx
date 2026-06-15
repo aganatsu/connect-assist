@@ -11,7 +11,7 @@
  * Data comes from detail.unifiedZone (the story) and detail.impulseZone (gate data).
  */
 
-import { formatPipDisplay, getPipLabel } from "@/lib/pipDisplay";
+import { formatPipDisplay } from "@/lib/pipDisplay";
 
 interface ZoneStoryData {
   hasZone: boolean;
@@ -152,11 +152,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
       return formatPipDisplay(raw, symbol, { showSign: opts.showSign ?? false, absolute: opts.absolute });
     }
     const d = opts.decimals ?? 1;
-    return `${opts.absolute ? Math.abs(raw) : raw}`.includes(".")
-      ? `${(opts.absolute ? Math.abs(raw) : raw).toFixed(d)} pips`
-      : `${(opts.absolute ? Math.abs(raw) : raw).toFixed(d)} pips`;
+    const v = opts.absolute ? Math.abs(raw) : raw;
+    return `${v.toFixed(d)} pips`;
   };
-  const pipLabel = symbol ? getPipLabel(symbol) : "pips";
 
   const stateColor = STATE_COLORS[unifiedData.state] ?? "text-zinc-400";
   const stateLabel = STATE_LABELS[unifiedData.state] ?? unifiedData.state;
