@@ -65,6 +65,14 @@ const TIER_CONFIG: Record<number, { label: string; sublabel: string; color: stri
   },
 };
 
+// Display name overrides — clarify what each factor checks without changing the underlying key
+const DISPLAY_NAME_MAP: Record<string, string> = {
+  "Fair Value Gap": "Fair Value Gap (Entry TF)",
+};
+function displayName(name: string): string {
+  return DISPLAY_NAME_MAP[name] || name;
+}
+
 // Classify factors by tier, falling back to name-based classification if tier field is missing
 const TIER_1_NAMES = new Set(["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount"]);
 const TIER_2_NAMES = new Set(["PD/PW Levels", "Liquidity Sweep", "Displacement", "Reversal Candle", "Session Quality"]);
@@ -169,7 +177,7 @@ function TierSection({
               </span>
               <div className="flex-1 min-w-0">
                 <span className={f.present ? "text-foreground" : "text-muted-foreground/60"}>
-                  {f.name}
+                  {displayName(f.name)}
                 </span>
                 {f.detail && (
                   f.detail.includes("IMPULSE-ZONE CREDIT") ? (
@@ -354,7 +362,7 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
                 {f.present ? "⚠" : "✓"}
               </span>
               <div>
-                <span className="text-muted-foreground">{f.name}</span>
+                <span className="text-muted-foreground">{displayName(f.name)}</span>
                 {f.detail && (
                   f.detail.includes("IMPULSE-ZONE CREDIT") ? (
                     <span className="ml-1">
@@ -389,7 +397,7 @@ export function TierFactorBreakdown({ factors, tieredScoring, compact = false }:
                 title={`${f.name} — disabled`}
               >
                 <span className="text-muted-foreground/60">—</span>
-                <span className="truncate max-w-[120px] line-through text-muted-foreground/70">{f.name}</span>
+                <span className="truncate max-w-[120px] line-through text-muted-foreground/70">{displayName(f.name)}</span>
               </span>
             ))}
           </div>
