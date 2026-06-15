@@ -516,14 +516,17 @@ export default function BotView() {
               </button>
             )}
 
-            {/* Trading Style Badge */}
+            {/* Trading Style Badge — shows the style from the LAST SCAN (not just config) */}
             {(() => {
-              const styleMode = botConfig?.tradingStyle?.mode || "day_trader";
-              const meta = STYLE_META[styleMode as keyof typeof STYLE_META];
+              const configStyle = botConfig?.tradingStyle?.mode || "day_trader";
+              const scanStyle = latestMeta?.activeStyle as keyof typeof STYLE_META | undefined;
+              const displayStyle = scanStyle || configStyle;
+              const meta = STYLE_META[displayStyle as keyof typeof STYLE_META];
+              const mismatch = scanStyle && scanStyle !== configStyle;
               if (meta) {
                 return (
-                  <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}>
-                    {meta.icon} {meta.label}
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`} title={mismatch ? `Last scan used ${meta.label} — config now set to ${STYLE_META[configStyle as keyof typeof STYLE_META]?.label || configStyle}. Run a new scan to apply.` : `Active style: ${meta.label}`}>
+                    {meta.icon} {meta.label}{mismatch && " ⟳"}
                   </span>
                 );
               }
@@ -1053,6 +1056,10 @@ export default function BotView() {
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
+                {latestMeta?.activeStyle && (() => {
+                  const sm = STYLE_META[latestMeta.activeStyle as keyof typeof STYLE_META];
+                  return sm ? <span className={`shrink-0 text-[9px] font-medium px-1 py-0 border rounded-sm ${sm.color}`}>{sm.icon} {sm.label}</span> : null;
+                })()}
                 {logs.length > 1 && (
                   <span className="inline-flex items-center gap-0.5 ml-auto shrink-0">
                     <button
