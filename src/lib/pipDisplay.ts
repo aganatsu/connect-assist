@@ -43,25 +43,12 @@ export function getDisplayConfig(symbol: string): DisplayConfig {
 
   switch (inst.type) {
     case "forex":
-      // Forex pips are already in standard units (e.g., 45.3 pips)
       return { label: "pips", decimals: 1, multiplier: 1 };
-
     case "crypto":
-      // Crypto: convert pips back to dollars
-      // ETH pipSize=0.01, so 555 pips * 0.01 = $5.55
-      // BTC pipSize=1.0, so 50 pips * 1.0 = $50
-      return { label: "$", decimals: 2, multiplier: inst.pipSize };
-
     case "index":
-      // Indices: convert to points
-      // US30 pipSize=1.0, NAS100 pipSize=0.25
-      return { label: "pts", decimals: 1, multiplier: inst.pipSize };
-
     case "commodity":
-      // Commodities: convert to dollars
-      // XAU pipSize=0.01, so 300 pips * 0.01 = $3.00
-      return { label: "$", decimals: 2, multiplier: inst.pipSize };
-
+      // Always display as raw pips for consistency
+      return { label: "pips", decimals: 1, multiplier: 1 };
     default:
       return { label: "pips", decimals: 1, multiplier: 1 };
   }
