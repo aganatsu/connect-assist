@@ -47,6 +47,9 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
   { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
   { tab: "strategy", label: "Regime Strength", keywords: ["regime", "strength", "multiplier", "scale", "aggressive", "subtle"] },
+  { tab: "strategy", label: "Thesis Conviction Tracker", keywords: ["thesis", "conviction", "decay", "evidence", "stale", "impulse credit", "revoke"] },
+  { tab: "strategy", label: "Thesis Conviction Mode", keywords: ["thesis", "conviction", "shadow", "active", "mode", "block"] },
+  { tab: "strategy", label: "Thesis Conviction Thresholds", keywords: ["thesis", "conviction", "revoke", "kill", "threshold", "decay", "recovery"] },
   { tab: "strategy", label: "Normalized Scoring", keywords: ["normalize", "normalized", "percentage", "scoring", "scale", "auto-adjust", "factor toggle", "weight"] },
   { tab: "strategy", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "history", "advanced", "tuning"] },
   { tab: "strategy", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "advanced", "tuning"] },
@@ -924,6 +927,63 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                             <div className="text-muted-foreground/70">Range setups get the inverse. All values scaled by the multiplier above.</div>
                           </div>
                         </FieldGroup>
+                      )}
+                    </div>
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Thesis Conviction Tracker</p>
+                      <p className="text-[11px] text-muted-foreground -mt-2">Tracks how healthy each active thesis is over time. When evidence accumulates against a thesis, impulse-zone credit is revoked to prevent stale entries.</p>
+                      <ToggleField label="Enable Thesis Conviction" description="Track evidence for/against each thesis across scan cycles. When disabled, impulse-zone credit is always granted if the zone qualifies." checked={config.strategy?.thesisConvictionEnabled ?? true} onChange={v => updateField('strategy', 'thesisConvictionEnabled', v)} />
+                      {(config.strategy?.thesisConvictionEnabled ?? true) && (
+                        <div className="space-y-4 pl-2 border-l-2 border-primary/20">
+                          <FieldGroup label="Mode" description="Shadow = logs only (no trade impact). Active = revokes impulse credit when conviction drops below threshold.">
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={((config.strategy?.thesisConvictionMode ?? 'shadow') === 'shadow') ? 'default' : 'outline'}
+                                onClick={() => updateField('strategy', 'thesisConvictionMode', 'shadow')}
+                                className="text-xs"
+                              >Shadow (Log Only)</Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={((config.strategy?.thesisConvictionMode ?? 'shadow') === 'active') ? 'default' : 'outline'}
+                                onClick={() => updateField('strategy', 'thesisConvictionMode', 'active')}
+                                className="text-xs"
+                              >Active (Block Trades)</Button>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Decay per Cycle" description="Points lost each scan cycle when evidence opposes the thesis. Higher = faster revocation.">
+                            <div className="flex items-center gap-3">
+                              <Slider value={[config.strategy?.thesisConvictionDecayPerCycle ?? 8]} onValueChange={v => updateField('strategy', 'thesisConvictionDecayPerCycle', v[0])} min={2} max={20} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionDecayPerCycle ?? 8}</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Recovery per Cycle" description="Points gained each scan cycle when evidence supports the thesis. Lower = slower recovery after damage.">
+                            <div className="flex items-center gap-3">
+                              <Slider value={[config.strategy?.thesisConvictionRecoveryPerCycle ?? 5]} onValueChange={v => updateField('strategy', 'thesisConvictionRecoveryPerCycle', v[0])} min={1} max={15} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionRecoveryPerCycle ?? 5}</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Revoke Threshold" description="Conviction below this % → impulse-zone credit revoked. Trade must pass normal tier-1 threshold instead.">
+                            <div className="flex items-center gap-3">
+                              <Slider value={[config.strategy?.thesisConvictionRevokeThreshold ?? 50]} onValueChange={v => updateField('strategy', 'thesisConvictionRevokeThreshold', v[0])} min={20} max={80} step={5} className="flex-1" />
+                              <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionRevokeThreshold ?? 50}%</span>
+                            </div>
+                          </FieldGroup>
+                          <FieldGroup label="Kill Threshold" description="Conviction below this % → thesis killed entirely. No trade will be taken in this direction until evidence recovers.">
+                            <div className="flex items-center gap-3">
+                              <Slider value={[config.strategy?.thesisConvictionKillThreshold ?? 30]} onValueChange={v => updateField('strategy', 'thesisConvictionKillThreshold', v[0])} min={10} max={60} step={5} className="flex-1" />
+                              <span className="text-sm font-mono font-bold text-primary w-8 text-right">{config.strategy?.thesisConvictionKillThreshold ?? 30}%</span>
+                            </div>
+                          </FieldGroup>
+                          <div className="rounded-md bg-muted/50 border border-border p-3 text-[11px] text-muted-foreground space-y-1">
+                            <div><span className="text-profit font-medium">80-100% conviction:</span> Impulse credit granted normally</div>
+                            <div><span className="text-warn font-medium">60-79% conviction:</span> Credit reduced, score penalty -5%</div>
+                            <div><span className="text-loss font-medium">Below revoke threshold:</span> Impulse credit revoked, score penalty -10%</div>
+                            <div className="text-muted-foreground/70 pt-1">Evidence sources: Direction Verdict, 4H Regime, Opposing Factors, FOTSI, Game Plan Bias</div>
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="border-t border-border pt-4 space-y-4">
