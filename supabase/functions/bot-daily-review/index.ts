@@ -810,6 +810,13 @@ async function sendTelegramNotification(
     return;
   }
 
+  // Check notification category toggle
+  const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+  if (notifyCategories["daily_review"] === false) {
+    console.log(`[daily-review] daily_review notifications disabled for user ${userId}, skipping`);
+    return;
+  }
+
   // Send via telegram-notify Edge Function to each configured chat ID
   for (const chatId of telegramChatIds) {
     try {
