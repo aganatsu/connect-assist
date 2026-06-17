@@ -2781,11 +2781,12 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
     score = 0;
   }
 
-  // Tier 1 minimum gate: need at least 3 core factors
+  // Tier 1 minimum gate: configurable minimum core factors (default 3)
   // Raised from 2→3 to prevent low-quality entries that only have
   // Market Structure + Premium/Discount (directional bias without
   // an institutional entry trigger like OB or FVG).
-  const tier1GatePassed = tier1Count >= 3;
+  const _minTier1 = typeof config.minTier1Factors === "number" ? Math.max(1, Math.min(config.minTier1Factors, 5)) : 3;
+  const tier1GatePassed = tier1Count >= _minTier1;
   // Build display list: include Unicorn when it was promoted to Tier 1, and HTF-promoted slots
   const tier1DisplayNames = ["Market Structure", "Order Block", "Fair Value Gap", "Premium/Discount & Fib", "Unicorn Model"];
   const tier1PresentNames = tier1DisplayNames.filter(n => {
@@ -2800,7 +2801,7 @@ export function runConfluenceAnalysis(candles: Candle[], dailyCandles: Candle[] 
   if (htfFibF && (htfFibF as any)._htfTier1Fib) tier1PresentNames.push("Fib (HTF-nested)");
   const tier1GateReason = tier1GatePassed
     ? `Tier 1 gate passed: ${tier1Count} core factors (${tier1PresentNames.join(", ")})`
-    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}, HTF FVG/OB/Fib`;
+    : `Tier 1 gate FAILED: only ${tier1Count} core factors — need at least ${_minTier1} of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib${factors.find(f => f.name === "Unicorn Model" && (f as any)._promotedToTier1) ? ", Unicorn Model" : ""}, HTF FVG/OB/Fib`;
 
   // Strong factor count = Tier 1 + Tier 2 present (Tier 3 are bonuses, not "strong")
   const strongFactorCount = tier1Count + tier2Count;

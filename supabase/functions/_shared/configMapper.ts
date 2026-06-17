@@ -134,6 +134,8 @@ export const RUNTIME_DEFAULTS = {
   maxConsecutiveLosses: 0,
   protectionMaxDailyLossDollar: 0,
 
+  // ── Tier 1 Gate ──
+  minTier1Factors: 3,
   // ── Impulse Zone Scoring ──
   impulseZoneEnabled: true,
   impulseZonePenalty: 2.0,
@@ -370,6 +372,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? RUNTIME_DEFAULTS.liquidityPoolMinTouches,
     equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? RUNTIME_DEFAULTS.equalHighsLowsSensitivity,
 
+    // ── Tier 1 Gate ──
+    minTier1Factors: strategy.minTier1Factors ?? raw.minTier1Factors ?? RUNTIME_DEFAULTS.minTier1Factors,
     // ── Impulse Zone ──
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? RUNTIME_DEFAULTS.impulseZoneEnabled,
     impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? RUNTIME_DEFAULTS.impulseZonePenalty,

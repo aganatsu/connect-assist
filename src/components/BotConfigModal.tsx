@@ -72,6 +72,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "choch", "ob", "fvg", "entry type", "limit"] },
+  { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
   { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
@@ -848,6 +849,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-1.5">
                         Zone score = fibDepth + S/R confirmed + LTF refined + HTF confluence. Set to 0 to disable this gate.
+                      </p>
+                    </FieldGroup>
+                    <FieldGroup label="Min Tier 1 Core Factors" description="Minimum number of Tier 1 factors (Market Structure, OB, FVG, Premium/Discount & Fib, Unicorn, HTF FVG/OB/Fib) required to pass Gate 19. Lower = more trades, higher = stricter quality filter.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.minTier1Factors ?? 3]} onValueChange={v => updateField('strategy', 'minTier1Factors', v[0])} min={1} max={5} step={1} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.minTier1Factors ?? 3}/5</span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-1.5">
+                        Default: 3. Set to 2 for more aggressive trading, 4–5 for ultra-conservative (fewer signals).
                       </p>
                     </FieldGroup>
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}

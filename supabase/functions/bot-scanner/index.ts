@@ -4922,13 +4922,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         if (izTier1Credits.length > 0) {
+          const _minT1 = pairConfig.minTier1Factors ?? 3;
           const newTier1Count = ts.tier1Count + izTier1Credits.length;
-          const newPassed = newTier1Count >= 3;
+          const newPassed = newTier1Count >= _minT1;
           const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
           const allPresent = [...existingFactors, ...izTier1Credits];
           const newReason = newPassed
             ? `Tier 1 gate passed (impulse-zone credit): ${newTier1Count} core factors (${allPresent.join(", ")})`
-            : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least 3`;
+            : `Tier 1 gate FAILED: only ${newTier1Count} core factors — need at least ${_minT1}`;
 
           // Each Tier 1 credit adds ~1.0 pts to tieredScore (conservative default)
           const creditPts = izTier1Credits.length * 1.0;
@@ -4968,8 +4969,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Update tieredScoring: increment tier1Count + add weight to tieredScore + recalc score
           const ts = analysis.tieredScoring;
           if (ts && (ts as any).tier1Count !== undefined) {
+            const _minT1PD = pairConfig.minTier1Factors ?? 3;
             const newCount = ts.tier1Count + 1;
-            const newPassed = newCount >= 3;
+            const newPassed = newCount >= _minT1PD;
             const existingFactors = ts.tier1GateReason.match(/core factors \(([^)]+)\)/)?.[1]?.split(", ") || [];
             existingFactors.push(`P/D (impulse-zone-fib ${fibPct}%)`);
             const newTieredScore = ts.tieredScore + pdFactor.weight;
@@ -4980,7 +4982,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               tier1GatePassed: newPassed,
               tier1GateReason: newPassed
                 ? `Tier 1 gate passed (impulse-zone credit): ${newCount} core factors (${existingFactors.join(", ")})`
-                : `Tier 1 gate FAILED: only ${newCount} core factors — need at least 3`,
+                : `Tier 1 gate FAILED: only ${newCount} core factors — need at least ${_minT1PD}`,
               tieredScore: newTieredScore,
             };
             analysis.score = newScore;
