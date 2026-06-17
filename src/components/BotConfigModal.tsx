@@ -71,7 +71,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
-  { tab: "entry_exit", label: "Enable Zone Setups", keywords: ["zone", "setup", "confirmation", "choch", "ob", "fvg", "entry type"] },
+  { tab: "entry_exit", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "choch", "ob", "fvg", "entry type", "limit"] },
+  { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
   { tab: "entry_exit", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity", "strict"] },
   { tab: "entry_exit", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "strict", "distance", "market fill"] },
   { tab: "entry_exit", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
@@ -850,7 +851,48 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </p>
                     </FieldGroup>
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
-                    <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity sweep → CHoCH). Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
+                    <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
+                    {/* ── Impulse Zone Gate Mode ── */}
+                    <FieldGroup label="Impulse Zone Gate Mode" description="Controls how strictly the impulse zone requirement is enforced when Unified Zone is OFF.">
+                      <div className="flex items-center gap-3">
+                        <Select value={config.strategy?.impulseZoneGateMode ?? 'hard'} onValueChange={(v: string) => updateField('strategy', 'impulseZoneGateMode', v)}>
+                          <SelectTrigger className="h-9 text-sm w-48"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="hard">Hard — no zone = skip pair</SelectItem>
+                            <SelectItem value="soft">Soft — score penalty only</SelectItem>
+                            <SelectItem value="off">Off — zones informational</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {(config.strategy?.impulseZoneGateMode ?? 'hard') !== 'off' && (
+                          <Badge variant="outline" className={`text-[9px] font-mono ${
+                            (config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' ? 'text-loss border-loss/40' : 'text-warn border-warn/40'
+                          }`}>
+                            {(config.strategy?.impulseZoneGateMode ?? 'hard') === 'hard' ? 'BLOCKING' : 'SCORING'}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">
+                        Hard = pair is skipped if no valid impulse zone exists. Soft = score penalty ({config.strategy?.impulseZonePenalty ?? 2.0} pts) but trade can still proceed. Off = zones are shown in the Zone Story but don't affect trade decisions.
+                      </p>
+                    </FieldGroup>
+                    {/* ── Entry Flow Diagram ── */}
+                    <div className="border border-border/50 rounded-lg p-3 bg-muted/30">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold mb-2">Entry Decision Flow</p>
+                      <div className="text-[10px] font-mono text-muted-foreground space-y-1">
+                        <p>1. Scanner detects confluence signal for pair</p>
+                        <p>2. Impulse Zone Gate checks:</p>
+                        <p className="pl-3">• Hard → must have valid zone or pair is skipped</p>
+                        <p className="pl-3">• Soft → penalty applied, trade may proceed</p>
+                        <p className="pl-3">• Off → no zone requirement</p>
+                        <p>3. If Unified Zone Confirmation = ON:</p>
+                        <p className="pl-3">• Must reach "triggered" state (impulse→zone→liq→confirm)</p>
+                        <p className="pl-3">• If not triggered → pair skipped (no fallback)</p>
+                        <p>4. Entry method (when zone exists):</p>
+                        <p className="pl-3">• Price AT zone + Market Fill ON → immediate fill</p>
+                        <p className="pl-3">• Price AT zone + Market Fill OFF → wait for LTF confirm</p>
+                        <p className="pl-3">• Price NOT at zone + Pending Orders ON → watch & wait</p>
+                      </div>
+                    </div>
                     <div className="grid grid-cols-2 gap-4">
                       <ToggleField label="Order Blocks" description="Detect institutional order blocks" checked={config.strategy?.useOrderBlocks ?? true} onChange={v => updateField('strategy', 'useOrderBlocks', v)} />
                       <ToggleField label="Fair Value Gaps" description="Identify FVG imbalances" checked={config.strategy?.useFVG ?? true} onChange={v => updateField('strategy', 'useFVG', v)} />
@@ -1259,7 +1301,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* ── Zone Entry Setup ── */}
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Entry</p>
-                      <ToggleField label="Enable Zone Setups" description="Wait for price to reach OB/FVG zone, then hunt for 5m CHoCH confirmation before entering at live price. More precise entries with real confirmation." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
+                      <ToggleField label="Pending Zone Orders" description="When price is NOT at the zone yet, place a pending order and watch for price to arrive. Once price reaches the zone, hunts for LTF confirmation (CHoCH/BOS) before filling at live price." checked={config.entry?.limitOrderEnabled ?? false} onChange={v => updateField('entry', 'limitOrderEnabled', v)} />
                       {config.entry?.limitOrderEnabled && (
                         <div className="pl-4 border-l-2 border-primary/20 space-y-3">
                           <FieldGroup label="Zone Watch Expiry (minutes)" description="How long the bot watches for price to reach the zone before cancelling the setup">
@@ -1268,7 +1310,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                               <span className="text-sm font-mono font-bold w-16 text-right">{config.entry?.limitOrderExpiryMinutes ?? 60}m</span>
                             </div>
                           </FieldGroup>
-                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for a 5m CHoCH confirmation before entering at live price. If hard gate mode is active, zone setups are auto-enabled for impulse zones.</p>
+                          <p className="text-[9px] text-muted-foreground italic">When enabled, the bot watches for price to reach the zone. Once price is in the zone, it hunts for LTF confirmation (CHoCH, BOS, or sweep+CHoCH) before entering at live price. If impulse zone gate mode is "hard", pending zone orders are auto-enabled.</p>
                         </div>
                       )}
                     </div>
@@ -1276,7 +1318,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     {/* ── Market Fill at Zone ── */}
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Market Fill at Zone</p>
-                      <ToggleField label="Market Fill at Zone" description="When price IS at the impulse zone and all gates pass, fill at market immediately (no CHoCH wait). Turn OFF to always require CHoCH confirmation." checked={config.entry?.marketFillAtZone ?? true} onChange={v => updateField('entry', 'marketFillAtZone', v)} />
+                      <ToggleField label="Market Fill at Zone" description="When price IS at the impulse zone (within ATR proximity) and all gates pass, fill at market immediately without waiting for LTF confirmation. Turn OFF to always require CHoCH/BOS confirmation even when price is at zone." checked={config.entry?.marketFillAtZone ?? true} onChange={v => updateField('entry', 'marketFillAtZone', v)} />
                       {(config.entry?.marketFillAtZone ?? true) && (
                         <div className="pl-4 border-l-2 border-primary/20 space-y-3">
                           <FieldGroup label="Zone Proximity (ATR×)" description="How close price must be to the zone edge for a market fill. Lower = stricter (must be closer). Range: 0.1–1.0">
@@ -1285,7 +1327,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                               <span className="text-sm font-mono font-bold w-16 text-right">{(config.entry?.marketFillStrictATRMult ?? 0.3).toFixed(2)}×</span>
                             </div>
                           </FieldGroup>
-                          <p className="text-[9px] text-muted-foreground italic">Default: 0.30× ATR. At 0.10×, price must be almost touching the zone. At 1.00×, price can be up to 1×ATR away. Requires impulse zone hard gate mode to be active.</p>
+                          <p className="text-[9px] text-muted-foreground italic">Default: 0.30× ATR. At 0.10×, price must be almost touching the zone. At 1.00×, price can be up to 1×ATR away. Requires impulse zone gate mode = "hard" to be active.</p>
                         </div>
                       )}
                     </div>
