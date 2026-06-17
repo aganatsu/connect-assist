@@ -1898,6 +1898,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     return prefs.telegramChatId ? [String(prefs.telegramChatId)] : [];
   })();
 
+  // Notification category toggles — read from preferences_json.telegramNotifyCategories
+  // Default: all enabled (undefined/missing = true)
+  const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+  const shouldNotify = (category: string): boolean => notifyCategories[category] !== false;
+
   const balance = parseFloat(account.balance || "10000");
   const isPaused = account.is_paused;
 
@@ -2212,7 +2217,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // Send Telegram alerts for significant management actions
-        if (telegramChatIds.length > 0) {
+        if (telegramChatIds.length > 0 && shouldNotify("trade_management")) {
           for (const a of activeActions) {
             const emoji = a.action === "sl_tightened" ? "🛡️"
               : a.action === "be_enabled" ? "🔒"
@@ -2497,7 +2502,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // 6. Telegram notification
-        if (telegramChatIds.length > 0) {
+        if (telegramChatIds.length > 0 && shouldNotify("trade_closed")) {
           const emoji = closeReason === "tp_hit" ? "🎯" : "🛑";
           const label = closeReason === "tp_hit" ? "TAKE PROFIT HIT" : "STOP LOSS HIT";
           const pnlEmoji = pnl >= 0 ? "✅" : "❌";
@@ -2780,7 +2785,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               pendingCancelled++;
               console.log(`[pending] THESIS INVALID: ${pending.symbol} ${pending.direction} — ${thesisResult.checkType}: ${thesisResult.reason}`);
               // Telegram notification for thesis cancellation
-              if (telegramChatIds.length > 0) {
+              if (telegramChatIds.length > 0 && shouldNotify("thesis_invalidated")) {
                 const msg = `⚠️ <b>Thesis Invalidated — Order Cancelled</b>\n\n` +
                   `<b>Symbol:</b> ${pending.symbol}\n` +
                   `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
@@ -2839,7 +2844,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
 
             // Send Telegram notification: zone touched, hunting confirmation
-            if (telegramChatIds.length > 0) {
+            if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
               const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
                 `<b>Symbol:</b> ${pending.symbol}\n` +
@@ -3057,7 +3062,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
 
           // Send Telegram notification for confirmed entry
-          if (telegramChatIds.length > 0) {
+          if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
             const confTierLabel = confirmationSignal.tier ? ` T${confirmationSignal.tier}` : "";
@@ -3225,7 +3230,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           { fxMarketClosed },
         );
         // Notify via Telegram
-        if (telegramChatIds.length > 0) {
+        if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
           const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
@@ -3502,7 +3507,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           },
         });
         // Send Telegram notification with game plan summary (only for NEW plans, respects gamePlanNotify toggle)
-        if (gamePlanNotify && telegramChatIds.length > 0 && activeGamePlan.summary) {
+        if (gamePlanNotify && telegramChatIds.length > 0 && shouldNotify("game_plan") && activeGamePlan.summary) {
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
@@ -5939,7 +5944,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           detail.takeProfit = limitTP;
 
           // Telegram notification for zone setup activation
-          if (telegramChatIds.length > 0) {
+          if (telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
             const emoji = analysis.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
             const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
@@ -6050,10 +6055,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         detail.stopLoss = sl;
         detail.takeProfit = tp;
         detail.positionId = positionId;
-        detail.exitFlags = exitFlags;
-
+                detail.exitFlags = exitFlags;
         // Send Telegram notification to all configured chat IDs
-        if (telegramChatIds.length > 0) {
+        if (telegramChatIds.length > 0 && shouldNotify("trade_opened")) {
           const emoji = analysis.direction === "long" ? "🟢" : "🔴";
           const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +

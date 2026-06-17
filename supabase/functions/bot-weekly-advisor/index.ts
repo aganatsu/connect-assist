@@ -1276,6 +1276,13 @@ async function sendTelegramNotification(
     return;
   }
 
+  // Check notification category toggle
+  const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+  if (notifyCategories["weekly_advisor"] === false) {
+    console.log(`[weekly-advisor] weekly_advisor notifications disabled for user ${userId}, skipping`);
+    return;
+  }
+
   // Send via telegram-notify Edge Function to each configured chat ID
   for (const chatId of telegramChatIds) {
     try {

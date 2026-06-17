@@ -501,6 +501,46 @@ function PreferencesSettings() {
   const [newId, setNewId] = useState("");
   const [newLabel, setNewLabel] = useState("");
 
+  // Notification category toggles — stored in preferences_json.telegramNotifyCategories
+  const NOTIFICATION_CATEGORIES = [
+    { key: "trade_opened", label: "Trade Opened", description: "Market fill at zone", emoji: "🔴" },
+    { key: "zone_setup_active", label: "Zone Setup Active", description: "Pending order placed", emoji: "📍" },
+    { key: "zone_touched", label: "Zone Touched", description: "Hunting confirmation", emoji: "🎯" },
+    { key: "confirmed_entry", label: "Confirmed Entry", description: "CHoCH/BOS fill", emoji: "✅" },
+    { key: "trade_closed", label: "Trade Closed", description: "TP/SL hit", emoji: "📊" },
+    { key: "trade_management", label: "Trade Management", description: "BE, trailing, partial TP", emoji: "🛡️" },
+    { key: "thesis_invalidated", label: "Thesis Invalidated", description: "Order cancelled", emoji: "⚠️" },
+    { key: "prop_firm_alert", label: "Prop Firm Alerts", description: "Emergency close, lockout", emoji: "🚨" },
+    { key: "daily_review", label: "Daily Review", description: "End-of-day summary", emoji: "📋" },
+    { key: "weekly_advisor", label: "Weekly Advisor", description: "Weekly performance report", emoji: "📈" },
+    { key: "gate_effectiveness", label: "Gate Effectiveness", description: "Gate performance alerts", emoji: "📊" },
+    { key: "game_plan", label: "Game Plan", description: "Session game plan summary", emoji: "🗺️" },
+  ] as const;
+
+  // Load saved toggles (default all ON)
+  const savedToggles: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+  const getCategoryEnabled = (key: string) => savedToggles[key] !== false; // default true
+
+  const saveNotifToggleMutation = useMutation({
+    mutationFn: (nextToggles: Record<string, boolean>) => settingsApi.upsert(undefined, {
+      ...prefs,
+      telegramNotifyCategories: nextToggles,
+    }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["user-settings"] }); toast.success("Notification preferences saved"); },
+    onError: (e: any) => toast.error(e.message),
+  });
+
+  const toggleCategory = (key: string, enabled: boolean) => {
+    const next = { ...savedToggles, [key]: enabled };
+    saveNotifToggleMutation.mutate(next);
+  };
+
+  const toggleAll = (enabled: boolean) => {
+    const next: Record<string, boolean> = {};
+    NOTIFICATION_CATEGORIES.forEach(c => { next[c.key] = enabled; });
+    saveNotifToggleMutation.mutate(next);
+  };
+
   useEffect(() => {
     const p = settings?.preferences_json;
     if (!p) return;
@@ -574,6 +614,42 @@ function PreferencesSettings() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Notification Categories */}
+      {chats.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm">Notification Categories</CardTitle>
+              <div className="flex gap-1">
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => toggleAll(true)}>All On</Button>
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" onClick={() => toggleAll(false)}>All Off</Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-1">
+            <p className="text-xs text-muted-foreground mb-3">Choose which notifications to receive on Telegram. Disabled categories will be silently skipped.</p>
+            <div className="space-y-2">
+              {NOTIFICATION_CATEGORIES.map(cat => (
+                <div key={cat.key} className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-secondary/30 transition-colors">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm flex-shrink-0">{cat.emoji}</span>
+                    <div className="min-w-0">
+                      <span className="text-xs font-medium block">{cat.label}</span>
+                      <span className="text-[10px] text-muted-foreground block">{cat.description}</span>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={getCategoryEnabled(cat.key)}
+                    onCheckedChange={(checked) => toggleCategory(cat.key, checked)}
+                    className="flex-shrink-0 ml-2"
+                  />
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Theme */}
       <Card>
