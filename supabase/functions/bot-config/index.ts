@@ -299,6 +299,36 @@ function validateConfig(config: any): string[] {
     }
   }
 
+  // Per-pair gate overrides validation
+  if (config.pairGateOverrides && typeof config.pairGateOverrides === "object") {
+    for (const [sym, val] of Object.entries(config.pairGateOverrides)) {
+      if (val && typeof val === "object") {
+        const v = val as any;
+        if (typeof v.minRiskReward === "number" && (v.minRiskReward < 0 || v.minRiskReward > 20)) {
+          errors.push(`pairGateOverrides.${sym}.minRiskReward must be between 0 and 20`);
+        }
+        if (typeof v.minTier1Factors === "number" && (v.minTier1Factors < 0 || v.minTier1Factors > 5)) {
+          errors.push(`pairGateOverrides.${sym}.minTier1Factors must be between 0 and 5`);
+        }
+        if (typeof v.maxPerSymbol === "number" && (v.maxPerSymbol < 1 || v.maxPerSymbol > 10)) {
+          errors.push(`pairGateOverrides.${sym}.maxPerSymbol must be between 1 and 10`);
+        }
+        if (typeof v.minConfluence === "number" && (v.minConfluence < 0 || v.minConfluence > 100)) {
+          errors.push(`pairGateOverrides.${sym}.minConfluence must be between 0 and 100`);
+        }
+        if (typeof v.protectionMaxDailyLossDollar === "number" && (v.protectionMaxDailyLossDollar < 0 || v.protectionMaxDailyLossDollar > 100000)) {
+          errors.push(`pairGateOverrides.${sym}.protectionMaxDailyLossDollar must be between 0 and 100000`);
+        }
+        if (typeof v.maxConsecutiveLosses === "number" && (v.maxConsecutiveLosses < 0 || v.maxConsecutiveLosses > 20)) {
+          errors.push(`pairGateOverrides.${sym}.maxConsecutiveLosses must be between 0 and 20`);
+        }
+        if (v.allowSameDirectionStacking !== undefined && typeof v.allowSameDirectionStacking !== "boolean") {
+          errors.push(`pairGateOverrides.${sym}.allowSameDirectionStacking must be a boolean`);
+        }
+      }
+    }
+  }
+
   // Sessions validations
   const sess = config.sessions;
   if (sess) {

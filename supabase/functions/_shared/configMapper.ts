@@ -273,10 +273,38 @@ export const RUNTIME_DEFAULTS = {
   entryTimeframe: "15min",
   htfTimeframe: "1day",
 
+  // ── Per-Pair Gate Overrides ──
+  // Allows per-symbol overrides for key gate thresholds.
+  // When a symbol has an entry here, those fields override the global config
+  // for that symbol only. Non-overridden fields fall through to global values.
+  pairGateOverrides: {} as Record<string, PairGateOverride>,
+
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
 };
+
+/**
+ * Fields that can be overridden per-pair.
+ * Each field corresponds to a gate threshold in the scanner.
+ * Only specified fields are overridden; omitted fields use global config.
+ */
+export interface PairGateOverride {
+  /** Min effective R:R after spread+commission (Gate 10). Default: global minRiskReward */
+  minRiskReward?: number;
+  /** Min Tier 1 core factors required (Gate 19). Default: global minTier1Factors */
+  minTier1Factors?: number;
+  /** Allow same-direction stacking (Gate 5). Default: global allowSameDirectionStacking */
+  allowSameDirectionStacking?: boolean;
+  /** Max positions per symbol (Gate 5). Default: global maxPerSymbol */
+  maxPerSymbol?: number;
+  /** Min confluence score threshold. Default: global minConfluence */
+  minConfluence?: number;
+  /** Dollar-based daily loss limit (Gate 15). Default: global protectionMaxDailyLossDollar */
+  protectionMaxDailyLossDollar?: number;
+  /** Max consecutive losses before cooldown (Gate 14). Default: global maxConsecutiveLosses */
+  maxConsecutiveLosses?: number;
+}
 
 // Export the type for consumers
 export type RuntimeConfig = typeof RUNTIME_DEFAULTS;
@@ -587,8 +615,38 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
     marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
 
+    // ── Per-Pair Gate Overrides ──
+    pairGateOverrides: raw.pairGateOverrides ?? RUNTIME_DEFAULTS.pairGateOverrides,
+
     // ── Per-pair scratch ──
     _currentSymbol: "",
     _smtResult: null,
   };
+}
+
+// ─── Apply Per-Pair Gate Overrides ─────────────────────────────────────────────────────────
+/**
+ * Merges per-pair gate overrides into a cloned config object.
+ * Call this AFTER cloning the global config for a specific symbol.
+ *
+ * Only fields present in the override are applied; all others retain
+ * their global values. Returns the mutated config (same reference).
+ *
+ * @param config - A CLONED config object (do not pass the shared global config)
+ * @param symbol - The trading pair symbol (e.g. "EUR/JPY")
+ * @returns The same config object with overrides applied (for chaining)
+ */
+export function applyPairOverrides<T extends RuntimeConfig>(config: T, symbol: string): T {
+  const overrides = config.pairGateOverrides?.[symbol];
+  if (!overrides) return config;
+
+  if (overrides.minRiskReward !== undefined) config.minRiskReward = overrides.minRiskReward;
+  if (overrides.minTier1Factors !== undefined) (config as any).minTier1Factors = overrides.minTier1Factors;
+  if (overrides.allowSameDirectionStacking !== undefined) config.allowSameDirectionStacking = overrides.allowSameDirectionStacking;
+  if (overrides.maxPerSymbol !== undefined) config.maxPerSymbol = overrides.maxPerSymbol;
+  if (overrides.minConfluence !== undefined) config.minConfluence = overrides.minConfluence;
+  if (overrides.protectionMaxDailyLossDollar !== undefined) (config as any).protectionMaxDailyLossDollar = overrides.protectionMaxDailyLossDollar;
+  if (overrides.maxConsecutiveLosses !== undefined) (config as any).maxConsecutiveLosses = overrides.maxConsecutiveLosses;
+
+  return config;
 }

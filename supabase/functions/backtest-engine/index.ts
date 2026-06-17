@@ -82,7 +82,7 @@ import {
   resolveWeightScale,
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../_shared/configMapper.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
 import {
   detectSession,
   normalizeSessionFilter,
@@ -1715,6 +1715,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
         // ── Build config for confluenceScoring ──
         const pairConfig = { ...config };
+        // Apply per-pair gate overrides (if configured for this symbol)
+        applyPairOverrides(pairConfig, symbol);
         pairConfig._currentSymbol = symbol;
         // Inject direction override
         if (directionResult) {
