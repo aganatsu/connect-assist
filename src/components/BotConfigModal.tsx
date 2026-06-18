@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles } from "lucide-react";
+import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -131,6 +131,14 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "gamePlan", label: "Game Plan Trade Filter", keywords: ["game plan", "filter", "gate", "bias", "reject", "alignment"] },
   { tab: "gamePlan", label: "DOL TP Extension", keywords: ["dol", "draw on liquidity", "tp", "take profit", "extension", "target"] },
   { tab: "gamePlan", label: "IPDA Ranges", keywords: ["ipda", "institutional", "data ranges", "20 day", "40 day", "60 day", "equilibrium"] },
+  // Per-Pair Gate Overrides
+  { tab: "pairOverrides", label: "Per-Pair Gate Overrides", keywords: ["pair", "symbol", "override", "per pair", "per symbol", "specific", "individual"] },
+  { tab: "pairOverrides", label: "Per-Pair Min R:R", keywords: ["risk reward", "rr", "effective", "spread", "pair specific"] },
+  { tab: "pairOverrides", label: "Per-Pair Tier 1", keywords: ["tier 1", "core factors", "pair", "minimum"] },
+  { tab: "pairOverrides", label: "Per-Pair Stacking", keywords: ["stacking", "duplicate", "same direction", "max per symbol"] },
+  { tab: "pairOverrides", label: "Per-Pair Confluence", keywords: ["confluence", "score", "threshold", "pair"] },
+  { tab: "pairOverrides", label: "Per-Pair Daily Loss", keywords: ["daily", "loss", "pnl", "dollar", "limit", "pair"] },
+  { tab: "pairOverrides", label: "Per-Pair Consecutive Losses", keywords: ["consecutive", "losses", "cooldown", "pair"] },
 ];
 
 // ─── ICT 2022 module definitions (single source of truth for tab + search) ──
@@ -549,6 +557,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     { id: "instruments", label: "Instruments", icon: Globe },
     { id: "sessions", label: "Sessions", icon: Clock },
     { id: "protection", label: "Protection", icon: ShieldAlert },
+    { id: "pairOverrides", label: "Per-Pair Gates", icon: Target },
     { id: "factorWeights", label: "Factor Weights", icon: SlidersHorizontal },
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
     { id: "gamePlan", label: "Game Plan", icon: Crosshair },
@@ -1807,6 +1816,10 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                   </div>
                 )}
 
+                {effectiveActiveTab === "pairOverrides" && (
+                  <PairOverridesTab config={config} setConfig={setConfig} />
+                )}
+
                 {effectiveActiveTab === "factorWeights" && (
                   <FactorWeightsTab config={config} setConfig={setConfig} />
                 )}
@@ -2099,6 +2112,212 @@ function ToggleField({ label, description, checked, onChange }: { label: string;
         {description && <p className="text-[10px] text-muted-foreground mt-0.5">{description}</p>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} className="shrink-0 mt-0.5" />
+    </div>
+  );
+}
+
+// ─── Per-Pair Gate Overrides Tab ──────────────────────────────────────────────
+// Allows per-symbol overrides for key gate thresholds. Overrides are stored in
+// config.pairGateOverrides[symbol] and applied by applyPairOverrides() in the scanner.
+
+const RECOMMENDED_OVERRIDES: Record<string, Record<string, any>> = {
+  'EUR/JPY': { minTier1Factors: 1, allowSameDirectionStacking: true, maxPerSymbol: 2, minRiskReward: 0.8 },
+  'GBP/USD': { protectionMaxDailyLossDollar: 5000, maxConsecutiveLosses: 8 },
+  'USD/CAD': { minTier1Factors: 2 },
+  'USD/CHF': { minRiskReward: 0.8 },
+  'NZD/CHF': { minRiskReward: 0.8 },
+  'XAU/USD': { minConfluence: 35 },
+  'BTC/USD': { minTier1Factors: 4, allowSameDirectionStacking: false, maxPerSymbol: 1 },
+};
+
+const OVERRIDE_FIELDS = [
+  { key: 'minRiskReward', label: 'Min R:R', type: 'number', min: 0.1, max: 5, step: 0.1, description: 'Effective R:R threshold (after spread/commission)' },
+  { key: 'minTier1Factors', label: 'Min Tier 1', type: 'number', min: 1, max: 5, step: 1, description: 'Minimum core factors (MS, OB, FVG, P/D, HTF)' },
+  { key: 'minConfluence', label: 'Min Confluence %', type: 'number', min: 10, max: 80, step: 5, description: 'Score threshold for this pair' },
+  { key: 'maxPerSymbol', label: 'Max Per Symbol', type: 'number', min: 1, max: 5, step: 1, description: 'Max concurrent positions for this pair' },
+  { key: 'allowSameDirectionStacking', label: 'Allow Stacking', type: 'toggle', description: 'Allow same-direction stacking' },
+  { key: 'protectionMaxDailyLossDollar', label: 'Max Daily Loss ($)', type: 'number', min: 50, max: 10000, step: 50, description: 'Pair-specific daily P&L limit' },
+  { key: 'maxConsecutiveLosses', label: 'Max Consec Losses', type: 'number', min: 1, max: 15, step: 1, description: 'Pair-specific consecutive loss cooldown' },
+] as const;
+
+function PairOverridesTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
+  const [expandedPair, setExpandedPair] = useState<string | null>(null);
+  const overrides: Record<string, Record<string, any>> = config.pairGateOverrides || {};
+
+  const updateOverride = (symbol: string, field: string, value: any) => {
+    setConfig((prev: any) => {
+      const current = { ...(prev.pairGateOverrides || {}) };
+      const pairCfg = { ...(current[symbol] || {}) };
+      if (value === undefined || value === '' || value === null) {
+        delete pairCfg[field];
+      } else {
+        pairCfg[field] = value;
+      }
+      // Remove pair entry if empty
+      if (Object.keys(pairCfg).length === 0) {
+        delete current[symbol];
+      } else {
+        current[symbol] = pairCfg;
+      }
+      return { ...prev, pairGateOverrides: current };
+    });
+  };
+
+  const clearPairOverrides = (symbol: string) => {
+    setConfig((prev: any) => {
+      const current = { ...(prev.pairGateOverrides || {}) };
+      delete current[symbol];
+      return { ...prev, pairGateOverrides: current };
+    });
+  };
+
+  const applyRecommendations = () => {
+    setConfig((prev: any) => ({
+      ...prev,
+      pairGateOverrides: { ...(prev.pairGateOverrides || {}), ...RECOMMENDED_OVERRIDES },
+    }));
+    toast.success('Applied data-driven recommendations for 7 pairs');
+  };
+
+  const hasOverride = (symbol: string) => {
+    const o = overrides[symbol];
+    return o && Object.keys(o).length > 0;
+  };
+
+  const enabledInstruments = config.instruments?.enabled || INSTRUMENTS.map((i: any) => i.symbol);
+
+  return (
+    <div className="space-y-5">
+      <SectionHeader
+        title="Per-Pair Gate Overrides"
+        description="Set symbol-specific gate thresholds. Empty fields use the global setting. Only enabled instruments are shown."
+      />
+
+      {/* Quick Apply Recommendations */}
+      <div className="border border-dashed border-primary/40 rounded p-3 bg-primary/5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium text-primary">Data-Driven Recommendations</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Apply optimized overrides based on rejected setups analysis (EUR/JPY, GBP/USD, USD/CAD, USD/CHF, NZD/CHF, XAU/USD, BTC/USD)
+            </p>
+          </div>
+          <Button variant="outline" size="sm" className="text-[10px] h-7 shrink-0 border-primary/40 text-primary hover:bg-primary/10" onClick={applyRecommendations}>
+            Apply All
+          </Button>
+        </div>
+      </div>
+
+      {/* Pair list grouped by type */}
+      {INSTRUMENT_TYPES.map(type => {
+        const typeInstruments = INSTRUMENTS.filter((i: any) => i.type === type && enabledInstruments.includes(i.symbol));
+        if (typeInstruments.length === 0) return null;
+        return (
+          <div key={type} className="space-y-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">{INSTRUMENT_TYPE_LABELS[type]}</p>
+            <div className="space-y-1">
+              {typeInstruments.map((inst: any) => {
+                const isExpanded = expandedPair === inst.symbol;
+                const pairOverride = overrides[inst.symbol] || {};
+                const hasOvr = hasOverride(inst.symbol);
+                return (
+                  <div key={inst.symbol} className={`border transition-colors ${hasOvr ? 'border-primary/40 bg-primary/5' : 'border-border'}`}>
+                    {/* Pair header row */}
+                    <button
+                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-secondary/30 transition-colors"
+                      onClick={() => setExpandedPair(isExpanded ? null : inst.symbol)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium w-20">{inst.symbol}</span>
+                        {hasOvr && (
+                          <Badge variant="secondary" className="text-[9px] h-4 px-1.5">
+                            {Object.keys(pairOverride).length} override{Object.keys(pairOverride).length > 1 ? 's' : ''}
+                          </Badge>
+                        )}
+                      </div>
+                      {isExpanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
+                    </button>
+
+                    {/* Expanded override fields */}
+                    {isExpanded && (
+                      <div className="px-3 pb-3 pt-1 border-t border-border/50 space-y-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          {OVERRIDE_FIELDS.map(field => {
+                            if (field.type === 'toggle') {
+                              const val = pairOverride[field.key];
+                              return (
+                                <div key={field.key} className="col-span-2">
+                                  <div className="flex items-center justify-between gap-3 p-2 border border-border rounded">
+                                    <div>
+                                      <p className="text-[11px] font-medium">{field.label}</p>
+                                      <p className="text-[9px] text-muted-foreground">{field.description}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {val !== undefined && (
+                                        <button className="text-[9px] text-muted-foreground hover:text-destructive" onClick={() => updateOverride(inst.symbol, field.key, undefined)}>✕</button>
+                                      )}
+                                      <Switch
+                                        checked={val ?? config.risk?.allowSameDirectionStacking ?? false}
+                                        onCheckedChange={v => updateOverride(inst.symbol, field.key, v)}
+                                        className="shrink-0"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            const val = pairOverride[field.key];
+                            return (
+                              <div key={field.key} className="space-y-1">
+                                <Label className="text-[10px] font-medium">{field.label}</Label>
+                                <Input
+                                  type="number"
+                                  placeholder="Global"
+                                  value={val ?? ''}
+                                  onChange={e => {
+                                    const v = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                    updateOverride(inst.symbol, field.key, v);
+                                  }}
+                                  step={field.step}
+                                  min={field.min}
+                                  max={field.max}
+                                  className="h-7 text-[11px]"
+                                />
+                                <p className="text-[9px] text-muted-foreground">{field.description}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {hasOvr && (
+                          <div className="flex justify-end">
+                            <Button variant="ghost" size="sm" className="text-[10px] h-6 text-destructive hover:text-destructive" onClick={() => clearPairOverrides(inst.symbol)}>
+                              <Trash2 className="h-3 w-3 mr-1" /> Clear All Overrides
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Summary of active overrides */}
+      {Object.keys(overrides).length > 0 && (
+        <div className="border border-border rounded p-3 bg-secondary/30">
+          <p className="text-[11px] text-muted-foreground">
+            <strong className="text-foreground">Active overrides:</strong>{' '}
+            {Object.entries(overrides).map(([sym, o]) => (
+              <span key={sym} className="inline-block mr-2">
+                <Badge variant="outline" className="text-[9px] h-4">{sym}: {Object.keys(o).length} field{Object.keys(o).length > 1 ? 's' : ''}</Badge>
+              </span>
+            ))}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
