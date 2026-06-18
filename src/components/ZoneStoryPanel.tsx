@@ -127,8 +127,8 @@ const STATE_COLORS: Record<string, string> = {
   confirmed: "text-cyan-400",
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
-  no_zone: "text-zinc-500",
-  no_impulse: "text-zinc-500",
+  no_zone: "text-zinc-400",
+  no_impulse: "text-zinc-400",
   error: "text-red-400",
 };
 
@@ -164,7 +164,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
     return (
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-red-900/50">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
           <span className="text-xs font-bold text-red-400">⚠ Error</span>
         </div>
         <p className="text-[10px] text-red-400">{unifiedData.reason}</p>
@@ -177,7 +177,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
     return (
       <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
           <span className={`text-xs font-bold ${stateColor}`}>{stateLabel}</span>
         </div>
         {/* Direction detail from gate data (when no zone search ran) */}
@@ -207,21 +207,21 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 1H {gateData.directionDetail.h1Confirmed ? "✓ CONFIRMED" : "✗ waiting"}
               </span>
             </div>
-            <p className="text-[10px] text-zinc-500 leading-tight">{unifiedData.reason}</p>
+            <p className="text-[10px] text-zinc-300 leading-tight">{unifiedData.reason}</p>
           </div>
         ) : (
-          <p className="text-[10px] text-zinc-500">{unifiedData.reason}</p>
+          <p className="text-[10px] text-zinc-300">{unifiedData.reason}</p>
         )}
       </div>
     );
   }
 
   return (
-    <div className="mt-3 p-3 rounded-lg bg-zinc-900/60 border border-zinc-800">
+    <div className="mt-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-700">
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Zone Story</span>
+          <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
           {unifiedData.selectedTF && (
             <span className="px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 text-[10px] font-bold">
               via {unifiedData.selectedTF}
@@ -253,22 +253,22 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               <span className={unifiedData.impulse.direction === "bullish" ? "text-green-400" : "text-red-400"}>
                 {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
               </span>
-              <span className="text-zinc-400 ml-2">
+              <span className="text-zinc-200 ml-2">
                 {fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}
               </span>
               <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
-              <div className="text-zinc-500 mt-0.5">
+              <div className="text-zinc-300 mt-0.5">
                 BOS: {fmt(unifiedData.impulse.bosPrice)}
                 {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
                   <span className="ml-2">
                     {unifiedData.impulse.startDate} → {unifiedData.impulse.endDate}
-                    <span className="text-zinc-600 ml-1">({unifiedData.impulse.spanBars} bars)</span>
+                    <span className="text-zinc-400 ml-1">({unifiedData.impulse.spanBars} bars)</span>
                   </span>
                 )}
               </div>
             </div>
           ) : (
-            <span className="text-zinc-600 ml-1">None found</span>
+            <span className="text-zinc-400 ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -277,10 +277,10 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           {unifiedData.zone ? (
             <div className="text-zinc-200">
               <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
-              <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-500 ml-1"}>
+              <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
                 (S/R {unifiedData.zone.srConfirmed ? "✓" : "✗"})
               </span>
-              <span className="text-zinc-500 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
+              <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
               {unifiedData.zone.htfLayers.length > 0 && (
                 <span className="text-blue-400 ml-1">[HTF: {unifiedData.zone.htfLayers.join("+")}]</span>
               )}
@@ -313,7 +313,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               )}
             </div>
           ) : (
-            <span className="text-zinc-600 ml-1">None found</span>
+            <span className="text-zinc-400 ml-1">None found</span>
           )}
         </StoryBullet>
 
@@ -340,10 +340,10 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   [{unifiedData.liquidity.sweepEvent.type} swept{unifiedData.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
                 </span>
               )}
-              <span className="text-zinc-500 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
+              <span className="text-zinc-300 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
             </span>
           ) : (
-            <span className="text-zinc-600">No significant pools near zone</span>
+            <span className="text-zinc-400">No significant pools near zone</span>
           )}
         </StoryBullet>
 
@@ -363,7 +363,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {unifiedData.confirmation.detail} (partial — not entry-ready)
             </span>
           ) : (
-            <span className="text-zinc-600">
+            <span className="text-zinc-400">
               Waiting for CHoCH/displacement in {unifiedData.impulse?.direction ?? "—"} direction
             </span>
           )}
@@ -382,8 +382,8 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 <span className="text-green-400 font-mono ml-2">TP: {fmt(unifiedData.entry.tpPrice)}</span>
               )}
               <div className="flex gap-2 mt-0.5 text-[10px]">
-                <span className="text-zinc-500">Risk: {fmtPips(unifiedData.entry.riskPips, { absolute: true })}</span>
-                {unifiedData.entry.rewardPips && <span className="text-zinc-500">Reward: {fmtPips(unifiedData.entry.rewardPips, { absolute: true })}</span>}
+                <span className="text-zinc-300">Risk: {fmtPips(unifiedData.entry.riskPips, { absolute: true })}</span>
+                {unifiedData.entry.rewardPips && <span className="text-zinc-300">Reward: {fmtPips(unifiedData.entry.rewardPips, { absolute: true })}</span>}
                 {unifiedData.entry.rrRatio && (
                   <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
                     R:R {unifiedData.entry.rrRatio}:1
@@ -394,7 +394,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
             <span className="text-orange-400">R:R below minimum — no entry</span>
           ) : (
-            <span className="text-zinc-600">Not yet</span>
+            <span className="text-zinc-400">Not yet</span>
           )}
         </StoryBullet>
       </div>
@@ -402,7 +402,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
       {/* Score breakdown */}
       {unifiedData.hasZone && (
         <div className="mt-2 pt-2 border-t border-zinc-800 flex flex-wrap gap-2 text-[10px]">
-          <span className="text-zinc-500">Base: {unifiedData.scoreBreakdown.baseScore.toFixed(1)}/9</span>
+          <span className="text-zinc-300">Base: {unifiedData.scoreBreakdown.baseScore.toFixed(1)}/9</span>
           {unifiedData.scoreBreakdown.liquidityBonus > 0 && (
             <span className="text-purple-400">Liq: +{unifiedData.scoreBreakdown.liquidityBonus.toFixed(1)}</span>
           )}
@@ -428,7 +428,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
       )}
 
       {/* Story summary */}
-      <p className="text-[10px] text-zinc-500 mt-2 leading-relaxed">
+      <p className="text-[10px] text-zinc-300 mt-2 leading-relaxed">
         {unifiedData.selectedTF === "D" ? "Daily" : unifiedData.selectedTF === "4H" ? "4H" : "1H"} zone selected
         {unifiedData.selectedTF === "D" ? " (A+ setup)" : unifiedData.selectedTF === "4H" ? " (B+ setup)" : ""}: {unifiedData.reason}
       </p>
@@ -454,14 +454,14 @@ function StoryBullet({
   label: string;
   children: React.ReactNode;
 }) {
-  const bulletColor = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-600";
+  const bulletColor = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
   const bullet = filled ? "●" : partial ? "◐" : "○";
 
   return (
     <div className="flex items-start gap-2">
       <span className={`${bulletColor} mt-0.5`}>{bullet}</span>
       <div className="flex-1">
-        <span className="text-zinc-400">{label}:</span>
+        <span className="text-zinc-200 font-medium">{label}:</span>
         {children}
       </div>
     </div>
