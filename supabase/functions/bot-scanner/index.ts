@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { mapNestedToFlat } from "../_shared/configMapper.ts";
+import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -3608,6 +3608,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
     // Clone config per-instrument to prevent style mutation (Fix #6)
     let pairConfig = { ...config };
+    // Apply per-pair gate overrides (if configured for this symbol)
+    applyPairOverrides(pairConfig, pair);
 
     // Determine entry TF based on style
     const entryInterval = getEntryInterval(pairConfig.entryTimeframe);
