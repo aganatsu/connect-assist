@@ -551,11 +551,15 @@ function runBacktestSafetyGates(
 
   // Gate 16: Tier 1 gate (from confluenceScoring)
   if (analysis.tieredScoring) {
-    const tier1Passed = analysis.tieredScoring.tier1GatePassed ?? true;
-    gates.push({
-      passed: tier1Passed,
-      reason: analysis.tieredScoring.tier1GateReason || (tier1Passed ? "Tier 1 gate passed" : "Tier 1 gate failed"),
-    });
+    if (config.tier1GateEnabled === false) {
+      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${analysis.tieredScoring.tier1Count} core factors present)` });
+    } else {
+      const tier1Passed = analysis.tieredScoring.tier1GatePassed ?? true;
+      gates.push({
+        passed: tier1Passed,
+        reason: analysis.tieredScoring.tier1GateReason || (tier1Passed ? "Tier 1 gate passed" : "Tier 1 gate failed"),
+      });
+    }
   }
 
   // Gate 17: HTF Bias Alignment

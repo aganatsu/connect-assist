@@ -1543,7 +1543,9 @@ async function runSafetyGates(
   // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
-    if (!ts.tier1GatePassed) {
+    if (config.tier1GateEnabled === false) {
+      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
+    } else if (!ts.tier1GatePassed) {
       gates.push({ passed: false, reason: ts.tier1GateReason });
     } else {
       gates.push({ passed: true, reason: ts.tier1GateReason });
