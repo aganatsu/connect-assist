@@ -27,6 +27,7 @@ const RETENTION_DAYS = 30;           // Delete records older than this
 const ALERT_THRESHOLD = 0.50;        // Alert if >50% would have won
 const ALERT_ROLLING_DAYS = 7;        // Rolling window for alert calculation
 const MIN_SAMPLES_FOR_ALERT = 10;    // Need at least 10 resolved setups to alert
+const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // Max one gate-effectiveness alert per user per 24h
 
 // ── Helpers ──
 
