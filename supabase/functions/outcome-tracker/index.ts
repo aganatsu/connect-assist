@@ -276,6 +276,13 @@ Deno.serve(async (req: Request) => {
                 .eq("user_id", uid)
                 .maybeSingle();
               const prefs = (userSettings?.preferences_json as any) || {};
+              // Respect category toggle (default ON, explicit OFF skips)
+              const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
+              if (notifyCategories.gate_effectiveness === false) continue;
+              // 24h cooldown per user to prevent spam
+              const lastAtRaw = prefs.lastGateEffectivenessAlertAt;
+              const lastAt = lastAtRaw ? Date.parse(lastAtRaw) : 0;
+              if (lastAt && Date.now() - lastAt < ALERT_COOLDOWN_MS) continue;
               const chatIds: string[] = (() => {
                 const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
                 const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
@@ -304,6 +311,18 @@ Deno.serve(async (req: Request) => {
                     });
                   } catch { /* non-fatal */ }
                 }
+                // Record cooldown timestamp
+                try {
+                  await supabase
+                    .from("user_settings")
+                    .update({
+                      preferences_json: {
+                        ...prefs,
+                        lastGateEffectivenessAlertAt: new Date().toISOString(),
+                      },
+                    })
+                    .eq("user_id", uid);
+                } catch { /* non-fatal */ }
               }
             } catch { /* non-fatal */ }
           }
