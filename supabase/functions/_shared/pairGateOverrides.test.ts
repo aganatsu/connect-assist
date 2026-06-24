@@ -214,3 +214,49 @@ Deno.test("applyPairOverrides: allowSameDirectionStacking=false is applied", () 
   applyPairOverrides(config, "BTC/USD");
   assertEquals(config.allowSameDirectionStacking, false);
 });
+
+// ─── Test 14: tier1GateEnabled defaults to true ──────────────────────
+
+Deno.test("tier1GateEnabled: defaults to true in RUNTIME_DEFAULTS", () => {
+  assertEquals(RUNTIME_DEFAULTS.tier1GateEnabled, true);
+});
+
+// ─── Test 15: tier1GateEnabled maps through mapNestedToFlat ──────────
+
+Deno.test("tier1GateEnabled: mapNestedToFlat resolves from strategy field", () => {
+  const result = mapNestedToFlat({
+    strategy: { tier1GateEnabled: false },
+    risk: {},
+    entry: {},
+    instruments: {},
+    sessions: {},
+  });
+  assertEquals(result.tier1GateEnabled, false);
+});
+
+// ─── Test 16: tier1GateEnabled defaults when not set ─────────────────
+
+Deno.test("tier1GateEnabled: defaults to true when not in config", () => {
+  const result = mapNestedToFlat({
+    strategy: {},
+    risk: {},
+    entry: {},
+    instruments: {},
+    sessions: {},
+  });
+  assertEquals(result.tier1GateEnabled, true);
+});
+
+// ─── Test 17: tier1GateEnabled from legacy flat field ────────────────
+
+Deno.test("tier1GateEnabled: resolves from raw flat field when strategy not set", () => {
+  const result = mapNestedToFlat({
+    tier1GateEnabled: false,
+    strategy: {},
+    risk: {},
+    entry: {},
+    instruments: {},
+    sessions: {},
+  });
+  assertEquals(result.tier1GateEnabled, false);
+});

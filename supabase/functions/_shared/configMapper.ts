@@ -135,6 +135,7 @@ export const RUNTIME_DEFAULTS = {
   protectionMaxDailyLossDollar: 0,
 
   // ── Tier 1 Gate ──
+  tier1GateEnabled: true,
   minTier1Factors: 3,
   // ── Impulse Zone Scoring ──
   impulseZoneEnabled: true,
@@ -401,6 +402,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? RUNTIME_DEFAULTS.equalHighsLowsSensitivity,
 
     // ── Tier 1 Gate ──
+    tier1GateEnabled: strategy.tier1GateEnabled ?? raw.tier1GateEnabled ?? RUNTIME_DEFAULTS.tier1GateEnabled,
     minTier1Factors: strategy.minTier1Factors ?? raw.minTier1Factors ?? RUNTIME_DEFAULTS.minTier1Factors,
     // ── Impulse Zone ──
     impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? RUNTIME_DEFAULTS.impulseZoneEnabled,
