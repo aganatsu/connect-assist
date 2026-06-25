@@ -647,6 +647,12 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   const limit = opts.limit ?? 200;
   const canon = canonicalInterval(opts.interval);
 
+  // Global deadline so a single request can never eat the 150s edge runtime budget.
+  // MetaAPI region probing + subscribe retries can each take 30-40s; cap the whole
+  // fan-out at ~60s and bail to the next source instead of hanging the function.
+  const deadline = Date.now() + 60_000;
+  const timeLeft = () => deadline - Date.now();
+
   // M1: Check cache first
   const cached = getCachedCandles(opts.symbol, canon);
   if (cached && cached.candles.length >= 30) {
@@ -658,14 +664,14 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   // request-budget-sensitive scan. Scanner invocations fetch many symbols and
   // timeframes; probing broker regions/subscriptions there can exceed hosted
   // runtime limits and surface as platform 503s.
-  if (!opts.skipBroker && opts.brokerConn?.api_key && opts.brokerConn?.account_id) {
+  if (!opts.skipBroker && opts.brokerConn?.api_key && opts.brokerConn?.account_id && timeLeft() > 15_000) {
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
 
     // Lazy auto-mapping: if we got 0 candles AND there was no explicit override,
     // fetch the broker's symbol list and try a strict match.
-    if (candles.length === 0 && !hasExplicitOverride(opts.symbol, opts.brokerConn)) {
+    if (candles.length === 0 && !hasExplicitOverride(opts.symbol, opts.brokerConn) && timeLeft() > 15_000) {
       const swapped = opts.brokerConn.account_id.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(opts.brokerConn.api_key);
       const authToken = swapped ? opts.brokerConn.account_id : opts.brokerConn.api_key;
       const metaAccountId = swapped ? opts.brokerConn.api_key : opts.brokerConn.account_id;
@@ -690,7 +696,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
 
   // Try Twelve Data
-  const td = await twelveDataCandles(opts.symbol, canon, limit);
+  const td = timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : [];
   if (td.length >= 30) {
     if (_activeTally) _activeTally.twelvedata++;
     setCachedCandles(opts.symbol, canon, td, "twelvedata");
@@ -698,34 +704,36 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   }
 
   // Polygon.io fallback
-  const pg = await polygonCandles(opts.symbol, canon, limit);
+  const pg = timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : [];
   if (pg.length >= 30) {
     if (_activeTally) _activeTally.polygon++;
     setCachedCandles(opts.symbol, canon, pg, "polygon");
     return { candles: pg.slice(-limit), source: "polygon" };
   }
 
-  // M3: Retry once after 2 seconds if all sources failed
-  console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
-  await new Promise(r => setTimeout(r, 2000));
+  // M3: One more pass only if we still have budget. The inner twelveData/polygon
+  // helpers already do their own backoff-retry, so a second outer pass on top of
+  // the MetaAPI region/subscribe retries can blow past the 150s runtime limit.
+  if (timeLeft() > 8_000) {
+    console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon}, retrying in 2s...`);
+    await new Promise(r => setTimeout(r, 2000));
 
-  // Retry TwelveData
-  const tdRetry = await twelveDataCandles(opts.symbol, canon, limit);
-  if (tdRetry.length >= 30) {
-    if (_activeTally) _activeTally.twelvedata++;
-    setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
-    return { candles: tdRetry.slice(-limit), source: "twelvedata" };
+    const tdRetry = timeLeft() > 5_000 ? await twelveDataCandles(opts.symbol, canon, limit) : [];
+    if (tdRetry.length >= 30) {
+      if (_activeTally) _activeTally.twelvedata++;
+      setCachedCandles(opts.symbol, canon, tdRetry, "twelvedata");
+      return { candles: tdRetry.slice(-limit), source: "twelvedata" };
+    }
+
+    const pgRetry = timeLeft() > 5_000 ? await polygonCandles(opts.symbol, canon, limit) : [];
+    if (pgRetry.length >= 30) {
+      if (_activeTally) _activeTally.polygon++;
+      setCachedCandles(opts.symbol, canon, pgRetry, "polygon");
+      return { candles: pgRetry.slice(-limit), source: "polygon" };
+    }
   }
 
-  // Retry Polygon
-  const pgRetry = await polygonCandles(opts.symbol, canon, limit);
-  if (pgRetry.length >= 30) {
-    if (_activeTally) _activeTally.polygon++;
-    setCachedCandles(opts.symbol, canon, pgRetry, "polygon");
-    return { candles: pgRetry.slice(-limit), source: "polygon" };
-  }
-
-  console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon} after retry`);
+  console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon} (deadline ${timeLeft()}ms left)`);
   if (_activeTally) _activeTally.none++;
   return { candles: [], source: "none" };
 }
