@@ -316,6 +316,10 @@ export async function manageOpenPositions(
   const partialTPLevel = config.partialTPLevel ?? 1.0;
   const breakEvenEnabled = config.breakEvenEnabled ?? true;
   const breakEvenPips = config.breakEvenPips ?? 20;
+  // Offset above/below entry when SL is moved to breakeven. Default 3 pips
+  // to absorb spread + commission so a "BE stop" still nets ~flat instead of
+  // closing slightly negative on live brokers.
+  const breakEvenOffsetPips = Math.max(0, Number(config.breakEvenOffsetPips ?? 3));
   const maxHoldEnabled = config.maxHoldEnabled ?? false;
   const maxHoldHours = config.maxHoldHours ?? 0; // 0 = no limit
 
@@ -358,6 +362,7 @@ export async function manageOpenPositions(
       let posTrailingActivation = trailingActivation;
       let posBreakEvenEnabled = breakEvenEnabled;
       let posBreakEvenPips = breakEvenPips;
+      let posBreakEvenOffsetPips = breakEvenOffsetPips;
       let posPartialTPEnabled = partialTPEnabled;
       let posPartialTPPercent = partialTPPercent;
       let posPartialTPLevel = partialTPLevel;
@@ -371,6 +376,7 @@ export async function manageOpenPositions(
         if (overrides.trailingStopActivation !== undefined) posTrailingActivation = overrides.trailingStopActivation;
         if (overrides.breakEvenEnabled !== undefined) posBreakEvenEnabled = overrides.breakEvenEnabled;
         if (overrides.breakEvenPips !== undefined) posBreakEvenPips = overrides.breakEvenPips;
+        if (overrides.breakEvenOffsetPips !== undefined) posBreakEvenOffsetPips = Math.max(0, Number(overrides.breakEvenOffsetPips));
         if (overrides.partialTPEnabled !== undefined) posPartialTPEnabled = overrides.partialTPEnabled;
         if (overrides.partialTPPercent !== undefined) posPartialTPPercent = overrides.partialTPPercent;
         if (overrides.partialTPLevel !== undefined) posPartialTPLevel = overrides.partialTPLevel;
@@ -419,8 +425,8 @@ export async function manageOpenPositions(
         // market via the `time_exit` path instead of silently tightening the stop.
         if (rMultiple > 0 && posBreakEvenEnabled) {
           const beSL = pos.direction === "long"
-            ? entryPrice + (spec.pipSize * 1)
-            : entryPrice - (spec.pipSize * 1);
+            ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+            : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
           const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
           if (shouldMove) {
             const attribution = makeAttribution(
@@ -458,8 +464,8 @@ export async function manageOpenPositions(
       if (posBreakEvenEnabled && !exitFlags.breakEvenActivated && rMultiple >= beActivationR) {
         const profitPipsAbs = Math.abs(profitPips);
         const beSL = pos.direction === "long"
-          ? entryPrice + (spec.pipSize * 1) // 1 pip above entry
-          : entryPrice - (spec.pipSize * 1);
+          ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+          : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
         const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
         if (shouldMove) {
           const attribution = makeAttribution(
@@ -785,8 +791,8 @@ export async function manageOpenPositions(
 
         if (normalizedCurrentSession === "offhours" || normalizedCurrentSession === "off-hours") {
           const beSL = pos.direction === "long"
-            ? entryPrice + (spec.pipSize * 1)
-            : entryPrice - (spec.pipSize * 1);
+            ? entryPrice + (spec.pipSize * posBreakEvenOffsetPips)
+            : entryPrice - (spec.pipSize * posBreakEvenOffsetPips);
           const shouldMove = pos.direction === "long" ? beSL > sl : beSL < sl;
           if (shouldMove) {
             const attribution = makeAttribution(
