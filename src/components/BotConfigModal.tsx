@@ -1507,7 +1507,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                                 <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.breakEvenTriggerPips ?? 20}</span>
                               </div>
                             </FieldGroup>
-                            <p className="text-[9px] text-muted-foreground italic">Only fires once per position. After activation, SL sits at entry + 1 pip to guarantee a risk-free trade.</p>
+                            <FieldGroup label="Break-Even Offset (pips)" description="How far above entry (long) / below entry (short) to park the SL. Set ≥ spread + commission so a BE stop nets ~flat, not a small loss.">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.exit?.breakEvenOffsetPips ?? 3]} onValueChange={v => updateField('exit', 'breakEvenOffsetPips', v[0])} min={0} max={20} step={1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.breakEvenOffsetPips ?? 3}</span>
+                              </div>
+                            </FieldGroup>
+                            <p className="text-[9px] text-muted-foreground italic">Only fires once per position. After activation, SL sits at entry ± offset pips. Default 3 covers typical spread + commission so a BE close is roughly breakeven, not a 1-pip loss.</p>
                           </div>
                         )}
                       </div>

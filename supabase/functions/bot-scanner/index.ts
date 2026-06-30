@@ -126,6 +126,10 @@ const DEFAULTS = {
   tpATRMultiple: 2.0,
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  // Offset above/below entry when SL is moved to breakeven (pips). Default 3
+  // covers typical spread + commission so BE exits net ~flat instead of slightly
+  // negative on live brokers.
+  breakEvenOffsetPips: 3,
   enabledSessions: ["london", "newyork"],
   enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
   instruments: [
@@ -854,6 +858,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
+    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? DEFAULTS.breakEvenOffsetPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
@@ -1826,7 +1831,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       "tpRatio",
       // Management fields the user can tune per-broker:
       "trailingStopEnabled", "trailingStopPips", "trailingStopActivation",
-      "breakEvenEnabled", "breakEvenPips",
+      "breakEvenEnabled", "breakEvenPips", "breakEvenOffsetPips",
       "partialTPEnabled", "partialTPPercent", "partialTPLevel",
       "maxHoldHours",
     ]);
@@ -5743,6 +5748,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Break-even
           breakEvenEnabled: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
+          breakEvenOffsetPips: pairConfig.breakEvenOffsetPips,
           breakEvenActivated: false,
           // Partial TP
           partialTPEnabled: pairConfig.partialTPEnabled,

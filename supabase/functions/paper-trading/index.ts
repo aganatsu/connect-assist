@@ -969,10 +969,11 @@ Deno.serve(async (req) => {
             const beActivationR = riskPips > 0 ? Math.min(2.0, Math.max(1.0, exitFlags.breakEvenPips / riskPips)) : 1.0;
             const rMultiple = riskPips > 0 ? profitPips / riskPips : 0;
             if (rMultiple >= beActivationR) {
-              // Move SL to entry + 1 pip (same as scannerManagement)
+              // Move SL to entry ± offset (default 3 pips) to absorb spread+commission
+              const beOffsetPips = Math.max(0, Number(exitFlags.breakEvenOffsetPips ?? 3));
               const newSL = pos.direction === "long"
-                ? entryPrice + spec.pipSize
-                : entryPrice - spec.pipSize;
+                ? entryPrice + spec.pipSize * beOffsetPips
+                : entryPrice - spec.pipSize * beOffsetPips;
               if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
                 // Update exitFlags to mark activation (so scannerManagement won't re-fire)
                 const updatedExitFlags = { ...exitFlags, breakEvenActivated: true };
@@ -1399,7 +1400,7 @@ Deno.serve(async (req) => {
           updates.trade_overrides = null; // Clear overrides — revert to global config
         } else {
           const allowedKeys = [
-            'breakEvenEnabled', 'breakEvenPips',
+            'breakEvenEnabled', 'breakEvenPips', 'breakEvenOffsetPips',
             'trailingStopEnabled', 'trailingStopPips', 'trailingStopActivation',
             'partialTPEnabled', 'partialTPPercent', 'partialTPLevel',
             'maxHoldEnabled', 'maxHoldHours',
