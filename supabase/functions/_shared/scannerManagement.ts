@@ -414,8 +414,10 @@ export async function manageOpenPositions(
       // ── 1. MAX HOLD TIME CHECK ──
       // If maxHoldEnabled and maxHoldHours is set and exceeded, flag for tightening
       if (posMaxHoldEnabled && posMaxHoldHours > 0 && holdHours >= posMaxHoldHours) {
-        // Move SL to breakeven or close if in profit
-        if (rMultiple > 0) {
+        // Respect the Break-Even toggle: only auto-move SL to BE when BE is enabled.
+        // When BE is disabled, leave SL alone — the paper-trading engine will close at
+        // market via the `time_exit` path instead of silently tightening the stop.
+        if (rMultiple > 0 && posBreakEvenEnabled) {
           const beSL = pos.direction === "long"
             ? entryPrice + (spec.pipSize * 1)
             : entryPrice - (spec.pipSize * 1);
@@ -774,7 +776,9 @@ export async function manageOpenPositions(
       // Only scalps get session-based tightening. Day trades and swings are
       // designed to be held across sessions — tightening them during off-hours
       // defeats their purpose.
-      if (tradingStyle === "scalper" && rMultiple > 0.3) {
+      // Respect the Break-Even toggle. Session-end SL→BE was effectively a hidden
+      // BE move; if the user has BE disabled, leave the stop where it is.
+      if (tradingStyle === "scalper" && rMultiple > 0.3 && posBreakEvenEnabled) {
         const currentSession = detectSessionFn(config);
         // Use filterKey directly from session result (canonical: asian, london, newyork, offhours)
         const normalizedCurrentSession = currentSession.filterKey || currentSession.name.toLowerCase().replace(/[\s-]/g, "");
