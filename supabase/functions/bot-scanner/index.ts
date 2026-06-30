@@ -168,7 +168,7 @@ const DEFAULTS = {
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
-  partialTPEnabled: false,
+  partialTPEnabled: true,
   partialTPPercent: 50,
   partialTPLevel: 1.0,
   maxHoldEnabled: false,
