@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { CheckCircle2, SkipForward, XCircle, AlertTriangle, ArrowUpRight, ArrowDownRight } from "lucide-react";
@@ -134,6 +134,8 @@ function classifyResult(result: string): BrokerLogRow["status"] {
 
 export function BrokerLog() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const { data, isLoading } = useQuery({
     queryKey: ["broker-log"],
@@ -294,6 +296,14 @@ export function BrokerLog() {
     return rows.filter((r) => r.status === statusFilter);
   }, [rows, statusFilter]);
 
+  // Reset to page 1 when filter or page size changes
+  useEffect(() => { setPage(1); }, [statusFilter, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * pageSize;
+  const paged = filtered.slice(pageStart, pageStart + pageSize);
+
   const StatusIcon = ({ status }: { status: BrokerLogRow["status"] }) => {
     if (status === "success") return <CheckCircle2 className="h-3 w-3 text-success" />;
     if (status === "blocked") return <AlertTriangle className="h-3 w-3 text-orange-500" />;
@@ -367,7 +377,7 @@ export function BrokerLog() {
           <>
           {/* Mobile: Stacked cards */}
           <div className="md:hidden space-y-1.5">
-            {filtered.map((r) => (
+            {paged.map((r) => (
               <div key={r.id} className={`border border-border p-2 space-y-1 ${rowTint(r.status)}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
@@ -405,7 +415,7 @@ export function BrokerLog() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((r, idx) => {
+              {paged.map((r, idx) => {
                 return (
                   <tr
                     key={r.id}
@@ -437,6 +447,55 @@ export function BrokerLog() {
           </>
         )}
       </div>
+
+      {/* Pagination footer */}
+      {filtered.length > 0 && (
+        <div className="flex items-center justify-between gap-2 pt-1.5 mt-1 border-t border-border/50 text-[10px]">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span>
+              {pageStart + 1}–{Math.min(pageStart + pageSize, filtered.length)} of {filtered.length}
+            </span>
+            <span className="hidden sm:inline">·</span>
+            <label className="hidden sm:flex items-center gap-1">
+              <span>Rows:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="bg-card border border-border px-1 py-0.5 text-[10px] text-foreground"
+              >
+                {[10, 25, 50, 100].map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(1)}
+              disabled={currentPage === 1}
+              className="px-1.5 py-0.5 border border-border bg-card text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            >« First</button>
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-1.5 py-0.5 border border-border bg-card text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            >‹ Prev</button>
+            <span className="px-2 text-foreground">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-1.5 py-0.5 border border-border bg-card text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            >Next ›</button>
+            <button
+              onClick={() => setPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="px-1.5 py-0.5 border border-border bg-card text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+            >Last »</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
