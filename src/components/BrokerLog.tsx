@@ -145,7 +145,7 @@ export function BrokerLog() {
           .from("scan_logs")
           .select("id, created_at, details_json")
           .order("created_at", { ascending: false })
-          .limit(500),
+          .limit(100),
         // Positions mirrored to a broker — captures pending-fill trades
         // (zone-confirmation-scanner) that never write to scan_logs.
         supabase
@@ -325,9 +325,9 @@ export function BrokerLog() {
 
       return rows;
     },
-    refetchInterval: 10000,
-    refetchOnWindowFocus: true,
-    staleTime: 0,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
+    staleTime: 15000,
   });
 
   const rows = data || [];
