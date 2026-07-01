@@ -140,12 +140,28 @@ export function BrokerLog() {
   const { data, isLoading } = useQuery({
     queryKey: ["broker-log"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("scan_logs")
-        .select("id, created_at, details_json")
-        .order("created_at", { ascending: false })
-        .limit(500);
-      if (error) throw error;
+      const [scanLogsRes, positionsRes, brokersRes] = await Promise.all([
+        supabase
+          .from("scan_logs")
+          .select("id, created_at, details_json")
+          .order("created_at", { ascending: false })
+          .limit(500),
+        // Positions mirrored to a broker — captures pending-fill trades
+        // (zone-confirmation-scanner) that never write to scan_logs.
+        supabase
+          .from("paper_positions")
+          .select("position_id, symbol, direction, entry_price, size, open_time, created_at, mirrored_connection_ids")
+          .not("mirrored_connection_ids", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(200),
+        supabase
+          .from("broker_connections")
+          .select("id, display_name"),
+      ]);
+      if (scanLogsRes.error) throw scanLogsRes.error;
+
+      const brokerNameById = new Map<string, string>();
+      for (const b of brokersRes.data || []) brokerNameById.set(b.id, b.display_name);
 
       type ScanDetail = {
         status?: string;
@@ -160,7 +176,11 @@ export function BrokerLog() {
       };
 
       const rows: BrokerLogRow[] = [];
-      for (const log of data || []) {
+      // Track which position_ids already have a scan_logs row so we don't
+      // duplicate them when we merge in paper_positions below.
+      const seenPositions = new Set<string>();
+
+      for (const log of scanLogsRes.data || []) {
         const details = Array.isArray(log.details_json) ? (log.details_json as unknown as ScanDetail[]) : [];
         for (const d of details) {
           // Surface trades the bot tried to place but couldn't (DB insert failed —
@@ -268,9 +288,41 @@ export function BrokerLog() {
               displayResult: translateBrokerResult(result),
               status: classifyResult(result),
             });
+            if (d.positionId) seenPositions.add(d.positionId);
           }
         }
       }
+
+      // Merge in mirrored paper_positions that weren't logged via scan_logs
+      // (typically trades filled by zone-confirmation-scanner on pending orders).
+      for (const p of positionsRes.data || []) {
+        const pid: string | null = p.position_id;
+        if (!pid) continue;
+        const shortPid = pid.slice(0, 8);
+        if (seenPositions.has(shortPid) || seenPositions.has(pid)) continue;
+        const connIds: string[] = Array.isArray(p.mirrored_connection_ids) ? p.mirrored_connection_ids : [];
+        if (connIds.length === 0) continue;
+        const time = p.open_time || p.created_at;
+        for (const connId of connIds) {
+          const brokerName = brokerNameById.get(connId) || connId.slice(0, 8);
+          rows.push({
+            id: `pos-${pid}-${connId}`,
+            time,
+            symbol: p.symbol,
+            direction: p.direction || "—",
+            positionId: shortPid,
+            size: p.size != null ? parseFloat(String(p.size)) : null,
+            entryPrice: p.entry_price != null ? parseFloat(String(p.entry_price)) : null,
+            mirrorResult: `${brokerName}: success (pending fill)`,
+            displayResult: `${brokerName}: Trade mirrored successfully (filled from pending order)`,
+            status: "success",
+          });
+        }
+      }
+
+      // Sort merged rows by time, newest first
+      rows.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+
       return rows;
     },
     refetchInterval: 10000,
