@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { CheckCircle2, SkipForward, XCircle, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { CheckCircle2, SkipForward, XCircle, AlertTriangle, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { formatBrokerTime } from "@/lib/formatTime";
 
 type BrokerLogRow = {
@@ -14,7 +14,7 @@ type BrokerLogRow = {
   entryPrice: number | null;
   mirrorResult: string;       // raw result from mt5Mirror
   displayResult: string;      // human-readable version
-  status: "success" | "skipped" | "failed" | "unknown";
+  status: "success" | "skipped" | "failed" | "blocked" | "unknown";
 };
 
 // Human-readable translations for broker error codes
@@ -119,6 +119,14 @@ function translateBrokerResult(raw: string): string {
 function classifyResult(result: string): BrokerLogRow["status"] {
   const lower = result.toLowerCase();
   if (lower.includes("success")) return "success";
+  // "Blocked" = broker refused before sending (balance/spread/symbol/connection)
+  // These are attempts that never reached the broker and MUST look distinct from success.
+  if (
+    lower.includes("balance error") ||
+    lower.includes("zero balance") ||
+    lower.includes("not found") ||
+    lower.includes("(spread")
+  ) return "blocked";
   if (lower.includes("skipped") || lower === "skipped_paper_mode" || lower === "skipped_no_connection") return "skipped";
   if (lower.includes("rejected") || lower.includes("failed") || lower.includes("error")) return "failed";
   return "unknown";
@@ -134,7 +142,7 @@ export function BrokerLog() {
         .from("scan_logs")
         .select("id, created_at, details_json")
         .order("created_at", { ascending: false })
-        .limit(200);
+        .limit(500);
       if (error) throw error;
 
       type ScanDetail = {
@@ -145,12 +153,32 @@ export function BrokerLog() {
         size?: number | null;
         entryPrice?: number | null;
         mt5Mirror?: string;
+        reason?: string;
+        error?: string;
       };
 
       const rows: BrokerLogRow[] = [];
       for (const log of data || []) {
         const details = Array.isArray(log.details_json) ? (log.details_json as unknown as ScanDetail[]) : [];
         for (const d of details) {
+          // Surface trades the bot tried to place but couldn't (DB insert failed —
+          // broker never saw them). Without this, these attempts silently disappear.
+          if (d.status === "zone_setup_insert_failed") {
+            rows.push({
+              id: `${log.id}-${d.pair}-insertfail`,
+              time: log.created_at,
+              symbol: d.pair || "—",
+              direction: d.direction || "—",
+              positionId: d.positionId || "—",
+              size: d.size ?? null,
+              entryPrice: d.entryPrice ?? null,
+              mirrorResult: d.error || d.reason || "zone_setup_insert_failed",
+              displayResult: `Bot could not create the trade record — ${d.error || d.reason || "insert failed"} (broker never called)`,
+              status: "failed",
+            });
+            continue;
+          }
+
           if (
             d.status !== "trade_placed" &&
             d.status !== "trade_placed_at_zone" &&
@@ -158,7 +186,22 @@ export function BrokerLog() {
           ) continue;
 
           const mt5 = d.mt5Mirror;
-          if (!mt5) continue;
+          if (!mt5) {
+            // Trade placed in paper account but no broker mirror field at all.
+            rows.push({
+              id: `${log.id}-${d.pair}-nomt5`,
+              time: log.created_at,
+              symbol: d.pair || "—",
+              direction: d.direction || "—",
+              positionId: d.positionId || "—",
+              size: d.size ?? null,
+              entryPrice: d.entryPrice ?? null,
+              mirrorResult: "no_mirror_field",
+              displayResult: "Trade placed in paper account — no broker mirror attempted",
+              status: "skipped",
+            });
+            continue;
+          }
 
           // Handle special single-value strings
           if (mt5 === "skipped_paper_mode") {
@@ -209,9 +252,10 @@ export function BrokerLog() {
 
           // Split semicolon-separated results for multiple brokers
           const parts = mt5.split("; ").filter(Boolean);
-          for (const result of parts) {
+          for (let i = 0; i < parts.length; i++) {
+            const result = parts[i];
             rows.push({
-              id: `${log.id}-${d.pair}-${result.slice(0, 20)}`,
+              id: `${log.id}-${d.pair}-${i}-${result.slice(0, 20)}`,
               time: log.created_at,
               symbol: d.pair,
               direction: d.direction || "—",
@@ -235,9 +279,10 @@ export function BrokerLog() {
   const rows = data || [];
 
   const counts = useMemo(() => {
-    const c = { success: 0, skipped: 0, failed: 0 };
+    const c = { success: 0, blocked: 0, skipped: 0, failed: 0 };
     rows.forEach((r) => {
       if (r.status === "success") c.success++;
+      else if (r.status === "blocked") c.blocked++;
       else if (r.status === "skipped") c.skipped++;
       else if (r.status === "failed") c.failed++;
     });
@@ -251,13 +296,35 @@ export function BrokerLog() {
 
   const StatusIcon = ({ status }: { status: BrokerLogRow["status"] }) => {
     if (status === "success") return <CheckCircle2 className="h-3 w-3 text-success" />;
+    if (status === "blocked") return <AlertTriangle className="h-3 w-3 text-orange-500" />;
     if (status === "skipped") return <SkipForward className="h-3 w-3 text-warning" />;
     if (status === "failed") return <XCircle className="h-3 w-3 text-destructive" />;
     return <span className="text-muted-foreground">—</span>;
   };
 
+  const StatusBadge = ({ status }: { status: BrokerLogRow["status"] }) => {
+    const cfg: Record<string, { label: string; cls: string }> = {
+      success: { label: "FILLED",  cls: "bg-success/15 text-success border-success/40" },
+      failed:  { label: "FAILED",  cls: "bg-destructive/15 text-destructive border-destructive/40" },
+      blocked: { label: "BLOCKED", cls: "bg-orange-500/15 text-orange-500 border-orange-500/40" },
+      skipped: { label: "SKIPPED", cls: "bg-warning/10 text-warning border-warning/30" },
+      unknown: { label: "—",       cls: "bg-muted/30 text-muted-foreground border-border" },
+    };
+    const c = cfg[status] || cfg.unknown;
+    return <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 border ${c.cls}`}>{c.label}</span>;
+  };
+
+  const rowTint = (status: BrokerLogRow["status"]) => {
+    if (status === "success") return "bg-success/5 border-l-2 border-l-success";
+    if (status === "failed")  return "bg-destructive/5 border-l-2 border-l-destructive";
+    if (status === "blocked") return "bg-orange-500/5 border-l-2 border-l-orange-500";
+    if (status === "skipped") return "bg-warning/5 border-l-2 border-l-warning";
+    return "";
+  };
+
   const statusTextColor = (status: BrokerLogRow["status"]) => {
     if (status === "success") return "text-success";
+    if (status === "blocked") return "text-orange-500";
     if (status === "skipped") return "text-warning";
     if (status === "failed") return "text-destructive";
     return "text-muted-foreground";
@@ -270,9 +337,10 @@ export function BrokerLog() {
         <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Filter</span>
         {[
           { key: "all", label: `All (${rows.length})` },
-          { key: "success", label: `✓ Success (${counts.success})` },
+          { key: "success", label: `✓ Filled (${counts.success})` },
+          { key: "failed",  label: `✗ Failed (${counts.failed})` },
+          { key: "blocked", label: `⚠ Blocked (${counts.blocked})` },
           { key: "skipped", label: `⏭ Skipped (${counts.skipped})` },
-          { key: "failed", label: `✗ Failed (${counts.failed})` },
         ].map((f) => (
           <button
             key={f.key}
@@ -300,11 +368,13 @@ export function BrokerLog() {
           {/* Mobile: Stacked cards */}
           <div className="md:hidden space-y-1.5">
             {filtered.map((r) => (
-              <div key={r.id} className="border border-border bg-card/50 p-2 space-y-1">
+              <div key={r.id} className={`border border-border p-2 space-y-1 ${rowTint(r.status)}`}>
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-[11px]">{r.symbol}</span>
                   <div className="flex items-center gap-1.5">
-                    <StatusIcon status={r.status} />
+                    <StatusBadge status={r.status} />
+                    <span className="font-medium text-[11px]">{r.symbol}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
                     <span className={`text-[10px] flex items-center gap-0.5 ${r.direction === "long" ? "text-success" : r.direction === "short" ? "text-destructive" : "text-muted-foreground"}`}>
                       {r.direction === "long" ? <ArrowUpRight className="h-2.5 w-2.5" /> : r.direction === "short" ? <ArrowDownRight className="h-2.5 w-2.5" /> : null}
                       {r.direction === "long" ? "BUY" : r.direction === "short" ? "SELL" : "—"}
@@ -324,12 +394,12 @@ export function BrokerLog() {
           <table className="w-full text-[11px] font-mono min-w-[700px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground text-[10px]">
+                <th className="text-left py-1 px-1">Status</th>
                 <th className="text-left py-1 px-1">Time</th>
                 <th className="text-left py-1 px-1">Symbol</th>
                 <th className="text-left py-1 px-1">Dir</th>
                 <th className="text-right py-1 px-1">Size</th>
                 <th className="text-right py-1 px-1">Entry</th>
-                <th className="text-center py-1 px-1">Status</th>
                 <th className="text-left py-1 px-1">Broker Result</th>
                 <th className="text-left py-1 px-1">Position</th>
               </tr>
@@ -339,8 +409,9 @@ export function BrokerLog() {
                 return (
                   <tr
                     key={r.id}
-                    className={`border-b border-border/30 hover:bg-secondary/30 ${idx % 2 === 1 ? "bg-secondary/10" : ""}`}
+                    className={`border-b border-border/30 hover:bg-secondary/30 ${rowTint(r.status)}`}
                   >
+                    <td className="py-1 px-1"><StatusBadge status={r.status} /></td>
                     <td className="py-1 px-1 text-muted-foreground whitespace-nowrap">{formatBrokerTime(r.time)}</td>
                     <td className="py-1 px-1 font-medium">{r.symbol}</td>
                     <td className="py-1 px-1">
@@ -351,9 +422,6 @@ export function BrokerLog() {
                     </td>
                     <td className="py-1 px-1 text-right">{r.size != null ? r.size.toFixed(2) : "—"}</td>
                     <td className="py-1 px-1 text-right">{r.entryPrice != null ? r.entryPrice.toFixed(5) : "—"}</td>
-                    <td className="py-1 px-1 text-center">
-                      <StatusIcon status={r.status} />
-                    </td>
                     <td className={`py-1 px-1 text-[10px] ${statusTextColor(r.status)}`} title={r.mirrorResult}>
                       {r.displayResult}
                     </td>
