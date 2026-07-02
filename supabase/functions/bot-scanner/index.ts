@@ -5930,6 +5930,23 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (limitSize < 0.01) limitSize = 0.01;
           }
 
+          // ── Replace stale pending: expire any existing pending order for same symbol+direction ──
+          // Market evolves — a new setup for the same symbol/direction is a different trade idea
+          // with different entry zone, SL/TP, score. Expire the old one and insert fresh.
+          const { data: stalePending } = await supabase.from("pending_orders")
+            .select("order_id, entry_price, signal_score")
+            .eq("user_id", userId).eq("bot_id", BOT_ID)
+            .eq("symbol", pair).eq("direction", analysis.direction)
+            .eq("status", "pending");
+          if (stalePending && stalePending.length > 0) {
+            const staleIds = stalePending.map((s: any) => s.order_id);
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${stalePending[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${stalePending[0].entry_price})`,
+            }).in("order_id", staleIds).eq("user_id", userId);
+            console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
+          }
+
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
