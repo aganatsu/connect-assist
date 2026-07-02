@@ -286,13 +286,15 @@ Deno.serve(async (req) => {
         }
 
         const regionResults = await Promise.all(REGIONS.map(async (region) => {
-          const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/historical-market-data/symbols/EURUSD${conn.symbol_suffix || ""}/timeframes/1d/candles?limit=1`;
+          // Use current-price endpoint — supported on all MetaAPI account types
+          // (cloud-g2/FTMO accounts don't expose historical-market-data).
+          const url = `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${metaAccountId}/symbols/EURUSD${conn.symbol_suffix || ""}/current-price`;
           try {
             const res = await fetch(url, { headers: { "auth-token": authToken } });
             const body = await res.text();
             if (res.ok) {
-              const arr = JSON.parse(body);
-              return { region, ok: true, status: res.status, candleCount: Array.isArray(arr) ? arr.length : 0 };
+              const j = JSON.parse(body);
+              return { region, ok: true, status: res.status, hasPrice: !!(j && (j.bid ?? j.ask)) };
             }
             return { region, ok: false, status: res.status, error: body.slice(0, 150) };
           } catch (e: any) {
@@ -313,7 +315,9 @@ Deno.serve(async (req) => {
           reachableRegion,
           regions: regionResults,
           hint: !reachableRegion
-            ? "Account exists in MetaAPI but no region can serve candle data. Most likely the account is UNDEPLOYED — deploy it from your MetaAPI dashboard."
+            ? (provisioning?.state === "DEPLOYED" && provisioning?.connectionStatus === "CONNECTED"
+                ? "Account is deployed and connected, but live-price probe failed on all regions. Broker may be offline (weekend) or EURUSD is named differently on this broker — check symbol mappings."
+                : "Account exists in MetaAPI but no region can serve price data. Most likely the account is UNDEPLOYED — deploy it from your MetaAPI dashboard.")
             : undefined,
         });
       }
