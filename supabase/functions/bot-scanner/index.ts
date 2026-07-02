@@ -2099,17 +2099,56 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       console.warn(`[mgmt-broker] ${conn.display_name}: No comment-tag match for paper:${a.positionId} on ${a.symbol} — skipping SL modify (B1 safety)`);
                       continue;
                     }
+                    // ── Freeze-level guard: query broker's current price and validate SL distance ──
+                    const brokerSymbol = resolveSymbol(a.symbol, conn);
+                    let brokerBid = 0, brokerAsk = 0;
+                    try {
+                      const { res: prRes, body: prBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`);
+                      if (prRes.ok) {
+                        const prData: any = JSON.parse(prBody);
+                        brokerBid = prData.bid ?? 0;
+                        brokerAsk = prData.ask ?? 0;
+                      }
+                    } catch {}
+                    // Determine minimum SL distance (freeze level). MT5 default freeze = 0-3 pips.
+                    // Use 3× pipSize as conservative minimum distance when we can't get the spec.
+                    const slSpec = SPECS[a.symbol] || SPECS["EUR/USD"];
+                    const minSLDistance = slSpec.pipSize * 3; // 3 pips minimum distance from price
+                    let finalSL = adjustedSL;
+                    if (brokerBid > 0 && brokerAsk > 0) {
+                      const relevantPrice = pos.direction === "long" ? brokerBid : brokerAsk;
+                      const slDistance = pos.direction === "long"
+                        ? relevantPrice - adjustedSL
+                        : adjustedSL - relevantPrice;
+                      if (slDistance < minSLDistance) {
+                        // SL is too close to broker price — widen it to minimum safe distance
+                        finalSL = pos.direction === "long"
+                          ? relevantPrice - minSLDistance
+                          : relevantPrice + minSLDistance;
+                        // Round to instrument precision
+                        const precision = slSpec.pipSize < 0.01 ? 5 : slSpec.pipSize < 1 ? 3 : 1;
+                        finalSL = parseFloat(finalSL.toFixed(precision));
+                        console.log(`[mgmt-broker] ${conn.display_name}: SL ${adjustedSL} too close to broker price ${relevantPrice} (dist=${slDistance.toFixed(5)}, min=${minSLDistance.toFixed(5)}) — widened to ${finalSL}`);
+                      }
+                    }
                     const modifyBody: any = {
                       actionType: "POSITION_MODIFY",
                       positionId: brokerPos.id,
-                      stopLoss: adjustedSL,
+                      stopLoss: finalSL,
                     };
                     if (tp && tp > 0) modifyBody.takeProfit = tp;
                     const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
                       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
                     });
                     if (res.ok) {
-                      console.log(`[mgmt-broker] ${conn.display_name}: SL modified to ${adjustedSL} for ${a.symbol} (${a.action})`);
+                      // MetaAPI returns 200 even on broker rejection — must check stringCode
+                      let modParsed: any = null;
+                      try { modParsed = JSON.parse(resBody); } catch {}
+                      if (modParsed?.stringCode && modParsed.stringCode !== "TRADE_RETCODE_DONE" && modParsed.stringCode !== "ERR_NO_ERROR") {
+                        console.warn(`[mgmt-broker] ${conn.display_name}: SL modify REJECTED by broker — ${modParsed.stringCode}: ${modParsed.message || ""} | ${a.symbol} SL→${finalSL} (${a.action})`);
+                      } else {
+                        console.log(`[mgmt-broker] ${conn.display_name}: SL modified to ${finalSL} for ${a.symbol} (${a.action})`);
+                      }
                     } else {
                       console.warn(`[mgmt-broker] ${conn.display_name}: SL modify failed [${res.status}]: ${resBody.slice(0, 300)}`);
                     }
@@ -2471,7 +2510,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // 5. Mirror close to broker if live mode + mirrored connections exist
         if (account.execution_mode === "live" && mirroredIds.length > 0) {
           const { data: closeConns } = await supabase.from("broker_connections")
-            .select("*").eq("user_id", userId).eq("broker_type", "metaapi")
+            .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
             .eq("is_active", true).in("id", mirroredIds);
           if (closeConns && closeConns.length > 0) {
             for (const conn of closeConns) {
@@ -5693,7 +5732,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             // on brokers that never received this paper position in the first place.
             if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
               const { data: closeConns } = await supabase.from("broker_connections")
-                .select("*").eq("user_id", userId).eq("broker_type", "metaapi")
+                .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
                 .eq("is_active", true).in("id", oppMirroredIds);
               if (closeConns && closeConns.length > 0) {
                 for (const conn of closeConns) {

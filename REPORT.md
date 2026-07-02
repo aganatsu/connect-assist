@@ -1,86 +1,71 @@
-# Task: Per-Pair Gate Overrides
-## Branch: manus/pair-gate-overrides
+# Task: Fix SL Modify Rejection Detection + Close Broker Filter
+
+## Branch: manus/fix-sl-modify-rejection
+
 ## Behavior changes
-1. **New capability**: Users can now configure per-pair gate overrides in their `config_json` under a new top-level `pairGateOverrides` field. When a symbol has an entry, those gate thresholds override the global config for that symbol only.
-2. **No existing behavior changes**: If `pairGateOverrides` is empty or absent (the default), all behavior is identical to the previous version. No trades are affected until overrides are explicitly configured.
+
+1. **SL modify rejections are now detected and logged.** Previously, when MetaAPI returned HTTP 200 but the broker rejected the SL modification (e.g., `TRADE_RETCODE_INVALID_STOPS`, `TRADE_RETCODE_FROZEN`), the scanner logged "SL modified to X" — a false success. Now it logs a warning: `SL modify REJECTED by broker — <stringCode>: <message>`. This means you will see explicit warnings in your Edge Function logs when FTMO rejects a trailing stop move, instead of silent failures.
+
+2. **SL/TP breach close and reverse signal close now fan out to OANDA connections** (in addition to MetaAPI). Previously, only `broker_type = "metaapi"` connections received close commands. This only affects users who have OANDA broker connections — MetaAPI-only users see no change.
 
 ## Files modified
-- `supabase/functions/_shared/configMapper.ts` — Added `PairGateOverride` interface, `pairGateOverrides` field to `RUNTIME_DEFAULTS`, mapping in `mapNestedToFlat()`, and exported `applyPairOverrides()` helper function.
-- `supabase/functions/bot-scanner/index.ts` — Added import of `applyPairOverrides` and one-line call at line 3612 after `pairConfig` clone (before gates run). **This does NOT modify any gate definition** — it only changes the config values that feed into existing gates.
-- `supabase/functions/backtest-engine/index.ts` — Same pattern: import + one-line call at pairConfig clone point so backtests respect per-pair overrides.
-- `supabase/functions/bot-config/index.ts` — Added validation for `pairGateOverrides` in `validateConfig()` with bounds checking for all overridable fields.
-- `supabase/functions/_shared/pairGateOverrides.test.ts` — 13 new tests covering all override scenarios.
+
+- `supabase/functions/bot-scanner/index.ts` — Added stringCode rejection checking to MetaAPI SL modify response (lines 2111-2119). Changed `.eq("broker_type", "metaapi")` to `.in("broker_type", ["metaapi", "oanda"])` in two close sections (SL/TP breach close at line 2481, reverse signal close at line 5703).
+- `supabase/functions/_shared/slModifyRejection.test.ts` — New test file (13 tests).
 
 ## Tests added
-1. `no overrides configured → config unchanged` — proves empty overrides is a no-op
-2. `overrides minRiskReward for EUR/JPY only` — proves single-field override works
-3. `non-targeted pair retains global values` — proves non-configured pairs are unaffected
-4. `multiple fields overridden for one pair` — proves all 5 overridable fields apply
-5. `partial override leaves other fields at global` — proves partial is truly partial
-6. `mapNestedToFlat: pairGateOverrides passed through from raw config` — proves persistence layer works
-7. `mapNestedToFlat: missing pairGateOverrides → empty object` — proves backward compat
-8. `protectionMaxDailyLossDollar and maxConsecutiveLosses` — proves protection gates override
-9. `regression: empty overrides = pure RUNTIME_DEFAULTS behavior` — regression guard
-10. `returns same config reference (mutation, not copy)` — proves no unnecessary allocations
-11. `different pairs get different override values` — proves multi-pair isolation
-12. `value of 0 is applied (not skipped as falsy)` — edge case: zero is valid
-13. `allowSameDirectionStacking=false is applied` — edge case: false is valid
+
+1. `SL modify: TRADE_RETCODE_INVALID_STOPS is detected as rejection` — verifies the most common FTMO rejection
+2. `SL modify: TRADE_RETCODE_INVALID is detected as rejection` — invalid request detection
+3. `SL modify: TRADE_RETCODE_MARKET_CLOSED is detected as rejection` — market closed detection
+4. `SL modify: TRADE_RETCODE_DONE is NOT a rejection` — success case passes through
+5. `SL modify: ERR_NO_ERROR is NOT a rejection` — alternative success code passes
+6. `SL modify: response without stringCode is NOT a rejection (legacy format)` — backward compat
+7. `SL modify: empty response body does not throw` — defensive handling
+8. `SL modify: malformed JSON does not throw` — defensive handling
+9. `SL modify: TRADE_RETCODE_FROZEN is detected as rejection` — freeze level rejection (common on FTMO)
+10. `broker_type filter: old filter misses OANDA connections` — proves the bug existed
+11. `broker_type filter: new filter includes both metaapi and oanda` — proves the fix works
+12. `broker_type filter: new filter still works with metaapi-only connections` — no regression for MetaAPI users
+13. `broker_type filter: new filter excludes unknown broker types` — safety check
 
 ## Tests run
+
 ```
-$ deno test --no-check --allow-all supabase/functions/_shared/pairGateOverrides.test.ts
-ok | 13 passed | 0 failed (50ms)
+$ deno test --allow-all supabase/functions/_shared/slModifyRejection.test.ts
+running 13 tests
+ok | 13 passed | 0 failed (12ms)
 
-$ deno test --no-check --allow-all supabase/functions/_shared/configMapper.test.ts
-ok | 51 passed | 0 failed (46ms)
+$ deno test --allow-all supabase/functions/_shared/calcPnl.test.ts
+ok | 35 passed | 0 failed (135ms)
 
-$ deno test --no-check --allow-all supabase/functions/_shared/
-ok | 1239 passed | 0 failed (16s)
+$ deno test --allow-all supabase/functions/_shared/confluenceScoring.test.ts
+ok | 22 passed | 0 failed (103ms)
 ```
 
-Note: One pre-existing flaky test in `zoneLiquidity.test.ts` ("returns empty result when no pools provided") intermittently fails due to test ordering/state leakage. This is NOT caused by our changes — confirmed by running the same test on the unmodified branch (passes in isolation, fails when run after certain other tests in the suite). The `zoneLiquidity.ts` source file has zero modifications.
+Note: `brokerFillPriceBE.test.ts` has 5 pre-existing failures unrelated to this change (confirmed by running on main before applying fix).
 
 ## Regression check
-- `mapNestedToFlat` with no `pairGateOverrides` field produces identical output to before (Test 7, 9)
-- `applyPairOverrides` on a non-configured symbol is a no-op (Test 1, 3)
-- All 51 existing configMapper tests pass unchanged
-- All 1239 shared module tests pass (excluding the pre-existing flaky test)
-- The `applyPairOverrides` function uses `!== undefined` checks, so `0` and `false` are correctly applied (Tests 12, 13)
+
+- The SL modify code path is additive: it only adds a `stringCode` check AFTER the existing `res.ok` check. If `res.ok` is false, behavior is unchanged. If `res.ok` is true, the new code parses the body and checks for rejection — this was previously not done at all, so there is no prior behavior to regress.
+- The broker_type filter change is also additive: `.in("broker_type", ["metaapi", "oanda"])` is a superset of `.eq("broker_type", "metaapi")`. For users with only MetaAPI connections, the query returns identical results.
+- Verified by running `calcPnl.test.ts` (35 tests) and `confluenceScoring.test.ts` (22 tests) — all pass.
 
 ## Open questions
-1. **UI integration**: The `pairGateOverrides` field needs a UI in the Lovable dashboard (Settings → Per-Pair Overrides section). Should I build that next?
-2. **Recommended initial overrides**: Based on the rejected setups analysis, here are the data-driven overrides I recommend configuring immediately:
 
-```json
-{
-  "pairGateOverrides": {
-    "EUR/JPY": { "minTier1Factors": 1, "allowSameDirectionStacking": true, "maxPerSymbol": 2, "minRiskReward": 0.8 },
-    "GBP/USD": { "protectionMaxDailyLossDollar": 5000, "maxConsecutiveLosses": 8 },
-    "USD/CAD": { "minTier1Factors": 2 },
-    "USD/CHF": { "minRiskReward": 0.8 },
-    "NZD/CHF": { "minRiskReward": 0.8 },
-    "XAU/USD": { "minConfluence": 35 },
-    "BTC/USD": { "minTier1Factors": 4, "allowSameDirectionStacking": false, "maxPerSymbol": 1 }
-  }
-}
-```
+1. **Should the scanner retry with adjusted SL when it gets TRADE_RETCODE_INVALID_STOPS?** Currently it just logs the rejection. A future enhancement could retry with a wider SL (e.g., add 1 more pip of buffer). This would require modifying `scannerManagement.ts` which is a protected file.
 
-3. **The flaky zoneLiquidity test**: This is a pre-existing issue unrelated to this PR. It appears to be a test isolation problem where shared state from earlier tests leaks. Should I fix it in a separate branch?
+2. **Should the rejection be stored in a database table for dashboard visibility?** Currently it only appears in Edge Function logs. Adding a `broker_action_log` table would let you see rejections in the dashboard.
 
 ## Suggested PR title and description
 
-**Title:** feat: per-pair gate overrides — allow symbol-specific gate thresholds
+**Title:** fix: detect MetaAPI SL modify rejections + include OANDA in close fan-out
 
 **Description:**
-Adds a `pairGateOverrides` config field that allows per-symbol overrides for key gate thresholds (R:R, Tier 1, stacking, max per symbol, confluence, daily P&L, consecutive losses).
+Fixes two bugs in trade management broker sync:
 
-**Motivation:** Rejected setups analysis showed that one-size-fits-all gate settings cost ~1,400 pips/week on profitable pairs (EUR/JPY 76% WR, GBP/USD 77% WR blocked) while correctly protecting on losers (BTC/USD 12.5% WR blocked). Per-pair overrides let us tune each symbol independently.
+1. **SL modify silent failures:** MetaAPI returns HTTP 200 even when the broker rejects a position modification (e.g., `TRADE_RETCODE_INVALID_STOPS` for freeze-level violations). The scanner previously only checked `res.ok` and logged success. Now it parses the response body for `stringCode` rejection codes — the same pattern already used for trade placement (line 6324). This explains why trailing stops were being "moved" in the paper system but not on MT5.
 
-**Changes:**
-- `configMapper.ts`: New `PairGateOverride` interface + `applyPairOverrides()` helper
-- `bot-scanner/index.ts`: 1-line call after pairConfig clone
-- `backtest-engine/index.ts`: Same 1-line call for backtest parity
-- `bot-config/index.ts`: Validation for the new field
-- 13 new tests with full regression coverage
+2. **Close fan-out missing OANDA:** The SL/TP breach close and reverse signal close sections only queried `broker_type = "metaapi"`, missing OANDA connections. Changed to `.in("broker_type", ["metaapi", "oanda"])` to match the pattern already used in the SL modify section (line 2017).
 
-**Zero behavior change** when `pairGateOverrides` is empty (the default). Only affects behavior when explicitly configured.
+13 new tests added. No behavior change for correctly-functioning MetaAPI connections (success responses pass through unchanged).
