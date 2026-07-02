@@ -88,7 +88,7 @@ export default function BrokersPage() {
     onSuccess: (data: any) => {
       if (Array.isArray(data.regions)) {
         const lines = data.regions.map((r: any) =>
-          `${r.ok ? "✓" : "✗"} ${r.region}${r.ok ? ` (${r.candleCount} candle)` : ` — ${r.error || `HTTP ${r.status}`}`}`
+          `${r.ok ? "✓" : "✗"} ${r.region}${r.ok ? (r.hasPrice ? " (live price)" : " (reachable)") : ` — ${r.error || `HTTP ${r.status}`}`}`
         ).join("\n");
         const header = data.success
           ? `✓ ${data.name || "MetaAPI"} reachable on "${data.reachableRegion}"`
