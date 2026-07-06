@@ -349,6 +349,22 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
           <span className={`text-xs ${direction === "long" ? "text-success" : "text-destructive"}`}>
             {direction === "long" ? "\u25B2" : "\u25BC"}
           </span>
+          {p.mirrorStatus === "mirrored" && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-success/15 border border-success/40 text-success"
+              title={`Mirrored to ${p.mirroredConnectionIds?.length || 0} broker connection(s)`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-success" /> MIRRORED
+            </span>
+          )}
+          {p.mirrorStatus === "orphan" && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-warning/15 border border-warning/40 text-warning"
+              title="Live mode but no broker link — this trade was NOT mirrored to MT4/MT5 at open (broker likely undeployed). SL/TP, reverse-close and management will NOT fan out. Close manually on MT5 if needed."
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-warning" /> ORPHAN
+            </span>
+          )}
           {sr.promotedFromWatchlist && (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" title={sr.watchlistOrigin?.promotionReason || "Promoted from watchlist"}>
               \ud83d\udccb WATCHLIST

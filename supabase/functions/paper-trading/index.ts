@@ -1185,17 +1185,29 @@ Deno.serve(async (req) => {
 
       const balance = parseFloat(account?.balance || "10000");
       const peakBalance = parseFloat(account?.peak_balance || "10000");
-      const posArr = (positions || []).map((p: any) => ({
-        id: p.position_id, symbol: p.symbol, direction: p.direction,
-        size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
-        currentPrice: parseFloat(p.current_price),
-        pnl: calcPnl(p.direction, parseFloat(p.entry_price), parseFloat(p.current_price), parseFloat(p.size), p.symbol).pnl,
-        stopLoss: p.stop_loss ? parseFloat(p.stop_loss) : null,
-        takeProfit: p.take_profit ? parseFloat(p.take_profit) : null,
-        openTime: p.open_time, signalReason: p.signal_reason || "",
-        signalScore: parseFloat(p.signal_score || "0"), orderId: p.order_id,
-        botId: p.bot_id || "smc",
-      }));
+      const execMode = account?.execution_mode || "paper";
+      const posArr = (positions || []).map((p: any) => {
+        const mirroredIds: string[] = Array.isArray(p.mirrored_connection_ids) ? p.mirrored_connection_ids : [];
+        // mirrorStatus is only meaningful in live mode. "mirrored" = trade is
+        // linked to at least one broker; "orphan" = live mode but not linked
+        // (typically because MetaAPI/OANDA was down/undeployed at open time,
+        // so future SL/TP/reverse-close will NOT fan out to the broker).
+        const mirrorStatus: "mirrored" | "orphan" | null =
+          execMode === "live" ? (mirroredIds.length > 0 ? "mirrored" : "orphan") : null;
+        return {
+          id: p.position_id, symbol: p.symbol, direction: p.direction,
+          size: parseFloat(p.size), entryPrice: parseFloat(p.entry_price),
+          currentPrice: parseFloat(p.current_price),
+          pnl: calcPnl(p.direction, parseFloat(p.entry_price), parseFloat(p.current_price), parseFloat(p.size), p.symbol).pnl,
+          stopLoss: p.stop_loss ? parseFloat(p.stop_loss) : null,
+          takeProfit: p.take_profit ? parseFloat(p.take_profit) : null,
+          openTime: p.open_time, signalReason: p.signal_reason || "",
+          signalScore: parseFloat(p.signal_score || "0"), orderId: p.order_id,
+          botId: p.bot_id || "smc",
+          mirroredConnectionIds: mirroredIds,
+          mirrorStatus,
+        };
+      });
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);
       const histArr = (history || []).map((t: any) => ({
         id: t.position_id, symbol: t.symbol, direction: t.direction,
