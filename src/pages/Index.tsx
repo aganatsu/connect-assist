@@ -361,7 +361,17 @@ export default function Dashboard() {
                   <tbody>
                     {positions.map((p: any) => (
                       <tr key={p.id} className="border-b border-border/50 hover:bg-secondary/30">
-                        <td className="py-1.5 px-1 font-medium">{p.symbol}</td>
+                        <td className="py-1.5 px-1 font-medium">
+                          <span className="inline-flex items-center gap-1.5">
+                            {p.mirrorStatus === "mirrored" && (
+                              <span title="Mirrored to MT4/MT5" className="w-1.5 h-1.5 rounded-full bg-success" />
+                            )}
+                            {p.mirrorStatus === "orphan" && (
+                              <span title="Live mode but NOT mirrored to broker — MT4/MT5 was down when this opened. SL/TP, reverse-close and management will not fan out. Close manually on MT5 if needed." className="w-1.5 h-1.5 rounded-full bg-warning" />
+                            )}
+                            {p.symbol}
+                          </span>
+                        </td>
                         <td className={`py-1.5 px-1 ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
                           {p.direction === "long" ? "▲" : "▼"}
                         </td>
