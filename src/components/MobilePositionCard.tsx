@@ -52,6 +52,12 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
             <span className={`text-[9px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
               {p.direction === "long" ? "LONG" : "SHORT"}
             </span>
+            {p.mirrorStatus === "mirrored" && (
+              <span title="Mirrored to broker" className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
+            )}
+            {p.mirrorStatus === "orphan" && (
+              <span title="Live mode but NOT mirrored to MT4/MT5 (broker was down at open) — management will not fan out" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
+            )}
             <OverrideBadge position={p} />
           </div>
           <div className="flex items-center gap-1.5 mt-0.5 min-w-0 overflow-hidden">
