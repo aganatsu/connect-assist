@@ -5674,105 +5674,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
-        // Close on Reverse: close existing opposite-direction positions for this symbol (Fix #8 — calc real PnL)
-        if (pairConfig.closeOnReverse) {
-          const oppositeDir = analysis.direction === "long" ? "short" : "long";
-          const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
-          for (const opp of oppositePositions) {
-            const oppEntry = parseFloat(opp.entry_price);
-            const oppSize = parseFloat(opp.size);
-            const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
-            const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
-            const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
-            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
-            const oppPnlPips = oppDiff / oppSpec.pipSize;
-
-            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
-            await supabase.from("paper_trade_history").insert({
-              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
-              symbol: pair, direction: opp.direction, size: opp.size,
-              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
-              open_time: opp.open_time || nowStr, closed_at: nowStr,
-              close_reason: "reverse_signal",
-              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
-              signal_score: opp.signal_score || "0",
-              bot_id: BOT_ID,
-            });
-            // Update balance with actual PnL — scope to this bot's account
-            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
-            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
-            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
-            const newBal = curBal + oppPnl;
-            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
-            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
-            await balUpdate;;
-
-            // Audit log entry for the reverse-signal close
-            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
-            console.log("[close]", JSON.stringify({
-              position_id: opp.position_id, symbol: pair, direction: opp.direction,
-              broker_connection_ids: oppMirroredIds, pnl: oppPnl, exit_price: analysis.lastPrice,
-              close_reason: "reverse_signal", close_source: "scanner", scan_cycle_id: scanCycleId,
-            }));
-            try {
-              const auditRows = (oppMirroredIds.length > 0 ? oppMirroredIds : [null]).map((cid: string | null) => ({
-                user_id: userId, position_id: opp.position_id, symbol: pair,
-                broker_connection_id: cid, close_reason: "reverse_signal", close_source: "scanner",
-                pnl: oppPnl.toFixed(2), exit_price: analysis.lastPrice.toString(),
-                scan_cycle_id: scanCycleId,
-                detail_json: { triggered_by_new_signal: positionId, new_direction: analysis.direction, opp_direction: opp.direction },
-              }));
-              await supabase.from("close_audit_log").insert(auditRows);
-            } catch (e: any) {
-              console.warn(`[close] audit insert failed for reverse ${opp.position_id}: ${e?.message}`);
-            }
-
-            // Mirror close ONLY to the broker connections this position was actually mirrored to.
-            // Critical fix: never iterate ALL active broker_connections — that would close trades
-            // on brokers that never received this paper position in the first place.
-            if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
-              const { data: closeConns } = await supabase.from("broker_connections")
-                .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
-                .eq("is_active", true).in("id", oppMirroredIds);
-              if (closeConns && closeConns.length > 0) {
-                for (const conn of closeConns) {
-                  try {
-                    let authToken = conn.api_key;
-                    let metaAccountId = conn.account_id;
-                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                      authToken = conn.account_id;
-                      metaAccountId = conn.api_key;
-                    }
-                    // Use region-failover metaFetch instead of hardcoded London URL
-                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-                    if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
-                    const brokerPositions: any[] = JSON.parse(posBody);
-                    const commentTag = `paper:${opp.position_id}`;
-                    const shortTag = commentTag.slice(0, 28);
-                    const brokerPos = brokerPositions.find((p: any) =>
-                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-                    );
-                    if (!brokerPos) {
-                      console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
-                      continue;
-                    }
-                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
-                    console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
-                  } catch (e: any) {
-                    console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
-                  }
-                }
-              }
-            } else if (account.execution_mode === "live") {
-              console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
-            }
-          }
-          // C6 fix: Remove closed opposite positions from the in-memory array
-          // so Gate 4 (max open positions) and Gate 5 (max per symbol) don't
-          // over-count for remaining pairs in this scan cycle.
-          const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
-          openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
-        }
+        // Close-on-Reverse was previously fired here — MOVED to just before the market-order
+        // insert (paper_positions.insert) below. Firing at this point was a bug: it closed
+        // opposite live positions even when this new signal was ultimately queued as a
+        // pending limit order that had not (and might never) fill. See CAD/JPY 2026-07-07.
 
         // Build exit flags metadata to store on the position
         // Intent fields (*Enabled) = user wants this feature
@@ -6075,6 +5980,104 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[scan ${scanCycleId}] ⛔ ${pair}: SL SANITY FAILED — entry ${marketEntryPrice} vs SL ${sl} (${analysis.direction}). Skipping.`);
           scanDetails.push(detail);
           continue;
+        }
+        // Close on Reverse: close existing opposite-direction positions for this symbol.
+        // MOVED here (from before the pending-order branch) so this only fires when the
+        // new signal is actually about to open a live market position — never on signals
+        // that get queued as pending limit orders which may never trigger.
+        if (pairConfig.closeOnReverse) {
+          const oppositeDir = analysis.direction === "long" ? "short" : "long";
+          const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
+          for (const opp of oppositePositions) {
+            const oppEntry = parseFloat(opp.entry_price);
+            const oppSize = parseFloat(opp.size);
+            const oppSpec = SPECS[pair] || SPECS["EUR/USD"];
+            const oppDiff = opp.direction === "long" ? analysis.lastPrice - oppEntry : oppEntry - analysis.lastPrice;
+            const oppQuoteToUSD = getQuoteToUSDRate(pair, rateMap);
+            const oppPnl = oppDiff * oppSpec.lotUnits * oppSize * oppQuoteToUSD;
+            const oppPnlPips = oppDiff / oppSpec.pipSize;
+
+            await supabase.from("paper_positions").delete().eq("position_id", opp.position_id).eq("user_id", userId);
+            await supabase.from("paper_trade_history").insert({
+              user_id: userId, position_id: opp.position_id, order_id: opp.order_id || orderId,
+              symbol: pair, direction: opp.direction, size: opp.size,
+              entry_price: opp.entry_price, exit_price: analysis.lastPrice.toString(),
+              open_time: opp.open_time || nowStr, closed_at: nowStr,
+              close_reason: "reverse_signal",
+              pnl: oppPnl.toFixed(2), pnl_pips: oppPnlPips.toFixed(1),
+              signal_score: opp.signal_score || "0",
+              bot_id: BOT_ID,
+            });
+            // Update balance with actual PnL — scope to this bot's account
+            const balQuery = supabase.from("paper_accounts").select("balance").eq("user_id", userId);
+            if (account.bot_id) balQuery.eq("bot_id", BOT_ID);
+            const curBal = parseFloat((await balQuery.single()).data?.balance || "10000");
+            const newBal = curBal + oppPnl;
+            const balUpdate = supabase.from("paper_accounts").update({ balance: newBal.toFixed(2), peak_balance: Math.max(newBal, parseFloat(account.peak_balance || "10000")).toFixed(2) }).eq("user_id", userId);
+            if (account.bot_id) balUpdate.eq("bot_id", BOT_ID);
+            await balUpdate;;
+
+            // Audit log entry for the reverse-signal close
+            const oppMirroredIds: string[] = Array.isArray(opp.mirrored_connection_ids) ? opp.mirrored_connection_ids : [];
+            console.log("[close]", JSON.stringify({
+              position_id: opp.position_id, symbol: pair, direction: opp.direction,
+              broker_connection_ids: oppMirroredIds, pnl: oppPnl, exit_price: analysis.lastPrice,
+              close_reason: "reverse_signal", close_source: "scanner", scan_cycle_id: scanCycleId,
+            }));
+            try {
+              const auditRows = (oppMirroredIds.length > 0 ? oppMirroredIds : [null]).map((cid: string | null) => ({
+                user_id: userId, position_id: opp.position_id, symbol: pair,
+                broker_connection_id: cid, close_reason: "reverse_signal", close_source: "scanner",
+                pnl: oppPnl.toFixed(2), exit_price: analysis.lastPrice.toString(),
+                scan_cycle_id: scanCycleId,
+                detail_json: { triggered_by_new_signal: positionId, new_direction: analysis.direction, opp_direction: opp.direction },
+              }));
+              await supabase.from("close_audit_log").insert(auditRows);
+            } catch (e: any) {
+              console.warn(`[close] audit insert failed for reverse ${opp.position_id}: ${e?.message}`);
+            }
+
+            // Mirror close ONLY to the broker connections this position was actually mirrored to.
+            if (account.execution_mode === "live" && oppMirroredIds.length > 0) {
+              const { data: closeConns } = await supabase.from("broker_connections")
+                .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"])
+                .eq("is_active", true).in("id", oppMirroredIds);
+              if (closeConns && closeConns.length > 0) {
+                for (const conn of closeConns) {
+                  try {
+                    let authToken = conn.api_key;
+                    let metaAccountId = conn.account_id;
+                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
+                      authToken = conn.account_id;
+                      metaAccountId = conn.api_key;
+                    }
+                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
+                    if (!posRes.ok) { console.warn(`Reverse close [${conn.display_name}]: positions fetch failed ${posRes.status}`); continue; }
+                    const brokerPositions: any[] = JSON.parse(posBody);
+                    const commentTag = `paper:${opp.position_id}`;
+                    const shortTag = commentTag.slice(0, 28);
+                    const brokerPos = brokerPositions.find((p: any) =>
+                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
+                    );
+                    if (!brokerPos) {
+                      console.log(`Reverse close [${conn.display_name}]: no matching comment-tagged position for paper:${opp.position_id} — skipping (no symbol fallback to avoid closing unrelated trades)`);
+                      continue;
+                    }
+                    const { res: closeRes } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id }) });
+                    console.log(`Reverse close [${conn.display_name}]: ${closeRes.ok ? "closed" : "failed " + closeRes.status} paper:${opp.position_id}`);
+                  } catch (e: any) {
+                    console.warn(`Reverse close [${conn.display_name}] error: ${e?.message}`);
+                  }
+                }
+              }
+            } else if (account.execution_mode === "live") {
+              console.log(`Reverse close: paper:${opp.position_id} had no mirrored_connection_ids — skipping broker fan-out`);
+            }
+          }
+          // Remove closed opposite positions from the in-memory array so subsequent
+          // gate checks in this scan cycle don't over-count.
+          const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
+          openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
         }
         await supabase.from("paper_positions").insert({
           user_id: userId,
