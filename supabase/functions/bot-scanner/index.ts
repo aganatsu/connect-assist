@@ -928,6 +928,11 @@ function _legacyLoadConfigMapping(_raw: any) {
     spreadFilterEnabled: instruments.spreadFilterEnabled ?? raw.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
     maxSpreadPips: instruments.maxSpreadPips ?? raw.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
 
+    // ── Correlation Filter (Gate 22) ──
+    correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? false,
+    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? 0.8,
+    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? 1,
+
     // ── News Event Filter ──
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
     newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? DEFAULTS.newsFilterPauseMinutes,
