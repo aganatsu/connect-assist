@@ -1473,13 +1473,14 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 22: Correlation Filter — prevent conflicting/doubling correlated positions
+  // Gate 22: Correlation Filter — block self-cancelling hedges; cap same-direction stacking
   // Uses the numeric correlation matrix (STATIC_CORRELATIONS in portfolioCorrelation.ts).
   // A position counts as "correlated" when |raw correlation| >= maxCorrelation threshold,
   // regardless of direction:
-  //   - Effective correlation > +threshold  → doubling (same bet twice)
+  //   - Effective correlation > +threshold  → doubling (same bet twice) — allowed, but
+  //     counted toward maxCorrelatedPositions to cap concentration.
   //   - Effective correlation < −threshold  → hedge (bets cancel; wastes spread/margin)
-  // If correlated count >= maxCorrelatedPositions the trade is blocked.
+  //     — always blocked, regardless of the cap.
   // Currency decomposition + SMT_PAIRS retained as belt-and-suspenders for pairs
   // that are absent from the matrix.
   // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
