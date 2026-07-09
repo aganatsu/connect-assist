@@ -82,7 +82,7 @@ import { updateConviction, buildConvictionKey, saveConvictionState, loadConvicti
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
-import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
+import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -1474,79 +1474,104 @@ async function runSafetyGates(
   }
 
   // Gate 22: Correlation Filter — prevent conflicting/doubling correlated positions
-  // Uses currency decomposition + SMT_PAIRS to detect:
-  //   1. Anti-correlated conflict: long EUR/USD + long USD/CHF (betting against yourself)
-  //   2. Over-correlated doubling: long EUR/USD + long GBP/USD (doubling USD exposure)
-  // Config: correlationFilterEnabled, maxCorrelation (threshold), maxCorrelatedPositions
+  // Uses the numeric correlation matrix (STATIC_CORRELATIONS in portfolioCorrelation.ts).
+  // A position counts as "correlated" when |raw correlation| >= maxCorrelation threshold,
+  // regardless of direction:
+  //   - Effective correlation > +threshold  → doubling (same bet twice)
+  //   - Effective correlation < −threshold  → hedge (bets cancel; wastes spread/margin)
+  // If correlated count >= maxCorrelatedPositions the trade is blocked.
+  // Currency decomposition + SMT_PAIRS retained as belt-and-suspenders for pairs
+  // that are absent from the matrix.
+  // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
   if ((config as any).correlationFilterEnabled) {
     const maxCorrelatedPos = Number((config as any).maxCorrelatedPositions) || 1;
+    const threshold = Number((config as any).maxCorrelation) || 0.7;
     const newPairCurrencies = parsePairCurrencies(symbol);
     const smtPair = SMT_PAIRS[symbol];
 
-    // Track conflicts and correlations found
-    let antiCorrelationConflict: string | null = null;
-    let correlatedSameDirection: string[] = [];
+    type Hit = { detail: string; kind: "doubling" | "hedge"; effCorr: number };
+    const hits: Hit[] = [];
 
     for (const pos of openPositions) {
       if (pos.symbol === symbol) continue; // same-symbol handled by Gate 5
-      const posDir = pos.direction; // "long" or "short"
+      const posDir = pos.direction;
 
-      // Check 1: Direct SMT pair conflict (e.g., EUR/USD vs GBP/USD, USD/JPY vs USD/CHF)
-      if (smtPair && pos.symbol === smtPair) {
-        // SMT pairs are positively correlated. Same direction = doubling exposure.
-        // Opposite direction = hedging (usually unintentional, wastes margin).
-        if (posDir !== direction) {
-          antiCorrelationConflict = `${pos.symbol} (${posDir}) — SMT pair hedge conflict`;
-        } else {
-          correlatedSameDirection.push(`${pos.symbol} (${posDir})`);
+      // Numeric correlation from static matrix (returns 0 if pair unknown)
+      const rawCorr = getCorrelation(symbol, pos.symbol);
+      const effCorr = getDirectionalCorrelation(
+        { symbol, direction },
+        { symbol: pos.symbol, direction: posDir },
+      );
+
+      let matched = false;
+      if (Math.abs(rawCorr) >= threshold) {
+        if (effCorr >= threshold) {
+          hits.push({
+            kind: "doubling",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — doubling`,
+          });
+          matched = true;
+        } else if (effCorr <= -threshold) {
+          hits.push({
+            kind: "hedge",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — hedge conflict`,
+          });
+          matched = true;
         }
-        continue;
       }
 
-      // Check 2: Currency decomposition — detect shared currency exposure
-      if (newPairCurrencies) {
-        const [newBase, newQuote] = newPairCurrencies;
+      // Fallback 1: SMT pair (positive-correlation proxy for pairs the matrix may miss)
+      if (!matched && smtPair && pos.symbol === smtPair) {
+        hits.push({
+          kind: posDir === direction ? "doubling" : "hedge",
+          effCorr: posDir === direction ? 0.85 : -0.85,
+          detail: `${pos.symbol} ${posDir} — SMT pair ${posDir === direction ? "doubling" : "hedge"}`,
+        });
+        matched = true;
+      }
+
+      // Fallback 2: currency decomposition — full opposite exposure on same two currencies
+      if (!matched && newPairCurrencies) {
         const posCurrencies = parsePairCurrencies(pos.symbol);
         if (posCurrencies) {
-          const [posBase, posQuote] = posCurrencies;
-
-          // Determine effective exposure: what currency are you buying/selling?
-          // Long EUR/USD = buying EUR, selling USD
-          // Short EUR/USD = selling EUR, buying USD
-          const newBuying = direction === "long" ? newBase : newQuote;
-          const newSelling = direction === "long" ? newQuote : newBase;
-          const posBuying = posDir === "long" ? posBase : posQuote;
-          const posSelling = posDir === "long" ? posQuote : posBase;
-
-          // Anti-correlation: buying what another position is selling (or vice versa) of the SAME currency
-          // e.g., Long EUR/USD (buying EUR) + Short EUR/GBP (selling EUR) = conflicting EUR exposure
+          const [nb, nq] = newPairCurrencies;
+          const [pb, pq] = posCurrencies;
+          const newBuying = direction === "long" ? nb : nq;
+          const newSelling = direction === "long" ? nq : nb;
+          const posBuying = posDir === "long" ? pb : pq;
+          const posSelling = posDir === "long" ? pq : pb;
           if (newBuying === posSelling && newSelling === posBuying) {
-            // Perfect hedge — buying and selling the same currencies in opposite directions
-            antiCorrelationConflict = `${pos.symbol} (${posDir}) — opposite exposure on ${newBuying}/${newSelling}`;
-          }
-
-          // Positive correlation: buying the same currency in multiple pairs
-          // e.g., Long EUR/USD (buying EUR) + Long EUR/GBP (buying EUR) = doubling EUR long exposure
-          if (newBuying === posBuying && newSelling === posSelling) {
-            correlatedSameDirection.push(`${pos.symbol} (${posDir}) — same ${newBuying} long / ${newSelling} short exposure`);
-          } else if (newBuying === posBuying) {
-            correlatedSameDirection.push(`${pos.symbol} (${posDir}) — both buying ${newBuying}`);
-          } else if (newSelling === posSelling) {
-            correlatedSameDirection.push(`${pos.symbol} (${posDir}) — both selling ${newSelling}`);
+            hits.push({
+              kind: "hedge",
+              effCorr: -1,
+              detail: `${pos.symbol} ${posDir} — perfect currency hedge on ${newBuying}/${newSelling}`,
+            });
+          } else if (newBuying === posBuying && newSelling === posSelling) {
+            hits.push({
+              kind: "doubling",
+              effCorr: 1,
+              detail: `${pos.symbol} ${posDir} — identical currency exposure`,
+            });
           }
         }
       }
     }
 
-    // Evaluate results
-    if (antiCorrelationConflict) {
-      gates.push({ passed: false, reason: `Correlation conflict: ${direction} ${symbol} vs open ${antiCorrelationConflict}` });
-    } else if (correlatedSameDirection.length >= maxCorrelatedPos) {
-      gates.push({ passed: false, reason: `Correlated exposure limit: ${correlatedSameDirection.length} correlated positions >= ${maxCorrelatedPos} max — ${correlatedSameDirection.join("; ")}` });
-    } else if (correlatedSameDirection.length > 0) {
-      gates.push({ passed: true, reason: `Correlated positions: ${correlatedSameDirection.length}/${maxCorrelatedPos} — ${correlatedSameDirection.join("; ")}` });
+    if (hits.length >= maxCorrelatedPos) {
+      const summary = hits.map(h => h.detail).join("; ");
+      gates.push({
+        passed: false,
+        reason: `Correlation limit hit (threshold ${threshold}): ${hits.length}/${maxCorrelatedPos} conflicts — ${summary}`,
+      });
+    } else if (hits.length > 0) {
+      gates.push({
+        passed: true,
+        reason: `Correlated positions: ${hits.length}/${maxCorrelatedPos} — ${hits.map(h => h.detail).join("; ")}`,
+      });
     } else {
-      gates.push({ passed: true, reason: `No correlated positions for ${symbol}` });
+      gates.push({ passed: true, reason: `No correlated positions (threshold ${threshold})` });
     }
   }
 
