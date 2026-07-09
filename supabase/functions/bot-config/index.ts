@@ -428,7 +428,7 @@ function getDefaultConfig() {
         "XAU/USD": true, "XAG/USD": false, "BTC/USD": false, "ETH/USD": false,
       },
       spreadFilterEnabled: true, maxSpreadPips: 3, volatilityFilterEnabled: false,
-      minATR: 0, maxATR: 999, correlationFilterEnabled: false, maxCorrelation: 0.8, maxCorrelatedPositions: 1,
+      minATR: 0, maxATR: 999, correlationFilterEnabled: true, maxCorrelation: 0.7, maxCorrelatedPositions: 2,
     },
     sessions: {
       filter: ["london", "newyork"],
