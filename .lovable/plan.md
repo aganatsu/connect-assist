@@ -1,32 +1,31 @@
-## Apply performance-driven config changes to active bot
+## Goal
+Stop the bot from doing things that directly cancel your P&L, without over-restricting trades that can still make money.
 
-Update the user's active `bot_configs` row via a migration to disable underperforming pairs/sessions and tighten safety filters.
+## The money-losing case (must block)
+**Opposite direction on correlated pairs** — e.g. long EUR/USD + short GBP/USD. They move together, so one wins exactly as the other loses. This is the setup that guarantees you bleed spread/commission for zero net edge. **Block this.**
 
-### Changes
+## The risky-but-profitable case (cap, don't block)
+**Same direction on correlated pairs** — e.g. long EUR/USD + long GBP/USD. Both can win together (or lose together). It's not self-sabotage, it's concentration risk. Blocking it entirely means missing real winners. **Allow, but capped** by `maxCorrelatedPositions` so you don't stack 5 EUR-longs at once.
 
-**Instruments — disable (13):**
-AUD/CHF, NZD/JPY, EUR/NZD, EUR/GBP, GBP/CHF, USD/JPY, EUR/CAD, AUD/JPY, EUR/CHF, plus any remaining CHF/JPY crosses currently enabled.
+## What changes in the bot
+File: `supabase/functions/bot-scanner/index.ts`
 
-**Instruments — keep enabled:**
-GBP/CAD, EUR/AUD, USD/CAD, GBP/USD, CAD/JPY, NZD/USD, AUD/USD, XAU/USD.
+Current behavior: correlation filter treats *both* same-direction and opposite-direction correlated trades as conflicts and blocks them.
 
-**Sessions:**
-- Remove: `asian`
-- Keep: `london`, `newyork`, `offhours`
+New behavior:
+- Opposite-direction correlated trade → classified as `hedge` conflict → **blocked** (as today).
+- Same-direction correlated trade → **allowed**, but still counted toward the `maxCorrelatedPositions` cap so exposure to one correlated cluster stays bounded.
+- Uncorrelated pairs → unaffected.
 
-**Safety filters:**
-- `correlationFilterEnabled: true`
-- `maxSpreadPips: 2`
+No changes to bot entry logic, SMC signals, or risk sizing — only the correlation gate.
 
-**Leave untouched:**
-- Partial TP (already on at +1R / 50%)
-- Break-even offset (already 3 pips)
-- Confluence threshold and tier-1 gate (per your current preference)
+## Defaults
+- Correlation filter: **on** by default.
+- Threshold: **0.70** (absolute) — catches strong correlations like EUR/USD–GBP/USD without over-flagging looser ones.
+- `maxCorrelatedPositions`: **2** — lets same-direction stack a little, prevents a full cluster pile-on.
 
-### How
+You can tune these in the bot config modal after it's live.
 
-One migration that JSON-patches the `config` column on the user's `bot_configs` row(s), preserving all other fields. Values will be merged in-place — arrays for instruments/sessions replaced, booleans/numbers overwritten.
-
-### Verification after apply
-
-Read back `bot_configs` and confirm the updated arrays + flags.
+## Out of scope
+- Bot strategy / signal logic (untouched).
+- Frontend UI (no changes needed; existing config modal already exposes threshold + max).

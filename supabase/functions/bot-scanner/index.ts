@@ -1473,13 +1473,14 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 22: Correlation Filter — prevent conflicting/doubling correlated positions
+  // Gate 22: Correlation Filter — block self-cancelling hedges; cap same-direction stacking
   // Uses the numeric correlation matrix (STATIC_CORRELATIONS in portfolioCorrelation.ts).
   // A position counts as "correlated" when |raw correlation| >= maxCorrelation threshold,
   // regardless of direction:
-  //   - Effective correlation > +threshold  → doubling (same bet twice)
+  //   - Effective correlation > +threshold  → doubling (same bet twice) — allowed, but
+  //     counted toward maxCorrelatedPositions to cap concentration.
   //   - Effective correlation < −threshold  → hedge (bets cancel; wastes spread/margin)
-  // If correlated count >= maxCorrelatedPositions the trade is blocked.
+  //     — always blocked, regardless of the cap.
   // Currency decomposition + SMT_PAIRS retained as belt-and-suspenders for pairs
   // that are absent from the matrix.
   // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
@@ -1559,19 +1560,28 @@ async function runSafetyGates(
       }
     }
 
-    if (hits.length >= maxCorrelatedPos) {
-      const summary = hits.map(h => h.detail).join("; ");
+    const hedgeHits = hits.filter(h => h.kind === "hedge");
+    const doublingHits = hits.filter(h => h.kind === "doubling");
+
+    if (hedgeHits.length > 0) {
+      // Hedges bet against yourself on correlated pairs — always block, regardless of cap.
       gates.push({
         passed: false,
-        reason: `Correlation limit hit (threshold ${threshold}): ${hits.length}/${maxCorrelatedPos} conflicts — ${summary}`,
+        reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
       });
-    } else if (hits.length > 0) {
+    } else if (doublingHits.length >= maxCorrelatedPos) {
+      // Same-direction correlated exposure exceeds the concentration cap.
+      gates.push({
+        passed: false,
+        reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
+      });
+    } else if (doublingHits.length > 0) {
       gates.push({
         passed: true,
-        reason: `Correlated positions: ${hits.length}/${maxCorrelatedPos} — ${hits.map(h => h.detail).join("; ")}`,
+        reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
       });
     } else {
-      gates.push({ passed: true, reason: `No correlated positions (threshold ${threshold})` });
+      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
     }
   }
 
