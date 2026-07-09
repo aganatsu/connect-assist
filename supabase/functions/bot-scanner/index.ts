@@ -1485,7 +1485,7 @@ async function runSafetyGates(
   // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
   if ((config as any).correlationFilterEnabled) {
     const maxCorrelatedPos = Number((config as any).maxCorrelatedPositions) || 1;
-    const threshold = Number((config as any).maxCorrelation) || 0.7;
+    const threshold = Number((config as any).maxCorrelation) || 0.8;
     const newPairCurrencies = parsePairCurrencies(symbol);
     const smtPair = SMT_PAIRS[symbol];
 
