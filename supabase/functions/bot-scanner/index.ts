@@ -82,7 +82,7 @@ import { updateConviction, buildConvictionKey, saveConvictionState, loadConvicti
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
-import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
+import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
