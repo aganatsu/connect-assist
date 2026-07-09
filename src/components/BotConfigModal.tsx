@@ -1671,6 +1671,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       <ToggleField label="Enable Correlation Filter" description="Block trades that conflict with or double exposure on open positions" checked={config.instruments?.correlationFilterEnabled ?? false} onChange={v => updateField('instruments', 'correlationFilterEnabled', v)} />
                       {(config.instruments?.correlationFilterEnabled) && (
                         <>
+                          <FieldGroup label="Correlation Threshold" description="Minimum correlation strength (±) that counts as related. Lower = stricter (catches more pairs).">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.instruments?.maxCorrelation ?? 0.8]} onValueChange={v => updateField('instruments', 'maxCorrelation', v[0])} min={0.5} max={0.95} step={0.05} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-12 text-right">{(config.instruments?.maxCorrelation ?? 0.8).toFixed(2)}</span>
+                            </div>
+                          </FieldGroup>
                           <FieldGroup label="Max Correlated Positions" description="Maximum same-direction correlated pairs allowed before blocking. E.g., 1 = only one EUR long pair at a time.">
                             <div className="flex items-center gap-4">
                               <Slider value={[config.instruments?.maxCorrelatedPositions ?? 1]} onValueChange={v => updateField('instruments', 'maxCorrelatedPositions', v[0])} min={1} max={5} step={1} className="flex-1" />
