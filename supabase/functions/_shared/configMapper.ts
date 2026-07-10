@@ -144,6 +144,10 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
   minZoneScore: 4,
   impulseSlCapMultiplier: 4,
+  /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
+  originOBRetest: false,
+  /** Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify. Default 0.786. */
+  fibMaxRetracement: 0.786,
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
