@@ -939,6 +939,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         <p>3. If Unified Zone Confirmation = ON:</p>
                         <p className="pl-3">• Must reach "triggered" state (impulse→zone→liq→confirm)</p>
                         <p className="pl-3">• If not triggered → pair skipped (no fallback)</p>
+                        <p className="pl-3">• Zone depth controlled by Max Fib Retracement (78.6% / 88.6% / 100%)</p>
+                        <p className="pl-3">• Origin OB Re-test adds the impulse-origin OB as a valid zone</p>
                         <p>4. Entry method (when zone exists):</p>
                         <p className="pl-3">• Price AT zone + Market Fill ON → immediate fill</p>
                         <p className="pl-3">• Price AT zone + Market Fill OFF → wait for LTF confirm</p>
