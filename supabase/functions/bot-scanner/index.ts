@@ -4463,7 +4463,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           {
             htfData: htfConfluenceData ?? undefined,
-            zoneEngineOpts: { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
+            zoneEngineOpts: {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+            },
           },
         );
         (detail as any).cascadeZone = {
