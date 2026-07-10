@@ -373,6 +373,7 @@ export function mapImpulsePOIs(
           low: oc.low,
           candleIndex: originCandleIdx,
           direction: impulse.direction,
+          isOriginOB: true,
         });
       }
     }
