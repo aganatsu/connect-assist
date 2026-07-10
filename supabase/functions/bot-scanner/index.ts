@@ -4341,7 +4341,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           combinedLiqPools,
           htfConfluenceData ?? undefined,
-          { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
+          {
+            strictATRMult: pairConfig.marketFillStrictATRMult,
+            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+            fibMaxRetracement: pairConfig.fibMaxRetracement,
+            originOBRetest: pairConfig.originOBRetest,
+          },
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
