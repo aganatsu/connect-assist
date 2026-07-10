@@ -264,6 +264,7 @@ function validateImpulseFromBOS(
 export function mapImpulsePOIs(
   candles: Candle[],
   impulse: ImpulseLeg,
+  options?: { originOBRetest?: boolean },
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
 
@@ -326,6 +327,53 @@ export function mapImpulsePOIs(
         candleIndex: fullIndex,
         direction: ob.type,
       });
+    }
+  }
+
+  // ── Origin OB re-test (optional) ──
+  // Synthesize an "origin OB" POI: the last opposing candle at or near the
+  // impulse origin swing. For bullish impulse, we want the last bearish
+  // candle around startIndex (the swing low). For bearish, the last bullish
+  // candle around startIndex (the swing high). This captures the demand/
+  // supply block that CAUSED the impulse (not the ones inside it).
+  if (options?.originOBRetest && candles.length > 0) {
+    const window = 5; // bars around the origin to search
+    const originIdx = impulse.startIndex;
+    const searchLo = Math.max(0, originIdx - window);
+    const searchHi = Math.min(candles.length - 1, originIdx + window);
+    let originCandleIdx = -1;
+    for (let i = originIdx; i >= searchLo; i--) {
+      const c = candles[i];
+      const isBearish = c.close < c.open;
+      const isBullish = c.close > c.open;
+      if (impulse.direction === "bullish" && isBearish) { originCandleIdx = i; break; }
+      if (impulse.direction === "bearish" && isBullish) { originCandleIdx = i; break; }
+    }
+    // Fallback: scan forward if none behind
+    if (originCandleIdx === -1) {
+      for (let i = originIdx + 1; i <= searchHi; i++) {
+        const c = candles[i];
+        const isBearish = c.close < c.open;
+        const isBullish = c.close > c.open;
+        if (impulse.direction === "bullish" && isBearish) { originCandleIdx = i; break; }
+        if (impulse.direction === "bearish" && isBullish) { originCandleIdx = i; break; }
+      }
+    }
+    if (originCandleIdx >= 0) {
+      const oc = candles[originCandleIdx];
+      // Avoid duplicates: skip if we already have a POI overlapping this exact candle
+      const duplicate = pois.some(p =>
+        p.candleIndex === originCandleIdx && p.type === "ob"
+      );
+      if (!duplicate) {
+        pois.push({
+          type: "ob",
+          high: oc.high,
+          low: oc.low,
+          candleIndex: originCandleIdx,
+          direction: impulse.direction,
+        });
+      }
     }
   }
 
