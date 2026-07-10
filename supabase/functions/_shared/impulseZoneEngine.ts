@@ -399,11 +399,22 @@ export function mapImpulsePOIs(
 export function overlayFibOnPOIs(
   impulse: ImpulseLeg,
   pois: ImpulsePOI[],
+  options?: { fibMaxRetracement?: number; originOBRetest?: boolean },
 ): RankedPOI[] {
   if (pois.length === 0) return [];
 
   const range = impulse.high - impulse.low;
   if (range <= 0) return [];
+
+  // Dynamic fib window. Default matches legacy behavior (max 0.786 / OTE 0.85).
+  const fibMax = Math.max(0.5, Math.min(1.0, options?.fibMaxRetracement ?? 0.786));
+  // Extend the checked Fib ladder based on the max and origin-OB toggle
+  const extraLevels: number[] = [];
+  if (fibMax >= 0.886) extraLevels.push(0.886);
+  if (fibMax >= 1.0 || options?.originOBRetest) extraLevels.push(1.0);
+  const FIB_LEVELS = [...extraLevels, ...FIB_LEVELS_BASE] as const;
+  // OTE upper bound scales with the max: allow a small tolerance above fibMax
+  const oteUpper = Math.min(1.05, fibMax + 0.05);
 
   const tolerance = range * FIB_TOLERANCE_FRACTION;
   const ranked: RankedPOI[] = [];
@@ -439,13 +450,18 @@ export function overlayFibOnPOIs(
 
     // Only include POIs that are within tolerance of a Fib level
     // OR that sit in the OTE zone (0.618 - 0.786)
-    const inOTE = fibDepth >= 0.5 && fibDepth <= 0.85;
+    const inOTE = fibDepth >= 0.5 && fibDepth <= oteUpper;
     const nearFib = nearestDist <= tolerance;
 
     if (!nearFib && !inOTE) continue; // POI not at a meaningful Fib level
 
     // Assign score based on depth
-    const fibScore = FIB_SCORES[nearestFib] ?? (fibDepth >= 0.71 ? 2 : fibDepth >= 0.618 ? 1.5 : fibDepth >= 0.5 ? 1 : 0);
+    const fibScore = FIB_SCORES[nearestFib] ?? (
+      fibDepth >= 0.886 ? 2 :
+      fibDepth >= 0.71 ? 2 :
+      fibDepth >= 0.618 ? 1.5 :
+      fibDepth >= 0.5 ? 1 : 0
+    );
 
     ranked.push({
       poi,
