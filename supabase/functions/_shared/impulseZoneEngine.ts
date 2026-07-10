@@ -88,10 +88,12 @@ export interface ZoneEngineResult {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Fib levels to check (from deepest to shallowest) */
-const FIB_LEVELS = [0.786, 0.71, 0.618, 0.5, 0.382] as const;
+const FIB_LEVELS_BASE = [0.786, 0.71, 0.618, 0.5, 0.382] as const;
 
 /** Score assigned to each Fib depth tier (flattened so other confluences carry more weight) */
 const FIB_SCORES: Record<number, number> = {
+  1.0: 2,
+  0.886: 2,
   0.786: 2,
   0.71: 2,
   0.618: 1.5,
