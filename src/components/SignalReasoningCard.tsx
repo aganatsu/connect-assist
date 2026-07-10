@@ -144,6 +144,35 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
   const spreadFilter = parsed?.spreadFilter ?? null;
   const newsFilter = parsed?.newsFilter ?? null;
 
+  // ── Zone Qualifiers (from impulseZoneEngine result) ──
+  const bestZone = parsed?.impulseZone?.bestZone?.zone ?? null;
+  const zoneQualifiers: { label: string; tone: "deep" | "origin" | "info" }[] = [];
+  if (bestZone) {
+    const fibLevel: number | undefined = bestZone.fibLevel;
+    const fibDepth: number | undefined = bestZone.fibDepth;
+    const poiType: string | undefined = bestZone.poi?.type;
+    const isOriginOB: boolean = !!bestZone.poi?.isOriginOB;
+    if (isOriginOB) zoneQualifiers.push({ label: "Origin OB Re-test", tone: "origin" });
+    if (typeof fibLevel === "number") {
+      const pct = (fibLevel * 100).toFixed(1).replace(/\.0$/, "");
+      const deep = fibLevel >= 0.786;
+      zoneQualifiers.push({
+        label: `Zone Depth ${pct}%${deep ? " · deep" : ""}`,
+        tone: deep ? "deep" : "info",
+      });
+    } else if (typeof fibDepth === "number") {
+      zoneQualifiers.push({ label: `Fib depth ${(fibDepth * 100).toFixed(0)}%`, tone: "info" });
+    }
+    if (poiType) zoneQualifiers.push({ label: `POI: ${poiType.toUpperCase()}`, tone: "info" });
+  }
+
+  const qualifierClass = (tone: "deep" | "origin" | "info") =>
+    tone === "origin"
+      ? "bg-primary/15 border-primary/40 text-primary"
+      : tone === "deep"
+        ? "bg-warning/15 border-warning/40 text-warning"
+        : "bg-secondary/60 border-border text-foreground";
+
   const exitRows: { label: string; value: string }[] = [];
   if (exitFlags) {
     if (exitFlags.trailingStopPips != null) {
@@ -221,6 +250,23 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
                 className="rounded bg-muted/40 border border-border/60 px-1.5 py-0.5 text-[9px] font-mono text-muted-foreground"
               >
                 {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Zone Qualifiers — impulseZoneEngine gate outcomes */}
+      {zoneQualifiers.length > 0 && (
+        <div>
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Zone Qualifiers</p>
+          <div className="flex flex-wrap gap-1">
+            {zoneQualifiers.map((q, i) => (
+              <span
+                key={i}
+                className={`rounded border px-1.5 py-0.5 text-[9px] font-mono ${qualifierClass(q.tone)}`}
+              >
+                {q.label}
               </span>
             ))}
           </div>
