@@ -112,6 +112,27 @@ export function TradeReplayDetails({ trade }: Props) {
   const maxScore = factors.reduce((s, f) => s + f.max, 0);
   const scorePct = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
 
+  // ── Zone Qualifiers from impulseZoneEngine (not scored; qualifiers that gated the entry) ──
+  const bestZone = sr?.impulseZone?.bestZone?.zone ?? null;
+  const qualifiers: { label: string; value: string; color: string }[] = [];
+  if (bestZone) {
+    if (bestZone.poi?.isOriginOB) {
+      qualifiers.push({ label: "Origin OB Re-test", value: "matched", color: "#a855f7" });
+    }
+    if (typeof bestZone.fibLevel === "number") {
+      const pct = (bestZone.fibLevel * 100).toFixed(1).replace(/\.0$/, "");
+      const deep = bestZone.fibLevel >= 0.786;
+      qualifiers.push({
+        label: "Zone Depth",
+        value: `${pct}% fib${deep ? " (deep)" : ""}`,
+        color: deep ? "#f59e0b" : "#06b6d4",
+      });
+    }
+    if (bestZone.poi?.type) {
+      qualifiers.push({ label: "POI Type", value: bestZone.poi.type.toUpperCase(), color: "#64748b" });
+    }
+  }
+
   return (
     <div className="h-full grid grid-cols-3 divide-x divide-border overflow-hidden">
       {/* Trade Details */}
@@ -168,6 +189,26 @@ export function TradeReplayDetails({ trade }: Props) {
         <SectionTitle dotColor="#22c55e">
           Entry Scoring ({scorePct}%)
         </SectionTitle>
+        {qualifiers.length > 0 && (
+          <div className="mb-3 pb-2 border-b border-border/40">
+            <div className="text-[9px] uppercase tracking-wider text-muted-foreground font-bold mb-1.5">
+              Zone Qualifiers
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {qualifiers.map((q, i) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-mono"
+                  style={{ borderColor: `${q.color}66`, background: `${q.color}1a`, color: q.color }}
+                  title={`${q.label}: ${q.value}`}
+                >
+                  <span className="opacity-70">{q.label}:</span>
+                  <span>{q.value}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         {factors.map((f, i) => (
           <ScoreBar
             key={i}
