@@ -871,7 +871,7 @@ export function findBestEntryZone(
   }
 
   // Step 2: Map POIs within the impulse
-  const pois = mapImpulsePOIs(htfCandles, impulse);
+  const pois = mapImpulsePOIs(htfCandles, impulse, { originOBRetest: options?.originOBRetest });
   if (pois.length === 0) {
     return {
       bestZone: null,
@@ -882,13 +882,16 @@ export function findBestEntryZone(
   }
 
   // Step 3: Overlay Fib and score by depth
-  let rankedZones = overlayFibOnPOIs(impulse, pois);
+  let rankedZones = overlayFibOnPOIs(impulse, pois, {
+    fibMaxRetracement: options?.fibMaxRetracement,
+    originOBRetest: options?.originOBRetest,
+  });
   if (rankedZones.length === 0) {
     return {
       bestZone: null,
       impulse,
       allZones: [],
-      reason: `POIs found but none align with key Fib levels (50%-78.6%)`,
+      reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
     };
   }
 
