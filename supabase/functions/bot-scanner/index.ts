@@ -773,6 +773,8 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
+    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
+    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? DEFAULTS.fibMaxRetracement,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
