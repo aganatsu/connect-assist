@@ -1049,6 +1049,16 @@ export interface ZoneEngineOptions {
   dailyZoneBounds?: { high: number; low: number };
   /** Pip size for the instrument (e.g. 0.0001 for EUR/USD, 1 for BTC/USD, 0.01 for XAU/USD). Default: 0.0001 */
   pipSize?: number;
+  /**
+   * Maximum Fib retracement to accept a POI (0.5–1.0). Default 0.786.
+   * Set higher (e.g. 0.886 or 1.0) to allow deeper zones near the impulse origin.
+   */
+  fibMaxRetracement?: number;
+  /**
+   * When true, synthesize an "origin OB" POI at the impulse origin swing and allow
+   * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
+   */
+  originOBRetest?: boolean;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
