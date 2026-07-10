@@ -415,6 +415,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
+    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
+    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
