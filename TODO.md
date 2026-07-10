@@ -40,6 +40,16 @@
 
 - [ ] Fix manual "Scan Now" button — add loading spinner while scan is running, refresh results on completion
 
+## Zone / Impulse Detection Rework
+
+- [ ] Recency/dominance rule — when a newer impulse ≥ X% the size of the current one prints, replace the active zone with the newer impulse's OB (even if it scores slightly lower on confluence)
+- [ ] Multi-zone output — return top 2–3 zones ranked, show them all in UnifiedZonePanel, and let the bot watchlist all of them (price at *any* valid zone = eligible)
+
+## Trade Audit — Last 40 Trades
+
+- [ ] Pull last 40 closed trades in a table: symbol, direction, entry price, stop loss (given), take profit (given), actual close price, close reason, pnl, open/close time, RR planned vs realized, signal score/reason
+- [ ] Compare given SL vs actual exit — flag trades where exit price is worse than SL (slippage) or where close_reason ≠ sl_hit but exit ≈ SL
+
 ## Ranging Direction & Scoring Fixes (manus/ranging-direction-fixes)
 
 - [ ] Fix 1: Regime override for direction in ranging markets — don't mean-revert against a trending regime (≥60% confidence)
