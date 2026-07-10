@@ -41,6 +41,7 @@ export interface ImpulsePOI {
   low: number;
   candleIndex: number;
   direction: "bullish" | "bearish";
+  isOriginOB?: boolean;   // True if this OB was synthesized as the impulse-origin re-test candidate
 }
 
 export interface RankedPOI {
