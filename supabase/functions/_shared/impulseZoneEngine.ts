@@ -88,10 +88,12 @@ export interface ZoneEngineResult {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Fib levels to check (from deepest to shallowest) */
-const FIB_LEVELS = [0.786, 0.71, 0.618, 0.5, 0.382] as const;
+const FIB_LEVELS_BASE = [0.786, 0.71, 0.618, 0.5, 0.382] as const;
 
 /** Score assigned to each Fib depth tier (flattened so other confluences carry more weight) */
 const FIB_SCORES: Record<number, number> = {
+  1.0: 2,
+  0.886: 2,
   0.786: 2,
   0.71: 2,
   0.618: 1.5,
@@ -262,6 +264,7 @@ function validateImpulseFromBOS(
 export function mapImpulsePOIs(
   candles: Candle[],
   impulse: ImpulseLeg,
+  options?: { originOBRetest?: boolean },
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
 
@@ -327,6 +330,53 @@ export function mapImpulsePOIs(
     }
   }
 
+  // ── Origin OB re-test (optional) ──
+  // Synthesize an "origin OB" POI: the last opposing candle at or near the
+  // impulse origin swing. For bullish impulse, we want the last bearish
+  // candle around startIndex (the swing low). For bearish, the last bullish
+  // candle around startIndex (the swing high). This captures the demand/
+  // supply block that CAUSED the impulse (not the ones inside it).
+  if (options?.originOBRetest && candles.length > 0) {
+    const window = 5; // bars around the origin to search
+    const originIdx = impulse.startIndex;
+    const searchLo = Math.max(0, originIdx - window);
+    const searchHi = Math.min(candles.length - 1, originIdx + window);
+    let originCandleIdx = -1;
+    for (let i = originIdx; i >= searchLo; i--) {
+      const c = candles[i];
+      const isBearish = c.close < c.open;
+      const isBullish = c.close > c.open;
+      if (impulse.direction === "bullish" && isBearish) { originCandleIdx = i; break; }
+      if (impulse.direction === "bearish" && isBullish) { originCandleIdx = i; break; }
+    }
+    // Fallback: scan forward if none behind
+    if (originCandleIdx === -1) {
+      for (let i = originIdx + 1; i <= searchHi; i++) {
+        const c = candles[i];
+        const isBearish = c.close < c.open;
+        const isBullish = c.close > c.open;
+        if (impulse.direction === "bullish" && isBearish) { originCandleIdx = i; break; }
+        if (impulse.direction === "bearish" && isBullish) { originCandleIdx = i; break; }
+      }
+    }
+    if (originCandleIdx >= 0) {
+      const oc = candles[originCandleIdx];
+      // Avoid duplicates: skip if we already have a POI overlapping this exact candle
+      const duplicate = pois.some(p =>
+        p.candleIndex === originCandleIdx && p.type === "ob"
+      );
+      if (!duplicate) {
+        pois.push({
+          type: "ob",
+          high: oc.high,
+          low: oc.low,
+          candleIndex: originCandleIdx,
+          direction: impulse.direction,
+        });
+      }
+    }
+  }
+
   return pois;
 }
 
@@ -349,11 +399,22 @@ export function mapImpulsePOIs(
 export function overlayFibOnPOIs(
   impulse: ImpulseLeg,
   pois: ImpulsePOI[],
+  options?: { fibMaxRetracement?: number; originOBRetest?: boolean },
 ): RankedPOI[] {
   if (pois.length === 0) return [];
 
   const range = impulse.high - impulse.low;
   if (range <= 0) return [];
+
+  // Dynamic fib window. Default matches legacy behavior (max 0.786 / OTE 0.85).
+  const fibMax = Math.max(0.5, Math.min(1.0, options?.fibMaxRetracement ?? 0.786));
+  // Extend the checked Fib ladder based on the max and origin-OB toggle
+  const extraLevels: number[] = [];
+  if (fibMax >= 0.886) extraLevels.push(0.886);
+  if (fibMax >= 1.0 || options?.originOBRetest) extraLevels.push(1.0);
+  const FIB_LEVELS = [...extraLevels, ...FIB_LEVELS_BASE] as const;
+  // OTE upper bound scales with the max: allow a small tolerance above fibMax
+  const oteUpper = Math.min(1.05, fibMax + 0.05);
 
   const tolerance = range * FIB_TOLERANCE_FRACTION;
   const ranked: RankedPOI[] = [];
@@ -389,13 +450,18 @@ export function overlayFibOnPOIs(
 
     // Only include POIs that are within tolerance of a Fib level
     // OR that sit in the OTE zone (0.618 - 0.786)
-    const inOTE = fibDepth >= 0.5 && fibDepth <= 0.85;
+    const inOTE = fibDepth >= 0.5 && fibDepth <= oteUpper;
     const nearFib = nearestDist <= tolerance;
 
     if (!nearFib && !inOTE) continue; // POI not at a meaningful Fib level
 
     // Assign score based on depth
-    const fibScore = FIB_SCORES[nearestFib] ?? (fibDepth >= 0.71 ? 2 : fibDepth >= 0.618 ? 1.5 : fibDepth >= 0.5 ? 1 : 0);
+    const fibScore = FIB_SCORES[nearestFib] ?? (
+      fibDepth >= 0.886 ? 2 :
+      fibDepth >= 0.71 ? 2 :
+      fibDepth >= 0.618 ? 1.5 :
+      fibDepth >= 0.5 ? 1 : 0
+    );
 
     ranked.push({
       poi,
@@ -805,7 +871,7 @@ export function findBestEntryZone(
   }
 
   // Step 2: Map POIs within the impulse
-  const pois = mapImpulsePOIs(htfCandles, impulse);
+  const pois = mapImpulsePOIs(htfCandles, impulse, { originOBRetest: options?.originOBRetest });
   if (pois.length === 0) {
     return {
       bestZone: null,
@@ -816,13 +882,16 @@ export function findBestEntryZone(
   }
 
   // Step 3: Overlay Fib and score by depth
-  let rankedZones = overlayFibOnPOIs(impulse, pois);
+  let rankedZones = overlayFibOnPOIs(impulse, pois, {
+    fibMaxRetracement: options?.fibMaxRetracement,
+    originOBRetest: options?.originOBRetest,
+  });
   if (rankedZones.length === 0) {
     return {
       bestZone: null,
       impulse,
       allZones: [],
-      reason: `POIs found but none align with key Fib levels (50%-78.6%)`,
+      reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
     };
   }
 
@@ -983,6 +1052,16 @@ export interface ZoneEngineOptions {
   dailyZoneBounds?: { high: number; low: number };
   /** Pip size for the instrument (e.g. 0.0001 for EUR/USD, 1 for BTC/USD, 0.01 for XAU/USD). Default: 0.0001 */
   pipSize?: number;
+  /**
+   * Maximum Fib retracement to accept a POI (0.5–1.0). Default 0.786.
+   * Set higher (e.g. 0.886 or 1.0) to allow deeper zones near the impulse origin.
+   */
+  fibMaxRetracement?: number;
+  /**
+   * When true, synthesize an "origin OB" POI at the impulse origin swing and allow
+   * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
+   */
+  originOBRetest?: boolean;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────

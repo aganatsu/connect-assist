@@ -144,6 +144,10 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
   minZoneScore: 4,
   impulseSlCapMultiplier: 4,
+  /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
+  originOBRetest: false,
+  /** Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify. Default 0.786. */
+  fibMaxRetracement: 0.786,
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
@@ -411,6 +415,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
+    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
+    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,

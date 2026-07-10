@@ -194,6 +194,8 @@ const DEFAULTS = {
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
   minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
   impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
+  originOBRetest: false,        // When true, allow entries at the OB that CAUSED the impulse (fib 1.0 re-test)
+  fibMaxRetracement: 0.786,     // Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify
   // ── Simple Direction Engine ──
   useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
   simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
@@ -771,6 +773,8 @@ function _legacyLoadConfigMapping(_raw: any) {
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
+    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
+    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? DEFAULTS.fibMaxRetracement,
     // Simple Direction Engine
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
     simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
@@ -4337,7 +4341,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           combinedLiqPools,
           htfConfluenceData ?? undefined,
-          { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
+          {
+            strictATRMult: pairConfig.marketFillStrictATRMult,
+            pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+            fibMaxRetracement: pairConfig.fibMaxRetracement,
+            originOBRetest: pairConfig.originOBRetest,
+          },
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
@@ -4454,7 +4463,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           analysis.lastPrice,
           {
             htfData: htfConfluenceData ?? undefined,
-            zoneEngineOpts: { strictATRMult: pairConfig.marketFillStrictATRMult, pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize },
+            zoneEngineOpts: {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+            },
           },
         );
         (detail as any).cascadeZone = {
