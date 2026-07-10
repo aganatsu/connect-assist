@@ -898,6 +898,35 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         Hard = pair is skipped if no valid impulse zone exists. Soft = score penalty ({config.strategy?.impulseZonePenalty ?? 2.0} pts) but trade can still proceed. Off = zones are shown in the Zone Story but don't affect trade decisions.
                       </p>
                     </FieldGroup>
+                    {/* ── Fib Max Retracement ── */}
+                    <FieldGroup label="Max Fib Retracement" description="How deep a zone can sit inside the impulse retracement and still qualify. Higher = more zones qualify near the origin, but SL headroom shrinks (capped at impulse origin).">
+                      <div className="flex items-center gap-3">
+                        <Select
+                          value={String(config.strategy?.fibMaxRetracement ?? 0.786)}
+                          onValueChange={(v: string) => updateField('strategy', 'fibMaxRetracement', parseFloat(v))}
+                        >
+                          <SelectTrigger className="h-9 text-sm w-48"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0.786">78.6% — Standard (OTE)</SelectItem>
+                            <SelectItem value="0.886">88.6% — Deep (more zones)</SelectItem>
+                            <SelectItem value="1">100% — To impulse origin</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Badge variant="outline" className="text-[9px] font-mono text-muted-foreground">
+                          {Math.round(((config.strategy?.fibMaxRetracement ?? 0.786)) * 1000) / 10}%
+                        </Badge>
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">
+                        Default 78.6%. Setting 88.6% or 100% catches deeper taps (returns to origin OB), but risk pips shrink because SL is capped at impulse origin.
+                      </p>
+                    </FieldGroup>
+                    {/* ── Origin OB Re-test ── */}
+                    <ToggleField
+                      label="Origin OB Re-test"
+                      description="Allow entries when price returns to the order block that CAUSED the impulse (fib 1.0). The zone is the last opposing candle at the impulse origin swing. Still requires the LTF confirmation gate (CHoCH / displacement / sweep) before firing."
+                      checked={config.strategy?.originOBRetest ?? false}
+                      onChange={v => updateField('strategy', 'originOBRetest', v)}
+                    />
                     {/* ── Entry Flow Diagram ── */}
                     <div className="border border-border/50 rounded-lg p-3 bg-muted/30">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold mb-2">Entry Decision Flow</p>
