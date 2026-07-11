@@ -87,12 +87,15 @@ export interface ZoneLiquidityConfig {
   sweepMaxAge: number;
   /** Minimum pool strength (touches) to consider. Default: 2 */
   minPoolStrength: number;
+  /** Penalty for swept_absorbed entry-trigger pools (level broken through). Default: 2.0 */
+  sweptAbsorbedPenalty: number;
 }
 
 export const DEFAULT_ZONE_LIQUIDITY_CONFIG: ZoneLiquidityConfig = {
   nearbyAtrMult: 1.5,
   sweepMaxAge: 15,
   minPoolStrength: 2,
+  sweptAbsorbedPenalty: 2.0,
 };
 
 // ─── Core Function ──────────────────────────────────────────────────
@@ -276,8 +279,8 @@ export function findZoneLiquidity(
   // When the entry-trigger pool has been swept but price closed through it
   // (no rejection), the level is invalidated — this is a THREAT, not a confirmation.
   if (entryTriggerState === "swept_absorbed") {
-    liquidityScore -= 2.0;
-    summaryParts.push(`⚠️ Entry trigger ABSORBED (level broken — invalidated)`);
+    liquidityScore -= cfg.sweptAbsorbedPenalty;
+    summaryParts.push(`\u26a0\ufe0f Entry trigger ABSORBED (level broken \u2014 invalidated, penalty -${cfg.sweptAbsorbedPenalty.toFixed(1)})`);
   }
 
   const summary = summaryParts.length > 0

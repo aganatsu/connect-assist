@@ -4350,7 +4350,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
-          { requireLiquiditySweep: pairConfig.requireLiquiditySweep },
+          { requireLiquiditySweep: pairConfig.requireLiquiditySweep, sweptAbsorbedPenalty: pairConfig.sweptAbsorbedPenalty ?? 2.0 },
         );
 
         // Store the full unified story for the frontend narrative panel
@@ -4875,8 +4875,69 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     } else if (unifiedZoneData?.state === "waiting_for_sweep") {
       // Liquidity Sweep Gate: entry-trigger pool exists but hasn't been swept yet — wait
       detail.status = "waiting_for_sweep";
-      detail.skipReason = `Liquidity Sweep Gate: entry-trigger pool near zone is unswept — waiting for BSL/SSL sweep before entry`;
+      detail.skipReason = `Liquidity Sweep Gate: entry-trigger pool near zone is unswept \u2014 waiting for BSL/SSL sweep before entry`;
       console.log(`[scan ${scanCycleId}] \u23f3 ${pair}: LIQUIDITY SWEEP GATE \u2014 entry-trigger pool unswept, waiting for sweep. Watchlisted.`);
+      // Stage this pair so it's auto-re-evaluated when the pool gets swept
+      if (stagingEnabled && analysis.direction && !isPaused) {
+        try {
+          const existingStagedForSweep = existingStaged;
+          if (!existingStagedForSweep) {
+            const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+            const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+            const ts = analysis.tieredScoring;
+            const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+              : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+              : stagingTTLMinutes;
+            const uzEntry = unifiedZoneData.entry ?? analysis.lastPrice;
+            const uzSL = unifiedZoneData.sl ?? (analysis.direction === "long" ? analysis.lastPrice - 0.0050 : analysis.lastPrice + 0.0050);
+            await supabase.from("staged_setups").insert({
+              user_id: userId,
+              bot_id: BOT_ID,
+              symbol: pair,
+              direction: analysis.direction,
+              initial_score: analysis.score,
+              current_score: analysis.score,
+              watch_threshold: watchThreshold,
+              initial_factors: presentFactors,
+              current_factors: presentFactors,
+              missing_factors: missingFactors,
+              entry_price: uzEntry,
+              sl_level: uzSL,
+              tp_level: analysis.takeProfit,
+              scan_cycles: 1,
+              min_cycles: 1,
+              ttl_minutes: styleTTL,
+              setup_type: "sweep_watch",
+              tier1_count: ts?.tier1Count ?? 0,
+              tier2_count: ts?.tier2Count ?? 0,
+              tier3_count: ts?.tier3Count ?? 0,
+              analysis_snapshot: {
+                score: analysis.score,
+                direction: analysis.direction,
+                unifiedZone: { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF },
+                liquiditySweep: { entryTriggerState: unifiedZoneData.zoneLiquidity?.entryTriggerState },
+              },
+            });
+            stagedNew++;
+            console.log(`[staging] NEW SWEEP WATCH ${pair} ${analysis.direction} \u2014 waiting for liquidity sweep, score ${analysis.score.toFixed(1)}%`);
+          } else {
+            // Update existing staged with latest data
+            await supabase.from("staged_setups").update({
+              current_score: analysis.score,
+              scan_cycles: existingStagedForSweep.scan_cycles + 1,
+              last_eval_at: new Date().toISOString(),
+            }).eq("id", existingStagedForSweep.id);
+            console.log(`[staging] Updated SWEEP WATCH ${pair} ${analysis.direction} \u2014 cycle ${existingStagedForSweep.scan_cycles + 1}`);
+          }
+        } catch (e: any) {
+          if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
+            console.log(`[staging] ${pair} ${analysis.direction} already staged for sweep watch`);
+          } else {
+            console.warn(`[staging] Failed to stage sweep watch ${pair}: ${e?.message}`);
+          }
+        }
+        detail.staging = { action: "sweep_watch" };
+      }
       scanDetails.push(detail);
       continue;
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {

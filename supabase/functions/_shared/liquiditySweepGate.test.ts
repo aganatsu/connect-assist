@@ -230,3 +230,45 @@ Deno.test("Liquidity Sweep Gate — bullish: SSL below zone swept + rejected", (
   assertEquals(result.hasUnsweptEntryTrigger, false);
   assertEquals(result.liquidityScore, 3.0); // +1.0 pool + 2.0 swept+rejected
 });
+
+// ─── Configurable sweptAbsorbedPenalty ─────────────────────────────
+
+Deno.test("Liquidity Sweep Gate — configurable penalty: custom sweptAbsorbedPenalty=3.0", () => {
+  const candles = generateBaseCandles(50);
+  // BSL above zone — swept but absorbed
+  const pools: LiquidityPool[] = [
+    makePool(1.1220, "buy-side", 3, true, 47, false, 0.0010),
+  ];
+  const result = findZoneLiquidity(candles, 1.1200, 1.1150, "bearish", pools, { sweptAbsorbedPenalty: 3.0 });
+  // Score: +1.0 (pool) + 1.5 (swept no rejection) - 3.0 (custom penalty) = -0.5 → clamped to 0
+  // Actually the code doesn't clamp, so it could be negative. Let's check:
+  // liquidityScore starts at 0, +1.0 for pool, +1.5 for swept, -3.0 penalty = -0.5
+  assertEquals(result.liquidityScore, -0.5);
+  assert(result.summary.includes("penalty -3.0"), "Summary should show custom penalty value");
+});
+
+Deno.test("Liquidity Sweep Gate — configurable penalty: sweptAbsorbedPenalty=0 disables penalty", () => {
+  const candles = generateBaseCandles(50);
+  // BSL above zone — swept but absorbed
+  const pools: LiquidityPool[] = [
+    makePool(1.1220, "buy-side", 3, true, 47, false, 0.0010),
+  ];
+  const result = findZoneLiquidity(candles, 1.1200, 1.1150, "bearish", pools, { sweptAbsorbedPenalty: 0 });
+  // Score: +1.0 (pool) + 1.5 (swept no rejection) - 0 = 2.5
+  assertEquals(result.liquidityScore, 2.5);
+});
+
+Deno.test("Liquidity Sweep Gate — configMapper: sweptAbsorbedPenalty defaults to 2.0", () => {
+  const result = mapNestedToFlat(null);
+  assertEquals(result.sweptAbsorbedPenalty, 2.0);
+});
+
+Deno.test("Liquidity Sweep Gate — configMapper: sweptAbsorbedPenalty from strategy section", () => {
+  const result = mapNestedToFlat({ strategy: { sweptAbsorbedPenalty: 1.5 } });
+  assertEquals(result.sweptAbsorbedPenalty, 1.5);
+});
+
+Deno.test("Liquidity Sweep Gate — configMapper: sweptAbsorbedPenalty from top-level raw", () => {
+  const result = mapNestedToFlat({ sweptAbsorbedPenalty: 3.0 });
+  assertEquals(result.sweptAbsorbedPenalty, 3.0);
+});

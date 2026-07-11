@@ -151,12 +151,15 @@ export interface UnifiedZoneConfig {
   requireConfirmation: boolean;
   /** Liquidity Sweep Gate: when true, block entry until entry-trigger pool is swept+rejected. Default: false */
   requireLiquiditySweep: boolean;
+  /** Penalty for swept_absorbed entry-trigger pools. Default: 2.0 */
+  sweptAbsorbedPenalty: number;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
   minRR: 2.0,
   requireConfirmation: true,
   requireLiquiditySweep: false,
+  sweptAbsorbedPenalty: 2.0,
 };
 
 // ─── Core Function ──────────────────────────────────────────────────
@@ -260,6 +263,7 @@ export function findUnifiedZone(
       zonePOI.poi.low,
       direction,
       liquidityPools,
+      { sweptAbsorbedPenalty: cfg.sweptAbsorbedPenalty },
     );
   }
 
