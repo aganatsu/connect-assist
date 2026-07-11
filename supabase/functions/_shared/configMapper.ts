@@ -422,7 +422,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
-    requireLiquiditySweep: strategy.requireLiquiditySweep ?? raw.requireLiquiditySweep ?? RUNTIME_DEFAULTS.requireLiquiditySweep,
+    requireLiquiditySweep: strategy.requireLiquiditySweep ?? strategy.liquiditySweepRequired ?? raw.requireLiquiditySweep ?? raw.liquiditySweepRequired ?? RUNTIME_DEFAULTS.requireLiquiditySweep,
     sweptAbsorbedPenalty: strategy.sweptAbsorbedPenalty ?? raw.sweptAbsorbedPenalty ?? RUNTIME_DEFAULTS.sweptAbsorbedPenalty,
 
     // ── Simple Direction Engine ──
