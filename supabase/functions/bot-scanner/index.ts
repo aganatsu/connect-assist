@@ -826,8 +826,9 @@ function _legacyLoadConfigMapping(_raw: any) {
     fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? 0.1,
     // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
     maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
-    // UI writes: maxConcurrentTrades; legacy DB: maxOpenPositions
-    maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? DEFAULTS.maxOpenPositions,
+    // Canonical: risk.maxConcurrentTrades (UI field). Legacy risk.maxOpenPositions
+    // is intentionally NOT read — removed by the 2026-07-11 dedup migration.
+    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
     // UI writes: minRR; legacy DB: minRiskReward
     minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
     // maxDrawdown is set later (combined with circuitBreakerPct)
