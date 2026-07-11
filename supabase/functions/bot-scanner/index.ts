@@ -4350,6 +4350,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           zoneDailyCandles,
           zoneConfirmCandles,
           zoneLtfConfirmCandles,
+          { requireLiquiditySweep: pairConfig.requireLiquiditySweep },
         );
 
         // Store the full unified story for the frontend narrative panel
@@ -4869,6 +4870,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       detail.status = "skipped_require_unified";
       detail.skipReason = "Require Unified Zone: unified zone engine did not reach triggered/confirmed state \u2014 no standalone fallback allowed";
       console.log(`[scan ${scanCycleId}] \u26d4 ${pair}: REQUIRE UNIFIED ZONE \u2014 unified gate not passed, standalone fallback disabled. Skipping.`);
+      scanDetails.push(detail);
+      continue;
+    } else if (unifiedZoneData?.state === "waiting_for_sweep") {
+      // Liquidity Sweep Gate: entry-trigger pool exists but hasn't been swept yet — wait
+      detail.status = "waiting_for_sweep";
+      detail.skipReason = `Liquidity Sweep Gate: entry-trigger pool near zone is unswept — waiting for BSL/SSL sweep before entry`;
+      console.log(`[scan ${scanCycleId}] \u23f3 ${pair}: LIQUIDITY SWEEP GATE \u2014 entry-trigger pool unswept, waiting for sweep. Watchlisted.`);
       scanDetails.push(detail);
       continue;
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {

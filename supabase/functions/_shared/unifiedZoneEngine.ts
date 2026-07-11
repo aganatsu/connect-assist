@@ -82,7 +82,8 @@ export type UnifiedState =
   | "watching"           // Zone found, price not there yet (watchlist)
   | "at_zone"            // Price at zone, waiting for confirmation
   | "confirmed"          // Confirmation fired, entry ready
-  | "triggered";         // Price at entry level — execute
+  | "triggered"          // Price at entry level — execute
+  | "waiting_for_sweep"; // Liquidity Sweep Gate: entry-trigger pool exists but unswept — wait
 
 export interface ImpulseStory {
   direction: "bullish" | "bearish";
@@ -148,11 +149,14 @@ export interface UnifiedZoneConfig {
   minRR: number;
   /** Whether to require confirmation for entry (vs watchlist). Default: true */
   requireConfirmation: boolean;
+  /** Liquidity Sweep Gate: when true, block entry until entry-trigger pool is swept+rejected. Default: false */
+  requireLiquiditySweep: boolean;
 }
 
 export const DEFAULT_UNIFIED_CONFIG: UnifiedZoneConfig = {
   minRR: 2.0,
   requireConfirmation: true,
+  requireLiquiditySweep: false,
 };
 
 // ─── Core Function ──────────────────────────────────────────────────
@@ -297,6 +301,20 @@ export function findUnifiedZone(
     state = cfg.requireConfirmation ? "at_zone" : "confirmed";
   } else {
     state = bestZone.priceAtZoneStrict ? "triggered" : "confirmed";
+  }
+
+  // ── Step 8b: Liquidity Sweep Gate (optional) ──
+  // When requireLiquiditySweep is ON, override state if entry-trigger pool is unswept or absorbed.
+  // This gate only applies when the setup would otherwise proceed (at_zone/confirmed/triggered).
+  if (cfg.requireLiquiditySweep && liquidity) {
+    if (liquidity.entryTriggerState === "swept_absorbed") {
+      // Level broken through — zone invalidated, demote to watching
+      state = "watching";
+    } else if (liquidity.hasUnsweptEntryTrigger &&
+               (state === "at_zone" || state === "confirmed" || state === "triggered")) {
+      // Entry-trigger pool exists but hasn't been swept yet — wait for sweep
+      state = "waiting_for_sweep";
+    }
   }
 
   // ── Step 9: Build entry story (only when confirmed) ──
@@ -459,6 +477,8 @@ function buildStorySummary(
   // Line 6: Entry
   if (entry) {
     lines.push(`${filled} Entry: ${entry.direction.toUpperCase()} @ ${entry.entryPrice.toFixed(5)}  SL: ${entry.slPrice.toFixed(5)}  R:R ${entry.rrRatio}:1`);
+  } else if (state === "waiting_for_sweep") {
+    lines.push(`${empty} Entry: Waiting for liquidity sweep (entry-trigger pool unswept)`);
   } else if (state === "confirmed" || state === "triggered") {
     lines.push(`${empty} Entry: R:R below minimum (${DEFAULT_UNIFIED_CONFIG.minRR}:1)`);
   } else {

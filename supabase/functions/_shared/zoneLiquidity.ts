@@ -9,6 +9,15 @@
  *   - Liquidity pool identified near zone edge: +1.0 to score
  *   - Liquidity swept (price wicked past pool then closed back): +2.0 to score
  *   - Sweep + rejection confirmed: highest conviction entry signal
+ *   - Sweep + absorbed (broken through): -2.0 penalty (level invalidated)
+ *
+ * Liquidity Sweep Gate (optional, toggle-driven):
+ *   When requireLiquiditySweep is ON in the unified engine config, the
+ *   entryTriggerState field tells the engine whether to block entry:
+ *     - "unswept" → entry_trigger pool exists but hasn't been swept yet → WAIT
+ *     - "swept_rejected" → pool swept + price rejected → PROCEED (highest conviction)
+ *     - "swept_absorbed" → pool swept but price broke through → INVALIDATE
+ *     - "none" → no entry_trigger pool found → no gate applies
  *
  * Uses existing infrastructure:
  *   - detectLiquidityPools() from smcAnalysis.ts (equal highs/lows detection)
@@ -20,6 +29,9 @@ import { type Inducement, detectInducements } from "./inducementDetection.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
+/** State of the nearest entry-trigger liquidity pool relative to the zone */
+export type EntryTriggerState = "unswept" | "swept_rejected" | "swept_absorbed" | "none";
+
 export interface ZoneLiquidityResult {
   /** Liquidity pools found near the zone edges */
   nearbyPools: NearbyPool[];
@@ -29,10 +41,14 @@ export interface ZoneLiquidityResult {
   sweepEvent: SweepEvent | null;
   /** Supporting inducement (if any) */
   inducement: Inducement | null;
-  /** Score contribution from liquidity (0 to 3.0) */
+  /** Score contribution from liquidity (can be negative for absorbed pools) */
   liquidityScore: number;
   /** Human-readable summary */
   summary: string;
+  /** Whether an entry-trigger pool exists but has NOT been swept yet */
+  hasUnsweptEntryTrigger: boolean;
+  /** Lifecycle state of the nearest entry-trigger pool */
+  entryTriggerState: EntryTriggerState;
 }
 
 export interface NearbyPool {
@@ -178,6 +194,28 @@ export function findZoneLiquidity(
     }
   }
 
+  // ── 2b. Determine entry-trigger state (for Liquidity Sweep Gate) ──
+  let entryTriggerState: EntryTriggerState = "none";
+  let hasUnsweptEntryTrigger = false;
+
+  if (triggerPools.length > 0) {
+    const primaryTrigger = triggerPools[0]; // Closest entry-trigger pool
+    if (primaryTrigger.pool.state === "swept_rejected") {
+      entryTriggerState = "swept_rejected";
+    } else if (primaryTrigger.pool.state === "swept_absorbed") {
+      entryTriggerState = "swept_absorbed";
+    } else if (primaryTrigger.pool.swept && primaryTrigger.pool.rejectionConfirmed) {
+      // Fallback: check boolean fields if state field is inconsistent
+      entryTriggerState = "swept_rejected";
+    } else if (primaryTrigger.pool.swept && !primaryTrigger.pool.rejectionConfirmed) {
+      entryTriggerState = "swept_absorbed";
+    } else {
+      // Pool exists but not swept → unswept
+      entryTriggerState = "unswept";
+      hasUnsweptEntryTrigger = true;
+    }
+  }
+
   // ── 3. Check for inducement patterns near the zone ──
   let inducement: Inducement | null = null;
   if (!swept) {
@@ -234,6 +272,14 @@ export function findZoneLiquidity(
     summaryParts.push(`Inducement: ${inducement.type} (quality ${inducement.quality}/10)`);
   }
 
+  // ── 4b. Penalty for swept_absorbed entry-trigger (level broken through) ──
+  // When the entry-trigger pool has been swept but price closed through it
+  // (no rejection), the level is invalidated — this is a THREAT, not a confirmation.
+  if (entryTriggerState === "swept_absorbed") {
+    liquidityScore -= 2.0;
+    summaryParts.push(`⚠️ Entry trigger ABSORBED (level broken — invalidated)`);
+  }
+
   const summary = summaryParts.length > 0
     ? summaryParts.join(" | ")
     : "No significant liquidity near zone";
@@ -245,5 +291,7 @@ export function findZoneLiquidity(
     inducement,
     liquidityScore,
     summary,
+    hasUnsweptEntryTrigger,
+    entryTriggerState,
   };
 }

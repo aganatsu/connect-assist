@@ -151,6 +151,7 @@ export const RUNTIME_DEFAULTS = {
   cascadeZoneMode: "prefer" as "prefer" | "only" | "off",
   cascadeZoneDailyATRMult: 2.0,
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
+  requireLiquiditySweep: false, // Liquidity Sweep Gate: when true, block entry until entry-trigger BSL/SSL pool is swept+rejected
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -420,6 +421,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     cascadeZoneMode: (strategy.cascadeZoneMode ?? raw.cascadeZoneMode ?? RUNTIME_DEFAULTS.cascadeZoneMode) as "prefer" | "only" | "off",
     cascadeZoneDailyATRMult: strategy.cascadeZoneDailyATRMult ?? raw.cascadeZoneDailyATRMult ?? RUNTIME_DEFAULTS.cascadeZoneDailyATRMult,
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
+    requireLiquiditySweep: strategy.requireLiquiditySweep ?? raw.requireLiquiditySweep ?? RUNTIME_DEFAULTS.requireLiquiditySweep,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,
