@@ -43,6 +43,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "FOTSI Currency Strength", keywords: ["fotsi", "currency strength", "tsi", "28 pair", "overbought", "oversold", "veto"] },
   { tab: "strategy", label: "Require HTF Bias Alignment", keywords: ["htf", "bias", "higher timeframe", "alignment"] },
   { tab: "strategy", label: "HTF Bias Hard Veto", keywords: ["htf", "veto", "hard", "block"] },
+  { tab: "strategy", label: "Require Entry-Trigger Sweep", keywords: ["liquidity", "sweep", "gate", "entry trigger", "bsl", "ssl", "require"] },
+  { tab: "strategy", label: "Swept-Absorbed Penalty", keywords: ["swept", "absorbed", "penalty", "liquidity", "invalidated", "zone"] },
   { tab: "strategy", label: "Only Buy in Discount", keywords: ["premium", "discount", "long", "buy"] },
   { tab: "strategy", label: "Only Sell in Premium", keywords: ["premium", "discount", "short", "sell"] },
   { tab: "strategy", label: "Regime Scoring", keywords: ["regime", "market regime", "trend", "range", "choppy", "alignment", "bonus", "penalty"] },
@@ -875,6 +877,18 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                     )}
                     {/* Min Strong Factors and Min Factor Count removed — single percentage threshold only */}
                     <ToggleField label="Require Unified Zone Confirmation" description="Only take trades when the Unified Zone Engine confirms entry (impulse → zone → liquidity → confirmation). Confirmation can be CHoCH, BOS, sweep+CHoCH, or displacement MSS. Disables the standalone impulse zone fallback — higher win rate, fewer trades." checked={config.strategy?.requireUnifiedZone ?? false} onChange={v => updateField('strategy', 'requireUnifiedZone', v)} />
+                    <ToggleField label="Require Entry-Trigger Sweep" description="Block entry until the entry-trigger liquidity pool (BSL above zone for shorts, SSL below zone for longs) has been swept and rejected. Pairs are staged as 'sweep_watch' and auto-re-evaluated when the pool gets swept." checked={config.strategy?.requireLiquiditySweep ?? false} onChange={v => updateField('strategy', 'requireLiquiditySweep', v)} />
+                    {(config.strategy?.requireLiquiditySweep ?? false) && (
+                    <FieldGroup label="Swept-Absorbed Penalty" description="Score penalty applied when the entry-trigger pool was swept but absorbed (broken through without rejection). Higher = more aggressive filtering of invalidated zones.">
+                      <div className="flex items-center gap-4">
+                        <Slider value={[config.strategy?.sweptAbsorbedPenalty ?? 2.0]} onValueChange={v => updateField('strategy', 'sweptAbsorbedPenalty', v[0])} min={0} max={5} step={0.5} className="flex-1" />
+                        <span className="text-sm font-mono font-bold text-primary w-14 text-right">{config.strategy?.sweptAbsorbedPenalty ?? 2.0}</span>
+                      </div>
+                      <p className="text-[9px] text-muted-foreground mt-1.5">
+                        Default: 2.0. Set to 0 to disable the penalty. A swept-absorbed pool means protective liquidity was consumed without reversal — the zone may be invalidated.
+                      </p>
+                    </FieldGroup>
+                    )}
                     {/* ── Impulse Zone Gate Mode ── */}
                     <FieldGroup label="Impulse Zone Gate Mode" description="Controls how strictly the impulse zone requirement is enforced when Unified Zone is OFF.">
                       <div className="flex items-center gap-3">
@@ -941,6 +955,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         <p className="pl-3">• If not triggered → pair skipped (no fallback)</p>
                         <p className="pl-3">• Zone depth controlled by Max Fib Retracement (78.6% / 88.6% / 100%)</p>
                         <p className="pl-3">• Origin OB Re-test adds the impulse-origin OB as a valid zone</p>
+                        <p className="pl-3">• If Require Entry-Trigger Sweep = ON → waits for BSL/SSL sweep</p>
                         <p>4. Entry method (when zone exists):</p>
                         <p className="pl-3">• Price AT zone + Market Fill ON → immediate fill</p>
                         <p className="pl-3">• Price AT zone + Market Fill OFF → wait for LTF confirm</p>
