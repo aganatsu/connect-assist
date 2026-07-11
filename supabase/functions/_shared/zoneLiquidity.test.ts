@@ -142,8 +142,9 @@ Deno.test("findZoneLiquidity — detects swept pool without rejection (score +2.
   assertEquals(result.swept, true);
   assert(result.sweepEvent !== null);
   assertEquals(result.sweepEvent!.rejected, false);
-  // Score: 1.0 (pool identified) + 1.5 (swept, no rejection) = 2.5
-  assertEquals(result.liquidityScore, 2.5);
+  // Score: 1.0 (pool identified) + 1.5 (swept, no rejection) - 2.0 (absorbed penalty) = 0.5
+  // NOTE: swept_absorbed penalty added by Liquidity Sweep Gate feature
+  assertEquals(result.liquidityScore, 0.5);
 });
 
 Deno.test("findZoneLiquidity — old sweep beyond maxAge is ignored", () => {
