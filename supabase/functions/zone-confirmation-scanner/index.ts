@@ -370,8 +370,11 @@ Deno.serve(async (req) => {
         console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
         console.log(`[zone-confirm] Tier: ${confirmationSignal.tier}, Type: ${confirmationSignal.type}`);
 
-        // Check max positions gate
-        const maxOpenPositions = parseInt(String(config.risk?.maxOpenPositions || config.maxOpenPositions || 3), 10);
+        // Check max positions gate — canonical: risk.maxConcurrentTrades (UI field).
+        // Runtime config.maxOpenPositions is populated from that same source by configMapper.
+        const maxOpenPositions = parseInt(String(
+          config.risk?.maxConcurrentTrades ?? config.maxOpenPositions ?? 3
+        ), 10);
         const maxPerSymbol = config.risk?.maxPerSymbol || config.maxPerSymbol || 2;
         const currentOpenCount = openPositions.length;
         const currentSymbolCount = openPositions.filter((p: any) => p.symbol === pending.symbol).length;

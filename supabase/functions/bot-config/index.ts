@@ -268,8 +268,13 @@ function validateConfig(config: any): string[] {
     if (typeof r.maxDrawdown === "number" && (r.maxDrawdown < 0 || r.maxDrawdown > 100)) {
       errors.push("risk.maxDrawdown must be between 0 and 100");
     }
-    if (typeof r.maxOpenPositions === "number" && (r.maxOpenPositions < 1 || r.maxOpenPositions > 50)) {
-      errors.push("risk.maxOpenPositions must be between 1 and 50");
+    // Canonical field: risk.maxConcurrentTrades. risk.maxOpenPositions is deprecated
+    // and rejected outright to prevent config drift (see 2026-07-11 dedup migration).
+    if (Object.prototype.hasOwnProperty.call(r, "maxOpenPositions")) {
+      errors.push("risk.maxOpenPositions is deprecated — use risk.maxConcurrentTrades instead");
+    }
+    if (typeof r.maxConcurrentTrades === "number" && (r.maxConcurrentTrades < 1 || r.maxConcurrentTrades > 50)) {
+      errors.push("risk.maxConcurrentTrades must be between 1 and 50");
     }
     if (typeof r.minRiskReward === "number" && (r.minRiskReward < 0.1 || r.minRiskReward > 20)) {
       errors.push("risk.minRiskReward must be between 0.1 and 20");
@@ -406,7 +411,7 @@ function getDefaultConfig() {
     },
     risk: {
       riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-      fixedLotSize: 0.1, maxOpenPositions: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
+      fixedLotSize: 0.1, maxConcurrentTrades: 5, maxPositionsPerSymbol: 2, maxPortfolioHeat: 10, minRiskReward: 1.5,
     },
     entry: {
       defaultOrderType: "market", entryRefinement: false, refinementTimeframe: "5m",

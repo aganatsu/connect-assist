@@ -461,7 +461,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? RUNTIME_DEFAULTS.positionSizingMethod,
     fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? RUNTIME_DEFAULTS.fixedLotSize,
     maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? RUNTIME_DEFAULTS.maxDailyLoss,
-    maxOpenPositions: risk.maxConcurrentTrades ?? risk.maxOpenPositions ?? raw.maxOpenPositions ?? RUNTIME_DEFAULTS.maxOpenPositions,
+    // Canonical: risk.maxConcurrentTrades (UI field). Legacy risk.maxOpenPositions is ignored
+    // after the 2026-07-11 migration removed it from DB configs.
+    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxConcurrentTrades ?? RUNTIME_DEFAULTS.maxOpenPositions,
     minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? RUNTIME_DEFAULTS.minRiskReward,
     maxPerSymbol: risk.maxPositionsPerSymbol ?? RUNTIME_DEFAULTS.maxPerSymbol,
     allowSameDirectionStacking: risk.allowSameDirectionStacking ?? RUNTIME_DEFAULTS.allowSameDirectionStacking,
