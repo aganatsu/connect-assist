@@ -98,8 +98,8 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
 
   const advisorMutation = useMutation({
     mutationFn: async () => {
-      const { data, error } = await (supabase as any).functions.invoke("strategy-advisor", {
-        body: { days },
+      const { data, error } = await (supabase as any).functions.invoke("advisor", {
+        body: { mode: "on_demand", days },
       });
       if (error) throw error;
       return data as AdvisorResponse;
