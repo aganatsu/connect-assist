@@ -98,8 +98,20 @@ export function StrategyAdvisor({ days }: StrategyAdvisorProps) {
 
   const advisorMutation = useMutation({
     mutationFn: async () => {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !authData?.user) throw new Error("Not signed in");
+      const userId = authData.user.id;
+
+      // Resolve a bot_id for this user (prefer paper_accounts, fall back to "smc")
+      const { data: accounts } = await (supabase as any)
+        .from("paper_accounts")
+        .select("bot_id")
+        .eq("user_id", userId)
+        .limit(1);
+      const botId = accounts?.[0]?.bot_id || "smc";
+
       const { data, error } = await (supabase as any).functions.invoke("advisor", {
-        body: { mode: "on_demand", days },
+        body: { mode: "on_demand", days, bot_id: botId, user_id: userId },
       });
       if (error) throw error;
       return data as AdvisorResponse;
