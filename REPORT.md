@@ -1,82 +1,77 @@
-# Task: Unified Advisor
-
-## Branch: manus/unified-advisor
+# Task: Signal Source Badge — Fix Detail Breakdown Misinformation
+## Branch: manus/signal-source-badge
 
 ## Behavior changes
 
-1. **NEW**: A single `advisor` edge function replaces the three existing advisors (`strategy-advisor`, `bot-daily-review`, `bot-weekly-advisor`). The old functions remain untouched — the new one runs alongside them until you switch over.
-2. **BUG FIX**: Regime adaptation recommendations now use the **correct** factor key names (`marketStructure`, `orderBlock`, `fairValueGap`, `premiumDiscountFib`, `sessionQuality`, `displacement`, `breakerBlock`, `amdPhase`, `dailyBias`) instead of the wrong ones (`premiumDiscount`, `fvg`, `breaker`, `silverBullet`, `amd`, `trendDirection`). This means regime adaptation recommendations will actually work when approved.
-3. **NEW**: Factor weight recommendations are now **$-weighted** (dollar lift per trade) instead of count-based. A factor that blocks 20 small winners but lets through 3 big losers is correctly identified as harmful.
-4. **NEW**: The prompt payload sent to the LLM contains pre-computed metrics only — no raw trade data. The LLM interprets, it doesn't calculate.
-5. **NEW**: Deterministic regime recommendations are merged with LLM recommendations (not dependent on LLM getting the math right).
-6. **NEW**: Dedup index prevents multiple pending recommendations of the same type per bot per day.
+1. **New UI badge on live scan details:** When a trade is placed, the signal detail row now shows a colored badge: `UNIFIED ×1` (cyan), `CASCADE ×1` (purple), or `STANDALONE ×0.5` (orange). Previously, no indication of entry path was shown.
+
+2. **New context note for standalone trades:** When a trade was placed via standalone fallback, an orange info box appears in the expanded detail: "Entry via standalone impulse zone — unified confirmation not met. Position size halved (×0.5)."
+
+3. **Signal source persisted to database:** `signalSource` and `unifiedZone` are now included in the `signal_reason` JSON stored in `paper_positions`. This means future closed trades will also display the badge in trade history. (Existing trades opened before this deploy will not have the field — badge simply won't render for them.)
+
+4. **No change to trading logic, gates, weights, or position sizing.** The signal source was already computed and stored in `scan_logs.details_json` — this change only adds it to `signal_reason` and surfaces it in the UI.
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/_shared/advisorCore.ts` | NEW — Shared math core: performance metrics, $-weighted factor lift, symbol stats, regime detection, regime recommendations (with FIXED factor keys), prompt builder, LLM wrapper, Telegram notification |
-| `supabase/functions/_shared/advisorCore.test.ts` | NEW — 18 tests covering all core functions |
-| `supabase/functions/advisor/index.ts` | NEW — Unified edge function with 3 modes (on_demand, daily, weekly), data loading, dedup, persistence, notifications |
-| `supabase/migrations/20250712_unified_advisor.sql` | NEW — Adds review_type, diagnosis, feature_gaps, llm_model, resolved_at columns + dedup index + performance index |
+| File | Change |
+|------|--------|
+| `supabase/functions/bot-scanner/index.ts` | Added `signalSource` and `unifiedZone` to `signal_reason` JSON in both market-order (line 6217) and limit-order (line 6001) insert paths |
+| `src/pages/BotView.tsx` | Added signal source badge + context note to `ScanSignalDetail` component (live scan results) and `ScanDetailInline` component (inline detail view), plus badge in closed-trade history expansion |
+| `src/components/ExpandedPositionCard.tsx` | Added signal source badge to the trade header bar for open positions |
+| `src/components/MobilePositionCard.tsx` | Added compact signal source badge (`UNI`/`CAS`/`STD½`) to mobile position cards |
+| `supabase/functions/_shared/signalSourcePersistence.test.ts` | New test file verifying signal source persistence |
 
 ## Tests added
 
 | Test | Asserts |
 |------|---------|
-| normalizeTradeRecord handles standard fields | Correct field mapping from raw DB row |
-| normalizeTradeRecord handles missing/null fields | Graceful fallback to empty/zero |
-| computePerformance returns zeros for empty trades | No crash on empty input |
-| computePerformance computes correct metrics for mixed trades | Win rate, PnL, profit factor, max consecutive losses |
-| computePerformance computes session breakdowns correctly | UTC hour → session mapping |
-| computePerformance handles all-winners (profitFactor = Infinity) | Edge case |
-| computeFactorLift computes $-lift correctly | Dollar lift, win rate present vs absent |
-| computeFactorLift requires minimum 5 present samples | Filters low-sample factors |
-| computeSymbolStats groups by symbol correctly | Per-symbol aggregation + rejection tracking |
-| detectRegimeFromTrades returns unknown for < 5 trades | Minimum data guard |
-| detectRegimeFromTrades detects trending market | Directional bias + low SL rate |
-| detectRegimeFromTrades detects choppy market | Mixed direction + high SL rate |
-| buildRegimeRecommendations uses CORRECT factor key names | All keys exist in DEFAULT_FACTOR_WEIGHTS |
-| buildRegimeRecommendations does NOT use old wrong keys | Regression test for the bug fix |
-| buildRegimeRecommendations returns empty for unknown regime | No recs when regime unknown |
-| buildRegimeRecommendations returns empty for low confidence | No recs below 0.4 threshold |
-| buildPromptPayload produces compact JSON without raw trade data | No entry_price/exit_price in payload |
-| Performance metrics are internally consistent | avgWin*wins - avgLoss*losses = totalPnl |
+| `signal_reason JSON includes signalSource field (market order path)` | Market-order signal_reason JSON.stringify includes `signalSource` and `unifiedZone` |
+| `signal_reason JSON includes signalSource field (limit order path)` | Limit-order signal_reason JSON.stringify includes `signalSource` and `unifiedZone` |
+| `signalSource is set to one of: unified, standalone, cascade` | All three assignment paths exist in bot-scanner |
+| `signalSource assignment happens BEFORE signal_reason construction` | The assignment at ~line 4846 precedes the JSON.stringify at ~line 6217 |
 
 ## Tests run
 
 ```
-ok | 18 passed | 0 failed (12ms) — advisorCore.test.ts
-ok | 59 passed | 0 failed (30ms) — gatePerformanceEngine.test.ts (no regression)
-ok | 51 passed | 0 failed (22ms) — configMapper.test.ts (no regression)
+deno test --no-check --allow-all supabase/
+FAILED | 1575 passed | 6 failed (17s)
 ```
+
+All 6 failures are **pre-existing** (confirmed identical on `main`):
+- 5× `brokerFillPriceBE.test.ts` — BE price calculation assertions
+- 1× `beTrailingRace.test.ts` — short position co-activation
+
+Our 4 new tests all pass. Zero new failures introduced.
 
 ## Regression check
 
-- The old advisor functions (`strategy-advisor`, `bot-daily-review`, `bot-weekly-advisor`) are NOT modified — they continue to work exactly as before.
-- The new `advisor` function is additive — it doesn't replace anything until you switch the cron triggers.
-- The migration SQL is fully additive (nullable columns, new indexes) — safe to apply to production with existing data.
-- The gatePerformanceEngine (shared dependency) has 59 tests passing unchanged.
-- The configMapper has 51 tests passing unchanged.
+- The `signal_reason` JSON change is purely additive — we append two new fields (`signalSource`, `unifiedZone`) to an existing JSON.stringify object. No existing fields are modified or removed.
+- `deno check` confirms zero new type errors from our change (the 62 pre-existing type errors are unrelated).
+- Frontend changes are display-only — they read `d.signalSource` / `sr.signalSource` and render a badge. If the field is absent (legacy trades), the badge simply doesn't render (conditional `{sr.signalSource && ...}`).
+- No gate logic, scoring, position sizing, or trade execution code was modified.
 
 ## Open questions
 
-1. **Deployment**: To switch over, you'd update your Supabase cron triggers to call `advisor` with `{"mode":"daily"}` and `{"mode":"weekly"}` instead of the old function names. Want me to write the cron SQL for that?
-2. **Frontend**: The Lovable `StrategyAdvisor.tsx` component currently calls `strategy-advisor`. Should I update it to call `advisor` with `{"mode":"on_demand"}`?
-3. **Old functions**: Once you verify the new advisor works, should I deprecate the old three functions (add a console.warn + redirect)?
-4. **Impact tracking**: The plan mentioned measuring before/after impact of approved recommendations. That requires a scheduled job that runs 7 days after approval. Want me to build that as a follow-up?
+1. **Existing open positions:** Positions opened before this deploy won't have `signalSource` in their `signal_reason`. Should we backfill from `scan_logs.details_json`? (Low priority — they'll close eventually and new trades will have it.)
+
+2. **Pre-existing test failures:** The 6 failing `brokerFillPriceBE` / `beTrailingRace` tests appear to be a regression from a prior change. Unrelated to this task but worth investigating separately.
 
 ## Suggested PR title and description
 
-**Title:** feat: Unified advisor with $-weighted factor lift and fixed regime presets
+**Title:** `[signal-source-badge] Show unified/standalone/cascade entry path in trade detail breakdown`
 
 **Description:**
-Replaces the three separate advisor functions with a single `advisor` edge function that supports 3 modes (on_demand, daily, weekly). Key improvements:
+Fixes the detail breakdown misinformation where trades placed via standalone fallback (0.5× size) showed the unified zone analysis without indicating the trade bypassed unified confirmation.
 
-- **$-weighted factor lift**: Recommendations based on dollar impact per trade, not just win rate counts
-- **Fixed regime presets**: Uses correct factor keys (was silently writing orphan keys before)
-- **Deterministic math first**: LLM receives pre-computed metrics only — no raw trade data, no hallucinated numbers
-- **Dedup protection**: Prevents duplicate pending recommendations per bot per day
-- **Compact prompts**: ~60% smaller token usage by sending structured JSON instead of markdown
+Changes:
+- Adds `signalSource` and `unifiedZone` to `signal_reason` JSON (both market + limit order paths)
+- Displays colored badge (UNIFIED ×1 / STANDALONE ×0.5 / CASCADE ×1) in:
+  - Live scan detail rows
+  - Inline scan detail view
+  - Closed trade history expansion
+  - Open position expanded card
+  - Mobile position card
+- Shows explanatory note for standalone trades: "Entry via standalone impulse zone — unified confirmation not met. Position size halved (×0.5)"
+- 4 new static analysis tests verifying persistence schema
 
-The old functions remain untouched for parallel running. Switch over by updating cron triggers.
+No behavior changes to trading logic.

@@ -1408,7 +1408,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 <tr className="bg-secondary/20 border-b border-border">
                   <td colSpan={10} className="p-2">
                     <div className="space-y-2 text-[10px]">
-                      {/* Header: Close reason badge + Score + Tier summary */}
+                      {/* Header: Close reason badge + Score + Signal source + Tier summary */}
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 border rounded ${
                           t.closeReason === "tp_hit" || t.closeReason === "trail_hit" ? "bg-success/15 border-success/40 text-success" :
@@ -1420,11 +1420,26 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                           {t.closeReason === "trail_hit" && " (trailing stop locked profit)"}
                           {t.closeReason === "be_hit" && " (break-even SL)"}
                         </span>
+                        {sr?.signalSource && (
+                          <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
+                            sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
+                            sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+                            "bg-orange-500/15 text-orange-400 border border-orange-500/30"
+                          }`}>
+                            {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+                          </span>
+                        )}
                         <span className={`text-[10px] font-mono font-bold ${
                           t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
                         }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
                         {sr?.tieredScoring && <TierScoreSummary tieredScoring={sr.tieredScoring} />}
                       </div>
+                      {/* Signal source context note for standalone trades */}
+                      {sr?.signalSource && sr.signalSource !== "unified" && sr.signalSource !== "cascade" && (
+                        <div className="text-[9px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/20 text-orange-300">
+                          Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
+                        </div>
+                      )}
 
                       {hasRichData ? (
                         <>
@@ -1722,6 +1737,15 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
         <div className="flex items-center gap-1.5">
           {d.direction === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : d.direction === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground" />}
           <span className="font-medium">{d.pair}</span>
+          {d.signalSource && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
+            <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
+              d.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
+              d.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+              "bg-orange-500/15 text-orange-400 border border-orange-500/30"
+            }`}>
+              {d.signalSource === "unified" ? "UNIFIED ×1" : d.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+            </span>
+          )}
           {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
         </div>
         <div className="flex items-center gap-1.5">
@@ -1732,6 +1756,12 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
       </button>
       {expanded && (
         <div className="px-1 pb-2 space-y-1.5">
+          {/* Signal source context note */}
+          {d.signalSource && d.signalSource !== "unified" && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
+            <div className="text-[9px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/20 text-orange-300">
+              Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
+            </div>
+          )}
           {/* Zone Story — consolidated impulse + unified zone narrative */}
           <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
           {/* Direction Verdict */}
@@ -1894,13 +1924,29 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
 
   return (
     <div className="space-y-2">
-      {/* 1. Header — Pair + Status + Score */}
+      {/* 1. Header — Pair + Status + Score + Signal Source */}
       <div className="flex items-center gap-2">
         {d.direction === "long" ? <TrendingUp className="h-3 w-3 text-success" /> : d.direction === "short" ? <TrendingDown className="h-3 w-3 text-destructive" /> : <Minus className="h-3 w-3 text-muted-foreground" />}
         <span className="text-[12px] font-bold">{d.pair}</span>
+        {d.signalSource && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
+          <span className={`text-[9px] font-mono font-bold px-1 py-0.5 rounded ${
+            d.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
+            d.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+            "bg-orange-500/15 text-orange-400 border border-orange-500/30"
+          }`}>
+            {d.signalSource === "unified" ? "UNIFIED ×1" : d.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+          </span>
+        )}
         <span className={`text-[12px] font-bold ${statusColor}`}>{statusLabel}</span>
         <span className={`text-[12px] font-mono font-bold ml-auto ${d.score > 10 ? (d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground") : (d.score >= 6 ? "text-success" : d.score >= 4 ? "text-warning" : "text-muted-foreground")}`}>{d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score?.toFixed(1)}/10`}</span>
       </div>
+
+      {/* Signal source context note for standalone */}
+      {d.signalSource && d.signalSource !== "unified" && d.signalSource !== "cascade" && (d.status === "trade_placed" || d.status === "trade_placed_from_watchlist" || d.status === "trade_placed_at_zone") && (
+        <div className="text-[9px] px-2 py-1 rounded bg-orange-500/10 border border-orange-500/20 text-orange-300">
+          Entry via <span className="font-bold">standalone impulse zone</span> — unified confirmation not met. Position size halved (×0.5).
+        </div>
+      )}
 
       {/* 2. Tier Score Summary */}
       {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
