@@ -105,6 +105,12 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
       {/* Expanded details */}
       {isExpanded && (
         <div className="px-3 pb-3 pt-0 space-y-2">
+          {/* Signal source context note */}
+          {sr.signalSource === "standalone" && (
+            <div className="text-[9px] text-orange-400/80 bg-orange-500/10 border border-orange-500/20 rounded px-2 py-1">
+              Entry via standalone impulse zone — unified confirmation not met. Size halved (×0.5).
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] font-mono pl-4 border-l-2 border-border">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Entry</span>
@@ -129,6 +135,29 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
             <div className="flex justify-between">
               <span className="text-muted-foreground">Size</span>
               <span>{parseFloat(p.size || 0).toFixed(2)}</span>
+            </div>
+            {p.signalScore != null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Score</span>
+                <span className="text-primary font-bold">{Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}</span>
+              </div>
+            )}
+            {trailFired && sl !== null && origSl !== null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Locked R</span>
+                <span className="text-cyan-400 font-bold">
+                  {(() => {
+                    const risk = p.direction === "long" ? entry - origSl : origSl - entry;
+                    if (risk <= 0) return "—";
+                    const locked = p.direction === "long" ? sl - entry : entry - sl;
+                    return `${(locked / risk).toFixed(2)}R`;
+                  })()}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Hold</span>
+              <span>{holdHours.toFixed(1)}h</span>
             </div>
           </div>
           <div className="pl-4 flex gap-2">
