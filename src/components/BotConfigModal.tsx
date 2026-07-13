@@ -462,7 +462,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const saveMut = useMutation({
     mutationFn: () => {
       if (!config) return Promise.reject(new Error("Config not loaded yet"));
-      return botConfigApi.update(config, connectionId);
+      // Strip deprecated keys before saving (legacy configs may still carry them).
+      const clean = JSON.parse(JSON.stringify(config));
+      if (clean?.risk) {
+        if ("maxOpenPositions" in clean.risk) {
+          if (clean.risk.maxConcurrentTrades == null) {
+            clean.risk.maxConcurrentTrades = clean.risk.maxOpenPositions;
+          }
+          delete clean.risk.maxOpenPositions;
+        }
+      }
+      return botConfigApi.update(clean, connectionId);
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Config saved"); onClose(); },
     onError: (e: any) => {
