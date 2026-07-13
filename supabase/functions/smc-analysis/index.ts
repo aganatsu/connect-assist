@@ -416,7 +416,11 @@ Deno.serve(async (req) => {
   try {
     const { action, candles, dailyCandles, pairData, data1, data2 } = await req.json();
 
-    if (action === "full_analysis") return respond(runFullAnalysis(candles, dailyCandles));
+    if (action === "full_analysis") {
+      const safeCandles = Array.isArray(candles) ? candles : [];
+      const safeDaily = Array.isArray(dailyCandles) ? dailyCandles : undefined;
+      return respond(runFullAnalysis(safeCandles, safeDaily));
+    }
     if (action === "currency_strength") return respond(calculateCurrencyStrength(pairData || {}));
     if (action === "correlation") return respond({ coefficient: calculateCorrelation(data1 || [], data2 || []) });
     if (action === "structure") return respond(analyzeMarketStructure(candles));
