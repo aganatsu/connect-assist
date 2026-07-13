@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -20,6 +21,7 @@ export default function IctAnalysis() {
   const [selectedSymbol, setSelectedSymbol] = useState("EUR/USD");
   const currentHour = new Date().getUTCHours();
   const { resolvedTheme } = useTheme();
+  const isMobile = useIsMobile();
   const ct = getChartTheme(resolvedTheme);
 
   // Listen for global symbol change
@@ -285,25 +287,53 @@ export default function IctAnalysis() {
               <AccordionContent>
                 <div className="bg-secondary/30 border border-border p-3">
                   {correlationMatrix ? (
-                    <div className="overflow-x-auto max-w-full">
-                      <table className="text-[9px] md:text-[11px] font-mono">
-                        <thead>
-                          <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map(p => <th key={p} className="px-1 md:px-2 py-1 md:py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
-                        </thead>
-                        <tbody>
-                          {correlationMatrix.pairs.map(p1 => (
-                            <tr key={p1}>
-                              <td className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p1.replace("/", "")}</td>
-                              {correlationMatrix.pairs.map(p2 => {
-                                const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
-                                const bg = p1 === p2 ? "bg-primary/25" : val > 0.5 ? "bg-destructive/40" : val < -0.5 ? "bg-primary/40" : val > 0.3 ? "bg-destructive/20" : val < -0.3 ? "bg-primary/20" : "bg-muted/15";
-                                return <td key={p2} className={`px-2 py-1.5 text-center font-bold text-foreground ${bg}`}>{val.toFixed(2)}</td>;
-                              })}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    isMobile ? (
+                      /* Mobile: show significant correlations as a vertical list */
+                      <div className="space-y-1.5">
+                        <p className="text-[9px] text-muted-foreground mb-2">Showing pairs with |correlation| ≥ 0.3</p>
+                        {(() => {
+                          const significant: { p1: string; p2: string; val: number }[] = [];
+                          correlationMatrix.pairs.forEach((p1: string, i: number) => {
+                            correlationMatrix.pairs.forEach((p2: string, j: number) => {
+                              if (j <= i) return;
+                              const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
+                              if (Math.abs(val) >= 0.3) significant.push({ p1, p2, val });
+                            });
+                          });
+                          significant.sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
+                          if (significant.length === 0) return <p className="text-[10px] text-muted-foreground">No significant correlations found</p>;
+                          return significant.map(({ p1, p2, val }) => (
+                            <div key={`${p1}-${p2}`} className="flex items-center justify-between py-1 px-2 rounded bg-muted/20">
+                              <span className="text-[10px] font-mono font-medium">{p1.replace("/", "")} / {p2.replace("/", "")}</span>
+                              <span className={`text-[10px] font-mono font-bold ${
+                                val > 0.5 ? "text-destructive" : val < -0.5 ? "text-primary" : val > 0.3 ? "text-destructive/70" : "text-primary/70"
+                              }`}>{val.toFixed(2)}</span>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                    ) : (
+                      /* Desktop: full NxN matrix table */
+                      <div className="overflow-x-auto max-w-full">
+                        <table className="text-[11px] font-mono">
+                          <thead>
+                            <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map((p: string) => <th key={p} className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {correlationMatrix.pairs.map((p1: string) => (
+                              <tr key={p1}>
+                                <td className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p1.replace("/", "")}</td>
+                                {correlationMatrix.pairs.map((p2: string) => {
+                                  const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
+                                  const bg = p1 === p2 ? "bg-primary/25" : val > 0.5 ? "bg-destructive/40" : val < -0.5 ? "bg-primary/40" : val > 0.3 ? "bg-destructive/20" : val < -0.3 ? "bg-primary/20" : "bg-muted/15";
+                                  return <td key={p2} className={`px-2 py-1.5 text-center font-bold text-foreground ${bg}`}>{val.toFixed(2)}</td>;
+                                })}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
                   ) : <p className="text-xs text-muted-foreground">Insufficient data</p>}
                 </div>
               </AccordionContent>
