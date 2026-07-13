@@ -229,7 +229,7 @@ const BASE_CONFIG = {
   },
   risk: {
     riskPerTrade: 1, maxDailyLoss: 5, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-    fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
+    fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxConcurrentTrades: 5, maxPositionsPerSymbol: 2, allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
     conflictThresholdRaise: 4, conflictBlockAt: 6,
   },
   entry: {
@@ -283,7 +283,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       },
       risk: {
         riskPerTrade: 1.5, maxDailyLoss: 3, maxDrawdown: 20, positionSizingMethod: "percent_risk",
-        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 2, maxPositionsPerSymbol: 1,
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxConcurrentTrades: 2, maxPositionsPerSymbol: 1,
         allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 2.5,
         conflictThresholdRaise: 4, conflictBlockAt: 6,
       },
@@ -335,7 +335,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       },
       risk: {
         riskPerTrade: 1, maxDailyLoss: 3, maxDrawdown: 15, positionSizingMethod: "percent_risk",
-        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 4, maxPositionsPerSymbol: 2,
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxConcurrentTrades: 4, maxPositionsPerSymbol: 2,
         allowSameDirectionStacking: false, maxPortfolioHeat: 10, minRiskReward: 1.5,
         conflictThresholdRaise: 4, conflictBlockAt: 6,
       },
@@ -387,7 +387,7 @@ const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day
       },
       risk: {
         riskPerTrade: 0.5, maxDailyLoss: 3, maxDrawdown: 10, positionSizingMethod: "percent_risk",
-        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxOpenPositions: 3, maxPositionsPerSymbol: 1,
+        fixedLotSize: 0.1, atrVolatilityMultiplier: 1.5, maxConcurrentTrades: 3, maxPositionsPerSymbol: 1,
         allowSameDirectionStacking: false, maxPortfolioHeat: 5, minRiskReward: 1.5,
         conflictThresholdRaise: 4, conflictBlockAt: 6,
       },
