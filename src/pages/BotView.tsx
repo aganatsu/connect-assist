@@ -81,8 +81,8 @@ export default function BotView() {
     try {
       const stored = localStorage.getItem("botview-show-scan");
       if (stored !== null) return stored !== "false";
-      // Default: collapsed on mobile, expanded on desktop
-      return typeof window !== "undefined" ? window.innerWidth >= 768 : true;
+      // Default: expanded on both mobile and desktop so scan results are immediately visible
+      return true;
     } catch { return true; }
   });
   const toggleSidebar = useCallback(() => {
@@ -395,7 +395,7 @@ export default function BotView() {
 
   return (
     <AppShell>
-      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden">
+      <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)] w-full max-w-full min-w-0 overflow-x-hidden overflow-y-auto md:overflow-y-hidden">
         {/* Phase-1 cleanup: removed duplicate desktop stats strip.
             StatusBar (bottom of app shell) and the Account drawer already cover
             balance, equity, P&L, win rate, open positions, and engine status. */}
@@ -620,7 +620,7 @@ export default function BotView() {
         {/* Main workspace: 65/35 split */}
         <div className="flex-1 flex flex-col md:flex-row gap-3 mt-2 min-h-0 min-w-0 max-w-full overflow-x-hidden">
           {/* Left: Tabbed Positions — expands to full width when sidebar hidden */}
-          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 min-h-[300px] md:min-h-0`}>
+          <div className={`${showSidebar ? "flex-[2]" : "flex-1"} flex flex-col min-h-0 min-w-0 md:min-h-0`}>
             <Tabs defaultValue="open" value={botTab} onValueChange={setBotTab} className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full overflow-x-hidden">
               {(() => {
                 const tabs: [string, string][] = [
@@ -1039,15 +1039,18 @@ export default function BotView() {
         {/* Bottom: Scan Master-Detail 60/40 */}
         <div className={`border border-border bg-card mt-2 flex flex-col min-h-0 min-w-0 max-w-full overflow-hidden ${showScanPanel ? `flex-1 ${isMobile ? "min-h-[20rem]" : "min-h-[28rem]"}` : "shrink-0"}`}>
           {/* Scan panel header — always visible for toggle */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1 min-w-0 max-w-full overflow-hidden">
+          <div
+            onClick={isMobile ? toggleScanPanel : undefined}
+            className={`flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-2 bg-card/60 border-b border-border px-2 py-1.5 md:py-1 min-w-0 max-w-full overflow-hidden ${isMobile ? "cursor-pointer active:bg-secondary/40 transition-colors" : ""}`}
+          >
             <div className="flex items-center gap-1.5 min-w-0 max-w-full">
               <button
-                onClick={toggleScanPanel}
+                onClick={(e) => { e.stopPropagation(); toggleScanPanel(); }}
                 className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
                 title={showScanPanel ? "Hide scan results" : "Show scan results"}
               >
-                {showScanPanel ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
-                {showScanPanel ? <ChevronDown className="h-2.5 w-2.5" /> : <ChevronUp className="h-2.5 w-2.5" />}
+                {showScanPanel ? <Eye className="h-3.5 w-3.5 md:h-3 md:w-3" /> : <EyeOff className="h-3.5 w-3.5 md:h-3 md:w-3" />}
+                {showScanPanel ? <ChevronDown className="h-3 w-3 md:h-2.5 md:w-2.5" /> : <ChevronUp className="h-3 w-3 md:h-2.5 md:w-2.5" />}
               </button>
               <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
                 <span className="truncate min-w-[120px]">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
