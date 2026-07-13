@@ -371,6 +371,15 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               {sr.watchlistOrigin?.cyclesWatched && <span className="text-cyan-300/70">({sr.watchlistOrigin.cyclesWatched} cycles)</span>}
             </span>
           )}
+          {sr.signalSource && (
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold ${
+              sr.signalSource === "unified" ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" :
+              sr.signalSource === "cascade" ? "bg-purple-500/15 border border-purple-500/40 text-purple-400" :
+              "bg-orange-500/15 border border-orange-500/40 text-orange-400"
+            }`} title={sr.signalSource === "unified" ? "Full unified confirmation — full position size" : sr.signalSource === "cascade" ? "Cascade zone confirmation — full position size" : "Standalone impulse zone entry — position size halved (×0.5)"}>
+              {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 text-xs font-mono flex-wrap">
           <span className="text-muted-foreground">Entry: <span className="text-foreground font-semibold">{formatPrice(entry, p.symbol)}</span></span>

@@ -59,6 +59,15 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               <span title="Live mode but NOT mirrored to MT4/MT5 (broker was down at open) — management will not fan out" className="w-1.5 h-1.5 rounded-full bg-warning shrink-0" />
             )}
             <OverrideBadge position={p} />
+            {sr.signalSource && (
+              <span className={`text-[8px] font-mono font-bold px-1 py-0 rounded shrink-0 ${
+                sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
+                sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+                "bg-orange-500/15 text-orange-400 border border-orange-500/30"
+              }`}>
+                {sr.signalSource === "unified" ? "UNI" : sr.signalSource === "cascade" ? "CAS" : "STD½"}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5 min-w-0 overflow-hidden">
             {/* Management badges — compact, no emojis */}
