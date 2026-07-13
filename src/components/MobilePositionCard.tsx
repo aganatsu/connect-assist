@@ -203,26 +203,40 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
     {/* Full Detail Bottom Sheet */}
     <Sheet open={detailSheet} onOpenChange={setDetailSheet}>
       <SheetContent side="bottom" className="max-h-[80vh] overflow-y-auto rounded-t-2xl">
-        <SheetHeader className="pb-2">
-          <SheetTitle className="text-sm flex items-center gap-2">
+        <SheetHeader className="pb-2 pr-8">
+          <SheetTitle className="text-sm flex flex-wrap items-center gap-2">
             <span className={`w-2 h-5 rounded-full ${p.direction === "long" ? "bg-success" : "bg-destructive"}`} />
             <span className="font-mono">{p.symbol}</span>
             <span className={`text-[10px] font-medium ${p.direction === "long" ? "text-success" : "text-destructive"}`}>
               {p.direction === "long" ? "LONG" : "SHORT"}
             </span>
-            {sr.signalSource && (
+            {p.signalScore != null && (
+              <span className="text-xs font-mono text-muted-foreground">
+                {Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`}
+              </span>
+            )}
+          </SheetTitle>
+          {/* Signal source badge — always visible below title */}
+          <div className="flex items-center gap-2 mt-1">
+            {sr.signalSource ? (
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
                 sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
                 sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
                 "bg-orange-500/15 text-orange-400 border border-orange-500/30"
               }`}>
-                {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+                {sr.signalSource === "unified" ? "UNIFIED \u00d71" : sr.signalSource === "cascade" ? "CASCADE \u00d71" : "STANDALONE \u00d70.5"}
+              </span>
+            ) : (
+              <span className="text-[9px] font-mono text-muted-foreground px-1.5 py-0.5 rounded border border-border">
+                {sr.entryMethod === "market_fill_at_zone" ? "MARKET FILL" : sr.filledFromLimitOrder ? "LIMIT FILL" : "DIRECT ENTRY"}
               </span>
             )}
-            <span className="ml-auto text-xs font-mono text-muted-foreground">
-              {p.signalScore != null ? (Number(p.signalScore) > 10 ? `${Number(p.signalScore).toFixed(1)}%` : `${p.signalScore}/10`) : ""}
-            </span>
-          </SheetTitle>
+            {sr.promotedFromWatchlist && (
+              <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                WATCHLIST
+              </span>
+            )}
+          </div>
         </SheetHeader>
 
         <div className="space-y-4 pb-6">
