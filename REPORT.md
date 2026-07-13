@@ -1,77 +1,61 @@
-# Task: Signal Source Badge — Fix Detail Breakdown Misinformation
-## Branch: manus/signal-source-badge
+# Task: Mobile UX V2 — Scan Panel Visibility, Trade Details, Scroll Fix
+
+## Branch: manus/mobile-ux-v2
 
 ## Behavior changes
 
-1. **New UI badge on live scan details:** When a trade is placed, the signal detail row now shows a colored badge: `UNIFIED ×1` (cyan), `CASCADE ×1` (purple), or `STANDALONE ×0.5` (orange). Previously, no indication of entry path was shown.
-
-2. **New context note for standalone trades:** When a trade was placed via standalone fallback, an orange info box appears in the expanded detail: "Entry via standalone impulse zone — unified confirmation not met. Position size halved (×0.5)."
-
-3. **Signal source persisted to database:** `signalSource` and `unifiedZone` are now included in the `signal_reason` JSON stored in `paper_positions`. This means future closed trades will also display the badge in trade history. (Existing trades opened before this deploy will not have the field — badge simply won't render for them.)
-
-4. **No change to trading logic, gates, weights, or position sizing.** The signal source was already computed and stored in `scan_logs.details_json` — this change only adds it to `signal_reason` and surfaces it in the UI.
+1. **Scan panel now defaults to expanded on mobile** — previously it defaulted to collapsed on mobile (only expanded on desktop). Users will now see scan results immediately without needing to tap the toggle.
+2. **Scan panel header is fully tappable on mobile** — the entire header row acts as a toggle button (not just the small eye icon). This makes it much easier to expand/collapse on touch devices.
+3. **Scan panel no longer hides when scrolling** — the outer BotView container now has `overflow-y-auto` on mobile, allowing the user to scroll down to the scan panel. Previously the positions panel had `min-h-[300px]` which pushed the scan panel below the viewport with no way to scroll to it.
+4. **Expanded trade cards now show a "View Full Details" button** — tapping it opens a bottom Sheet with the full signal breakdown (entry confirmation story, signal source badge, zone info, factor breakdown via SignalReasoningCard, trade metrics, and management status).
 
 ## Files modified
 
-| File | Change |
-|------|--------|
-| `supabase/functions/bot-scanner/index.ts` | Added `signalSource` and `unifiedZone` to `signal_reason` JSON in both market-order (line 6217) and limit-order (line 6001) insert paths |
-| `src/pages/BotView.tsx` | Added signal source badge + context note to `ScanSignalDetail` component (live scan results) and `ScanDetailInline` component (inline detail view), plus badge in closed-trade history expansion |
-| `src/components/ExpandedPositionCard.tsx` | Added signal source badge to the trade header bar for open positions |
-| `src/components/MobilePositionCard.tsx` | Added compact signal source badge (`UNI`/`CAS`/`STD½`) to mobile position cards |
-| `supabase/functions/_shared/signalSourcePersistence.test.ts` | New test file verifying signal source persistence |
+| File | Description |
+|------|-------------|
+| `src/pages/BotView.tsx` | Added `overflow-y-auto` on mobile to outer container; removed `min-h-[300px]` on mobile; defaulted scan panel to expanded; made scan header row fully tappable on mobile with larger icons; fixed missing `</button>` closing tag |
+| `src/components/MobilePositionCard.tsx` | Complete rewrite: added "View Full Details" button that opens a bottom Sheet with entry confirmation story, signal source badges (UNIFIED/CASCADE/STANDALONE), zone info, SignalReasoningCard factor breakdown, trade metrics grid, and management status indicators |
 
 ## Tests added
 
-| Test | Asserts |
-|------|---------|
-| `signal_reason JSON includes signalSource field (market order path)` | Market-order signal_reason JSON.stringify includes `signalSource` and `unifiedZone` |
-| `signal_reason JSON includes signalSource field (limit order path)` | Limit-order signal_reason JSON.stringify includes `signalSource` and `unifiedZone` |
-| `signalSource is set to one of: unified, standalone, cascade` | All three assignment paths exist in bot-scanner |
-| `signalSource assignment happens BEFORE signal_reason construction` | The assignment at ~line 4846 precedes the JSON.stringify at ~line 6217 |
+No new deno tests added — these are purely frontend/UI changes that don't affect any Supabase edge function logic. The changes are CSS class modifications and React component rendering only.
 
 ## Tests run
 
 ```
-deno test --no-check --allow-all supabase/
-FAILED | 1575 passed | 6 failed (17s)
+Before (main, no changes): 1490 passed | 48 failed (11s)
+After (our changes):       1491 passed | 47 failed (13s)
 ```
 
-All 6 failures are **pre-existing** (confirmed identical on `main`):
-- 5× `brokerFillPriceBE.test.ts` — BE price calculation assertions
-- 1× `beTrailingRace.test.ts` — short position co-activation
+The 47-49 failures are pre-existing and unrelated to our changes (they come from `styleTuningPort.test.ts`, `gate6Heat.test.ts`, `livePriceStatus.test.ts`, `reset.test.ts`, and `propFirmStatusBrokerEquity.test.ts` — all backend test files with uncaught errors or environment-dependent assertions).
 
-Our 4 new tests all pass. Zero new failures introduced.
+ESBuild compilation verification:
+- `src/pages/BotView.tsx` — compiles cleanly (167.2kb bundle, 0 errors)
+- `src/components/MobilePositionCard.tsx` — compiles cleanly (27.3kb bundle, 0 errors)
 
 ## Regression check
 
-- The `signal_reason` JSON change is purely additive — we append two new fields (`signalSource`, `unifiedZone`) to an existing JSON.stringify object. No existing fields are modified or removed.
-- `deno check` confirms zero new type errors from our change (the 62 pre-existing type errors are unrelated).
-- Frontend changes are display-only — they read `d.signalSource` / `sr.signalSource` and render a badge. If the field is absent (legacy trades), the badge simply doesn't render (conditional `{sr.signalSource && ...}`).
-- No gate logic, scoring, position sizing, or trade execution code was modified.
+1. **No backend code modified** — all changes are in `src/pages/` and `src/components/` (React frontend only)
+2. **No scoring, gate, or trade logic touched** — changes are purely visual/layout
+3. **Desktop behavior preserved** — all mobile-specific changes use `isMobile` guards or responsive classes (`md:` prefixes). Desktop layout is unchanged.
+4. **ESBuild confirms no syntax errors** in both modified files
 
 ## Open questions
 
-1. **Existing open positions:** Positions opened before this deploy won't have `signalSource` in their `signal_reason`. Should we backfill from `scan_logs.details_json`? (Low priority — they'll close eventually and new trades will have it.)
-
-2. **Pre-existing test failures:** The 6 failing `brokerFillPriceBE` / `beTrailingRace` tests appear to be a regression from a prior change. Unrelated to this task but worth investigating separately.
+1. The scan panel `max-h-64` constraint on mobile (line 1135) limits the scan list to ~256px. Should this be increased now that the panel is more accessible?
+2. Should the "View Full Details" sheet also include the SL/TP editor (EditSLTPInline) that exists on desktop's ExpandedPositionCard?
 
 ## Suggested PR title and description
 
-**Title:** `[signal-source-badge] Show unified/standalone/cascade entry path in trade detail breakdown`
+**Title:** fix(mobile): scan panel visibility + trade detail sheet + scroll behavior
 
 **Description:**
-Fixes the detail breakdown misinformation where trades placed via standalone fallback (0.5× size) showed the unified zone analysis without indicating the trade bypassed unified confirmation.
+Fixes three reported mobile UX issues:
 
-Changes:
-- Adds `signalSource` and `unifiedZone` to `signal_reason` JSON (both market + limit order paths)
-- Displays colored badge (UNIFIED ×1 / STANDALONE ×0.5 / CASCADE ×1) in:
-  - Live scan detail rows
-  - Inline scan detail view
-  - Closed trade history expansion
-  - Open position expanded card
-  - Mobile position card
-- Shows explanatory note for standalone trades: "Entry via standalone impulse zone — unified confirmation not met. Position size halved (×0.5)"
-- 4 new static analysis tests verifying persistence schema
+1. **Scan panel disappearing on scroll** — The positions panel had `min-h-[300px]` which pushed the scan panel below the viewport. Removed the mobile min-height and made the outer container scrollable (`overflow-y-auto`) so users can always reach the scan panel.
 
-No behavior changes to trading logic.
+2. **Scan arrows/toggle not visible/tappable** — Made the entire scan header row tappable on mobile (not just the tiny eye icon). Increased icon sizes for touch targets. Defaulted the panel to expanded so scan results are immediately visible.
+
+3. **Expanded trades missing details** — Added a "View Full Details" button to MobilePositionCard that opens a bottom Sheet with the full signal breakdown: entry confirmation story, signal source badges, zone info, SignalReasoningCard factor breakdown, trade metrics, and management status.
+
+No backend changes. No behavior changes to scoring, gates, or trade execution.
