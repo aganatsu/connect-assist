@@ -35,21 +35,31 @@ function getPipSize(symbol: string): number {
   return (SPECS as any)[symbol]?.pipSize ?? 0.0001;
 }
 
-interface OutcomeResult {
+export interface OutcomeResult {
   outcome_status: "inconclusive" | "would_have_won" | "would_have_lost";
   price_reached_entry: boolean;
   tp_hit: boolean;
   sl_hit: boolean;
   tp_hit_time_minutes: number | null;
+  sl_hit_time_minutes: number | null;
   mfe_pips: number;
   mae_pips: number;
 }
 
 /**
  * Simulate the outcome of a rejected setup using candle data.
- * Returns the outcome based on whether price reached entry, then hit TP or SL first.
+ *
+ * Fixed logic (v2):
+ *   1. Once SL is hit, the trade is OVER — loop breaks immediately.
+ *      MFE/MAE stop accumulating after SL breach.
+ *   2. Both TP and SL timing are recorded. If both are hit in the same
+ *      candle, outcome is "inconclusive" (can't determine intra-bar order
+ *      with 1H resolution).
+ *   3. If neither TP nor SL hit within the 24h window, outcome is always
+ *      "inconclusive" — no MFE>MAE guessing.
+ *   4. MFE is capped once TP is hit (trade would have closed at TP).
  */
-function simulateOutcome(
+export function simulateOutcome(
   candles: Array<{ datetime: string; open: number; high: number; low: number; close: number }>,
   direction: "long" | "short",
   entryPrice: number,
@@ -57,13 +67,13 @@ function simulateOutcome(
   takeProfit: number | null,
   rejectedAt: string,
 ): OutcomeResult {
-  const pipSize = 0.0001; // Will be overridden per-symbol in the caller
   const result: OutcomeResult = {
     outcome_status: "inconclusive",
     price_reached_entry: false,
     tp_hit: false,
     sl_hit: false,
     tp_hit_time_minutes: null,
+    sl_hit_time_minutes: null,
     mfe_pips: 0,
     mae_pips: 0,
   };
@@ -89,22 +99,27 @@ function simulateOutcome(
         result.price_reached_entry = true;
         entryReachedTime = candleTime;
       }
+      // If entry wasn't reached on this candle, continue to next
+      if (!result.price_reached_entry) continue;
     }
 
     // Once entry is reached, track MFE/MAE and check TP/SL
     if (result.price_reached_entry && entryReachedTime !== null) {
+      // ── Check TP and SL for this candle ──
+      let tpHitThisCandle = false;
+      let slHitThisCandle = false;
+
       if (direction === "long") {
         const favorable = candle.high - entryPrice;
         const adverse = entryPrice - candle.low;
         maxFavorable = Math.max(maxFavorable, favorable);
         maxAdverse = Math.max(maxAdverse, adverse);
 
-        if (takeProfit !== null && candle.high >= takeProfit && !result.tp_hit) {
-          result.tp_hit = true;
-          result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        if (takeProfit !== null && candle.high >= takeProfit) {
+          tpHitThisCandle = true;
         }
         if (stopLoss !== null && candle.low <= stopLoss) {
-          result.sl_hit = true;
+          slHitThisCandle = true;
         }
       } else {
         // Short
@@ -113,41 +128,71 @@ function simulateOutcome(
         maxFavorable = Math.max(maxFavorable, favorable);
         maxAdverse = Math.max(maxAdverse, adverse);
 
-        if (takeProfit !== null && candle.low <= takeProfit && !result.tp_hit) {
-          result.tp_hit = true;
-          result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        if (takeProfit !== null && candle.low <= takeProfit) {
+          tpHitThisCandle = true;
         }
         if (stopLoss !== null && candle.high >= stopLoss) {
-          result.sl_hit = true;
+          slHitThisCandle = true;
         }
       }
+
+      // ── Determine outcome based on what happened this candle ──
+
+      if (tpHitThisCandle && slHitThisCandle) {
+        // Both TP and SL hit in the SAME candle — can't determine order with 1H data
+        result.tp_hit = true;
+        result.sl_hit = true;
+        result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        result.sl_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        // Outcome is inconclusive — we don't know which was hit first
+        result.outcome_status = "inconclusive";
+        break; // Trade is over either way
+      }
+
+      if (slHitThisCandle && !result.tp_hit) {
+        // SL hit BEFORE TP was ever reached — trade is a loss, STOP immediately
+        result.sl_hit = true;
+        result.sl_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        // Cap MAE at SL distance for the final result
+        if (stopLoss !== null) {
+          maxAdverse = Math.abs(entryPrice - stopLoss);
+        }
+        result.outcome_status = "would_have_lost";
+        break; // Trade is OVER — no further candles matter
+      }
+
+      if (tpHitThisCandle && !result.sl_hit) {
+        // TP hit BEFORE SL was ever reached — trade is a win
+        result.tp_hit = true;
+        result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
+        // Cap MFE at TP distance for the final result
+        if (takeProfit !== null) {
+          maxFavorable = Math.abs(takeProfit - entryPrice);
+        }
+        result.outcome_status = "would_have_won";
+        break; // Trade is OVER — closed at TP
+      }
+
+      // Neither hit this candle — continue to next
+    }
+  }
+
+  // ── Final classification ──
+  // If we exited the loop without hitting TP or SL:
+  if (!result.tp_hit && !result.sl_hit) {
+    if (result.price_reached_entry) {
+      // Entry was reached but neither TP nor SL hit within 24h window
+      // This is genuinely inconclusive — we do NOT guess based on MFE>MAE
+      result.outcome_status = "inconclusive";
+    } else {
+      // Price never even reached entry — inconclusive
+      result.outcome_status = "inconclusive";
     }
   }
 
   // Assign MFE/MAE in raw price units (caller converts to pips)
   result.mfe_pips = maxFavorable;
   result.mae_pips = maxAdverse;
-
-  // Determine final outcome
-  if (!result.price_reached_entry) {
-    result.outcome_status = "inconclusive";
-  } else if (result.tp_hit && !result.sl_hit) {
-    result.outcome_status = "would_have_won";
-  } else if (result.sl_hit && !result.tp_hit) {
-    result.outcome_status = "would_have_lost";
-  } else if (result.tp_hit && result.sl_hit) {
-    // Both hit — check which was hit first by time (tp_hit_time_minutes gives TP timing)
-    // If TP was hit first (tp_hit_time_minutes is set), it's a win
-    result.outcome_status = result.tp_hit_time_minutes !== null ? "would_have_won" : "would_have_lost";
-  } else {
-    // Entry reached but neither TP nor SL hit within window
-    // Use MFE vs MAE to determine likely outcome
-    if (maxFavorable > maxAdverse) {
-      result.outcome_status = "would_have_won";
-    } else {
-      result.outcome_status = "would_have_lost";
-    }
-  }
 
   return result;
 }
