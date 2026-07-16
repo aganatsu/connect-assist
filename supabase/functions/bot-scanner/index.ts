@@ -3133,6 +3133,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ...parsedSignalReason,
             filledFromLimitOrder: true,
             confirmationEntry: true,
+            confirmationMethod: config.confirmationMethod || "choch",
+            tpMethod: config.tpMethod || "rr_ratio",
             confirmation: {
               type: confirmedSignal.type,
               tier: confirmedSignal.tier,
@@ -3143,6 +3145,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               supportingSignals: confirmedSignal.supportingSignals,
               zoneTouchTime: pending.zone_touch_time,
               confirmationAttempts: pending.confirmation_attempts || 0,
+              method: config.confirmationMethod || "choch",
             },
             limitOrderOrigin: {
               orderType: pending.order_type,
@@ -3212,15 +3215,26 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const confAttempts = (pending.confirmation_attempts || 0) > 0
               ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
               : "";
+            // Build specific confirmation method label
+            const confMethodUsed = config.confirmationMethod || "choch";
+            const confMethodLabel = confMethodUsed === "choch" ? "CHoCH/BOS" : confMethodUsed === "indicators" ? "Indicator Consensus" : "CHoCH + Indicators";
+            const confMethodDetail = confMethodUsed === "indicators"
+              ? `\n<b>Mode:</b> ${confMethodLabel} (${config.indicatorMinCount || 3}/4 indicators required)`
+              : confMethodUsed === "choch_and_indicators"
+              ? `\n<b>Mode:</b> ${confMethodLabel} (CHoCH + ${config.indicatorMinCount || 3}/4 indicators)`
+              : `\n<b>Mode:</b> ${confMethodLabel}`;
+            // Build TP method label
+            const tpMethodUsed = config.tpMethod || "rr_ratio";
+            const tpMethodLabel = tpMethodUsed === "rr_ratio" ? `R:R (${config.tpRatio || 2.0}:1)` : tpMethodUsed === "next_level" ? "Next Structure Level" : tpMethodUsed === "fixed_pips" ? "Fixed Pips" : `ATR ×${config.tpATRMultiple || 2.0}`;
             const msg = `${emoji} <b>${mode} CONFIRMED Entry${confTierLabel}</b>\n\n` +
               `<b>Symbol:</b> ${pending.symbol}\n` +
               `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
               `<b>Size:</b> ${pending.size} lots\n` +
               `<b>Entry:</b> ${actualFillPrice.toFixed(5)}\n` +
               `<b>SL:</b> ${pending.stop_loss}\n` +
-              `<b>TP:</b> ${pending.take_profit}\n` +
+              `<b>TP:</b> ${pending.take_profit} (${tpMethodLabel})\n` +
               `<b>Score:</b> ${pending.signal_score}\n\n` +
-              `🎯 <b>Confirmation</b>\n` +
+              `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
               `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
               confSupporting + `\n` +
               `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
@@ -6122,7 +6136,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -6168,6 +6182,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
             const emoji = analysis.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+            // Confirmation method label for zone setup notification
+            const zoneConfMethod = pairConfig.confirmationMethod || "choch";
+            const zoneConfLabel = zoneConfMethod === "choch" ? "CHoCH/BOS" : zoneConfMethod === "indicators" ? `Indicator Consensus (${pairConfig.indicatorMinCount || 3}/4)` : `CHoCH + Indicators (${pairConfig.indicatorMinCount || 3}/4)`;
+            // TP method label
+            const zoneTpMethod = pairConfig.tpMethod || "rr_ratio";
+            const zoneTpLabel = zoneTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : zoneTpMethod === "next_level" ? "Next Structure Level" : zoneTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR \u00d7${pairConfig.tpATRMultiple || 2.0}`;
             const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
 
 ` +
@@ -6183,11 +6203,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 ` +
               `<b>SL:</b> ${limitSL}
 ` +
-              `<b>TP:</b> ${limitTP}
+              `<b>TP:</b> ${limitTP} (${zoneTpLabel})
 ` +
               `<b>Score:</b> ${analysis.score.toFixed(1)}
 ` +
-              `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for 5m CHoCH at zone"}
+              `<b>Confirm Mode:</b> ${zoneConfLabel}
+` +
+              `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone"}
 ` +
               `<b>Expires:</b> ${expiryMinutes}min` +
               (isPromotedFromStaging && existingStaged ? `
@@ -6338,7 +6360,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -6379,13 +6401,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (telegramChatIds.length > 0 && shouldNotify("trade_opened")) {
           const emoji = analysis.direction === "long" ? "🟢" : "🔴";
           const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+          // TP method label for notification
+          const openTpMethod = pairConfig.tpMethod || "rr_ratio";
+          const openTpLabel = openTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : openTpMethod === "next_level" ? "Next Structure Level" : openTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR ×${pairConfig.tpATRMultiple || 2.0}`;
           const msg = `${emoji} <b>${mode} Trade Opened</b>\n\n` +
             `<b>Symbol:</b> ${pair}\n` +
             `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
             `<b>Size:</b> ${size} lots\n` +
             `<b>Entry:</b> ${analysis.lastPrice}\n` +
             `<b>SL:</b> ${sl}\n` +
-            `<b>TP:</b> ${tp}\n` +
+            `<b>TP:</b> ${tp} (${openTpLabel})\n` +
             `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
