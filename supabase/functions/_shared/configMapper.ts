@@ -193,6 +193,8 @@ export const RUNTIME_DEFAULTS = {
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest",
   marketFillAtZone: true,
   marketFillStrictATRMult: 0.3,
+  confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",
+  indicatorMinCount: 3,
 
   // ── Opening Range ──
   openingRange: {
@@ -628,6 +630,8 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? RUNTIME_DEFAULTS.limitOrderPreferZone,
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
     marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
+    confirmationMethod: (entry.confirmationMethod ?? raw.confirmationMethod ?? RUNTIME_DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
+    indicatorMinCount: entry.indicatorMinCount ?? raw.indicatorMinCount ?? RUNTIME_DEFAULTS.indicatorMinCount,
 
     // ── Per-Pair Gate Overrides ──
     pairGateOverrides: raw.pairGateOverrides ?? RUNTIME_DEFAULTS.pairGateOverrides,
