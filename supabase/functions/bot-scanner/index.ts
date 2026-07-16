@@ -84,6 +84,7 @@ import { computePositionSize, calculatePositionRisk, type VolatilityContext, typ
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
 import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
   detectSession as sharedDetectSession,
@@ -234,6 +235,9 @@ const DEFAULTS = {
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
   marketFillAtZone: true,        // When true + izGateMode="hard" + price IS at zone → market fill immediately (no CHoCH wait)
   marketFillStrictATRMult: 0.3,   // ATR multiplier for strict zone proximity (market fill). Range: 0.1-1.0
+  // ── Confirmation Method ──
+  confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",  // "choch" = 5m CHoCH (default), "indicators" = BB+Stoch+MACD+Vol, "choch_and_indicators" = both must pass
+  indicatorMinCount: 3,            // How many of 4 indicators must agree (when using indicator confirmation)
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
   _smtResult: null as any,
@@ -1008,6 +1012,8 @@ function _legacyLoadConfigMapping(_raw: any) {
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
         marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
     marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? DEFAULTS.marketFillStrictATRMult,
+    confirmationMethod: (entry.confirmationMethod ?? strategy.confirmationMethod ?? raw.confirmationMethod ?? DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
+    indicatorMinCount: entry.indicatorMinCount ?? strategy.indicatorMinCount ?? raw.indicatorMinCount ?? DEFAULTS.indicatorMinCount,
     // ── Thesis Conviction Tracker ──
     thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? DEFAULTS.thesisConvictionEnabled,
     thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? DEFAULTS.thesisConvictionMode) as "shadow" | "active",
@@ -3013,37 +3019,78 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
-          // Run zone confirmation detection (delegates to confirmationHierarchy first, falls back to legacy tiers)
-          const confirmationSignal = detectZoneConfirmation(
-            confirm5mCandles,
-            pending.direction as "long" | "short",
-            DEFAULT_ZONE_CONFIRMATION_CONFIG,
-            zoneTouchIdx,
-            pending.symbol,
-            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
-          );
+          // ── Confirmation Method Routing ──
+          // Supports 3 modes: "choch" (default), "indicators", "choch_and_indicators"
+          const confMethod = config.confirmationMethod || "choch";
+          let confirmationSignal: ConfirmationSignal | null = null;
+          let indicatorConfResult: { confirmed: boolean; summary: string; passedCount: number } | null = null;
 
-          if (!confirmationSignal) {
-            // No confirmation yet — keep hunting (all 3 tiers checked)
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation (no tier passed)`);
+          // CHoCH path (default)
+          if (confMethod === "choch" || confMethod === "choch_and_indicators") {
+            confirmationSignal = detectZoneConfirmation(
+              confirm5mCandles,
+              pending.direction as "long" | "short",
+              DEFAULT_ZONE_CONFIRMATION_CONFIG,
+              zoneTouchIdx,
+              pending.symbol,
+              (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
+            );
+          }
+
+          // Indicator path
+          if (confMethod === "indicators" || confMethod === "choch_and_indicators") {
+            indicatorConfResult = checkIndicatorConfirmation(
+              confirm5mCandles,
+              pending.direction as "long" | "short",
+              { minIndicators: config.indicatorMinCount || 3 },
+            );
+          }
+
+          // Evaluate confirmation based on method
+          let confirmationPassed = false;
+          if (confMethod === "choch") {
+            confirmationPassed = !!confirmationSignal;
+          } else if (confMethod === "indicators") {
+            confirmationPassed = !!indicatorConfResult?.confirmed;
+          } else if (confMethod === "choch_and_indicators") {
+            confirmationPassed = !!confirmationSignal && !!indicatorConfResult?.confirmed;
+          }
+
+          if (!confirmationPassed) {
+            const chochStatus = confirmationSignal ? `CHoCH=T${confirmationSignal.tier}` : "CHoCH=none";
+            const indStatus = indicatorConfResult ? `Indicators=${indicatorConfResult.passedCount}/4` : "";
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — awaiting confirmation [${confMethod}] (${chochStatus}${indStatus ? ", " + indStatus : ""})`);
             continue;
           }
 
+          // For indicator-only mode, synthesize a confirmationSignal for downstream compatibility
+          if (!confirmationSignal && indicatorConfResult?.confirmed) {
+            confirmationSignal = {
+              type: (pending.direction === "long" ? "bullish_choch" : "bearish_choch") as any,
+              tier: 2,
+              price: confirm5mCandles[confirm5mCandles.length - 1].close,
+              candleIndex: confirm5mCandles.length - 1,
+              displacement: 0.5,
+              significance: undefined,
+              closeBased: false,
+              supportingSignals: ["indicator_confirmation", indicatorConfResult.summary],
+            };
+          }
+
           // ── Tier gate: require Tier 1 when no refined zone is available ──
-          // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
-          // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
-          // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
-          // enough evidence that the level is holding.
-          if (!hasRefZone && confirmationSignal.tier !== 1) {
+          // Only applies to CHoCH-based confirmation (indicators don't have tiers)
+          if (confMethod !== "indicators" && !hasRefZone && confirmationSignal && confirmationSignal.tier !== 1) {
             console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
             continue;
           }
 
           // ═══════════════════════════════════════════════════════════════
-          // CHoCH CONFIRMED! Enter the trade at live price.
+          // CONFIRMED! Enter the trade at live price.
           // ═══════════════════════════════════════════════════════════════
-          console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
-          console.log(`[pending] Confirmation tier: ${confirmationSignal.tier}, type: ${confirmationSignal.type}`);
+          // At this point confirmationSignal is guaranteed non-null (either from CHoCH or synthesized from indicators)
+          const confirmedSignal = confirmationSignal!;
+          console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmedSignal)}`);
+          console.log(`[pending] Confirmation tier: ${confirmedSignal.tier}, type: ${confirmedSignal.type}`);
 
           // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
           const currentOpenCount = openPosArr.length;
@@ -3087,13 +3134,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             filledFromLimitOrder: true,
             confirmationEntry: true,
             confirmation: {
-              type: confirmationSignal.type,
-              tier: confirmationSignal.tier,
-              price: confirmationSignal.price,
-              displacement: confirmationSignal.displacement,
-              significance: confirmationSignal.significance,
-              closeBased: confirmationSignal.closeBased,
-              supportingSignals: confirmationSignal.supportingSignals,
+              type: confirmedSignal.type,
+              tier: confirmedSignal.tier,
+              price: confirmedSignal.price,
+              displacement: confirmedSignal.displacement,
+              significance: confirmedSignal.significance,
+              closeBased: confirmedSignal.closeBased,
+              supportingSignals: confirmedSignal.supportingSignals,
               zoneTouchTime: pending.zone_touch_time,
               confirmationAttempts: pending.confirmation_attempts || 0,
             },
@@ -3136,7 +3183,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             symbol: pending.symbol,
             direction: pending.direction,
             confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+            summary: `[CONFIRMED ENTRY] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
             bias: pending.direction === "long" ? "bullish" : "bearish",
             session: "confirmation_fill",
             timeframe: "5m",
@@ -3144,7 +3191,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           await supabase.from("pending_orders").update({
             status: "filled",
-            fill_reason: `Confirmed ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
+            fill_reason: `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmedSignal.displacement.toFixed(2)}, signals: ${confirmedSignal.supportingSignals.join(", ")})`,
             filled_at: nowStr,
             resolved_at: nowStr,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -3158,9 +3205,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
             const emoji = pending.direction === "long" ? "🟢" : "🔴";
             const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
-            const confTierLabel = confirmationSignal.tier ? ` T${confirmationSignal.tier}` : "";
-            const confSupporting = Array.isArray(confirmationSignal.supportingSignals) && confirmationSignal.supportingSignals.length > 0
-              ? `\n<b>Supporting:</b> ${confirmationSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
+            const confTierLabel = confirmedSignal.tier ? ` T${confirmedSignal.tier}` : "";
+            const confSupporting = Array.isArray(confirmedSignal.supportingSignals) && confirmedSignal.supportingSignals.length > 0
+              ? `\n<b>Supporting:</b> ${confirmedSignal.supportingSignals.map((s: string) => s.replace(/_/g, " ")).join(", ")}`
               : "";
             const confAttempts = (pending.confirmation_attempts || 0) > 0
               ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
@@ -3174,7 +3221,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>TP:</b> ${pending.take_profit}\n` +
               `<b>Score:</b> ${pending.signal_score}\n\n` +
               `🎯 <b>Confirmation</b>\n` +
-              `<b>Signal:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)}×${confirmationSignal.significance ? ", " + confirmationSignal.significance : ""})${confAttempts}` +
+              `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
               confSupporting + `\n` +
               `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
@@ -5610,21 +5657,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const spec = SPECS[pair] || SPECS["EUR/USD"];
         let sl = analysis.stopLoss;
         let tp = analysis.takeProfit;
+        // ── computeTP: respects next_level TP from smcAnalysis when configured ──
+        // When tpMethod="next_level", keeps the structure-based TP (PDH/PDL/PWH/PWL/liquidity)
+        // unless the recalculated SL makes the R:R unacceptable (below minRiskReward).
+        const computeTP = (entry: number, newSl: number, direction: string): number => {
+          const risk = Math.abs(entry - newSl);
+          if (config.tpMethod === "next_level" && analysis.takeProfit) {
+            const structureRR = Math.abs(analysis.takeProfit - entry) / risk;
+            if (structureRR >= (config.minRiskReward ?? 1.0)) {
+              return analysis.takeProfit;
+            }
+          }
+          return direction === "long" ? entry + risk * config.tpRatio : entry - risk * config.tpRatio;
+        };
 
         // Recalculate SL with correct pip size
         if (analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
             sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
-            const risk = analysis.lastPrice - sl;
-            tp = analysis.lastPrice + risk * config.tpRatio;
+            tp = computeTP(analysis.lastPrice, sl, "long");
           }
         } else {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
             sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
-            const risk = sl - analysis.lastPrice;
-            tp = analysis.lastPrice - risk * config.tpRatio;
+            tp = computeTP(analysis.lastPrice, sl, "short");
           }
         }
 
@@ -5647,10 +5705,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             sl = analysis.lastPrice + minSlDistance;
           }
           // Recalculate TP based on widened SL
-          const newRisk = Math.abs(analysis.lastPrice - sl);
-          tp = analysis.direction === "long"
-            ? analysis.lastPrice + newRisk * config.tpRatio
-            : analysis.lastPrice - newRisk * config.tpRatio;
+          tp = computeTP(analysis.lastPrice, sl, analysis.direction);
         }
         // ── Impulse Zone SL Override (hard gate mode) ──
         // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
@@ -5671,10 +5726,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               console.log(`[${pair}] Impulse Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p → ${impulseSlPips.toFixed(1)}p (impulse origin at ${impulseSL.toFixed(5)})`);
               sl = impulseSL;
               // Recalculate TP based on impulse SL for proper R:R
-              const impulseRisk = Math.abs(analysis.lastPrice - sl);
-              tp = analysis.direction === "long"
-                ? analysis.lastPrice + impulseRisk * config.tpRatio
-                : analysis.lastPrice - impulseRisk * config.tpRatio;
+              tp = computeTP(analysis.lastPrice, sl, analysis.direction);
               detail.impulseZoneSLOverride = {
                 originalSL: actualSlDistance / spec.pipSize,
                 impulseSL: impulseSlPips,
@@ -5700,10 +5752,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.log(`[${pair}] Unified Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${unifiedSlPips.toFixed(1)}p (unified story [${unifiedZoneData.selectedTF}])`);
             sl = unifiedSL;
             // Recalculate TP based on unified SL for proper R:R
-            const unifiedRisk = Math.abs(analysis.lastPrice - sl);
-            tp = analysis.direction === "long"
-              ? analysis.lastPrice + unifiedRisk * config.tpRatio
-              : analysis.lastPrice - unifiedRisk * config.tpRatio;
+            tp = computeTP(analysis.lastPrice, sl, analysis.direction);
             (detail as any).unifiedZoneSLOverride = {
               originalSLPips: actualSlDistance / spec.pipSize,
               unifiedSLPips: unifiedSlPips,
@@ -5726,10 +5775,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.log(`[${pair}] Cascade Zone SL override: ${(Math.abs(analysis.lastPrice - sl) / spec.pipSize).toFixed(1)}p \u2192 ${cascadeSlPips.toFixed(1)}p (cascade Daily\u21924H\u21921H)`);
             sl = cascadeSL;
             // Recalculate TP based on cascade SL for proper R:R
-            const cascadeRisk = Math.abs(analysis.lastPrice - sl);
-            tp = analysis.direction === "long"
-              ? analysis.lastPrice + cascadeRisk * config.tpRatio
-              : analysis.lastPrice - cascadeRisk * config.tpRatio;
+            tp = computeTP(analysis.lastPrice, sl, analysis.direction);
             (detail as any).cascadeZoneSLOverride = {
               originalSLPips: actualSlDistance / spec.pipSize,
               cascadeSLPips: cascadeSlPips,
@@ -5991,7 +6037,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         if (izGateMode === "hard" && izData?.bestZone?.priceAtZone && !strictZone) {
           console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: priceAtZone(loose)=true but priceAtZoneStrict=false — routing to pending/CHoCH path. Distance: ${izData.bestZone.distancePips?.toFixed(1) ?? "?"}p, sideOk=${sideOk}`);
         }
-        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide;
+        // Standalone trades MUST go through CHoCH confirmation — market fill only for unified/cascade
+        const isStandaloneSignal = (detail as any).signalSource === "standalone";
+        const useMarketFillAtZone = priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide && !isStandaloneSignal;
+        if (isStandaloneSignal && priceIsAtValidatedZone && config.marketFillAtZone && priceOnCorrectSide) {
+          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE at zone — routing to CHoCH confirmation path (market fill reserved for unified/cascade).`);
+        }
 
         // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
         // or when marketFillAtZone is explicitly disabled.
@@ -6004,13 +6055,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           // Recalculate SL/TP relative to the limit entry price for better R:R
           let limitSL = sl;
-          let limitTP = tp;
-          const riskFromLimit = Math.abs(limitEntry.price - sl);
-          if (analysis.direction === "long") {
-            limitTP = limitEntry.price + riskFromLimit * config.tpRatio;
-          } else {
-            limitTP = limitEntry.price - riskFromLimit * config.tpRatio;
-          }
+          let limitTP = computeTP(limitEntry.price, sl, analysis.direction);
 
           // Recalculate position size based on limit entry price (unified sizing)
           const limitSizingResult = computePositionSize(
