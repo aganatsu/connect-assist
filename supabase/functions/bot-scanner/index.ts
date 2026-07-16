@@ -107,6 +107,7 @@ const DEFAULTS = {
   maxDrawdown: 20,
   maxDailyLoss: 5,
   riskPerTrade: 1,
+  standaloneMultiplier: 0.5,  // Position size multiplier for standalone entries (0.1–1.0). Unified = 1.0x always.
   maxOpenPositions: 3,
   maxPerSymbol: 2,
   allowSameDirectionStacking: false,
@@ -822,6 +823,7 @@ function _legacyLoadConfigMapping(_raw: any) {
 
     // ── Risk mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
+    standaloneMultiplier: risk.standaloneMultiplier ?? raw.standaloneMultiplier ?? DEFAULTS.standaloneMultiplier,
     positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? "percent_risk",
     fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? 0.1,
     // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
@@ -5858,11 +5860,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
         }
         // ── Signal Source Size Multiplier ──
-        // Unified signal = full conviction (1.0x). Standalone fallback = half size (0.5x).
+        // Unified signal = full conviction (1.0x). Standalone fallback = configurable (default 0.5x).
         // This reflects the higher confidence when the full story (impulse + liquidity +
         // confirmation) aligns vs just the impulse zone engine alone.
         if ((detail as any).signalSource !== "unified") {
-          const standaloneMultiplier = 0.5;
+          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, pairConfig.standaloneMultiplier ?? 0.5));
           const prevSize = size;
           size = Math.round(size * standaloneMultiplier * 100) / 100;
           if (size < 0.01) size = 0.01; // Floor at minimum lot

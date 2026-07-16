@@ -60,6 +60,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "strategy", label: "Liquidity Pool Min Touches", keywords: ["liquidity", "pool", "touches", "equal highs", "advanced", "tuning"] },
   // Risk
   { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
+  { tab: "risk", label: "Standalone Size Multiplier", keywords: ["standalone", "multiplier", "size", "half", "conviction", "unified", "fallback"] },
   { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
   { tab: "risk", label: "Max Concurrent Trades", keywords: ["concurrent", "open", "positions", "max"] },
   { tab: "risk", label: "Min R:R Ratio", keywords: ["rr", "risk reward", "ratio", "minimum"] },
@@ -1211,6 +1212,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                           </p>
                         </FieldGroup>
                       )}
+
+                      <FieldGroup label="Standalone Size Multiplier" description="Position size multiplier for standalone entries (unified gate not passed). 1.0 = full size, 0.5 = half size.">
+                        <div className="flex items-center gap-2">
+                          <Input type="number" value={config.risk?.standaloneMultiplier ?? 0.5} onChange={e => updateField('risk', 'standaloneMultiplier', Math.max(0.1, Math.min(1.0, parseFloat(e.target.value) || 0.5)))} step={0.1} min={0.1} max={1.0} className="h-9 text-sm" />
+                          <span className="text-[11px] text-muted-foreground font-mono">×{(config.risk?.standaloneMultiplier ?? 0.5).toFixed(1)}</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-1">Unified entries always use full size (×1.0)</p>
+                      </FieldGroup>
 
                       {/* ── Max Daily Drawdown: dual %/$ input ── */}
                       <FieldGroup label="Max Daily Drawdown" description="Percentage of account balance — halts new trades for the day if intraday loss exceeds this. (Protection tab has a separate dollar-based daily loss limit.)">
