@@ -302,13 +302,23 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
 
   // Exit strategy config rows
   const exitConfig: { label: string; value: string }[] = [];
+  // TP Method — show the targeting strategy used for this trade
+  if (sr.tpMethod) {
+    const tpMethodLabels: Record<string, string> = {
+      rr_ratio: `R:R (${ef.tpRatio || sr.exitFlags?.tpRatio || "2.0"}:1)`,
+      next_level: "Next Structure Level",
+      fixed_pips: "Fixed Pips",
+      atr_multiple: "ATR Multiple",
+    };
+    exitConfig.push({ label: "TP Target", value: tpMethodLabels[sr.tpMethod] || sr.tpMethod });
+  }
   if (ef.trailingStopPips != null) {
     exitConfig.push({ label: "Trailing", value: `${ef.trailingStopPips} pips${ef.trailingStopActivation ? ` (${ef.trailingStopActivation})` : ""}` });
   }
   if (ef.breakEvenPips != null) {
     exitConfig.push({ label: "BE", value: `${ef.breakEvenPips} pips` });
   }
-  if (ef.tpRatio != null) {
+  if (ef.tpRatio != null && sr.tpMethod !== "rr_ratio") {
     exitConfig.push({ label: "TP Ratio", value: `${ef.tpRatio}` });
   }
   if (ef.maxHoldHours != null) {
@@ -450,6 +460,12 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
               {sr.filledFromLimitOrder && !isConfirmedEntry && !isMarketFillAtZone && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/15 border border-blue-500/40 text-blue-400">
                   Limit Order Fill
+                </span>
+              )}
+              {/* Confirmation method badge — only show when non-default */}
+              {sr.confirmationMethod && sr.confirmationMethod !== "choch" && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-violet-500/15 border border-violet-500/40 text-violet-400">
+                  {sr.confirmationMethod === "indicators" ? `Indicator Consensus` : `CHoCH + Indicators`}
                 </span>
               )}
             </div>
