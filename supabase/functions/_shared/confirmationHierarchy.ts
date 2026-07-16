@@ -130,7 +130,7 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       entryReady: true,
       confirmationIndex: ltfChoch.index,
       direction,
-      detail: `LTF CHoCH (${direction}) @ index ${ltfChoch.index}`,
+      detail: `LTF CHoCH (${direction}) @ ${ltfChoch.price.toFixed(5)}${ltfCandles && ltfCandles[ltfChoch.index]?.datetime ? " (" + ltfCandles[ltfChoch.index].datetime.slice(5, 16).replace("T", " ") + ")" : ""}`,
       insideZone: ltfChoch.insideZone,
     };
   }
@@ -143,7 +143,7 @@ export function evaluateConfirmation(input: ConfirmationInput): ConfirmationResu
       entryReady: true,
       confirmationIndex: choch.index,
       direction,
-      detail: `CHoCH (${direction}) @ index ${choch.index}`,
+      detail: `CHoCH (${direction}) @ ${choch.price.toFixed(5)}${confirmationCandles[choch.index]?.datetime ? " (" + confirmationCandles[choch.index].datetime.slice(5, 16).replace("T", " ") + ")" : ""}`,
       insideZone: choch.insideZone,
     };
   }
