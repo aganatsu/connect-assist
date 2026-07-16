@@ -5033,6 +5033,83 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         continue;
       }
 
+      // ── Standalone Sweep Gate: block if unswept inducement detected ──────
+      // When requireLiquiditySweep is ON and this is a standalone entry (unified
+      // gate did NOT pass), check whether the unified zone engine detected nearby
+      // liquidity pools that haven't been swept yet. If so, block the trade and
+      // watchlist it — same behavior as the unified path's waiting_for_sweep state.
+      if (pairConfig.requireLiquiditySweep && !unifiedGatePassed && unifiedZoneData?.liquidity) {
+        const liq = unifiedZoneData.liquidity;
+        const hasSweepEvent = liq.sweepEvent !== null;
+        const sweepRejected = liq.sweepEvent?.rejected === true;
+        // Block if: pools exist near zone AND (no sweep occurred OR sweep was absorbed)
+        if (liq.nearbyPools > 0 && (!hasSweepEvent || !sweepRejected)) {
+          detail.status = "waiting_for_sweep";
+          detail.skipReason = `Standalone Sweep Gate: unswept inducement detected (${liq.summary || liq.nearbyPools + " pool(s)"}) — waiting for BSL/SSL sweep before entry`;
+          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${liq.nearbyPools} unswept pool(s) near zone, blocking standalone entry. Watchlisted.`);
+          // Stage as sweep_watch (same pattern as unified waiting_for_sweep)
+          if (stagingEnabled && analysis.direction && !isPaused) {
+            try {
+              if (!existingStaged) {
+                const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+                const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
+                const ts = analysis.tieredScoring;
+                const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
+                  : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
+                  : stagingTTLMinutes;
+                await supabase.from("staged_setups").insert({
+                  user_id: userId,
+                  bot_id: BOT_ID,
+                  symbol: pair,
+                  direction: analysis.direction,
+                  initial_score: analysis.score,
+                  current_score: analysis.score,
+                  watch_threshold: watchThreshold,
+                  initial_factors: presentFactors,
+                  current_factors: presentFactors,
+                  missing_factors: missingFactors,
+                  entry_price: izData.bestZone?.entry ?? analysis.lastPrice,
+                  sl_level: izData.bestZone?.sl ?? (analysis.direction === "long" ? analysis.lastPrice - 0.0050 : analysis.lastPrice + 0.0050),
+                  tp_level: analysis.takeProfit,
+                  scan_cycles: 1,
+                  min_cycles: 1,
+                  ttl_minutes: styleTTL,
+                  setup_type: "sweep_watch",
+                  tier1_count: ts?.tier1Count ?? 0,
+                  tier2_count: ts?.tier2Count ?? 0,
+                  tier3_count: ts?.tier3Count ?? 0,
+                  analysis_snapshot: {
+                    score: analysis.score,
+                    direction: analysis.direction,
+                    source: "standalone_sweep_gate",
+                    unifiedZone: unifiedZoneData ? { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF } : null,
+                    liquidity: { nearbyPools: liq.nearbyPools, summary: liq.summary, sweepEvent: liq.sweepEvent },
+                  },
+                });
+                stagedNew++;
+                console.log(`[staging] NEW STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — unswept inducement, score ${analysis.score.toFixed(1)}%`);
+              } else {
+                await supabase.from("staged_setups").update({
+                  current_score: analysis.score,
+                  scan_cycles: existingStaged.scan_cycles + 1,
+                  last_eval_at: new Date().toISOString(),
+                }).eq("id", existingStaged.id);
+                console.log(`[staging] Updated STANDALONE SWEEP WATCH ${pair} ${analysis.direction} — cycle ${existingStaged.scan_cycles + 1}`);
+              }
+            } catch (e: any) {
+              if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
+                console.log(`[staging] ${pair} ${analysis.direction} already staged for standalone sweep watch`);
+              } else {
+                console.warn(`[staging] Failed to stage standalone sweep watch ${pair}: ${e?.message}`);
+              }
+            }
+            detail.staging = { action: "sweep_watch", source: "standalone" };
+          }
+          scanDetails.push(detail);
+          continue;
+        }
+      }
+
       // ── Impulse Zone → Tier 1 Credit ──────────────────────────────────
       // The impulse zone engine validates FVG/OB within the impulse leg at a Fib level,
       // but confluenceScoring checks FVG/OB independently with stricter criteria
