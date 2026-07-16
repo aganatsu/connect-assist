@@ -75,6 +75,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing", "aggressive", "conservative"] },
   // Entry / Exit
   { tab: "entry_exit", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "choch", "ob", "fvg", "entry type", "limit"] },
+  { tab: "entry_exit", label: "Confirmation Method", keywords: ["confirmation", "method", "choch", "indicators", "bollinger", "stochastic", "macd", "volume"] },
+  { tab: "entry_exit", label: "Indicator Min Count", keywords: ["indicator", "min", "count", "confirmation", "required", "signals"] },
   { tab: "strategy", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "gate 19", "core factors", "off"] },
   { tab: "strategy", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum", "gate 19", "market structure", "ob", "fvg", "premium discount"] },
   { tab: "strategy", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off", "blocking", "skip"] },
@@ -1420,6 +1422,32 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       )}
                     </div>
 
+                    {/* ── Confirmation Method ── */}
+                    <div className="border-t border-border pt-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Confirmation</p>
+                      <FieldGroup label="Confirmation Method" description="How the bot confirms entry once price reaches the zone. CHoCH = traditional structure break. Indicators = BB + Stochastic + MACD + Volume consensus. Both = require CHoCH AND indicators.">
+                        <Select value={config.entry?.confirmationMethod ?? "choch"} onValueChange={v => updateField('entry', 'confirmationMethod', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="choch">CHoCH / BOS (Default)</SelectItem>
+                            <SelectItem value="indicators">Indicator Consensus</SelectItem>
+                            <SelectItem value="choch_and_indicators">CHoCH + Indicators (Both)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FieldGroup>
+                      {(config.entry?.confirmationMethod === "indicators" || config.entry?.confirmationMethod === "choch_and_indicators") && (
+                        <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                          <FieldGroup label="Min Indicators Required" description="How many of the 4 indicators (BB, Stochastic, MACD, Volume) must agree for confirmation. Range: 1–4">
+                            <div className="flex items-center gap-4">
+                              <Slider value={[config.entry?.indicatorMinCount ?? 3]} onValueChange={v => updateField('entry', 'indicatorMinCount', v[0])} min={1} max={4} step={1} className="flex-1" />
+                              <span className="text-sm font-mono font-bold w-8 text-right">{config.entry?.indicatorMinCount ?? 3}/4</span>
+                            </div>
+                          </FieldGroup>
+                          <p className="text-[9px] text-muted-foreground italic">Indicators checked: Bollinger Bands (price at/beyond band), Stochastic (oversold/overbought), MACD (histogram crossover), Volume (above-average spike). Default: 3 of 4 must agree.</p>
+                        </div>
+                      )}
+                    </div>
+
                     {/* ── Stop Loss Method ── */}
                     <div className="border-t border-border pt-4 space-y-4">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Stop Loss Method</p>
@@ -1482,7 +1510,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         </FieldGroup>
                       )}
                       {config.exit?.takeProfitMethod === "next_level" && (
-                        <p className="text-[10px] text-muted-foreground italic">TP targets nearest PDH/PDL/PWH/PWL or liquidity pool. Falls back to Fixed Pips if none found.</p>
+                        <p className="text-[10px] text-muted-foreground italic">TP targets nearest PDH/PDL/PWH/PWL or liquidity pool from structure analysis. Falls back to R:R ratio math if no valid structure level found or if the structure target gives less than 1:1 R:R.</p>
                       )}
                       {config.exit?.takeProfitMethod === "atr_multiple" && (
                         <FieldGroup label="TP ATR Multiple" description="TP = ATR × this multiplier">
