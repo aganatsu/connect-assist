@@ -230,6 +230,7 @@ const DEFAULTS = {
   // ── Limit Orders ──
   limitOrderEnabled: false,     // When true, place limit orders at zone edges instead of market orders
   limitOrderExpiryMinutes: 60,  // How long a pending limit order stays active before expiring
+  pendingOrderCooldownMinutes: 0, // 0 = use limitOrderExpiryMinutes as cooldown. Set >0 to override.
   limitOrderMaxDistancePips: 30, // Max distance from current price to limit price (skip if too far)
   limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
   limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
@@ -1007,6 +1008,7 @@ function _legacyLoadConfigMapping(_raw: any) {
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
     limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? DEFAULTS.limitOrderExpiryMinutes,
+    pendingOrderCooldownMinutes: entry.pendingOrderCooldownMinutes ?? raw.pendingOrderCooldownMinutes ?? DEFAULTS.pendingOrderCooldownMinutes,
     limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
@@ -6062,6 +6064,41 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // or when marketFillAtZone is explicitly disabled.
         const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
         if (effectiveLimitEnabled && limitEntry) {
+          // ── Anti-Cycling Fix Part 2: Block pending orders when confirmation = "none" ──
+          // If the unified zone engine returned type="none" (zero confirmation signal),
+          // the setup has NO structural reason to expect a fill. Route to watchlist instead
+          // of placing a pending order that will just cycle indefinitely.
+          const uzConfirmationType = unifiedZoneData?.confirmation?.type;
+          if (isStandaloneSignal && uzConfirmationType === "none") {
+            detail.status = "skipped_no_confirmation";
+            detail.skipReason = `Standalone signal with no confirmation (type=none) — watchlist only, pending order blocked`;
+            console.log(`[scan ${scanCycleId}] ⏸️ ${pair}: PENDING ORDER BLOCKED — standalone signal with confirmation.type=none. No structural basis for entry. Watchlisted.`);
+            scanDetails.push(detail);
+            continue;
+          }
+
+          // ── Anti-Cycling Fix Part 1: Post-expiry cooldown ──
+          // If the same symbol+direction had a pending order expire recently (within TTL),
+          // don't re-place — the setup already failed once and conditions haven't changed enough.
+          const cooldownMinutes = config.pendingOrderCooldownMinutes > 0
+            ? config.pendingOrderCooldownMinutes
+            : (config.limitOrderExpiryMinutes || 60);
+          const cooldownCutoff = new Date(Date.now() - cooldownMinutes * 60 * 1000).toISOString();
+          const { data: recentExpired } = await supabase.from("pending_orders")
+            .select("order_id, resolved_at, entry_price")
+            .eq("user_id", userId).eq("bot_id", BOT_ID)
+            .eq("symbol", pair).eq("direction", analysis.direction)
+            .eq("status", "expired")
+            .gte("resolved_at", cooldownCutoff)
+            .limit(1);
+          if (recentExpired && recentExpired.length > 0) {
+            detail.status = "skipped_expiry_cooldown";
+            detail.skipReason = `Post-expiry cooldown: same setup expired at ${recentExpired[0].resolved_at} (within ${cooldownMinutes}min cooldown)`;
+            console.log(`[scan ${scanCycleId}] ⏳ ${pair}: PENDING ORDER COOLDOWN — same ${analysis.direction} setup expired recently (${recentExpired[0].order_id} @ ${recentExpired[0].entry_price}). Waiting ${cooldownMinutes}min before re-placing.`);
+            scanDetails.push(detail);
+            continue;
+          }
+
           // Place a pending limit order instead of executing immediately
           const pendingOrderId = crypto.randomUUID().slice(0, 8);
           const expiryMinutes = config.limitOrderExpiryMinutes || 60;
