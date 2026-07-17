@@ -420,6 +420,17 @@ function adjustSLTPForSpread(
   }
 }
 
+// Format a price for display using the instrument's pip size (avoids
+// noisy floats like 217.90583499999997 in Telegram messages).
+function fmtPx(v: number | string | null | undefined, sym: string): string {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!isFinite(n)) return String(v);
+  const ps = SPECS[sym]?.pipSize ?? 0.0001;
+  const decimals = Math.max(2, Math.round(-Math.log10(ps)) + 1);
+  return n.toFixed(decimals);
+}
+
 // ─── Trading Style Execution Profiles ───────────────────────────────────────────────────────
 // Each style has fundamentally different execution characteristics.
 // Key principle: BE and trailing are now R-based (see scannerManagement.ts),
