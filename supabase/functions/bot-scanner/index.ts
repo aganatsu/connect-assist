@@ -86,6 +86,7 @@ import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } fro
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
+import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -4332,15 +4333,95 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       },
     };
 
+    // ── DIRECTION VERDICT (single source of truth for direction) ──
+    // Moved BEFORE zone engine so the impulse search direction aligns with HTF consensus.
+    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
+    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
+    let directionVerdict: DirectionVerdictResult | null = null;
+    let earlyWeeklyBias: { bias: string; confidence: number } | null = null;
+    try {
+      const gpCtx = (pairConfig as any)._gamePlanContext;
+      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
+        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+        : null;
+      // Compute weekly bias directly (previously depended on ictHTFResult which runs after zone engine)
+      const _earlyWeeklyBiasResult = weeklyCandles && weeklyCandles.length >= 12
+        ? analyzeWeeklyBiasAndDOL(weeklyCandles, analysis.lastPrice)
+        : null;
+      if (_earlyWeeklyBiasResult) {
+        earlyWeeklyBias = { bias: _earlyWeeklyBiasResult.bias, confidence: _earlyWeeklyBiasResult.confidence };
+      }
+      directionVerdict = computeDirectionVerdict({
+        confirmedTrend: ctResult,
+        simpleDirection: simpleDirectionResult ? {
+          direction: simpleDirectionResult.direction,
+          bias: simpleDirectionResult.bias,
+          biasSource: simpleDirectionResult.biasSource,
+          h4Retrace: simpleDirectionResult.h4Retrace,
+          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
+          h1Confirmed: simpleDirectionResult.h1Confirmed,
+          reason: simpleDirectionResult.reason,
+        } : null,
+        regime: analysis.regimeInfo ? {
+          regime: analysis.regimeInfo.regime,
+          confidence: analysis.regimeInfo.confidence,
+          directionalBias: analysis.regimeInfo.bias,
+        } : null,
+        weeklyBias: earlyWeeklyBias ? {
+          bias: earlyWeeklyBias.bias as "bullish" | "bearish" | "neutral",
+          confidence: earlyWeeklyBias.confidence,
+        } : null,
+        gamePlanBias: gpCtx ? {
+          bias: gpCtx.bias,
+          confidence: gpCtx.biasConfidence ?? 50,
+        } : null,
+      });
+      (detail as any).directionVerdict = {
+        verdict: directionVerdict.verdict,
+        confidence: directionVerdict.confidence,
+        agreement: directionVerdict.agreement,
+        shouldBlock: directionVerdict.shouldBlock,
+        scoreAdjustment: directionVerdict.scoreAdjustment,
+        summary: directionVerdict.summary,
+      };
+      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict (pre-zone): ${directionVerdict.summary}`);
+    } catch (dvErr: any) {
+      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
+      (detail as any).directionVerdict = { error: dvErr?.message };
+    }
+
+    // ── Effective direction for zone engine ──
+    // Use verdict when available and non-neutral; fall back to analysis.direction (15m scoring)
+    const effectiveDirection: "long" | "short" | null =
+      (directionVerdict && !directionVerdict.shouldBlock && directionVerdict.verdict !== "neutral")
+        ? directionVerdict.verdict as "long" | "short"
+        : analysis.direction;
+    const directionSource: "verdict" | "15m_fallback" =
+      (directionVerdict && !directionVerdict.shouldBlock && directionVerdict.verdict !== "neutral")
+        ? "verdict" : "15m_fallback";
+    // ── DIRECTION SYNC: overwrite analysis.direction with verdict direction ──
+    // This ensures ALL downstream code (SL/TP, pending orders, trade execution, broker)
+    // uses the authoritative verdict direction, not the 15m confluenceScoring direction.
+    // The scoring factors were already computed — this only affects trade mechanics.
+    if (effectiveDirection && effectiveDirection !== analysis.direction) {
+      console.log(`[scan ${scanCycleId}] ${pair} Direction SYNC: analysis.direction ${analysis.direction} → ${effectiveDirection} (source: ${directionSource})`);
+      analysis.direction = effectiveDirection;
+    }
+    // Attach source to detail so frontend can show which system drove zone selection
+    (detail as any).directionSource = directionSource;
+    if ((detail as any).directionVerdict && typeof (detail as any).directionVerdict === "object") {
+      (detail as any).directionVerdict.directionSource = directionSource;
+      (detail as any).directionVerdict.effectiveDirection = effectiveDirection;
+    }
     // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
-    const htfConfluenceData: HTFConfluenceData | null = analysis.direction ? {
+    const htfConfluenceData: HTFConfluenceData | null = effectiveDirection ? {
       h4OBs: h4OBs ?? [],
       h4FVGs: h4FVGs ?? [],
       h4Breakers: h4Breakers ?? [],
       htfFibLevels: htfFibLevels4H ?? null,
       dailyFibLevels: htfFibLevelsD ?? null,
       htfPD: htfPD4H ?? null,
-      direction: (analysis.direction === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
+      direction: (effectiveDirection === "long" ? "bullish" : "bearish") as "bullish" | "bearish",
     } : null;
 
     // ── Consolidated Zone Engine (story-driven waterfall with liquidity + confirmation) ──
@@ -4355,9 +4436,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       : resolvedStyle === "swing_trader"
         ? h4Candles.length >= 20
         : hourlyCandles.length >= 20;
-    if (analysis.direction && hasMinZoneCandles) {
+    if (effectiveDirection && hasMinZoneCandles) {
       try {
-        const unifiedDir = analysis.direction === "long" ? "bullish" : "bearish";
+        const unifiedDir = effectiveDirection === "long" ? "bullish" : "bearish";
         // Combine liquidity pools from the relevant timeframes
         const combinedLiqPools = [
           ...htfLiquidityPoolsD,
@@ -4498,9 +4579,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: `Error: ${zoneErr?.message}`, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false };
       }
     } else {
-      const dirReason = !analysis.direction && simpleDirectionResult?.reason
+      const dirReason = !effectiveDirection && simpleDirectionResult?.reason
         ? `No direction: ${simpleDirectionResult.reason}`
-        : analysis.direction ? "Insufficient 1H candles" : "No direction determined";
+        : effectiveDirection ? "Insufficient candles for zone detection" : "No direction determined";
       (detail as any).unifiedZone = { hasZone: false, state: "no_impulse", reason: dirReason };
       (detail as any).impulseZone = { hasZone: false, selectedTF: null, reason: dirReason, impulse: null, bestZone: null, allZonesCount: 0, h1HasZone: false, h4HasZone: false,
         directionDetail: simpleDirectionResult ? {
@@ -4518,9 +4599,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // compared to the unified zone engine. Backtest validated: 75% WR, PF 8.88, Sharpe 12.78.
     // When cascade reaches "triggered" state, it overrides the unified zone gate.
     let cascadeResult: CascadeResult | null = null;
-    if (resolvedStyle === "swing_trader" && analysis.direction && dailyCandles.length >= 30 && h4Candles.length >= 20) {
+    if (resolvedStyle === "swing_trader" && effectiveDirection && dailyCandles.length >= 30 && h4Candles.length >= 20) {
       try {
-        const cascadeDir = analysis.direction === "long" ? "bullish" : "bearish";
+        const cascadeDir = effectiveDirection === "long" ? "bullish" : "bearish";
         cascadeResult = findCascadeZone(
           dailyCandles,
           h4Candles,
@@ -4573,19 +4654,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ── ICT HTF Framework: Weekly Bias + Daily Impulse + Containment (log-only in "off" mode) ──
     let ictHTFResult: ICTHTFResult | null = null;
     const shouldRunICTHTF = resolvedStyle === "swing_trader" || ictHTFActive;
-    if (shouldRunICTHTF && analysis.direction) {
+    if (shouldRunICTHTF && effectiveDirection) {
       try {
         // Build LTF zone from impulse zone engine result (if available)
         const izData = (detail as any).impulseZone;
         const ltfZone: { high: number; low: number } | null = izData?.bestZone
           ? { high: izData.bestZone.high, low: izData.bestZone.low }
           : null;
-
         ictHTFResult = runICTHTFAnalysis(
           weeklyCandles,
           dailyCandles,
           analysis.lastPrice,
-          analysis.direction as "long" | "short",
+          effectiveDirection as "long" | "short",
           ltfZone,
           {
             ictHTFEnabled: pairConfig.ictHTFEnabled,
@@ -4849,53 +4929,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
       }
     }
-    // ── DIRECTION VERDICT (single source of truth for direction) ──
-    // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
-    // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
-    let directionVerdict: DirectionVerdictResult | null = null;
-    try {
-      const gpCtx = (pairConfig as any)._gamePlanContext;
-      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
-        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
-        : null;
-      directionVerdict = computeDirectionVerdict({
-        confirmedTrend: ctResult,
-        simpleDirection: simpleDirectionResult ? {
-          direction: simpleDirectionResult.direction,
-          bias: simpleDirectionResult.bias,
-          biasSource: simpleDirectionResult.biasSource,
-          h4Retrace: simpleDirectionResult.h4Retrace,
-          h4ChochAgainst: simpleDirectionResult.h4ChochAgainst,
-          h1Confirmed: simpleDirectionResult.h1Confirmed,
-          reason: simpleDirectionResult.reason,
-        } : null,
-        regime: analysis.regimeInfo ? {
-          regime: analysis.regimeInfo.regime,
-          confidence: analysis.regimeInfo.confidence,
-          directionalBias: analysis.regimeInfo.bias,
-        } : null,
-        weeklyBias: ictHTFResult?.weeklyBias ? {
-          bias: ictHTFResult.weeklyBias.bias,
-          confidence: ictHTFResult.weeklyBias.confidence,
-        } : null,
-        gamePlanBias: gpCtx ? {
-          bias: gpCtx.bias,
-          confidence: gpCtx.biasConfidence ?? 50,
-        } : null,
-      });
-      (detail as any).directionVerdict = {
-        verdict: directionVerdict.verdict,
-        confidence: directionVerdict.confidence,
-        agreement: directionVerdict.agreement,
-        shouldBlock: directionVerdict.shouldBlock,
-        scoreAdjustment: directionVerdict.scoreAdjustment,
-        summary: directionVerdict.summary,
-      };
-      console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict: ${directionVerdict.summary}`);
-    } catch (dvErr: any) {
-      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
-      (detail as any).directionVerdict = { error: dvErr?.message };
-    }
+    // (Direction Verdict moved earlier — before zone engine — see line ~4336)
     // ── UNIFIED ZONE GATE (primary signal source) ──
     // The unified engine composes impulse zone + liquidity + confirmation into one story.
     // When its state is 'triggered' or 'confirmed' AND entryReady=true, it becomes the

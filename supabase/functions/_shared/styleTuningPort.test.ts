@@ -101,9 +101,9 @@ Deno.test("bot-scanner imports findCascadeZone from cascadeZoneEngine", () => {
 // ── Test 3: Cascade zone engine is called for swing_trader ──
 Deno.test("bot-scanner calls findCascadeZone for swing_trader", () => {
   assertEquals(
-    scannerSource.includes('resolvedStyle === "swing_trader" && analysis.direction && dailyCandles.length >= 30'),
+    scannerSource.includes('resolvedStyle === "swing_trader" && effectiveDirection && dailyCandles.length >= 30'),
     true,
-    "Cascade zone engine should be called conditionally for swing_trader"
+    "Cascade zone engine should be called conditionally for swing_trader (uses effectiveDirection from verdict)"
   );
 });
 
