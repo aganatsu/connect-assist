@@ -67,8 +67,22 @@ export default function Dashboard() {
   });
 
   const balance = botStatus?.balance ?? 10000;
-  const profit = balance - 10000;
-  const profitPct = ((profit / 10000) * 100).toFixed(1);
+  // Derive actual starting balance from equity curve (balance minus all closed PnL)
+  const startingBalance = useMemo(() => {
+    const curve = botStatus?.equityCurve;
+    if (!curve || curve.length === 0) return 10000;
+    // The first point in equityCurve is: startingBalance + first trade PnL
+    // But the backend already calculates it as: balance - totalClosedPnl
+    // So the starting balance = first equity point minus first trade's contribution
+    // Simpler: balance - sum of all trade PnLs = starting balance
+    // The backend builds equityCurve starting from (balance - totalClosedPnl)
+    // So the value BEFORE the first trade is: curve[0].equity - (first trade pnl)
+    // Actually the simplest: curve[0].equity is after first trade, so starting = balance - totalPnl from history
+    const totalPnl = (botStatus?.tradeHistory || []).reduce((s: number, t: any) => s + (t.pnl || 0), 0);
+    return balance - totalPnl;
+  }, [botStatus?.equityCurve, botStatus?.tradeHistory, balance]);
+  const profit = balance - startingBalance;
+  const profitPct = startingBalance > 0 ? ((profit / startingBalance) * 100).toFixed(1) : "0.0";
   const dailyPnl = botStatus?.dailyPnl ?? 0;
   const positions = botStatus?.positions ?? [];
   const winRate = botStatus?.winRate ?? 0;
@@ -284,9 +298,9 @@ export default function Dashboard() {
                   <ComposedChart data={equityData}>
                     <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} interval={Math.max(0, Math.floor(equityData.length / 8))} angle={-30} textAnchor="end" height={50} />
-                    <YAxis tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(1)}k`} />
-                    <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "11px", color: ct.axis }} labelStyle={{ color: ct.axis }} />
-                    <ReferenceLine y={10000} stroke={ct.grid} strokeDasharray="3 3" strokeOpacity={0.6} />
+                    <YAxis tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} />
+                    <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "11px", color: ct.axis }} labelStyle={{ color: ct.axis }} formatter={(value: number, name: string) => [`$${Math.round(value).toLocaleString()}`, name === 'equity' ? 'Equity' : name]} />
+                    <ReferenceLine y={startingBalance} stroke={ct.grid} strokeDasharray="3 3" strokeOpacity={0.6} />
                     <Line type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" strokeWidth={2.5} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>

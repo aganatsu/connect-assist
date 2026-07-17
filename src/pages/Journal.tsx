@@ -276,8 +276,8 @@ export default function JournalView() {
                         <AreaChart data={equityCurveData}>
                           <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                           <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
-                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
-                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} />
+                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v/1000)}k` : `$${Math.round(v)}`} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} formatter={(value: number) => [`$${Math.round(value).toLocaleString()}`, 'Equity']} />
                           <Area type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.1} strokeWidth={2} />
                         </AreaChart>
                       </ResponsiveContainer>
@@ -292,8 +292,8 @@ export default function JournalView() {
                         <BarChart data={dailyPnlData}>
                           <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
                           <XAxis dataKey="date" tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
-                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} />
-                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} />
+                          <YAxis tick={{ fontSize: 9, fontFamily: "'IBM Plex Mono'" }} stroke={ct.axis} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v/1000)}k` : `$${Math.round(v)}`} />
+                          <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "0" }} formatter={(value: number) => [`$${Math.round(value).toLocaleString()}`, 'P&L']} />
                           <Bar dataKey="pnl">{dailyPnlData.map((e, i) => <Cell key={i} fill={e.pnl >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
                         </BarChart>
                       </ResponsiveContainer>

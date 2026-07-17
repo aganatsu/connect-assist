@@ -143,8 +143,9 @@ export function generateEquityCurve(days = 90): { date: string; equity: number; 
 
 export function formatMoney(val: number, showSign = false): string {
   const abs = Math.abs(val);
+  const decimals = abs >= 1000 ? 0 : 2;
   const str = abs >= 1000
-    ? `$${abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    ? `$${abs.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`
     : `$${abs.toFixed(2)}`;
   if (showSign) return val >= 0 ? `+${str}` : `-${str}`;
   return str;
