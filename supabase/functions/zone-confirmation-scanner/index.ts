@@ -493,18 +493,24 @@ Deno.serve(async (req) => {
         if (telegramChatIds.length > 0) {
           const emoji = pending.direction === "long" ? "🟢" : "🔴";
           const mode = account.execution_mode === "live" ? "LIVE" : "PAPER";
+          const _spec = SPECS[pending.symbol] || SPECS["EUR/USD"];
+          const _decimals = Math.max(2, Math.round(-Math.log10(_spec.pipSize)) + 1);
+          const fmt = (v: any) => {
+            const n = typeof v === "number" ? v : parseFloat(String(v));
+            return isFinite(n) ? n.toFixed(_decimals) : String(v);
+          };
           const msg = `${emoji} <b>${mode} CONFIRMED Entry</b> ⚡\n\n` +
             `<b>Symbol:</b> ${pending.symbol}\n` +
             `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
             `<b>Size:</b> ${pending.size} lots\n` +
-            `<b>Entry:</b> ${actualFillPrice.toFixed(5)} (${confirmationSignal.type})\n` +
-            `<b>Zone Level:</b> ${entryPrice}\n` +
-            `<b>SL:</b> ${pending.stop_loss}\n` +
-            `<b>TP:</b> ${pending.take_profit}\n` +
+            `<b>Entry:</b> ${fmt(actualFillPrice)} (${confirmationSignal.type})\n` +
+            `<b>Zone Level:</b> ${fmt(entryPrice)}\n` +
+            `<b>SL:</b> ${fmt(pending.stop_loss)}\n` +
+            `<b>TP:</b> ${fmt(pending.take_profit)}\n` +
             `<b>Score:</b> ${pending.signal_score}\n` +
             `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
             `<b>Scanner:</b> Fast-confirm (60s poll)\n` +
-            `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+            `<b>Zone:</b> ${pending.entry_zone_type} [${fmt(pending.entry_zone_low || "0")} - ${fmt(pending.entry_zone_high || "0")}]` +
             (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {

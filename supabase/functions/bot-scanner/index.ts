@@ -420,6 +420,17 @@ function adjustSLTPForSpread(
   }
 }
 
+// Format a price for display using the instrument's pip size (avoids
+// noisy floats like 217.90583499999997 in Telegram messages).
+function fmtPx(v: number | string | null | undefined, sym: string): string {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!isFinite(n)) return String(v);
+  const ps = SPECS[sym]?.pipSize ?? 0.0001;
+  const decimals = Math.max(2, Math.round(-Math.log10(ps)) + 1);
+  return n.toFixed(decimals);
+}
+
 // ─── Trading Style Execution Profiles ───────────────────────────────────────────────────────
 // Each style has fundamentally different execution characteristics.
 // Key principle: BE and trailing are now R-based (see scannerManagement.ts),
@@ -2334,8 +2345,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const msg = `${emoji} <b>Trade Management</b>\n\n` +
               `<b>Symbol:</b> ${a.symbol}\n` +
               `<b>Action:</b> ${actionLabel}\n` +
-              (a.newSL ? `<b>New SL:</b> ${a.newSL}\n` : "") +
-              (a.newTP ? `<b>New TP:</b> ${a.newTP}\n` : "") +
+              (a.newSL ? `<b>New SL:</b> ${fmtPx(a.newSL, a.symbol)}\n` : "") +
+              (a.newTP ? `<b>New TP:</b> ${fmtPx(a.newTP, a.symbol)}\n` : "") +
               `<b>Reason:</b> ${a.reason}`;
             await Promise.all(telegramChatIds.map(async (chatId) => {
               try {
@@ -3233,14 +3244,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               `<b>Symbol:</b> ${pending.symbol}\n` +
               `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
               `<b>Size:</b> ${pending.size} lots\n` +
-              `<b>Entry:</b> ${actualFillPrice.toFixed(5)}\n` +
-              `<b>SL:</b> ${pending.stop_loss}\n` +
-              `<b>TP:</b> ${pending.take_profit} (${tpMethodLabel})\n` +
+              `<b>Entry:</b> ${fmtPx(actualFillPrice, pending.symbol)}\n` +
+              `<b>SL:</b> ${fmtPx(pending.stop_loss, pending.symbol)}\n` +
+              `<b>TP:</b> ${fmtPx(pending.take_profit, pending.symbol)} (${tpMethodLabel})\n` +
               `<b>Score:</b> ${pending.signal_score}\n\n` +
               `🎯 <b>Confirmation</b>` + confMethodDetail + `\n` +
               `<b>Signal:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)}×${confirmedSignal.significance ? ", " + confirmedSignal.significance : ""})${confAttempts}` +
               confSupporting + `\n` +
-              `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} – ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]` +
+              `<b>Zone:</b> ${pending.entry_zone_type} [${fmtPx(pending.entry_zone_low || "0", pending.symbol)} – ${fmtPx(pending.entry_zone_high || "0", pending.symbol)}]` +
               (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
             await Promise.all(telegramChatIds.map(async (chatId: string) => {
               try {
@@ -6266,15 +6277,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 ` +
               `<b>Direction:</b> ${analysis.direction.toUpperCase()}
 ` +
-              `<b>Zone Trigger:</b> ${limitEntry.price.toFixed(5)} (${limitEntry.zoneType} zone)
+              `<b>Zone Trigger:</b> ${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)
 ` +
-              `<b>Current Price:</b> ${analysis.lastPrice}
+              `<b>Current Price:</b> ${fmtPx(analysis.lastPrice, pair)}
 ` +
               `<b>Size:</b> ${limitSize} lots
 ` +
-              `<b>SL:</b> ${limitSL}
+              `<b>SL:</b> ${fmtPx(limitSL, pair)}
 ` +
-              `<b>TP:</b> ${limitTP} (${zoneTpLabel})
+              `<b>TP:</b> ${fmtPx(limitTP, pair)} (${zoneTpLabel})
 ` +
               `<b>Score:</b> ${analysis.score.toFixed(1)}
 ` +
@@ -6479,9 +6490,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `<b>Symbol:</b> ${pair}\n` +
             `<b>Direction:</b> ${analysis.direction.toUpperCase()}\n` +
             `<b>Size:</b> ${size} lots\n` +
-            `<b>Entry:</b> ${analysis.lastPrice}\n` +
-            `<b>SL:</b> ${sl}\n` +
-            `<b>TP:</b> ${tp} (${openTpLabel})\n` +
+            `<b>Entry:</b> ${fmtPx(analysis.lastPrice, pair)}\n` +
+            `<b>SL:</b> ${fmtPx(sl, pair)}\n` +
+            `<b>TP:</b> ${fmtPx(tp, pair)} (${openTpLabel})\n` +
             `<b>Score:</b> ${analysis.score.toFixed(1)}\n` +
             `<b>Session:</b> ${analysis.session.name}\n` +
             `<b>Setup:</b> ${setupClassification.setupType.toUpperCase()} (${(setupClassification.confidence * 100).toFixed(0)}% conf)\n` +
