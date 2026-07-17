@@ -259,13 +259,21 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
               <div className="text-zinc-300 mt-0.5">
                 BOS: {fmt(unifiedData.impulse.bosPrice)}
-                {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
-                  <span className="ml-2">
-                    {unifiedData.impulse.startDate} → {unifiedData.impulse.endDate}
-                    <span className="text-zinc-400 ml-1">({unifiedData.impulse.spanBars} bars)</span>
-                  </span>
-                )}
               </div>
+              {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
+                <div
+                  className="mt-0.5 text-[10px] font-mono text-zinc-300 bg-zinc-800/60 border border-zinc-700 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
+                  title={`Impulse leg: ${unifiedData.impulse.startDate} → ${unifiedData.impulse.endDate} on ${unifiedData.impulse.timeframe}. Use these timestamps to locate the leg on your chart.`}
+                >
+                  <span className="text-zinc-400">🕒 Trace:</span>
+                  <span className="text-green-400">{unifiedData.impulse.startDate}</span>
+                  <span className="text-zinc-500">→</span>
+                  <span className="text-red-400">{unifiedData.impulse.endDate}</span>
+                  <span className="text-zinc-400">
+                    ({unifiedData.impulse.spanBars} {unifiedData.impulse.timeframe} bars)
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             <span className="text-zinc-400 ml-1">None found</span>

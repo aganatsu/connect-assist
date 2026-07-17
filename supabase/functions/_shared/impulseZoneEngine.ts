@@ -160,10 +160,12 @@ export function findImpulseLeg(
       const startCandle = candles[impulse.startIndex];
       const endCandle = candles[impulse.endIndex];
       if (startCandle?.datetime) {
-        impulse.startDate = startCandle.datetime.slice(0, 10);
+        // Keep date + time (YYYY-MM-DD HH:MM) so the impulse leg is traceable
+        // on the chart down to the exact bar, not just the day.
+        impulse.startDate = startCandle.datetime.slice(0, 16);
       }
       if (endCandle?.datetime) {
-        impulse.endDate = endCandle.datetime.slice(0, 10);
+        impulse.endDate = endCandle.datetime.slice(0, 16);
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
       return impulse;
