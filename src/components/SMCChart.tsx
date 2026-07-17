@@ -124,7 +124,7 @@ export interface ChartImpulseZone {
     priceAtZone: boolean;
     distanceToZone: number;
   } | null;
-  selectedTF: "1H" | "4H" | null;
+  selectedTF: string | null;
   hasZone: boolean;
 }
 

@@ -25,6 +25,8 @@ import {
   type ImpulseLeg,
   type RankedPOI,
   type BestZone,
+  type TFSlotLabels,
+  DEFAULT_TF_LABELS,
 } from "./impulseZoneEngine.ts";
 import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
@@ -37,7 +39,7 @@ export interface UnifiedZoneResult {
   hasZone: boolean;
 
   /** Which timeframe produced the winning zone */
-  selectedTF: "D" | "4H" | "1H" | null;
+  selectedTF: string | null;
 
   /** The impulse leg that created the zone */
   impulse: ImpulseStory | null;
@@ -196,12 +198,14 @@ export function findUnifiedZone(
   confirmationCandles?: Candle[],
   ltfConfirmationCandles?: Candle[],
   config?: Partial<UnifiedZoneConfig>,
+  tfLabels?: TFSlotLabels,
 ): UnifiedZoneResult {
   const cfg = { ...DEFAULT_UNIFIED_CONFIG, ...config };
+  const labels = tfLabels ?? DEFAULT_TF_LABELS;
 
-  // ── Step 1: Find the best zone (waterfall: Daily → 4H → 1H) ──
+  // ── Step 1: Find the best zone (waterfall: top → mid → low TF) ──
   const multiTFResult = findBestEntryZoneMultiTF(
-    h1Candles, h4Candles, entryCandles, direction, currentPrice, htfData, options, dailyCandles,
+    h1Candles, h4Candles, entryCandles, direction, currentPrice, htfData, options, dailyCandles, labels,
   );
 
   // No zone found
@@ -258,7 +262,7 @@ export function findUnifiedZone(
   if (liquidityPools.length > 0) {
     liquidity = findZoneLiquidity(
       // Use the candles from the zone's timeframe for ATR context
-      selectedTF === "D" ? (dailyCandles ?? h4Candles) : selectedTF === "4H" ? h4Candles : h1Candles,
+      selectedTF === labels.top ? (dailyCandles ?? h4Candles) : selectedTF === labels.mid ? h4Candles : h1Candles,
       zonePOI.poi.high,
       zonePOI.poi.low,
       direction,
@@ -286,7 +290,8 @@ export function findUnifiedZone(
   const baseScore = zonePOI.totalScore; // Out of 9 (existing scoring)
   const liquidityBonus = liquidity?.liquidityScore ?? 0;
   const confirmationBonus = confirmation?.score ?? 0;
-  const tfBonus = selectedTF === "D" ? 2.0 : selectedTF === "4H" ? 1.0 : 0;
+  // TF bonus based on slot position: top slot = 2.0, mid = 1.0, low = 0
+  const tfBonus = selectedTF === labels.top ? 2.0 : selectedTF === labels.mid ? 1.0 : 0;
   const totalScore = baseScore + liquidityBonus + confirmationBonus + tfBonus;
 
   const scoreBreakdown: ScoreBreakdown = {

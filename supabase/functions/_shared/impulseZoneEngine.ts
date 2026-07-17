@@ -1073,9 +1073,22 @@ export interface ZoneEngineOptions {
  * Result from the multi-TF zone engine.
  * Includes the best zone across timeframes and individual TF results for transparency.
  */
+/** Maps the three engine slots to human-readable timeframe labels.
+ * Default (day_trader): { top: "D", mid: "4H", low: "1H" }
+ * Scalper:              { top: "1H", mid: "15m", low: "5m" }
+ * Swing:               { top: "W", mid: "D", low: "4H" }
+ */
+export interface TFSlotLabels {
+  top: string;   // Highest TF slot ("Daily" slot in engine)
+  mid: string;   // Middle TF slot ("4H" slot in engine)
+  low: string;   // Lowest TF slot ("1H" slot in engine)
+}
+
+export const DEFAULT_TF_LABELS: TFSlotLabels = { top: "D", mid: "4H", low: "1H" };
+
 export interface MultiTFZoneResult {
   bestZone: BestZone | null;
-  selectedTF: "D" | "1H" | "4H" | null;  // Which timeframe produced the winning zone
+  selectedTF: string | null;  // Which timeframe produced the winning zone (style-aware label)
   reason: string;
   h1Result: ZoneEngineResult;
   h4Result: ZoneEngineResult | null; // null when 4H candles not available
@@ -1114,7 +1127,9 @@ export function findBestEntryZoneMultiTF(
   htfData?: HTFConfluenceData,
   options?: ZoneEngineOptions,
   dailyCandles?: Candle[],
+  tfLabels?: TFSlotLabels,
 ): MultiTFZoneResult {
+  const labels = tfLabels ?? DEFAULT_TF_LABELS;
   // ── WATERFALL: Try Daily first (A+ setup) ──
   let dailyResult: ZoneEngineResult | null = null;
   if (dailyCandles && dailyCandles.length >= 20) {
@@ -1124,8 +1139,8 @@ export function findBestEntryZoneMultiTF(
       const allZones: RankedPOI[] = [...dailyResult.allZones];
       return {
         bestZone: dailyResult.bestZone,
-        selectedTF: "D",
-        reason: `Daily zone selected (A+ setup): ${dailyResult.reason}`,
+        selectedTF: labels.top,
+        reason: `${labels.top} zone selected (A+ setup): ${dailyResult.reason}`,
         h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options),
         h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options) : null,
         dailyResult,
@@ -1159,10 +1174,10 @@ export function findBestEntryZoneMultiTF(
 
   // Case: Neither TF has a zone
   if (!h1Zone && !h4Zone) {
-    const reasons: string[] = [`1H: ${h1Result.reason}`];
-    if (h4Result) reasons.push(`4H: ${h4Result.reason}`);
-    else reasons.push("4H: Not available (insufficient candles)");
-    if (dailyResult) reasons.push(`Daily: ${dailyResult.reason}`);
+    const reasons: string[] = [`${labels.low}: ${h1Result.reason}`];
+    if (h4Result) reasons.push(`${labels.mid}: ${h4Result.reason}`);
+    else reasons.push(`${labels.mid}: Not available (insufficient candles)`);
+    if (dailyResult) reasons.push(`${labels.top}: ${dailyResult.reason}`);
     return {
       bestZone: null,
       selectedTF: null,
@@ -1174,12 +1189,12 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Case: Only 1H has a zone
+  // Case: Only low-TF has a zone
   if (h1Zone && !h4Zone) {
     return {
       bestZone: h1Zone,
-      selectedTF: "1H",
-      reason: `1H zone selected (4H ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
+      selectedTF: labels.low,
+      reason: `${labels.low} zone selected (${labels.mid} ${h4Result ? "found no zone" : "not available"}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1187,12 +1202,12 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Case: Only 4H has a zone
+  // Case: Only mid-TF has a zone
   if (!h1Zone && h4Zone) {
     return {
       bestZone: h4Zone,
-      selectedTF: "4H",
-      reason: `4H zone selected (1H found no zone): ${h4Result!.reason}`,
+      selectedTF: labels.mid,
+      reason: `${labels.mid} zone selected (${labels.low} found no zone): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1207,8 +1222,8 @@ export function findBestEntryZoneMultiTF(
   if (h4Score > h1Score) {
     return {
       bestZone: h4Zone!,
-      selectedTF: "4H",
-      reason: `4H zone wins (score ${h4Score} > 1H score ${h1Score}): ${h4Result!.reason}`,
+      selectedTF: labels.mid,
+      reason: `${labels.mid} zone wins (score ${h4Score} > ${labels.low} score ${h1Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1219,8 +1234,8 @@ export function findBestEntryZoneMultiTF(
   if (h1Score > h4Score) {
     return {
       bestZone: h1Zone!,
-      selectedTF: "1H",
-      reason: `1H zone wins (score ${h1Score} > 4H score ${h4Score}): ${h1Result.reason}`,
+      selectedTF: labels.low,
+      reason: `${labels.low} zone wins (score ${h1Score} > ${labels.mid} score ${h4Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1235,8 +1250,8 @@ export function findBestEntryZoneMultiTF(
   if (h4Depth > h1Depth) {
     return {
       bestZone: h4Zone!,
-      selectedTF: "4H",
-      reason: `4H zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
+      selectedTF: labels.mid,
+      reason: `${labels.mid} zone wins on depth (${h4Depth.toFixed(3)} > ${h1Depth.toFixed(3)}, tied score ${h4Score}): ${h4Result!.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1247,8 +1262,8 @@ export function findBestEntryZoneMultiTF(
   if (h1Depth > h4Depth) {
     return {
       bestZone: h1Zone!,
-      selectedTF: "1H",
-      reason: `1H zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
+      selectedTF: labels.low,
+      reason: `${labels.low} zone wins on depth (${h1Depth.toFixed(3)} > ${h4Depth.toFixed(3)}, tied score ${h1Score}): ${h1Result.reason}`,
       h1Result,
       h4Result,
       dailyResult,
@@ -1256,11 +1271,11 @@ export function findBestEntryZoneMultiTF(
     };
   }
 
-  // Perfect tie — 4H wins (higher timeframe = more significant structure)
+  // Perfect tie — mid-TF wins (higher timeframe = more significant structure)
   return {
     bestZone: h4Zone!,
-    selectedTF: "4H",
-    reason: `4H zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
+    selectedTF: labels.mid,
+    reason: `${labels.mid} zone wins (tied score ${h4Score}, tied depth ${h4Depth.toFixed(3)} — HTF preferred): ${h4Result!.reason}`,
     h1Result,
     h4Result,
     dailyResult,
