@@ -1181,7 +1181,7 @@ Deno.serve(async (req) => {
         }
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
-      const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50);
+      const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
 
       const balance = parseFloat(account?.balance || "10000");
       const peakBalance = parseFloat(account?.peak_balance || "10000");
