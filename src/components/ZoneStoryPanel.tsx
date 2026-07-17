@@ -16,7 +16,7 @@ import { formatPipDisplay } from "@/lib/pipDisplay";
 interface ZoneStoryData {
   hasZone: boolean;
   state: string;
-  selectedTF: "D" | "4H" | "1H" | null;
+  selectedTF: string | null;
   unifiedScore: number;
   scoreBreakdown: {
     baseScore: number;
@@ -437,8 +437,8 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
 
       {/* Story summary */}
       <p className="text-[10px] text-zinc-300 mt-2 leading-relaxed">
-        {unifiedData.selectedTF === "D" ? "Daily" : unifiedData.selectedTF === "4H" ? "4H" : "1H"} zone selected
-        {unifiedData.selectedTF === "D" ? " (A+ setup)" : unifiedData.selectedTF === "4H" ? " (B+ setup)" : ""}: {unifiedData.reason}
+        {unifiedData.selectedTF ?? "—"} zone selected
+        {unifiedData.scoreBreakdown.tfBonus >= 2.0 ? " (A+ setup)" : unifiedData.scoreBreakdown.tfBonus >= 1.0 ? " (B+ setup)" : ""}: {unifiedData.reason}
       </p>
     </div>
   );
