@@ -13,6 +13,28 @@
 
 import { formatPipDisplay } from "@/lib/pipDisplay";
 
+/** Format ISO timestamp to readable AM/PM format: "Jul 15, 8:00 PM" */
+function formatTraceDate(iso: string): string {
+  try {
+    // Handle both "2026-07-15" (date-only) and "2026-07-15T20:00" (date+time) formats
+    const d = new Date(iso.includes("T") ? iso : iso + "T00:00:00");
+    if (isNaN(d.getTime())) return iso;
+    const hasTime = iso.includes("T");
+    if (!hasTime) {
+      return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    }
+    return d.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  } catch {
+    return iso;
+  }
+}
+
 interface ZoneStoryData {
   hasZone: boolean;
   state: string;
@@ -266,9 +288,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                   title={`Impulse leg: ${unifiedData.impulse.startDate} → ${unifiedData.impulse.endDate} on ${unifiedData.impulse.timeframe}. Use these timestamps to locate the leg on your chart.`}
                 >
                   <span className="text-zinc-400">🕒 Trace:</span>
-                  <span className="text-green-400">{unifiedData.impulse.startDate}</span>
+                  <span className="text-green-400">{formatTraceDate(unifiedData.impulse.startDate)}</span>
                   <span className="text-zinc-500">→</span>
-                  <span className="text-red-400">{unifiedData.impulse.endDate}</span>
+                  <span className="text-red-400">{formatTraceDate(unifiedData.impulse.endDate)}</span>
                   <span className="text-zinc-400">
                     ({unifiedData.impulse.spanBars} {unifiedData.impulse.timeframe} bars)
                   </span>
