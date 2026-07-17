@@ -61,7 +61,7 @@ async function fetchATR(symbol: string): Promise<number> {
   if (!tdSymbol) return 0;
   try {
     // Fetch 20 candles (need at least 15 for ATR-14)
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=15min&outputsize=20&apikey=${apiKey}&order=ASC`;
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=15min&outputsize=20&apikey=${apiKey}&order=ASC&timezone=UTC`;
     const res = await fetch(url);
     if (!res.ok) return 0;
     const data = await res.json();

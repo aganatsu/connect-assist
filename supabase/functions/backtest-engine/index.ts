@@ -229,7 +229,7 @@ async function fetchTwelveDataRange(
   let currentStart = startDate;
   const maxPerRequest = 5000;
   for (let page = 0; page < 20; page++) {
-    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&start_date=${encodeURIComponent(currentStart)}&end_date=${encodeURIComponent(endDate)}&outputsize=${maxPerRequest}&apikey=${apiKey}&order=ASC`;
+    const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${tdInterval}&start_date=${encodeURIComponent(currentStart)}&end_date=${encodeURIComponent(endDate)}&outputsize=${maxPerRequest}&apikey=${apiKey}&order=ASC&timezone=UTC`;
     try {
       const res = await fetch(url);
       if (res.status === 429) {
