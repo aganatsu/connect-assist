@@ -469,7 +469,7 @@ async function twelveDataCandles(
   if (!hasSlot) return []; // Skip to Polygon fallback
 
   const interval = twelveDataInterval(canon);
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(tdSymbol)}&interval=${interval}&outputsize=${limit}&apikey=${apiKey}&order=ASC&timezone=UTC`;
   try {
     const res = await fetch(url);
     // H8: Handle 429 with exponential backoff
