@@ -1356,10 +1356,10 @@ export default function Backtest() {
                         <ComposedChart data={equityCurveWithDD}>
                           <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.5} />
                           <XAxis dataKey="date" tick={{ fontSize: 8, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
-                          <YAxis yAxisId="equity" tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
-                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: 'hsl(0, 72%, 51%)' }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={v => `${v.toFixed(0)}%`} />
+                          <YAxis yAxisId="equity" tick={{ fontSize: 9, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => v >= 1000 ? `$${Math.round(v/1000)}k` : `$${Math.round(v)}`} domain={[(dataMin: number) => Math.floor(dataMin * 0.995), (dataMax: number) => Math.ceil(dataMax * 1.005)]} />
+                          <YAxis yAxisId="dd" orientation="right" tick={{ fontSize: 9, fill: 'hsl(0, 72%, 51%)' }} stroke={ct.grid} axisLine={false} tickLine={false} tickFormatter={(v: number) => `${v.toFixed(0)}%`} />
                           <Tooltip contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: '6px', fontSize: '11px', color: ct.axis }} labelStyle={{ color: ct.axis }}
-                            formatter={(value: number, name: string) => name === "equity" ? [`$${value.toFixed(2)}`, "Equity"] : [`${value.toFixed(1)}%`, "Drawdown"]} />
+                            formatter={(value: number, name: string) => name === "equity" ? [`$${Math.round(value).toLocaleString()}`, "Equity"] : [`${value.toFixed(1)}%`, "Drawdown"]} />
                           <Area yAxisId="equity" type="monotone" dataKey="equity" stroke="hsl(185, 80%, 55%)" fill="hsl(185, 80%, 55%)" fillOpacity={0.08} strokeWidth={2} />
                           <Line yAxisId="dd" type="monotone" dataKey="drawdown" stroke="hsl(0, 72%, 51%)" strokeWidth={1} dot={false} strokeDasharray="3 3" />
                         </ComposedChart>
