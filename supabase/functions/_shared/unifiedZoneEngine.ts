@@ -106,6 +106,7 @@ export interface ZoneStory {
   fibLevel: number;
   fibLabel: string;
   srConfirmed: boolean;
+  srLevel?: number;
   htfLayers: string[];
   ltfRefined: boolean;
   totalScore: number;
@@ -241,6 +242,7 @@ export function findUnifiedZone(
     fibLevel: zonePOI.fibLevel,
     fibLabel: `${(zonePOI.fibLevel * 100).toFixed(1)}%`,
     srConfirmed: zonePOI.srConfirmed,
+    srLevel: zonePOI.srLevel,
     htfLayers: zonePOI.htfLayers,
     ltfRefined: zonePOI.ltfRefined,
     totalScore: zonePOI.totalScore,
