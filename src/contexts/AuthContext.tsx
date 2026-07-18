@@ -25,7 +25,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      setLoading(false);
     });
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -36,6 +35,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (error) {
           console.warn("[Auth] Invalid session detected, signing out:", error.message);
           await supabase.auth.signOut();
+          try {
+            // Belt-and-suspenders: purge any stale sb-* auth tokens so a
+            // reload doesn't rehydrate the same bad JWT.
+            Object.keys(localStorage)
+              .filter((k) => k.startsWith("sb-") && k.endsWith("-auth-token"))
+              .forEach((k) => localStorage.removeItem(k));
+          } catch {}
           setSession(null);
           setLoading(false);
           return;
