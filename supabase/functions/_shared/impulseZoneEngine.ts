@@ -50,6 +50,7 @@ export interface RankedPOI {
   fibDepth: number;       // How deep into the retracement (higher = better)
   fibScore: number;       // 1-4 score based on depth
   srConfirmed: boolean;   // Historical S/R overlaps this zone
+  srLevel?: number;       // The actual S/R price level that confirmed this zone
   ltfRefined: boolean;    // LTF OB/FVG found inside
   refinedEntry?: number;  // Precise entry from LTF refinement
   refinedSL?: number;     // Precise SL from LTF refinement
@@ -536,6 +537,7 @@ export function checkHistoricalSR(
     for (const sr of srLevels) {
       if (sr >= zoneLow && sr <= zoneHigh) {
         zone.srConfirmed = true;
+        zone.srLevel = sr;
         zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
         break;
       }

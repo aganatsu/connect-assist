@@ -60,6 +60,7 @@ interface ZoneStoryData {
     fibLevel: number;
     fibLabel: string;
     srConfirmed: boolean;
+    srLevel?: number;
     htfLayers: string[];
     ltfRefined: boolean;
     totalScore: number;
@@ -317,7 +318,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 <div>
                   <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
                   <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
-                    (S/R {unifiedData.zone.srConfirmed ? "✓" : "✗"})
+                    (S/R {unifiedData.zone.srConfirmed ? `✓ ${unifiedData.zone.srLevel ? fmt(unifiedData.zone.srLevel) : ""}` : "✗"})
                   </span>
                   <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
                 </div>
