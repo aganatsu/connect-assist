@@ -1,12 +1,8 @@
 /**
  * ZoneStoryPanel — Consolidated zone display that tells the full trade story.
  *
- * Replaces both ImpulseZonePanel and UnifiedZonePanel with a single narrative:
+ * Table-based layout for quick scanning:
  * Impulse → Zone → Price → Liquidity → Confirmation → Entry
- *
- * Shows the zone detection result from the unified engine (which now includes
- * Daily → 4H → 1H waterfall). When price is at zone, shows live action
- * indicators (CHoCH hunting, confirmation status).
  *
  * Data comes from detail.unifiedZone (the story) and detail.impulseZone (gate data).
  */
@@ -16,7 +12,6 @@ import { formatPipDisplay } from "@/lib/pipDisplay";
 /** Format ISO timestamp to readable AM/PM format: "Jul 15, 8:00 PM" */
 function formatTraceDate(iso: string): string {
   try {
-    // Handle both "2026-07-15" (date-only) and "2026-07-15T20:00" (date+time) formats
     const d = new Date(iso.includes("T") ? iso : iso + "T00:00:00");
     if (isNaN(d.getTime())) return iso;
     const hasTime = iso.includes("T");
@@ -138,9 +133,7 @@ interface ImpulseGateData {
 interface Props {
   unifiedData: ZoneStoryData | null | undefined;
   gateData?: ImpulseGateData | null | undefined;
-  /** When true, live-action badges ("Hunting 5m CHoCH") are shown. */
   isLiveContext?: boolean;
-  /** Trading symbol (e.g. "EUR/USD", "ETH/USD") — used for asset-aware pip/$/pts labels. */
   symbol?: string;
 }
 
@@ -167,7 +160,6 @@ const STATE_LABELS: Record<string, string> = {
 export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol }: Props) {
   if (!unifiedData) return null;
 
-  // Asset-aware formatter — falls back to plain "X pips" if no symbol provided
   const fmtPips = (raw: number | null | undefined, opts: { showSign?: boolean; absolute?: boolean; decimals?: number } = {}) => {
     if (raw == null) return "—";
     if (symbol) {
@@ -202,7 +194,6 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           <span className="text-xs font-semibold text-zinc-200 uppercase tracking-wider">Zone Story</span>
           <span className={`text-xs font-bold ${stateColor}`}>{stateLabel}</span>
         </div>
-        {/* Direction detail from gate data (when no zone search ran) */}
         {gateData?.directionDetail ? (
           <div className="space-y-1">
             <div className="flex items-center gap-1 flex-wrap">
@@ -238,6 +229,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
     );
   }
 
+  // ─── Main Zone Story Table Layout ───
   return (
     <div className="mt-3 p-3 rounded-lg bg-zinc-900/80 border border-zinc-700">
       {/* Header */}
@@ -256,7 +248,6 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Live action indicator */}
           {isLiveContext && gateData?.bestZone && (gateData.bestZone.priceInsideZone || gateData.bestZone.priceAtZoneStrict) && (
             <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-300 animate-pulse">
               ⏳ Hunting CHoCH
@@ -266,170 +257,218 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
         </div>
       </div>
 
-      {/* Story progression */}
-      <div className="space-y-1.5 text-[11px]">
-        {/* 1. Impulse Leg */}
-        <StoryBullet filled={!!unifiedData.impulse} label={`${unifiedData.impulse?.timeframe ?? ""} Impulse`}>
-          {unifiedData.impulse ? (
-            <div className="text-zinc-200 mt-0.5">
-              <span className={unifiedData.impulse.direction === "bullish" ? "text-green-400" : "text-red-400"}>
-                {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
-              </span>
-              <span className="text-zinc-200 ml-2">
-                {fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}
-              </span>
-              <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
-              <div className="text-zinc-300 mt-0.5">
-                BOS: {fmt(unifiedData.impulse.bosPrice)}
-              </div>
-              {unifiedData.impulse.startDate && unifiedData.impulse.endDate && (
-                <div
-                  className="mt-0.5 text-[10px] font-mono text-zinc-300 bg-zinc-800/60 border border-zinc-700 rounded px-1.5 py-0.5 inline-flex items-center gap-1"
-                  title={`Impulse leg: ${unifiedData.impulse.startDate} → ${unifiedData.impulse.endDate} on ${unifiedData.impulse.timeframe}. Use these timestamps to locate the leg on your chart.`}
-                >
-                  <span className="text-zinc-400">🕒 Trace:</span>
-                  <span className="text-green-400">{formatTraceDate(unifiedData.impulse.startDate)}</span>
-                  <span className="text-zinc-500">→</span>
-                  <span className="text-red-400">{formatTraceDate(unifiedData.impulse.endDate)}</span>
-                  <span className="text-zinc-400">
-                    ({unifiedData.impulse.spanBars} {unifiedData.impulse.timeframe} bars)
+      {/* Table */}
+      <table className="w-full text-[11px] border-collapse">
+        <tbody>
+          {/* Impulse Row */}
+          <tr className="border-b border-zinc-800/50">
+            <td className="py-1.5 pr-2 align-top w-5">
+              <Bullet filled={!!unifiedData.impulse} />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap w-24">
+              Impulse
+            </td>
+            <td className="py-1.5 text-zinc-200">
+              {unifiedData.impulse ? (
+                <div>
+                  <span className={unifiedData.impulse.direction === "bullish" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                    {unifiedData.impulse.direction === "bullish" ? "↑" : "↓"} {unifiedData.impulse.direction.toUpperCase()}
                   </span>
+                  <span className="ml-2">{fmt(unifiedData.impulse.low)} → {fmt(unifiedData.impulse.high)}</span>
+                  <span className="text-cyan-400 ml-2">({fmtPips(unifiedData.impulse.pips, { absolute: true })})</span>
                 </div>
+              ) : (
+                <span className="text-zinc-400">None found</span>
               )}
-            </div>
-          ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
-          )}
-        </StoryBullet>
+            </td>
+          </tr>
 
-        {/* 2. Zone (with gate scoring from impulseZone data) */}
-        <StoryBullet filled={!!unifiedData.zone} label="Zone">
-          {unifiedData.zone ? (
-            <div className="text-zinc-200">
-              <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
-              <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
-                (S/R {unifiedData.zone.srConfirmed ? "✓" : "✗"})
-              </span>
-              <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
-              {unifiedData.zone.htfLayers.length > 0 && (
-                <span className="text-blue-400 ml-1">[HTF: {unifiedData.zone.htfLayers.join("+")}]</span>
-              )}
-              {/* Gate scoring badge from impulse zone data */}
-              {gateData?.bestZone && (
-                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                  <span className={`text-[10px] font-mono px-1 py-0.5 rounded ${
-                    gateData.bestZone.totalScore >= 5 ? "bg-green-500/15 text-green-400"
-                    : gateData.bestZone.totalScore >= 3 ? "bg-cyan-500/15 text-cyan-400"
-                    : "bg-zinc-500/15 text-zinc-500"
-                  }`}>
-                    Gate Score {gateData.bestZone.totalScore.toFixed(1)}/9
+          {/* Trace Row */}
+          {unifiedData.impulse?.startDate && unifiedData.impulse?.endDate && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Trace</td>
+              <td className="py-1">
+                <span className="text-green-400 font-mono">{formatTraceDate(unifiedData.impulse.startDate)}</span>
+                <span className="text-zinc-500 mx-1">→</span>
+                <span className="text-red-400 font-mono">{formatTraceDate(unifiedData.impulse.endDate)}</span>
+                <span className="text-zinc-400 ml-2">({unifiedData.impulse.spanBars} {unifiedData.impulse.timeframe} bars)</span>
+              </td>
+            </tr>
+          )}
+
+          {/* BOS Row */}
+          {unifiedData.impulse && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">BOS</td>
+              <td className="py-1 font-mono text-zinc-200">{fmt(unifiedData.impulse.bosPrice)}</td>
+            </tr>
+          )}
+
+          {/* Zone Row */}
+          <tr className="border-b border-zinc-800/50">
+            <td className="py-1.5 pr-2 align-top">
+              <Bullet filled={!!unifiedData.zone} />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Zone</td>
+            <td className="py-1.5 text-zinc-200">
+              {unifiedData.zone ? (
+                <div>
+                  <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
+                  <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
+                    (S/R {unifiedData.zone.srConfirmed ? "✓" : "✗"})
                   </span>
-                  {gateData.bestZone.ltfRefined && (
-                    <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-green-500/15 text-green-400">
-                      LTF ✓ {gateData.bestZone.ltfType?.toUpperCase() || ""}
-                    </span>
-                  )}
-                  {gateData.bestZone.refinedEntry && (
-                    <span className="text-[10px] font-mono text-zinc-400">
-                      Entry: {fmt(gateData.bestZone.refinedEntry)}
-                    </span>
-                  )}
-                  {gateData.bestZone.refinedSL && (
-                    <span className="text-[10px] font-mono text-zinc-400">
-                      SL: {fmt(gateData.bestZone.refinedSL)}
-                    </span>
-                  )}
+                  <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
                 </div>
+              ) : (
+                <span className="text-zinc-400">None found</span>
               )}
-            </div>
-          ) : (
-            <span className="text-zinc-400 ml-1">None found</span>
+            </td>
+          </tr>
+
+          {/* HTF Row */}
+          {unifiedData.zone && unifiedData.zone.htfLayers.length > 0 && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">HTF</td>
+              <td className="py-1 text-blue-400 font-mono text-[10px]">{unifiedData.zone.htfLayers.join(" + ")}</td>
+            </tr>
           )}
-        </StoryBullet>
 
-        {/* 3. Price */}
-        <StoryBullet filled={unifiedData.price.atZone || unifiedData.price.insideZone} label="Price">
-          <span className="text-zinc-200">
-            {unifiedData.price.insideZone ? (
-              <span className="text-green-400">Inside zone</span>
-            ) : unifiedData.price.atZone ? (
-              <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
-            ) : (
-              <span className="text-orange-400">{fmtPips(unifiedData.price.distancePips, { absolute: true })} away</span>
-            )}
-          </span>
-        </StoryBullet>
-
-        {/* 4. Liquidity */}
-        <StoryBullet filled={!!unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0} label="Liquidity">
-          {unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0 ? (
-            <span className="text-zinc-200">
-              {unifiedData.liquidity.summary}
-              {unifiedData.liquidity.sweepEvent && (
-                <span className={unifiedData.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
-                  [{unifiedData.liquidity.sweepEvent.type} swept{unifiedData.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
+          {/* LTF + Gate Score Row */}
+          {gateData?.bestZone && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Gate Score</td>
+              <td className="py-1">
+                <span className={`font-mono px-1 py-0.5 rounded text-[10px] ${
+                  gateData.bestZone.totalScore >= 5 ? "bg-green-500/15 text-green-400"
+                  : gateData.bestZone.totalScore >= 3 ? "bg-cyan-500/15 text-cyan-400"
+                  : "bg-zinc-500/15 text-zinc-500"
+                }`}>
+                  {gateData.bestZone.totalScore.toFixed(1)}/9
                 </span>
-              )}
-              <span className="text-zinc-300 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
-            </span>
-          ) : (
-            <span className="text-zinc-400">No significant pools near zone</span>
-          )}
-        </StoryBullet>
-
-        {/* 5. Confirmation */}
-        <StoryBullet
-          filled={!!unifiedData.confirmation?.entryReady}
-          partial={!!unifiedData.confirmation && unifiedData.confirmation.score > 0 && !unifiedData.confirmation.entryReady}
-          label="Confirmation"
-        >
-          {unifiedData.confirmation?.entryReady ? (
-            <span className="text-zinc-200">
-              {unifiedData.confirmation.detail}
-              <span className="text-cyan-400 ml-1">(+{unifiedData.confirmation.score.toFixed(1)})</span>
-            </span>
-          ) : unifiedData.confirmation && unifiedData.confirmation.score > 0 ? (
-            <span className="text-yellow-400">
-              {unifiedData.confirmation.detail} (partial — not entry-ready)
-            </span>
-          ) : (
-            <span className="text-zinc-400">
-              Waiting for CHoCH/displacement in {unifiedData.impulse?.direction ?? "—"} direction
-            </span>
-          )}
-        </StoryBullet>
-
-        {/* 6. Entry */}
-        <StoryBullet filled={!!unifiedData.entry} label="Entry">
-          {unifiedData.entry ? (
-            <div className="text-zinc-200 mt-0.5">
-              <span className={unifiedData.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
-                {unifiedData.entry.direction.toUpperCase()}
-              </span>
-              <span className="font-mono ml-2">@ {fmt(unifiedData.entry.entryPrice)}</span>
-              <span className="text-red-400 font-mono ml-2">SL: {fmt(unifiedData.entry.slPrice)}</span>
-              {unifiedData.entry.tpPrice && (
-                <span className="text-green-400 font-mono ml-2">TP: {fmt(unifiedData.entry.tpPrice)}</span>
-              )}
-              <div className="flex gap-2 mt-0.5 text-[10px]">
-                <span className="text-zinc-300">Risk: {fmtPips(unifiedData.entry.riskPips, { absolute: true })}</span>
-                {unifiedData.entry.rewardPips && <span className="text-zinc-300">Reward: {fmtPips(unifiedData.entry.rewardPips, { absolute: true })}</span>}
-                {unifiedData.entry.rrRatio && (
-                  <span className={unifiedData.entry.rrRatio >= 3 ? "text-green-400 font-bold" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}>
-                    R:R {unifiedData.entry.rrRatio}:1
+                {gateData.bestZone.ltfRefined && (
+                  <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-green-500/15 text-green-400 ml-1">
+                    LTF ✓ {gateData.bestZone.ltfType?.toUpperCase() || ""}
                   </span>
                 )}
-              </div>
-            </div>
-          ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
-            <span className="text-orange-400">R:R below minimum — no entry</span>
-          ) : (
-            <span className="text-zinc-400">Not yet</span>
+                {gateData.bestZone.refinedEntry && (
+                  <span className="text-[10px] font-mono text-zinc-400 ml-2">
+                    Entry: {fmt(gateData.bestZone.refinedEntry)}
+                  </span>
+                )}
+                {gateData.bestZone.refinedSL && (
+                  <span className="text-[10px] font-mono text-zinc-400 ml-2">
+                    SL: {fmt(gateData.bestZone.refinedSL)}
+                  </span>
+                )}
+              </td>
+            </tr>
           )}
-        </StoryBullet>
-      </div>
 
-      {/* Score breakdown */}
+          {/* Price Row */}
+          <tr className="border-b border-zinc-800/50">
+            <td className="py-1.5 pr-2 align-top">
+              <Bullet filled={unifiedData.price.atZone || unifiedData.price.insideZone} />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Price</td>
+            <td className="py-1.5">
+              {unifiedData.price.insideZone ? (
+                <span className="text-green-400">Inside zone</span>
+              ) : unifiedData.price.atZone ? (
+                <span className="text-green-400">At zone{!unifiedData.price.sideOk && " (wrong side)"}</span>
+              ) : (
+                <span className="text-orange-400">{fmtPips(unifiedData.price.distancePips, { absolute: true })} away</span>
+              )}
+            </td>
+          </tr>
+
+          {/* Liquidity Row */}
+          <tr className="border-b border-zinc-800/50">
+            <td className="py-1.5 pr-2 align-top">
+              <Bullet filled={!!unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0} />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Liquidity</td>
+            <td className="py-1.5">
+              {unifiedData.liquidity && unifiedData.liquidity.liquidityScore > 0 ? (
+                <span className="text-zinc-200">
+                  {unifiedData.liquidity.summary}
+                  {unifiedData.liquidity.sweepEvent && (
+                    <span className={unifiedData.liquidity.sweepEvent.rejected ? "text-green-400 ml-1" : "text-yellow-400 ml-1"}>
+                      [{unifiedData.liquidity.sweepEvent.type} swept{unifiedData.liquidity.sweepEvent.rejected ? " + rejected" : ""}]
+                    </span>
+                  )}
+                  <span className="text-zinc-400 ml-1">({unifiedData.liquidity.nearbyPools} pools)</span>
+                </span>
+              ) : (
+                <span className="text-zinc-400">No significant pools near zone</span>
+              )}
+            </td>
+          </tr>
+
+          {/* Confirmation Row */}
+          <tr className="border-b border-zinc-800/50">
+            <td className="py-1.5 pr-2 align-top">
+              <Bullet
+                filled={!!unifiedData.confirmation?.entryReady}
+                partial={!!unifiedData.confirmation && unifiedData.confirmation.score > 0 && !unifiedData.confirmation.entryReady}
+              />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Confirmation</td>
+            <td className="py-1.5">
+              {unifiedData.confirmation?.entryReady ? (
+                <span className="text-zinc-200">
+                  {unifiedData.confirmation.detail}
+                  <span className="text-cyan-400 ml-1">(+{unifiedData.confirmation.score.toFixed(1)})</span>
+                </span>
+              ) : unifiedData.confirmation && unifiedData.confirmation.score > 0 ? (
+                <span className="text-yellow-400">
+                  {unifiedData.confirmation.detail} (partial — not entry-ready)
+                </span>
+              ) : (
+                <span className="text-zinc-400">
+                  Waiting for CHoCH/displacement in {unifiedData.impulse?.direction ?? "—"} direction
+                </span>
+              )}
+            </td>
+          </tr>
+
+          {/* Entry Row */}
+          <tr>
+            <td className="py-1.5 pr-2 align-top">
+              <Bullet filled={!!unifiedData.entry} />
+            </td>
+            <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">Entry</td>
+            <td className="py-1.5">
+              {unifiedData.entry ? (
+                <div>
+                  <span className={unifiedData.entry.direction === "long" ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
+                    {unifiedData.entry.direction.toUpperCase()}
+                  </span>
+                  <span className="font-mono ml-2">@ {fmt(unifiedData.entry.entryPrice)}</span>
+                  <span className="text-red-400 font-mono ml-2">SL: {fmt(unifiedData.entry.slPrice)}</span>
+                  {unifiedData.entry.tpPrice && (
+                    <span className="text-green-400 font-mono ml-2">TP: {fmt(unifiedData.entry.tpPrice)}</span>
+                  )}
+                  {unifiedData.entry.rrRatio && (
+                    <span className={`ml-2 font-bold ${unifiedData.entry.rrRatio >= 3 ? "text-green-400" : unifiedData.entry.rrRatio >= 2 ? "text-cyan-400" : "text-orange-400"}`}>
+                      R:R {unifiedData.entry.rrRatio}:1
+                    </span>
+                  )}
+                </div>
+              ) : unifiedData.state === "confirmed" || unifiedData.state === "triggered" ? (
+                <span className="text-orange-400">R:R below minimum — no entry</span>
+              ) : (
+                <span className="text-zinc-400">Not yet</span>
+              )}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Score breakdown footer */}
       {unifiedData.hasZone && (
         <div className="mt-2 pt-2 border-t border-zinc-800 flex flex-wrap gap-2 text-[10px]">
           <span className="text-zinc-300">Base: {unifiedData.scoreBreakdown.baseScore.toFixed(1)}/9</span>
@@ -442,7 +481,6 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           {unifiedData.scoreBreakdown.tfBonus > 0 && (
             <span className="text-blue-400">TF: +{unifiedData.scoreBreakdown.tfBonus.toFixed(1)}</span>
           )}
-          {/* Gate scoring impact */}
           {gateData?.scoringEnabled && (
             <span className={`font-mono font-bold px-1 py-0.5 rounded ${
               gateData.bestZone?.priceAtZone
@@ -473,29 +511,10 @@ function fmt(price: number | null | undefined): string {
   return price > 10 ? price.toFixed(3) : price.toFixed(5);
 }
 
-function StoryBullet({
-  filled,
-  partial,
-  label,
-  children,
-}: {
-  filled: boolean;
-  partial?: boolean;
-  label: string;
-  children: React.ReactNode;
-}) {
-  const bulletColor = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
-  const bullet = filled ? "●" : partial ? "◐" : "○";
-
-  return (
-    <div className="flex items-start gap-2">
-      <span className={`${bulletColor} mt-0.5`}>{bullet}</span>
-      <div className="flex-1">
-        <span className="text-zinc-200 font-medium">{label}:</span>
-        {children}
-      </div>
-    </div>
-  );
+function Bullet({ filled, partial }: { filled: boolean; partial?: boolean }) {
+  const color = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
+  const char = filled ? "●" : partial ? "◐" : "○";
+  return <span className={`${color} text-[11px]`}>{char}</span>;
 }
 
 export default ZoneStoryPanel;
