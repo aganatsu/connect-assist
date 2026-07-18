@@ -1052,7 +1052,7 @@ export default function BotView() {
                 {showScanPanel ? <Eye className="h-3.5 w-3.5 md:h-3 md:w-3" /> : <EyeOff className="h-3.5 w-3.5 md:h-3 md:w-3" />}
                 {showScanPanel ? <ChevronDown className="h-3 w-3 md:h-2.5 md:w-2.5" /> : <ChevronUp className="h-3 w-3 md:h-2.5 md:w-2.5" />}
               </button>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1 flex-wrap">
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1.5 font-semibold min-w-0 flex-1">
                 <span className="truncate">{safeScanIdx === 0 ? "Latest Scan" : `Scan #${safeScanIdx + 1} of ${logs.length}`}</span>
                 {currentScan?.scanned_at && (
                   <span className="shrink-0 text-foreground font-mono normal-case">
@@ -1064,22 +1064,22 @@ export default function BotView() {
                   return sm ? <span className={`shrink-0 text-[9px] font-medium px-1 py-0 border rounded-sm ${sm.color}`}>{sm.icon} {sm.label}</span> : null;
                 })()}
                 {logs.length > 1 && (
-                  <span className="inline-flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <span className="inline-flex items-center gap-0.5 shrink-0 ml-auto" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(i => Math.min(logs.length - 1, i + 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx >= logs.length - 1}
-                      className="px-1.5 py-0.5 h-6 md:h-5 min-w-[44px] md:min-w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="px-1.5 py-0.5 h-6 md:h-5 w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed text-center"
                       title="Older scan"
-                    ><span className="md:hidden">‹ older</span><span className="hidden md:inline">‹ older</span></button>
+                    >‹ older</button>
                     <button
                       onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(i => Math.max(0, i - 1)); setSelectedPairIdx(0); }}
                       disabled={safeScanIdx <= 0}
-                      className="px-1.5 py-0.5 h-6 md:h-5 min-w-[44px] md:min-w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      className="px-1.5 py-0.5 h-6 md:h-5 w-[52px] text-[10px] md:text-[9px] rounded border border-border hover:bg-secondary/50 disabled:opacity-30 disabled:cursor-not-allowed text-center"
                       title="Newer scan"
-                    ><span className="md:hidden">newer ›</span><span className="hidden md:inline">newer ›</span></button>
+                    >newer ›</button>
                     <button
                       onClick={(e) => { e.stopPropagation(); setSelectedScanIdx(0); setSelectedPairIdx(0); }}
-                      className={`px-1.5 py-0.5 h-6 md:h-5 min-w-[40px] text-[10px] md:text-[9px] rounded border border-primary/40 text-primary hover:bg-primary/10 ${safeScanIdx === 0 ? 'invisible' : ''}`}
+                      className={`px-1.5 py-0.5 h-6 md:h-5 w-[44px] text-[10px] md:text-[9px] rounded border border-primary/40 text-primary hover:bg-primary/10 text-center ${safeScanIdx === 0 ? 'invisible' : ''}`}
                       title="Jump to latest"
                       disabled={safeScanIdx === 0}
                     >latest</button>
