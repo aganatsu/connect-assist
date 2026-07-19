@@ -4,6 +4,32 @@ let brokerExecuteQueue: Promise<void> = Promise.resolve();
 const functionCooldownUntil = new Map<string, number>();
 const functionResponseCache = new Map<string, { data: any; expiresAt: number }>();
 
+function jwtHasSubject(token?: string): boolean {
+  if (!token) return false;
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return false;
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")));
+    return typeof claims?.sub === "string" && claims.sub.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function getAuthenticatedToken(): Promise<string> {
+  let { data: { session } } = await supabase.auth.getSession();
+  if (!jwtHasSubject(session?.access_token)) {
+    const refreshed = await supabase.auth.refreshSession();
+    session = refreshed.data.session;
+  }
+  if (!jwtHasSubject(session?.access_token)) {
+    await supabase.auth.signOut().catch(() => {});
+    throw new Error("Unauthorized: no valid authenticated session");
+  }
+  return session.access_token;
+}
+
 function functionCacheKey(functionName: string, body: Record<string, any>) {
   return `${functionName}:${JSON.stringify(body)}`;
 }
@@ -48,8 +74,7 @@ function cacheSuccessfulFunctionResponse(functionName: string, body: Record<stri
 async function invokeSupabaseFunction(functionName: string, body: Record<string, any>) {
   const run = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      const token = await getAuthenticatedToken();
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${functionName}`, {
         method: "POST",
         headers: {
@@ -94,7 +119,7 @@ function isAuthError(error: any, data: any): boolean {
   const msg = (error?.message || data?.error || "").toString().toLowerCase();
   const status = error?.context?.status ?? error?.status;
   if (status === 401 || status === 403) return true;
-  return /unauthor|invalid.*jwt|bad.?jwt|missing sub|jwt.*expired|expired.*jwt/.test(msg);
+  return /unauthor|invalid.*jwt|bad.?jwt|missing sub|authenticated session|jwt.*expired|expired.*jwt/.test(msg);
 }
 
 // Helper to invoke edge functions with typed responses
@@ -248,8 +273,7 @@ export interface CandlesWithMeta { candles: any[]; source: CandleSource; }
 // (the supabase-js invoke() helper doesn't expose response headers).
 async function fetchMarketData(body: Record<string, any>): Promise<{ data: any; source: CandleSource }> {
   const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/market-data`;
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  const token = await getAuthenticatedToken();
   const res = await fetch(url, {
     method: "POST",
     headers: {
