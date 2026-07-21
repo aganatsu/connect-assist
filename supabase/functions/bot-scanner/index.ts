@@ -6227,6 +6227,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
           }
 
+          // GUARD: reject pending orders whose SL/TP orientation doesn't match direction.
+          // Long needs SL<entry<TP; short needs TP<entry<SL. Prevents inverted limit orders
+          // (root cause: direction flipped after analysis.stopLoss/takeProfit computed).
+          {
+            const eNum = Number(limitEntry.price);
+            const sNum = Number(limitSL);
+            const tNum = Number(limitTP);
+            const ok = analysis.direction === "long"
+              ? (sNum < eNum && tNum > eNum)
+              : (sNum > eNum && tNum < eNum);
+            if (!ok) {
+              console.error(`[GUARD] ${pair} ${analysis.direction} LIMIT REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
+              detail.status = "zone_setup_rejected_orientation";
+              detail.skipReason = `SL/TP orientation mismatch for ${analysis.direction} (entry=${eNum} sl=${sNum} tp=${tNum})`;
+              scanDetails.push(detail);
+              continue;
+            }
+          }
+
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
