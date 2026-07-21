@@ -262,6 +262,10 @@ export function detectZoneConfirmation(
   symbol?: string,
   /** Optional zone bounds — when provided, delegates to confirmationHierarchy first */
   zoneBounds?: { zoneHigh: number; zoneLow: number },
+  /** Optional 1m candles for LTF CHoCH detection (Level 2 in hierarchy) */
+  ltfCandles?: Candle[],
+  /** Optional sweep event for Sweep+CHoCH detection (Level 1 in hierarchy) */
+  sweepEvent?: { level: number; type: string } | null,
 ): ConfirmationSignal | null {
   if (candles5m.length < 10) return null;
 
@@ -275,6 +279,10 @@ export function detectZoneConfirmation(
       zoneLow: zoneBounds.zoneLow,
       direction: hierarchyDir,
       maxLookback: config.maxLookbackCandles,
+      // Pass LTF candles when available (enables Level 2: LTF CHoCH)
+      ...(ltfCandles && ltfCandles.length >= 15 ? { ltfCandles } : {}),
+      // Pass sweep event when available (enables Level 1: Sweep + CHoCH)
+      ...(sweepEvent ? { sweepEvent: sweepEvent as any } : {}),
     });
     // Map hierarchy result to ConfirmationSignal if entry-ready (CHoCH-level)
     if (hierarchyResult.entryReady && hierarchyResult.type !== "none") {
@@ -429,15 +437,23 @@ export function detectZoneConfirmation(
 // ─── Zone Boundary Check ─────────────────────────────────────────────────────
 
 /**
- * Check if price is still within the zone boundaries.
- * Used to determine if confirmation hunting should continue or reset.
+ * Check if price has left the zone in the WRONG direction (invalidation).
+ * 
+ * DIRECTIONAL LOGIC:
+ *   - For LONG (demand zone): price leaving ABOVE zone is the confirmation direction
+ *     (potential CHoCH). Only return false when price drops BELOW zoneLow - buffer.
+ *   - For SHORT (supply zone): price leaving BELOW zone is the confirmation direction
+ *     (potential CHoCH). Only return false when price rises ABOVE zoneHigh + buffer.
+ * 
+ * When price leaves in the profitable direction, we return true to allow
+ * the confirmation check to run before deciding to reset.
  * 
  * @param currentPrice - current live price
  * @param zoneLow - lower boundary of the entry zone
  * @param zoneHigh - upper boundary of the entry zone
  * @param direction - trade direction
  * @param atr - ATR value for proximity buffer (optional)
- * @returns true if price is still in/near the zone
+ * @returns true if price is still valid for confirmation hunting
  */
 export function isPriceInZone(
   currentPrice: number,
@@ -446,15 +462,18 @@ export function isPriceInZone(
   direction: "long" | "short",
   atr?: number,
 ): boolean {
-  // Add a small buffer (10% of zone width or ATR-based) to avoid premature resets
-  // from minor wicks outside the zone
+  // Buffer: 10% of zone width or 0.2×ATR to avoid premature resets from minor wicks
   const zoneWidth = zoneHigh - zoneLow;
   const buffer = atr ? atr * 0.2 : zoneWidth * 0.1;
 
-  if (direction === "short") {
-    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
+  if (direction === "long") {
+    // Demand zone: price dropping below = wrong direction (invalidation)
+    // Price rising above = confirmation direction (let CHoCH check run first)
+    return currentPrice >= (zoneLow - buffer);
   } else {
-    return currentPrice >= (zoneLow - buffer) && currentPrice <= (zoneHigh + buffer);
+    // Supply zone: price rising above = wrong direction (invalidation)
+    // Price dropping below = confirmation direction (let CHoCH check run first)
+    return currentPrice <= (zoneHigh + buffer);
   }
 }
 
