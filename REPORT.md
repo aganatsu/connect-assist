@@ -1,53 +1,85 @@
-# Task: Fix Zone Story Timeframe Labels
-## Branch: manus/fix-zone-story-tf-labels
+# Task: Unlock Pending Order Confirmation Paths
+
+## Branch: manus/unlock-pending-confirmations
+
 ## Behavior changes
-1. **Scalper style**: Zone Story now correctly shows "via 1H" / "via 15m" / "via 5m" instead of "via D" / "via 4H" / "via 1H". The trace line shows the correct timeframe unit (e.g., "12 1H bars" instead of "12 D bars").
-2. **Swing trader style**: Zone Story now correctly shows "via W" / "via D" / "via 4H" instead of "via D" / "via 4H" / "via 1H".
-3. **Day trader style**: No change — labels remain "D" / "4H" / "1H" (this is the default).
-4. **TF Bonus scoring**: Now correctly awards +2.0 for the top slot, +1.0 for mid slot, regardless of style. Previously, a scalper's 1H zone (top slot) would get +0 because the engine checked `selectedTF === "D"` literally.
-5. **A+/B+ setup labels**: Now derived from tfBonus value (>=2.0 = A+, >=1.0 = B+) instead of hardcoded TF string comparison.
-6. **Story summary reason strings**: Now use the correct style-aware TF names in the reason text (e.g., "1H zone selected (A+ setup)" for scalper instead of "Daily zone selected (A+ setup)").
+
+1. **`isPriceInZone` is now directional** — For LONG setups, price rising ABOVE the zone no longer resets the order to pending (this is the confirmation direction). Only price dropping BELOW the zone (wrong direction) invalidates. Vice versa for SHORT. Previously, price leaving the zone in ANY direction caused a reset, creating a catch-22 where the confirmation (CHoCH breakout) itself killed the order.
+
+2. **Tier gate relaxed from "Tier 1 only" to "Tier 1 or 2"** — When no refined zone is available, Tier 2 confirmations (wick-based CHoCH with supporting signal like engulfing, rejection wick, FVG, or volume spike) are now accepted. Only Tier 3 (reversal pattern without any CHoCH) is still blocked without a refined zone. Previously, only close-based CHoCH (Tier 1) was accepted.
+
+3. **Standalone signals can now place pending orders** — The block that prevented standalone signals (those without pre-existing unified zone confirmation) from placing pending orders has been removed. The pending order path already requires CHoCH/confirmation at fill time, so blocking placement was redundant and defeated the purpose of the pending order system.
+
+4. **LTF CHoCH (1m) now available during confirmation** — The pending order confirmation path now fetches 1m candles and passes them to `evaluateConfirmation`, enabling Level 2 (LTF CHoCH) detection. Previously, `ltfCandles` was never passed, making this path unreachable.
+
+5. **Sweep + CHoCH (highest conviction) now available during confirmation** — Sweep data from `signal_reason` (stored at order placement time) is now extracted and passed to `evaluateConfirmation`, enabling Level 1 (Sweep + CHoCH) detection. Previously, `sweepEvent` was never passed.
+
+**Net effect:** Pending orders that previously could NEVER fill (0 trades from 100+ setups) will now be able to fill when valid confirmation occurs. All 6 entry-ready confirmation methods are now reachable instead of just 1.
 
 ## Files modified
-- `supabase/functions/_shared/impulseZoneEngine.ts` — Added TFSlotLabels interface, DEFAULT_TF_LABELS constant, optional tfLabels param to findBestEntryZoneMultiTF, all selectedTF assignments now use labels
-- `supabase/functions/_shared/unifiedZoneEngine.ts` — Import TFSlotLabels, pass through to engine, fix tfBonus and candle selection to use labels instead of hardcoded strings
-- `supabase/functions/bot-scanner/index.ts` — Import TFSlotLabels, define zoneTFLabels per trading style, pass to findUnifiedZone
-- `src/components/ZoneStoryPanel.tsx` — Widen selectedTF type to string, fix summary to use tfBonus for A+/B+ label
-- `src/components/UnifiedZonePanel.tsx` — Widen selectedTF type to string
-- `src/components/ImpulseZonePanel.tsx` — Widen selectedTF type to string
-- `src/components/SMCChart.tsx` — Widen selectedTF type to string
+
+| File | Description |
+|------|-------------|
+| `supabase/functions/_shared/zoneConfirmation.ts` | Made `isPriceInZone` directional (only invalidate on wrong-direction exit). Added `ltfCandles` and `sweepEvent` params to `detectZoneConfirmation` and passes them to `evaluateConfirmation`. |
+| `supabase/functions/bot-scanner/index.ts` | (1) Relaxed Tier gate from `tier !== 1` to `tier === 3`. (2) Removed standalone pending order block. (3) Added 1m candle fetch and sweep data extraction in Branch B confirmation path. |
+| `supabase/functions/zone-confirmation-scanner/index.ts` | Same 3 fixes as bot-scanner: relaxed Tier gate, added 1m candle fetch, added sweep data extraction. |
+| `supabase/functions/_shared/zoneConfirmation.test.ts` | Updated existing tests to match new directional logic. Added 7 new directional isPriceInZone tests. |
 
 ## Tests added
-No new test files added (the existing 8 frontend tests all pass). The backend changes are backward-compatible (default labels = existing behavior), and the 63 pre-existing Deno type errors are unrelated to this change (same count before and after).
+
+| Test | Assertion |
+|------|-----------|
+| `isPriceInZone directional: LONG — price below zone = invalidation (wrong direction)` | Price below zoneLow - buffer returns false for LONG |
+| `isPriceInZone directional: LONG — price above zone = valid (confirmation direction)` | Price above zone returns true for LONG |
+| `isPriceInZone directional: SHORT — price above zone = invalidation (wrong direction)` | Price above zoneHigh + buffer returns false for SHORT |
+| `isPriceInZone directional: SHORT — price below zone = valid (confirmation direction)` | Price below zone returns true for SHORT |
+| `isPriceInZone directional: LONG — price within buffer below zone = still valid` | Minor wick below zone stays valid |
+| `isPriceInZone directional: SHORT — price within buffer above zone = still valid` | Minor wick above zone stays valid |
+| `isPriceInZone directional: ATR-based buffer works correctly for LONG` | ATR-based buffer correctly bounds invalidation |
 
 ## Tests run
+
 ```
-vitest run: 2 files, 8 tests passed (0 failed)
-deno check impulseZoneEngine.ts: OK (0 errors)
-deno check unifiedZoneEngine.ts: OK (0 errors)
-deno check bot-scanner/index.ts: 63 pre-existing errors (none related to this change)
+$ deno test supabase/functions/_shared/zoneConfirmation.test.ts --allow-all --no-check
+ok | 48 passed | 0 failed (18ms)
+
+$ deno test supabase/functions/_shared/confirmationHierarchy.test.ts --allow-all --no-check
+ok | 8 passed | 0 failed (13ms)
+
+$ deno test supabase/functions/_shared/ --allow-all --no-check
+FAILED | 1371 passed | 6 failed (14s)
+(All 6 failures are pre-existing on main branch — unrelated to this change)
 ```
 
 ## Regression check
-- Verified that without tfLabels param, findBestEntryZoneMultiTF defaults to `{ top: "D", mid: "4H", low: "1H" }` — identical to previous hardcoded behavior.
-- Day trader style explicitly passes `{ top: "D", mid: "4H", low: "1H" }` — no change in output.
-- The 63 deno check errors are identical before and after the change (stash/pop verified).
-- Frontend vitest tests pass unchanged (fixture data uses "1H" which is still a valid string).
+
+- Ran full test suite on `main` branch: 1364 passed, 6 failed
+- Ran full test suite on this branch: 1371 passed, 6 failed (7 new tests added, all passing)
+- Same 6 pre-existing failures in both (BE trailing tests + findImpulseLeg)
+- `confirmationHierarchy.test.ts`: 8/8 pass (no regression in confirmation logic)
+- `zoneConfirmation.test.ts`: 48/48 pass (all directional behavior verified)
+- The `isPriceInZone` change is **intentionally behavior-changing** — it fixes the catch-22 that prevented all pending orders from filling
 
 ## Open questions
-1. **Deployment**: The bot-scanner edge function needs to be redeployed for this fix to take effect in production. The frontend will auto-deploy via Lovable once merged to main.
-2. **Cascade engine**: `cascadeZoneEngine.ts` (line 572) also interpolates `multiTFResult.selectedTF` in a reason string — this will automatically show the correct label since it reads from the same engine output. No code change needed there.
+
+1. **Zone-confirmation-scanner deployment** — Is this function currently deployed to Supabase? If not, the 1-minute confirmation checks won't run regardless of code fixes. Need to verify with `supabase functions list`.
+
+2. **ATR availability** — The `isPriceInZone` function now accepts an optional `atr` parameter for adaptive buffer sizing. Currently no callers pass it. Should we add ATR fetching to the confirmation path for more intelligent zone bounds?
+
+3. **Tier 3 without refined zone** — Currently still blocked. Should we allow Tier 3 (reversal pattern: engulfing + rejection wick + displacement, no CHoCH) when other confluence factors are present (high fib depth, S/R alignment)?
 
 ## Suggested PR title and description
-**Title:** fix: use style-aware timeframe labels in zone story engine
+
+**Title:** fix: unlock pending order confirmation paths (directional zone exit + tier gate + LTF/sweep data)
 
 **Description:**
-The zone engine hardcoded "D"/"4H"/"1H" labels regardless of trading style. For scalper (which remaps slots to 1H/15m/5m), this caused:
-- Zone Story showing "via D" when the actual timeframe was 1H
-- "12 D bars" trace when it was actually 12 hourly bars
-- TF bonus of +0 for what should be the top-slot zone (+2.0)
-- "Daily zone selected (A+ setup)" when it was really a 1H zone
+Fixes the root cause of 100+ zone setups never triggering a trade. Four compounding bugs made it nearly impossible for pending orders to fill:
 
-This PR adds a `TFSlotLabels` interface that maps engine slots to actual timeframe names per style, and passes it through the full pipeline (impulseZoneEngine -> unifiedZoneEngine -> bot-scanner -> frontend).
+1. `isPriceInZone` reset the order when price left in the confirmation direction (the CHoCH breakout itself killed the order)
+2. Tier gate blocked Tier 2 (wick CHoCH + support) without refined zone
+3. Standalone signals were blocked from placing pending orders
+4. LTF candles and sweep data were never passed to the confirmation engine
 
-Backward compatible: day_trader behavior is unchanged. No new dependencies.
+This PR fixes all four, unlocking all 6 entry-ready confirmation methods (Sweep+CHoCH, LTF CHoCH, Same-TF CHoCH, Displacement, Wick CHoCH+support, Reversal pattern) instead of just 1.
+
+**BEHAVIOR CHANGE:** Pending orders will now fill when valid confirmation occurs. Previously 0% fill rate → expected normal fill rate.

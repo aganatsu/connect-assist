@@ -3033,11 +3033,34 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
-          // ── Confirmation Method Routing ──
+                    // ── Confirmation Method Routing ──
           // Supports 3 modes: "choch" (default), "indicators", "choch_and_indicators"
           const confMethod = config.confirmationMethod || "choch";
           let confirmationSignal: ConfirmationSignal | null = null;
           let indicatorConfResult: { confirmed: boolean; summary: string; passedCount: number } | null = null;
+
+          // Fetch 1m candles for LTF CHoCH detection (Level 2 in hierarchy)
+          let confirm1mCandles: any[] = [];
+          try {
+            confirm1mCandles = await cachedFetch(pending.symbol, "1m", "1d");
+          } catch { /* non-critical: LTF path just won't fire */ }
+
+          // Extract sweep data from signal_reason (stored at order placement time)
+          let sweepEventForConfirmation: { level: number; type: string } | null = null;
+          try {
+            const sr = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {});
+            if (sr?.sweepReclaim?.bestReclaim?.sweptLevel) {
+              sweepEventForConfirmation = {
+                level: sr.sweepReclaim.bestReclaim.sweptLevel,
+                type: sr.sweepReclaim.bestReclaim.type || "buy-side",
+              };
+            } else if (sr?.sweepReclaim?.sweeps?.[0]?.sweptLevel) {
+              sweepEventForConfirmation = {
+                level: sr.sweepReclaim.sweeps[0].sweptLevel,
+                type: sr.sweepReclaim.sweeps[0].type || "buy-side",
+              };
+            }
+          } catch { /* non-critical: sweep path just won't fire */ }
 
           // CHoCH path (default)
           if (confMethod === "choch" || confMethod === "choch_and_indicators") {
@@ -3048,6 +3071,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               zoneTouchIdx,
               pending.symbol,
               (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
+              confirm1mCandles.length >= 15 ? confirm1mCandles : undefined,
+              sweepEventForConfirmation,
             );
           }
 
@@ -3091,10 +3116,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             };
           }
 
-          // ── Tier gate: require Tier 1 when no refined zone is available ──
-          // Only applies to CHoCH-based confirmation (indicators don't have tiers)
-          if (confMethod !== "indicators" && !hasRefZone && confirmationSignal && confirmationSignal.tier !== 1) {
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
+          // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──
+          // Tier 1 (close-based CHoCH) and Tier 2 (wick CHoCH + supporting signal) are
+          // both valid structural confirmations. Only block Tier 3 (reversal pattern without
+          // any CHoCH) when there's no refined zone, as it lacks structural evidence.
+          if (confMethod !== "indicators" && !hasRefZone && confirmationSignal && confirmationSignal.tier === 3) {
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1/2 required for non-CHoCH patterns)`);
             continue;
           }
 
@@ -6158,17 +6185,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // or when marketFillAtZone is explicitly disabled.
         const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
         if (effectiveLimitEnabled && limitEntry) {
-          // ── Anti-Cycling Fix Part 2: Block pending orders when confirmation = "none" ──
-          // If the unified zone engine returned type="none" (zero confirmation signal),
-          // the setup has NO structural reason to expect a fill. Route to watchlist instead
-          // of placing a pending order that will just cycle indefinitely.
+          // ── Anti-Cycling Fix Part 2 (RELAXED): Log standalone signals but allow pending orders ──
+          // Previously this blocked standalone signals with confirmation.type="none" from
+          // placing pending orders. However, the ENTIRE PURPOSE of a pending order is to wait
+          // for price to reach the zone and THEN hunt for confirmation (CHoCH/displacement/etc).
+          // Blocking placement because no pre-existing confirmation exists defeats the purpose.
+          // The confirmation requirement at FILL TIME (Branch B) is the real gate.
           const uzConfirmationType = unifiedZoneData?.confirmation?.type;
           if (isStandaloneSignal && uzConfirmationType === "none") {
-            detail.status = "skipped_no_confirmation";
-            detail.skipReason = `Standalone signal with no confirmation (type=none) — watchlist only, pending order blocked`;
-            console.log(`[scan ${scanCycleId}] ⏸️ ${pair}: PENDING ORDER BLOCKED — standalone signal with confirmation.type=none. No structural basis for entry. Watchlisted.`);
-            scanDetails.push(detail);
-            continue;
+            console.log(`[scan ${scanCycleId}] 📋 ${pair}: Standalone signal (confirmation.type=none) — placing pending order to await zone confirmation at fill time.`);
           }
 
           // ── Anti-Cycling Fix Part 1: Post-expiry cooldown ──

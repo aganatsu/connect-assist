@@ -602,14 +602,18 @@ Deno.test("isPriceInZone: returns true when price is inside zone (short)", () =>
   assertEquals(result, true);
 });
 
-Deno.test("isPriceInZone: returns false when price is above zone (long)", () => {
+Deno.test("isPriceInZone: returns TRUE when price is above zone (long) — confirmation direction", () => {
+  // For LONG (demand zone): price rising above zone is the confirmation direction
+  // (potential CHoCH breakout). Should NOT reset — let confirmation check run.
   const result = isPriceInZone(4560, 4535, 4550, "long");
-  assertEquals(result, false);
+  assertEquals(result, true);
 });
 
-Deno.test("isPriceInZone: returns false when price is below zone (short)", () => {
+Deno.test("isPriceInZone: returns TRUE when price is below zone (short) — confirmation direction", () => {
+  // For SHORT (supply zone): price dropping below zone is the confirmation direction
+  // (potential CHoCH breakout). Should NOT reset — let confirmation check run.
   const result = isPriceInZone(4530, 4537, 4551, "short");
-  assertEquals(result, false);
+  assertEquals(result, true);
 });
 
 Deno.test("isPriceInZone: returns true at zone edge (exact boundary)", () => {
@@ -622,9 +626,10 @@ Deno.test("isPriceInZone: includes buffer for near-zone prices", () => {
   assertEquals(result, true);
 });
 
-Deno.test("isPriceInZone: returns false when clearly outside buffer", () => {
+Deno.test("isPriceInZone: returns TRUE when clearly below zone (short) — still confirmation direction", () => {
+  // For SHORT: even far below zone is still confirmation direction
   const result = isPriceInZone(4520, 4537, 4551, "short");
-  assertEquals(result, false);
+  assertEquals(result, true);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -761,13 +766,14 @@ Deno.test("State machine: zone touch detection triggers confirmation hunt (short
   assertEquals(broken, false);
 });
 
-Deno.test("State machine: price leaving zone resets to pending", () => {
+Deno.test("State machine: price leaving zone in confirmation direction stays valid (short)", () => {
+  // For SHORT: price dropping below zone is confirmation direction
   const zoneLow = 4537;
   const zoneHigh = 4551;
   const currentPrice = 4530;
 
   const inZone = isPriceInZone(currentPrice, zoneLow, zoneHigh, "short");
-  assertEquals(inZone, false);
+  assertEquals(inZone, true); // Should stay valid — confirmation direction
 });
 
 Deno.test("State machine: impulse broken cancels order", () => {
@@ -803,4 +809,79 @@ Deno.test("Regression: Tier 1 only config produces same results as old binary CH
     assertEquals(result.closeBased, true);
     assert(result.displacement >= 0.5, "Old-style config should enforce 0.5 displacement");
   }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── Directional isPriceInZone Tests (unlock-pending-confirmations) ───────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Deno.test("isPriceInZone directional: LONG — price below zone = invalidation (wrong direction)", () => {
+  // For LONG (demand zone): price dropping below zoneLow - buffer = wrong direction
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const buffer = (zoneHigh - zoneLow) * 0.1; // 0.00025
+  const priceBelow = zoneLow - buffer - 0.001; // Clearly below zone + buffer
+  const result = isPriceInZone(priceBelow, zoneLow, zoneHigh, "long");
+  assertEquals(result, false, "LONG: price below zone should invalidate");
+});
+
+Deno.test("isPriceInZone directional: LONG — price above zone = valid (confirmation direction)", () => {
+  // For LONG: price rising above zone is the confirmation direction
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const priceAbove = 1.2100; // Well above zone
+  const result = isPriceInZone(priceAbove, zoneLow, zoneHigh, "long");
+  assertEquals(result, true, "LONG: price above zone should stay valid for confirmation check");
+});
+
+Deno.test("isPriceInZone directional: SHORT — price above zone = invalidation (wrong direction)", () => {
+  // For SHORT (supply zone): price rising above zoneHigh + buffer = wrong direction
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const buffer = (zoneHigh - zoneLow) * 0.1; // 0.00025
+  const priceAbove = zoneHigh + buffer + 0.001; // Clearly above zone + buffer
+  const result = isPriceInZone(priceAbove, zoneLow, zoneHigh, "short");
+  assertEquals(result, false, "SHORT: price above zone should invalidate");
+});
+
+Deno.test("isPriceInZone directional: SHORT — price below zone = valid (confirmation direction)", () => {
+  // For SHORT: price dropping below zone is the confirmation direction
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const priceBelow = 1.1950; // Well below zone
+  const result = isPriceInZone(priceBelow, zoneLow, zoneHigh, "short");
+  assertEquals(result, true, "SHORT: price below zone should stay valid for confirmation check");
+});
+
+Deno.test("isPriceInZone directional: LONG — price within buffer below zone = still valid", () => {
+  // Buffer tolerance: minor wick below zone should not invalidate
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const buffer = (zoneHigh - zoneLow) * 0.1; // 0.00025
+  const priceInBuffer = zoneLow - buffer + 0.0001; // Just inside buffer
+  const result = isPriceInZone(priceInBuffer, zoneLow, zoneHigh, "long");
+  assertEquals(result, true, "LONG: price within buffer should stay valid");
+});
+
+Deno.test("isPriceInZone directional: SHORT — price within buffer above zone = still valid", () => {
+  // Buffer tolerance: minor wick above zone should not invalidate
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const buffer = (zoneHigh - zoneLow) * 0.1; // 0.00025
+  const priceInBuffer = zoneHigh + buffer - 0.0001; // Just inside buffer
+  const result = isPriceInZone(priceInBuffer, zoneLow, zoneHigh, "short");
+  assertEquals(result, true, "SHORT: price within buffer should stay valid");
+});
+
+Deno.test("isPriceInZone directional: ATR-based buffer works correctly for LONG", () => {
+  const zoneLow = 1.2000;
+  const zoneHigh = 1.2025;
+  const atr = 0.0050; // 50 pips ATR
+  const atrBuffer = atr * 0.2; // 0.001 (10 pips)
+  // Price just inside ATR buffer (should be valid)
+  const priceInBuffer = zoneLow - atrBuffer + 0.0001;
+  assertEquals(isPriceInZone(priceInBuffer, zoneLow, zoneHigh, "long", atr), true);
+  // Price outside ATR buffer (should invalidate)
+  const priceOutside = zoneLow - atrBuffer - 0.001;
+  assertEquals(isPriceInZone(priceOutside, zoneLow, zoneHigh, "long", atr), false);
 });

@@ -338,6 +338,23 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Fetch 1m candles for LTF CHoCH detection (Level 2 in hierarchy)
+        let candles1m: Candle[] = [];
+        try {
+          candles1m = await fetchCandles(pending.symbol, "1m");
+        } catch { /* non-critical: LTF path just won't fire */ }
+
+        // Extract sweep data from signal_reason (stored at order placement time)
+        let sweepEventData: { level: number; type: string } | null = null;
+        try {
+          const sr = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {});
+          if (sr?.sweepReclaim?.bestReclaim?.sweptLevel) {
+            sweepEventData = { level: sr.sweepReclaim.bestReclaim.sweptLevel, type: sr.sweepReclaim.bestReclaim.type || "buy-side" };
+          } else if (sr?.sweepReclaim?.sweeps?.[0]?.sweptLevel) {
+            sweepEventData = { level: sr.sweepReclaim.sweeps[0].sweptLevel, type: sr.sweepReclaim.sweeps[0].type || "buy-side" };
+          }
+        } catch { /* non-critical */ }
+
         const confirmationSignal = detectZoneConfirmation(
           candles5m,
           pending.direction as "long" | "short",
@@ -345,6 +362,8 @@ Deno.serve(async (req) => {
           zoneTouchIdx,
           pending.symbol,
           (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
+          candles1m.length >= 15 ? candles1m : undefined,
+          sweepEventData,
         );
 
         if (!confirmationSignal) {
@@ -353,14 +372,13 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // ── Tier gate: require Tier 1 when no refined zone is available ──
-        // Without a refined zone, we're watching a broad HTF zone (20-30 pips).
-        // Tier 2 (wick-based CHoCH) and Tier 3 (reversal pattern) are too weak
-        // for such an imprecise area. Only a close-based CHoCH (Tier 1) provides
-        // enough evidence that the level is holding.
-        if (!hasRefinedZone && confirmationSignal.tier !== 1) {
+        // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──
+        // Tier 1 (close-based CHoCH) and Tier 2 (wick CHoCH + supporting signal)
+        // are both valid structural confirmations. Only block Tier 3 (reversal
+        // pattern without any CHoCH) when there's no refined zone.
+        if (!hasRefinedZone && confirmationSignal.tier === 3) {
           stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1 required)`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1/2 required)`);
           continue;
         }
 
