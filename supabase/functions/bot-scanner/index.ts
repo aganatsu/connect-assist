@@ -3140,6 +3140,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const nowStr = new Date().toISOString();
           const exitFlags = pending.exit_flags || {};
 
+          // GUARD: reject confirmed-fill inserts whose SL/TP orientation doesn't match direction.
+          {
+            const eNum = Number(actualFillPrice);
+            const sNum = Number(pending.stop_loss);
+            const tNum = Number(pending.take_profit);
+            const ok = pending.direction === "long"
+              ? (sNum < eNum && tNum > eNum)
+              : (sNum > eNum && tNum < eNum);
+            if (!ok) {
+              console.error(`[GUARD] ${pending.symbol} ${pending.direction} CONFIRMED-FILL REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
+              await supabase.from("pending_orders").update({
+                status: "cancelled",
+                cancel_reason: `Orientation guard: SL/TP inverted vs direction (entry=${eNum} sl=${sNum} tp=${tNum})`,
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              continue;
+            }
+          }
+
           // Build signal_reason with limit order provenance + confirmation data
           let parsedSignalReason: any = {};
           try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
@@ -5730,26 +5748,51 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const computeTP = (entry: number, newSl: number, direction: string): number => {
           const risk = Math.abs(entry - newSl);
           if (config.tpMethod === "next_level" && analysis.takeProfit) {
+            // Guard: TP from smcAnalysis was computed for the ORIGINAL direction.
+            // If direction was flipped by directionVerdict, analysis.takeProfit may
+            // sit on the wrong side of entry. Only reuse it if orientation matches.
+            const tpOnCorrectSide = direction === "long"
+              ? analysis.takeProfit > entry
+              : analysis.takeProfit < entry;
             const structureRR = Math.abs(analysis.takeProfit - entry) / risk;
-            if (structureRR >= (config.minRiskReward ?? 1.0)) {
+            if (tpOnCorrectSide && structureRR >= (config.minRiskReward ?? 1.0)) {
               return analysis.takeProfit;
             }
           }
           return direction === "long" ? entry + risk * config.tpRatio : entry - risk * config.tpRatio;
         };
 
-        // Recalculate SL with correct pip size
+        // Recalculate SL with correct pip size for the (possibly flipped) direction.
+        // If direction was flipped by directionVerdict, force a fresh SL/TP from
+        // structure — analysis.stopLoss/takeProfit are for the ORIGINAL direction
+        // and would produce an inverted trade if reused.
+        const originalSlSide = analysis.stopLoss != null
+          ? (analysis.stopLoss < analysis.lastPrice ? "long" : "short")
+          : null;
+        const directionFlipped = originalSlSide !== null && originalSlSide !== analysis.direction;
         if (analysis.direction === "long") {
           const swingLows = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "low" && s.price < analysis.lastPrice).slice(-3);
           if (swingLows.length > 0) {
             sl = Math.max(...swingLows.map((s: SwingPoint) => s.price)) - adjustedSlBuffer * spec.pipSize;
             tp = computeTP(analysis.lastPrice, sl, "long");
+          } else if (directionFlipped) {
+            // No swings available AND direction was flipped — fall back to ATR/static floor
+            // instead of leaving the inverted analysis.stopLoss in place.
+            const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
+            sl = analysis.lastPrice - fallbackPips * spec.pipSize;
+            tp = computeTP(analysis.lastPrice, sl, "long");
+            console.log(`[${pair}] Direction flipped to LONG with no swing lows — using fallback SL ${fallbackPips}p`);
           }
         } else {
           const swingHighs = analysis.structure.swingPoints.filter((s: SwingPoint) => s.type === "high" && s.price > analysis.lastPrice).slice(-3);
           if (swingHighs.length > 0) {
             sl = Math.min(...swingHighs.map((s: SwingPoint) => s.price)) + adjustedSlBuffer * spec.pipSize;
             tp = computeTP(analysis.lastPrice, sl, "short");
+          } else if (directionFlipped) {
+            const fallbackPips = Math.max(MIN_SL_PIPS[pair] ?? 15, 20);
+            sl = analysis.lastPrice + fallbackPips * spec.pipSize;
+            tp = computeTP(analysis.lastPrice, sl, "short");
+            console.log(`[${pair}] Direction flipped to SHORT with no swing highs — using fallback SL ${fallbackPips}p`);
           }
         }
 
@@ -6200,6 +6243,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               cancel_reason: `Superseded by new setup (score ${analysis.score.toFixed(1)} vs old ${stalePending[0].signal_score?.toFixed?.(1) ?? "?"}, entry ${limitEntry.price} vs old ${stalePending[0].entry_price})`,
             }).in("order_id", staleIds).eq("user_id", userId);
             console.log(`[pending] Expired ${stalePending.length} stale pending order(s) for ${pair} ${analysis.direction} — superseded by new setup (score ${analysis.score.toFixed(1)})`);
+          }
+
+          // GUARD: reject pending orders whose SL/TP orientation doesn't match direction.
+          // Long needs SL<entry<TP; short needs TP<entry<SL. Prevents inverted limit orders
+          // (root cause: direction flipped after analysis.stopLoss/takeProfit computed).
+          {
+            const eNum = Number(limitEntry.price);
+            const sNum = Number(limitSL);
+            const tNum = Number(limitTP);
+            const ok = analysis.direction === "long"
+              ? (sNum < eNum && tNum > eNum)
+              : (sNum > eNum && tNum < eNum);
+            if (!ok) {
+              console.error(`[GUARD] ${pair} ${analysis.direction} LIMIT REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
+              detail.status = "zone_setup_rejected_orientation";
+              detail.skipReason = `SL/TP orientation mismatch for ${analysis.direction} (entry=${eNum} sl=${sNum} tp=${tNum})`;
+              scanDetails.push(detail);
+              continue;
+            }
           }
 
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
