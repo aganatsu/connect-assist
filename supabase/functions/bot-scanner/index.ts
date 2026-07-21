@@ -6437,6 +6437,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
           openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
         }
+        // GUARD: reject trades whose SL/TP orientation doesn't match direction.
+        // For long: SL must be below entry, TP above. For short: SL above, TP below.
+        // This catches direction-vs-zone contradictions (e.g. LONG verdict with SHORT zone SL/TP)
+        // before they get booked and later show up as "tp_hit" on a losing trade.
+        {
+          const entryRef = marketEntryPrice;
+          const slNum = Number(sl);
+          const tpNum = Number(tp);
+          const orientationOk = analysis.direction === "long"
+            ? (slNum < entryRef && tpNum > entryRef)
+            : (slNum > entryRef && tpNum < entryRef);
+          if (!orientationOk) {
+            console.error(`[GUARD] ${pair} ${analysis.direction} REJECTED — SL/TP orientation mismatch. entry=${entryRef} sl=${slNum} tp=${tpNum}`);
+            continue;
+          }
+        }
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
