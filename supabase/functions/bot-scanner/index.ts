@@ -3140,6 +3140,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const nowStr = new Date().toISOString();
           const exitFlags = pending.exit_flags || {};
 
+          // GUARD: reject confirmed-fill inserts whose SL/TP orientation doesn't match direction.
+          {
+            const eNum = Number(actualFillPrice);
+            const sNum = Number(pending.stop_loss);
+            const tNum = Number(pending.take_profit);
+            const ok = pending.direction === "long"
+              ? (sNum < eNum && tNum > eNum)
+              : (sNum > eNum && tNum < eNum);
+            if (!ok) {
+              console.error(`[GUARD] ${pending.symbol} ${pending.direction} CONFIRMED-FILL REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
+              await supabase.from("pending_orders").update({
+                status: "cancelled",
+                cancel_reason: `Orientation guard: SL/TP inverted vs direction (entry=${eNum} sl=${sNum} tp=${tNum})`,
+              }).eq("order_id", pending.order_id).eq("user_id", userId);
+              continue;
+            }
+          }
+
           // Build signal_reason with limit order provenance + confirmation data
           let parsedSignalReason: any = {};
           try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
