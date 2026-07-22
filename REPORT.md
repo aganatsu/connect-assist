@@ -1,38 +1,53 @@
-# Task: Expandable Trade Detail (Post-Mortem)
-## Branch: manus/expandable-trade-detail
+# Task: Rebuild ICT Analysis Page to Use Full Bot-Scanner Data
+## Branch: manus/ict-page-rebuild
 ## Behavior changes
-1. Trade history items in the paper-trading status API response now include a `postMortem` field (object or null) containing: outcome, holdDuration, whatWorked, whatFailed, lessonLearned, factorsPresent, factorsAbsent.
-2. Expanded rows in both "Closed Today" and "History" tabs now display a Post-Mortem section (amber-bordered card) showing outcome badge, hold duration, what worked, what failed, and lesson learned.
-3. Mobile trade cards now have a chevron indicator and expand on tap to show score, signal source badge, post-mortem, and metadata (size, order ID, SL, TP).
+1. ICT Analysis page no longer calls `smcApi.fullAnalysis()` or fetches raw candles for its own analysis. It now reads from `scan_logs` (same data source as BotView's scan panel).
+2. Instrument sidebar now shows per-pair direction arrow and score from the latest scan.
+3. Page displays 13 new/enhanced sections that were previously unavailable: Direction Verdict, Regime Detection, Zone Story, Tiered Scoring, Structure Intelligence, Entity Lifecycles, Confluence Stacking, Sweep & Reclaim, Pullback Health, Setup Classification, Fibonacci Levels, Gates, and enhanced Currency Strength (from scanner meta).
+4. Removed: Correlation Matrix section (was a standalone computation unrelated to scanner data; can be re-added later if needed).
+5. Removed: Premium/Discount visual zone (now covered by Zone Story panel which shows the full trade narrative).
+6. Removed: PD/PW Levels section (data is available in scanner's chartOverlays for Session 3 chart overlays).
 
 ## Files modified
-- `supabase/functions/paper-trading/index.ts` — Added fetch of `trade_post_mortems` table in status action; builds a lookup map by position_id and attaches postMortem object to each history item.
-- `src/pages/BotView.tsx` — Added Post-Mortem display section to desktop expanded row (before Trade Metadata Grid); enhanced mobile cards with chevron, expandable detail including score/signal source/post-mortem/metadata.
+- `src/pages/IctAnalysis.tsx` — Complete rewrite (339 lines removed, 632 lines added). Now uses `scannerApi.logs()` as sole data source, reuses existing components (TierFactorBreakdown, TierScoreSummary, ZoneStoryPanel, generateDetailNarrative).
 
 ## Tests added
-None added (frontend-only display change + backend query addition; no logic to unit-test beyond what generatePostMortem already covers).
+None (pure frontend display page with no business logic to unit-test; all data comes from scanner which has its own tests).
 
 ## Tests run
 TypeScript check: `npx tsc --noEmit` → Exit code 0, zero errors.
 
 ## Regression check
-- The `histArr` mapping is strictly additive — existing fields are unchanged, only `postMortem` is appended.
-- If `trade_post_mortems` table is empty or the query fails, `pmByPosId` is empty and all trades get `postMortem: null` — no visual change from before.
-- Desktop expanded row: Post-Mortem section is conditionally rendered only when `t.postMortem` is truthy, so existing rows without post-mortem data render identically to before.
-- Mobile cards: the only structural change is wrapping the P&L + chevron in a flex div and adding the expandable section below — collapsed state looks the same.
+- This is a display-only page with no effect on trading behavior. It reads scan_logs (read-only) and renders data.
+- No backend files modified.
+- No scoring, gates, or trade execution logic touched.
 
 ## Open questions
-- The paper-trading status endpoint now makes an additional Supabase query (`trade_post_mortems`). This adds ~50-100ms latency. If this is a concern, we could lazy-load post-mortems client-side instead.
-- Older trades that were closed before `generatePostMortem` was added will show `postMortem: null` — no section displayed. This is expected behavior.
+1. The Correlation Matrix was removed — should it be re-added as a separate section? It required fetching 60 days of daily candles for 7 pairs independently of the scanner.
+2. The page currently shows "No scanner data for X. Run a scan from the Bot tab." if no scan_logs exist. Should we add a "Run Scan" button directly on this page?
+3. Session 3 (Chart Overlays) will use `d.chartOverlays` data that's already available in the scanner detail — the ICT page is now perfectly positioned to receive chart overlay rendering.
 
 ## Suggested PR title and description
-**Title:** feat: add post-mortem data to expandable trade detail rows
+**Title:** feat: rebuild ICT Analysis page to use full bot-scanner data
 
 **Description:**
-Adds post-mortem analysis (what worked, what failed, lesson learned) to the expandable trade detail rows in both "Closed Today" and "History" tabs.
+Completely rewrites the ICT Analysis page to consume `scan_logs` (the same data source as BotView's scan panel) instead of running its own duplicate analysis from raw candles.
 
-**Backend:** paper-trading status now fetches `trade_post_mortems` and attaches the data to each history item.
+**What's new:**
+- Direction Verdict with confidence/agreement/blocking
+- Regime Detection (Daily + 4H with transitions)
+- Zone Story (reuses ZoneStoryPanel)
+- Full Tiered Scoring + Factor Breakdown
+- Structure Intelligence (BOS/CHoCH, S2F, derived S/R)
+- Entity Lifecycles dashboard (OBs, FVGs, Swing Points, Liquidity, Breakers, Unicorns)
+- Confluence Stacking zones
+- Sweep & Reclaim events
+- Pullback Health / Decay
+- Setup Classification + Style suggestion
+- Fibonacci Levels
+- Gates pass/fail
+- Enhanced sidebar with direction arrows + scores
 
-**Frontend:** Amber-bordered Post-Mortem card renders in expanded rows showing outcome badge, hold duration, and the three insight fields. Mobile cards also get full expandable detail with chevron indicator.
+**Removed:** Correlation Matrix, standalone Premium/Discount visual, PD/PW levels (data available for chart overlays in Session 3).
 
-Both tabs use the same `TradeHistoryTable` component so the change applies uniformly.
+**Technical:** Zero new API calls — all data comes from existing scanner output. Reuses TierFactorBreakdown, TierScoreSummary, ZoneStoryPanel, and generateDetailNarrative components.
