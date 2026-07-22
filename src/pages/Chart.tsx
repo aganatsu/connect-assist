@@ -45,8 +45,10 @@ export default function Chart() {
     if (overlayVisibility.fvg) s.add('fvgs');
     if (overlayVisibility.sp) s.add('swingPoints');
     if (overlayVisibility.liq) s.add('liquidity');
+    if (overlayVisibility.bsl) s.add('bslSsl');
     if (overlayVisibility.fib) s.add('fibs');
     if (overlayVisibility.sr) { s.add('support'); s.add('resistance'); }
+    if (overlayVisibility.ipda) s.add('ipda');
     if (overlayVisibility.bos) s.add('bosChoch');
     if (overlayVisibility.disp) s.add('displacement');
     if (overlayVisibility.judas) s.add('judasSwing');
@@ -231,18 +233,45 @@ export default function Chart() {
     }
 
     return {
-      orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).filter((ob: any) => !ob.mitigated).map((ob: any) => ({
-        high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type,
+      orderBlocks: overlayVisibility.ob ? (analysis.orderBlocks || []).map((ob: any) => ({
+        high: ob.high, low: ob.low, datetime: ob.datetime, direction: ob.type, state: ob.state,
       })) : [],
-      fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).filter((f: any) => !f.mitigated).map((f: any) => ({
-        high: f.high, low: f.low, datetime: f.datetime, direction: f.type,
+      fvgs: overlayVisibility.fvg ? (analysis.fvgs || []).map((f: any) => ({
+        high: f.high, low: f.low, datetime: f.datetime, direction: f.type, state: f.state, fillPercent: f.fillPercent,
       })) : [],
       swingPoints: overlayVisibility.sp ? (analysis.structure?.swingPoints || []).map((sp: any) => ({
         price: sp.price, index: sp.index, type: sp.type, datetime: sp.datetime,
       })) : [],
       liquidityPools: overlayVisibility.liq ? (analysis.liquidityPools || []).map((lp: any) => ({
-        price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept,
+        price: lp.price, type: lp.type, strength: lp.strength, swept: lp.swept, state: lp.state,
       })) : [],
+      // BSL/SSL: derive from scanner chartOverlays liquidity pools (directional)
+      bslSsl: overlayVisibility.bsl ? (() => {
+        const scannerLPs = botScanSignal?.signal?.chartOverlays?.liquidityPools || [];
+        return scannerLPs.map((lp: any) => ({
+          price: lp.price,
+          type: lp.direction === 'bullish' || lp.direction === 'bsl' ? 'bsl' : 'ssl',
+          strength: lp.strength,
+          swept: lp.state === 'swept_rejected' || lp.state === 'swept_absorbed',
+          state: lp.state,
+        }));
+      })() : [],
+      // IPDA: from scanner dailyEntities premiumDiscount + fib levels
+      ipda: overlayVisibility.ipda ? (() => {
+        const dailyEnts = botScanSignal?.signal?.chartOverlays?.dailyEntities;
+        const pd = dailyEnts?.premiumDiscount;
+        const fibs = dailyEnts?.fibLevels;
+        if (pd && fibs?.swingHigh && fibs?.swingLow) {
+          return {
+            swingHigh: fibs.swingHigh,
+            swingLow: fibs.swingLow,
+            currentZone: pd.currentZone,
+            zonePercent: pd.zonePercent,
+            oteZone: pd.oteZone ?? false,
+          };
+        }
+        return null;
+      })() : null,
       fibLevels: computedFibLevels,
       fiftyPercentLevel: computedFiftyPercent,
       keySupport: computedSupport?.length ? computedSupport : undefined,
@@ -260,6 +289,10 @@ export default function Chart() {
         index: d.index, direction: d.direction, bodyRatio: d.bodyRatio, rangeMultiple: d.rangeMultiple,
       })) : [],
       judasSwing: overlayVisibility.judas ? (analysis.judasSwing ?? null) : null,
+      // Pass breaker state for lifecycle coloring
+      breakerBlocks: (analysis.breakerBlocks || []).map((bb: any) => ({
+        high: bb.high, low: bb.low, datetime: bb.datetime, direction: bb.type, state: bb.state,
+      })),
     };
   }, [analysis, botScanSignal, overlayVisibility, candles]);
 
@@ -269,11 +302,23 @@ export default function Chart() {
     fvg: activeFVGs.length > 0 ? `${activeFVGs.length} unfilled` : 'none',
     sp: `${(analysis?.structure?.swingPoints || []).length} points`,
     liq: `${(analysis?.liquidityPools || []).length} pools`,
+    bsl: (() => {
+      const lps = botScanSignal?.signal?.chartOverlays?.liquidityPools || [];
+      const bslCount = lps.filter((l: any) => l.direction === 'bullish' || l.direction === 'bsl').length;
+      const sslCount = lps.length - bslCount;
+      return lps.length > 0 ? `${bslCount} BSL, ${sslCount} SSL` : 'no scan data';
+    })(),
     fib: analysis?.structure?.swingPoints?.length ? '5 levels' : 'no swings',
     iz: botScanSignal?.signal?.impulseZone?.hasZone ? `${botScanSignal.signal.impulseZone.selectedTF} zone` : 'no signal',
     sr: pdLevels ? 'PDH/PDL/PWH/PWL/DO/WO' : 'loading',
     bos: `${(analysis?.structure?.bos || []).length} BOS, ${(analysis?.structure?.choch || []).length} CHoCH`,
     disp: `${(analysis?.extendedFactors?.displacement?.displacementCandles || []).length} candles`,
+    ipda: (() => {
+      const dailyEnts = botScanSignal?.signal?.chartOverlays?.dailyEntities;
+      const pd = dailyEnts?.premiumDiscount;
+      if (pd) return `${pd.currentZone} (${pd.zonePercent?.toFixed(0)}%)${pd.oteZone ? ' — in OTE' : ''}`;
+      return 'no scan data';
+    })(),
     judas: analysis?.judasSwing?.detected ? `${analysis.judasSwing.type} ${analysis.judasSwing.confirmed ? '(confirmed)' : '(unconfirmed)'}` : 'none',
     sessions: 'Asian/London/NY boxes',
     killZones: 'London 02-05 / NY 08:30-12',

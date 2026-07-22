@@ -6,24 +6,23 @@
  * score pill sits on the right.
  */
 import { useState } from 'react';
-
-export type OverlayLayer = 'iz' | 'ob' | 'fvg' | 'sp' | 'liq' | 'fib' | 'sr' | 'bos' | 'disp' | 'judas' | 'sessions' | 'killZones';
-
+export type OverlayLayer = 'iz' | 'ob' | 'fvg' | 'sp' | 'liq' | 'bsl' | 'fib' | 'sr' | 'ipda' | 'bos' | 'disp' | 'judas' | 'sessions' | 'killZones';
 export interface OverlayVisibility {
   iz: boolean;
   ob: boolean;
   fvg: boolean;
   sp: boolean;
   liq: boolean;
+  bsl: boolean;
   fib: boolean;
   sr: boolean;
+  ipda: boolean;
   bos: boolean;
   disp: boolean;
   judas: boolean;
   sessions: boolean;
   killZones: boolean;
 }
-
 interface LayerInfo {
   key: OverlayLayer;
   label: string;
@@ -31,22 +30,22 @@ interface LayerInfo {
   activeColor: string;
   tooltip: string;
 }
-
 const LAYERS: LayerInfo[] = [
   { key: 'iz', label: 'IZ', color: 'border-cyan-500/40 text-cyan-400', activeColor: 'bg-cyan-500/20 border-cyan-400 text-cyan-300', tooltip: 'Impulse Zone — full impulse leg + entry POI' },
-  { key: 'ob', label: 'OB', color: 'border-orange-500/40 text-warn', activeColor: 'bg-badge-warn border-orange-400 text-warn', tooltip: 'Order Blocks — institutional supply/demand zones' },
-  { key: 'fvg', label: 'FVG', color: 'border-purple-500/40 text-tier3', activeColor: 'bg-purple-500/20 border-purple-400 text-tier3', tooltip: 'Fair Value Gaps — imbalance zones' },
+  { key: 'ob', label: 'OB', color: 'border-orange-500/40 text-warn', activeColor: 'bg-badge-warn border-orange-400 text-warn', tooltip: 'Order Blocks — institutional supply/demand zones (lifecycle-colored)' },
+  { key: 'fvg', label: 'FVG', color: 'border-purple-500/40 text-tier3', activeColor: 'bg-purple-500/20 border-purple-400 text-tier3', tooltip: 'Fair Value Gaps — imbalance zones (lifecycle-colored)' },
   { key: 'sp', label: 'SP', color: 'border-yellow-500/40 text-highlight', activeColor: 'bg-badge-warn border-yellow-400 text-highlight', tooltip: 'Swing Points — HH/HL/LH/LL structure' },
   { key: 'liq', label: 'LIQ', color: 'border-destructive/40 text-loss', activeColor: 'bg-badge-loss border-red-400 text-loss', tooltip: 'Liquidity Pools — equal highs/lows' },
+  { key: 'bsl', label: 'BSL/SSL', color: 'border-fuchsia-500/40 text-fuchsia-400', activeColor: 'bg-fuchsia-500/20 border-fuchsia-400 text-fuchsia-300', tooltip: 'Buy-Side / Sell-Side Liquidity — directional sweep targets' },
   { key: 'fib', label: 'FIB', color: 'border-blue-500/40 text-info-c', activeColor: 'bg-badge-info border-blue-400 text-info-c', tooltip: 'Fibonacci Levels — retracement zones' },
   { key: 'sr', label: 'S/R', color: 'border-emerald-500/40 text-profit', activeColor: 'bg-badge-profit border-emerald-400 text-profit', tooltip: 'Support / Resistance levels' },
+  { key: 'ipda', label: 'IPDA', color: 'border-violet-500/40 text-violet-400', activeColor: 'bg-violet-500/20 border-violet-400 text-violet-300', tooltip: 'IPDA — Premium/Discount/Equilibrium zones (HTF range)' },
   { key: 'bos', label: 'BOS', color: 'border-sky-500/40 text-tier2', activeColor: 'bg-sky-500/20 border-sky-400 text-tier2', tooltip: 'BOS/CHoCH — structure break & change of character' },
   { key: 'disp', label: 'DISP', color: 'border-rose-500/40 text-rose-400', activeColor: 'bg-rose-500/20 border-rose-400 text-rose-300', tooltip: 'Displacement Candles — strong momentum candles' },
   { key: 'judas', label: 'JDS', color: 'border-amber-500/40 text-warn', activeColor: 'bg-badge-warn border-amber-400 text-warn', tooltip: 'Judas Swing — false break & reversal' },
   { key: 'sessions', label: 'SES', color: 'border-indigo-500/40 text-indigo-400', activeColor: 'bg-indigo-500/20 border-indigo-400 text-indigo-300', tooltip: 'Session Boxes — Asian/London/NY time windows' },
   { key: 'killZones', label: 'KZ', color: 'border-pink-500/40 text-pink-400', activeColor: 'bg-pink-500/20 border-pink-400 text-pink-300', tooltip: 'Kill Zones — high-probability time windows' },
 ];
-
 interface ChartOverlayHUDProps {
   visibility: OverlayVisibility;
   onToggle: (layer: OverlayLayer) => void;
@@ -55,7 +54,6 @@ interface ChartOverlayHUDProps {
   /** Extra detail per layer for tooltips */
   layerDetails?: Partial<Record<OverlayLayer, string>>;
 }
-
 export function ChartOverlayHUD({ visibility, onToggle, confluenceScore, direction, layerDetails }: ChartOverlayHUDProps) {
   const [hoveredLayer, setHoveredLayer] = useState<OverlayLayer | null>(null);
 
@@ -123,8 +121,10 @@ export const DEFAULT_VISIBILITY: OverlayVisibility = {
   fvg: true,
   sp: true,
   liq: true,
+  bsl: true,
   fib: true,
   sr: true,
+  ipda: false,
   bos: true,
   disp: true,
   judas: true,

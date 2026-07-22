@@ -151,6 +151,22 @@ export interface ChartJudasSwing {
   description: string;
 }
 
+export interface ChartBSLSSL {
+  price: number;
+  type: "bsl" | "ssl";
+  strength?: number;
+  swept?: boolean;
+  state?: string; // active, swept_rejected, swept_absorbed, retested
+}
+
+export interface ChartIPDA {
+  swingHigh: number;
+  swingLow: number;
+  currentZone: "premium" | "discount" | "equilibrium";
+  zonePercent: number;
+  oteZone: boolean;
+}
+
 export interface SMCOverlays {
   orderBlocks?: ChartOrderBlock[];
   fvgs?: ChartFVG[];
@@ -169,6 +185,9 @@ export interface SMCOverlays {
   chochLevels?: ChartStructureBreak[];
   displacementCandles?: ChartDisplacementCandle[];
   judasSwing?: ChartJudasSwing | null;
+  // Session 3: BSL/SSL + IPDA
+  bslSsl?: ChartBSLSSL[];
+  ipda?: ChartIPDA | null;
 }
 
 export type OverlayLayer =
@@ -178,11 +197,13 @@ export type OverlayLayer =
   | "breakers"
   | "swingPoints"
   | "liquidity"
+  | "bslSsl"
   | "fibs"
   | "htfPOIs"
   | "trades"
   | "support"
   | "resistance"
+  | "ipda"
   | "bosChoch"
   | "displacement"
   | "judasSwing"
@@ -257,6 +278,21 @@ const COLORS = {
   // Kill Zones
   kzLondon: "rgba(236,72,153,0.08)", // pink
   kzNY: "rgba(236,72,153,0.08)",
+  // BSL/SSL
+  bsl: "rgba(217,70,239,0.8)", // fuchsia-500
+  ssl: "rgba(168,85,247,0.8)", // purple-500
+  bslSwept: "rgba(217,70,239,0.3)",
+  sslSwept: "rgba(168,85,247,0.3)",
+  // IPDA zones
+  ipdaPremium: "rgba(239,68,68,0.04)", // very subtle red
+  ipdaDiscount: "rgba(34,197,94,0.04)", // very subtle green
+  ipdaEquilibrium: "rgba(250,204,21,0.03)", // very subtle yellow
+  ipdaOTE: "rgba(6,182,212,0.06)", // subtle cyan for OTE zone
+  // Zone lifecycle state modifiers
+  stateActive: 1.0,
+  stateTested: 0.6,
+  stateMitigating: 0.35,
+  stateBroken: 0.15,
 };
 
 // ─── Layer Definitions ──────────────────────────────────────────────────────
@@ -268,11 +304,13 @@ const LAYER_DEFS: { id: OverlayLayer; label: string; color: string }[] = [
   { id: "breakers", label: "BRK", color: "#ec4899" },
   { id: "swingPoints", label: "SP", color: "#f59e0b" },
   { id: "liquidity", label: "LIQ", color: "#a855f7" },
+  { id: "bslSsl", label: "BSL/SSL", color: "#d946ef" },
   { id: "fibs", label: "FIB", color: "#f59e0b" },
   { id: "htfPOIs", label: "HTF", color: "#22c55e" },
   { id: "trades", label: "TRADE", color: "#06b6d4" },
   { id: "support", label: "S", color: "#22c55e" },
   { id: "resistance", label: "R", color: "#ef4444" },
+  { id: "ipda", label: "IPDA", color: "#8b5cf6" },
   { id: "bosChoch", label: "BOS", color: "#38bdf8" },
   { id: "displacement", label: "DISP", color: "#34d399" },
   { id: "judasSwing", label: "JDS", color: "#fbbf24" },
@@ -630,67 +668,85 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
       }
     }
 
-    // ─── Order Blocks ─────────────────────────────────────────────────
+    // ─── Order Blocks (lifecycle-colored) ─────────────────────────────
     if (visibleLayers.has("orderBlocks") && overlays.orderBlocks?.length) {
       for (const ob of overlays.orderBlocks.slice(0, 15)) {
         const isBull = ob.direction === "bullish";
-        const color = isBull ? COLORS.bullOB : COLORS.bearOB;
+        const baseColor = isBull ? COLORS.bullOB : COLORS.bearOB;
+        const opacity = ob.state === "tested" ? COLORS.stateTested
+          : ob.state === "mitigating" ? COLORS.stateMitigating
+          : ob.state === "broken" ? COLORS.stateBroken
+          : COLORS.stateActive;
+        const color = baseColor.replace(/[\d.]+\)$/, `${opacity})`);
+        const stateLabel = ob.state && ob.state !== "active" ? ` [${ob.state}]` : "";
         const tf = ob.timeframe ? ` ${ob.timeframe}` : "";
+        const lineStyle = ob.state === "mitigating" || ob.state === "broken" ? LineStyle.Dashed : LineStyle.Solid;
         addLine({
           price: ob.high,
           color,
           lineWidth: 1,
-          lineStyle: LineStyle.Solid,
+          lineStyle,
           axisLabelVisible: false,
-          title: `OB${tf}`,
+          title: `OB${tf}${stateLabel}`,
         });
         addLine({
           price: ob.low,
           color,
           lineWidth: 1,
-          lineStyle: LineStyle.Solid,
+          lineStyle,
           axisLabelVisible: false,
           title: "",
         });
       }
     }
 
-    // ─── FVGs ─────────────────────────────────────────────────────────
+    // ─── FVGs (lifecycle-colored) ────────────────────────────────────
     if (visibleLayers.has("fvgs") && overlays.fvgs?.length) {
       for (const fvg of overlays.fvgs.slice(0, 15)) {
         const isBull = fvg.direction === "bullish";
-        const color = isBull ? COLORS.bullFVG : COLORS.bearFVG;
+        const baseColor = isBull ? COLORS.bullFVG : COLORS.bearFVG;
+        const opacity = fvg.state === "respected" || fvg.state === "partially_filled" ? COLORS.stateTested
+          : fvg.state === "filled" ? COLORS.stateBroken
+          : COLORS.stateActive;
+        const color = baseColor.replace(/[\d.]+\)$/, `${opacity})`);
+        const stateLabel = fvg.state && fvg.state !== "open" ? ` [${fvg.state}${fvg.fillPercent ? ` ${fvg.fillPercent}%` : ""}]` : "";
+        const lineStyle = fvg.state === "filled" ? LineStyle.Dotted : LineStyle.Dashed;
         addLine({
           price: fvg.high,
           color,
           lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
+          lineStyle,
           axisLabelVisible: false,
-          title: "FVG",
+          title: `FVG${stateLabel}`,
         });
         addLine({
           price: fvg.low,
           color,
           lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
+          lineStyle,
           axisLabelVisible: false,
           title: "",
         });
       }
     }
 
-    // ─── Breaker Blocks ───────────────────────────────────────────────
+    // ─── Breaker Blocks (lifecycle-colored) ─────────────────────────
     if (visibleLayers.has("breakers") && overlays.breakerBlocks?.length) {
       for (const bb of overlays.breakerBlocks.slice(0, 8)) {
         const isBull = bb.direction.includes("bullish");
-        const color = isBull ? COLORS.bullBreaker : COLORS.bearBreaker;
+        const baseColor = isBull ? COLORS.bullBreaker : COLORS.bearBreaker;
+        const opacity = bb.state === "tested" ? COLORS.stateTested
+          : bb.state === "broken" ? COLORS.stateBroken
+          : COLORS.stateActive;
+        const color = baseColor.replace(/[\d.]+\)$/, `${opacity})`);
+        const stateLabel = bb.state && bb.state !== "active" ? ` [${bb.state}]` : "";
         addLine({
           price: (bb.high + bb.low) / 2,
           color,
           lineWidth: 1,
-          lineStyle: LineStyle.LargeDashed,
+          lineStyle: bb.state === "broken" ? LineStyle.Dotted : LineStyle.LargeDashed,
           axisLabelVisible: false,
-          title: `BRK ${bb.timeframe ?? ""}`,
+          title: `BRK ${bb.timeframe ?? ""}${stateLabel}`,
         });
       }
     }
@@ -706,6 +762,103 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
           lineStyle: LineStyle.Dotted,
           axisLabelVisible: true,
           title: `$$$ ${lp.strength ? `(${lp.strength})` : ""}`,
+        });
+      }
+    }
+
+    // ─── BSL/SSL (Buy-Side / Sell-Side Liquidity) ─────────────────────
+    if (visibleLayers.has("bslSsl") && overlays.bslSsl?.length) {
+      for (const level of overlays.bslSsl.slice(0, 12)) {
+        const isBSL = level.type === "bsl";
+        const isSwept = level.swept || level.state === "swept_rejected" || level.state === "swept_absorbed";
+        const color = isBSL
+          ? (isSwept ? COLORS.bslSwept : COLORS.bsl)
+          : (isSwept ? COLORS.sslSwept : COLORS.ssl);
+        const lineStyle = isSwept ? LineStyle.Dotted : LineStyle.Solid;
+        const stateTag = level.state && level.state !== "active" ? ` (${level.state.replace("_", " ")})` : "";
+        addLine({
+          price: level.price,
+          color,
+          lineWidth: isSwept ? 1 : 2,
+          lineStyle,
+          axisLabelVisible: true,
+          title: `${isBSL ? "BSL" : "SSL"}${level.strength ? ` ×${level.strength}` : ""}${stateTag}`,
+        });
+      }
+    }
+
+    // ─── IPDA (Premium / Discount / Equilibrium) ─────────────────────
+    if (visibleLayers.has("ipda") && overlays.ipda) {
+      const ipda = overlays.ipda;
+      const range = ipda.swingHigh - ipda.swingLow;
+      if (range > 0) {
+        // Equilibrium line (50%)
+        const eqPrice = ipda.swingLow + range * 0.5;
+        addLine({
+          price: eqPrice,
+          color: "rgba(250,204,21,0.6)",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "EQ (50%)",
+        });
+        // Premium boundary (55%)
+        const premiumLine = ipda.swingLow + range * 0.55;
+        addLine({
+          price: premiumLine,
+          color: "rgba(239,68,68,0.4)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: false,
+          title: "Premium",
+        });
+        // Discount boundary (45%)
+        const discountLine = ipda.swingLow + range * 0.45;
+        addLine({
+          price: discountLine,
+          color: "rgba(34,197,94,0.4)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: false,
+          title: "Discount",
+        });
+        // OTE zone boundaries (62%-79%)
+        if (ipda.oteZone) {
+          const oteLow = ipda.swingLow + range * 0.62;
+          const oteHigh = ipda.swingLow + range * 0.79;
+          addLine({
+            price: oteLow,
+            color: "rgba(6,182,212,0.5)",
+            lineWidth: 1,
+            lineStyle: LineStyle.LargeDashed,
+            axisLabelVisible: false,
+            title: "OTE Low",
+          });
+          addLine({
+            price: oteHigh,
+            color: "rgba(6,182,212,0.5)",
+            lineWidth: 1,
+            lineStyle: LineStyle.LargeDashed,
+            axisLabelVisible: true,
+            title: "OTE (62-79%)",
+          });
+        }
+        // Swing High / Low reference
+        addLine({
+          price: ipda.swingHigh,
+          color: "rgba(239,68,68,0.3)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "IPDA High",
+        });
+        addLine({
+          price: ipda.swingLow,
+          color: "rgba(34,197,94,0.3)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Solid,
+          axisLabelVisible: true,
+          title: "IPDA Low",
         });
       }
     }
@@ -1069,7 +1222,9 @@ function SMCChart({ candles, overlays, loading, symbol, defaultLayers, hideToolb
     if (overlays.breakerBlocks?.length) s.add("breakers");
     if (overlays.swingPoints?.length) s.add("swingPoints");
     if (overlays.liquidityPools?.length) s.add("liquidity");
+    if (overlays.bslSsl?.length) s.add("bslSsl");
     if (overlays.fibLevels?.length || overlays.fiftyPercentLevel) s.add("fibs");
+    if (overlays.ipda) s.add("ipda");
     if (overlays.htfPOIs?.length) s.add("htfPOIs");
     if (overlays.trades?.length) s.add("trades");
     if (overlays.keySupport?.length) s.add("support");
