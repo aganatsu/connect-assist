@@ -1182,6 +1182,10 @@ Deno.serve(async (req) => {
       }
       const { data: pending } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "pending");
       const { data: history } = await supabase.from("paper_trade_history").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
+      // Fetch post-mortems for closed trades (keyed by position_id)
+      const { data: postMortems } = await supabase.from("trade_post_mortems").select("position_id, what_worked, what_failed, lesson_learned, detail_json").eq("user_id", user.id).order("created_at", { ascending: false }).limit(500);
+      const pmByPosId: Record<string, any> = {};
+      for (const pm of (postMortems || [])) { pmByPosId[pm.position_id] = pm; }
 
       const balance = parseFloat(account?.balance || "10000");
       const peakBalance = parseFloat(account?.peak_balance || "10000");
@@ -1209,18 +1213,30 @@ Deno.serve(async (req) => {
         };
       });
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);
-      const histArr = (history || []).map((t: any) => ({
-        id: t.position_id, symbol: t.symbol, direction: t.direction,
-        size: parseFloat(t.size), entryPrice: parseFloat(t.entry_price),
-        exitPrice: parseFloat(t.exit_price), pnl: parseFloat(t.pnl),
-        pnlPips: parseFloat(t.pnl_pips), openTime: t.open_time,
-        closedAt: t.closed_at, closeReason: t.close_reason,
-        signalReason: t.signal_reason || "", signalScore: parseFloat(t.signal_score || "0"),
-        orderId: t.order_id,
-        botId: t.bot_id || "smc",
-        stopLoss: t.stop_loss ? parseFloat(t.stop_loss) : null,
-        takeProfit: t.take_profit ? parseFloat(t.take_profit) : null,
-      }));
+      const histArr = (history || []).map((t: any) => {
+        const pm = pmByPosId[t.position_id] || null;
+        return {
+          id: t.position_id, symbol: t.symbol, direction: t.direction,
+          size: parseFloat(t.size), entryPrice: parseFloat(t.entry_price),
+          exitPrice: parseFloat(t.exit_price), pnl: parseFloat(t.pnl),
+          pnlPips: parseFloat(t.pnl_pips), openTime: t.open_time,
+          closedAt: t.closed_at, closeReason: t.close_reason,
+          signalReason: t.signal_reason || "", signalScore: parseFloat(t.signal_score || "0"),
+          orderId: t.order_id,
+          botId: t.bot_id || "smc",
+          stopLoss: t.stop_loss ? parseFloat(t.stop_loss) : null,
+          takeProfit: t.take_profit ? parseFloat(t.take_profit) : null,
+          postMortem: pm ? {
+            whatWorked: pm.what_worked || null,
+            whatFailed: pm.what_failed || null,
+            lessonLearned: pm.lesson_learned || null,
+            outcome: pm.detail_json?.outcome || null,
+            holdDuration: pm.detail_json?.holdDuration || null,
+            factorsPresent: pm.detail_json?.factorsPresent || [],
+            factorsAbsent: pm.detail_json?.factorsAbsent || [],
+          } : null,
+        };
+      });
       const wins = histArr.filter((t: any) => t.pnl > 0).length;
       const losses = histArr.filter((t: any) => t.pnl <= 0).length;
       const drawdown = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
