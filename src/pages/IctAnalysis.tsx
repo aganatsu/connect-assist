@@ -43,40 +43,56 @@ export default function IctAnalysis() {
   });
   const { data: sessionInfo } = useQuery({ queryKey: ["session-info"], queryFn: () => smcApi.session(), refetchInterval: 60000 });
 
-  const { data: liveQuotes } = useQuery({
+  // Currency Strength — fetch 28 major+cross pairs for full 8-currency coverage
+  const strengthPairs = useMemo(() => [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF",
+    "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "EUR/CHF",
+    "GBP/JPY", "GBP/AUD", "GBP/CAD", "GBP/NZD", "GBP/CHF",
+    "AUD/JPY", "AUD/CAD", "AUD/NZD", "AUD/CHF",
+    "CAD/JPY", "CAD/CHF",
+    "NZD/JPY", "NZD/CAD", "NZD/CHF",
+    "CHF/JPY",
+  ], []);
+  const { data: liveQuotes, isError: quotesError } = useQuery({
     queryKey: ["ict-live-quotes"],
     queryFn: async () => {
-      const pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"];
       try {
-        return await marketApi.batchQuotes(pairs);
+        return await marketApi.batchQuotes(strengthPairs);
       } catch {
+        // Fallback: try just the 7 majors individually
         const results: Record<string, any> = {};
-        await Promise.all(pairs.map(async (pair) => { try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; } }));
-        return results;
+        const majors = strengthPairs.slice(0, 7);
+        await Promise.all(majors.map(async (pair) => { try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; } }));
+        return Object.keys(results).length > 0 ? results : null;
       }
     },
     staleTime: 30000,
+    refetchInterval: 60000,
   });
-
-  const { data: currencyStrength } = useQuery({
-    queryKey: ["ict-currency-strength", liveQuotes],
-    queryFn: () => {
-      if (!liveQuotes) return null;
-      const pairData: Record<string, { change: number }> = {};
-      Object.entries(liveQuotes).forEach(([pair, q]: [string, any]) => { const pct = q?.percentChange ?? q?.change; if (pct != null) pairData[pair] = { change: pct }; });
-      return Object.keys(pairData).length > 0 ? smcApi.currencyStrength(pairData) : null;
-    },
-    enabled: !!liveQuotes, staleTime: 30000,
-  });
-
+  // Compute currency strength locally (no extra network hop to smc-analysis)
   const strengthData = useMemo(() => {
-    if (!currencyStrength) return [];
-    const arr = Array.isArray(currencyStrength) ? currencyStrength : Object.values(currencyStrength);
-    return arr
-      .filter((item: any) => item.currency && typeof item.currency === 'string' && item.currency.length <= 4)
-      .map((item: any) => ({ currency: item.currency, score: Math.round(((item.strength ?? item.score ?? 0) + Number.EPSILON) * 100) / 100 }))
-      .sort((a: any, b: any) => b.score - a.score);
-  }, [currencyStrength]);
+    if (!liveQuotes) return [];
+    const scores: Record<string, number> = {};
+    const counts: Record<string, number> = {};
+    CURRENCIES.forEach(c => { scores[c] = 0; counts[c] = 0; });
+    for (const [pair, q] of Object.entries(liveQuotes)) {
+      if (!q || (q as any).error) continue;
+      const pct = (q as any)?.percentChange ?? (q as any)?.change;
+      if (pct == null) continue;
+      const base = pair.slice(0, 3).toUpperCase();
+      const quote = pair.slice(4, 7).toUpperCase();
+      if (scores[base] !== undefined) { scores[base] += pct; counts[base]++; }
+      if (scores[quote] !== undefined) { scores[quote] -= pct; counts[quote]++; }
+    }
+    // Normalize by pair count for fair comparison
+    const result = CURRENCIES.map(c => ({
+      currency: c,
+      score: counts[c] > 0 ? Math.round((scores[c] / counts[c]) * 100) / 100 : 0,
+    }));
+    if (result.every(r => r.score === 0)) return [];
+    return result.sort((a, b) => b.score - a.score);
+  }, [liveQuotes]);
+  const strengthUnavailable = quotesError || (liveQuotes && strengthData.length === 0);
 
   // Correlation matrix from real candle close % changes
   const { data: correlationCandles } = useQuery({
@@ -273,10 +289,12 @@ export default function IctAnalysis() {
                         </ResponsiveContainer>
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-1 text-center">
-                        Based on % change across major pairs · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
+                        Based on % change across 28 pairs · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
                       </p>
                     </div>
-                  ) : <p className="text-xs text-muted-foreground">Loading...</p>}
+                  ) : strengthUnavailable ? (
+                    <p className="text-xs text-muted-foreground">Market data unavailable (market may be closed)</p>
+                  ) : <p className="text-xs text-muted-foreground animate-pulse">Fetching live quotes...</p>}
                 </div>
               </AccordionContent>
             </AccordionItem>

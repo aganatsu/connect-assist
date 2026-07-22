@@ -101,6 +101,20 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "entry_exit", label: "Partial Take Profit", keywords: ["partial", "tp", "scale out", "management"] },
   { tab: "entry_exit", label: "Time-Based Exit", keywords: ["time", "exit", "hours", "auto close", "max hold", "management"] },
   { tab: "entry_exit", label: "Structure Invalidation", keywords: ["structure", "invalidation", "choch", "reversal", "protection", "management"] },
+  { tab: "entry_exit", label: "Adaptive Trailing", keywords: ["adaptive", "trailing", "atr", "tighten", "widen", "momentum", "fade"] },
+  { tab: "entry_exit", label: "Regime-Adaptive TP", keywords: ["regime", "adaptive", "tp", "trending", "ranging", "rr", "multiplier"] },
+  { tab: "entry_exit", label: "Staging Mode", keywords: ["staging", "persist", "cycles", "ttl", "fleeting", "filter"] },
+  { tab: "entry_exit", label: "Watch Threshold", keywords: ["watch", "threshold", "watchlist", "minimum", "confluence"] },
+  { tab: "entry_exit", label: "Limit Order Distance", keywords: ["limit", "order", "distance", "pips", "pending", "max", "min"] },
+  { tab: "entry_exit", label: "Pending Order Cooldown", keywords: ["pending", "cooldown", "expiry", "re-place", "wait"] },
+  { tab: "strategy", label: "Direction Engine", keywords: ["direction", "engine", "consensus", "strict", "veto", "htf", "mtf", "alignment", "weight"] },
+  { tab: "strategy", label: "Zone Engine Fine-Tuning", keywords: ["zone", "quality", "threshold", "age", "body", "ratio", "displacement", "atr"] },
+  { tab: "instruments", label: "ATR Filter (Entry Gate)", keywords: ["atr", "filter", "gate", "entry", "min", "max", "pips", "quiet", "volatile"] },
+  { tab: "ict2022", label: "ICT HTF Min Bias", keywords: ["ict", "htf", "bias", "strength", "confidence", "fine-tuning"] },
+  { tab: "ict2022", label: "ICT Displacement Min Ratio", keywords: ["ict", "displacement", "ratio", "body", "range", "mss", "fine-tuning"] },
+  { tab: "ict2022", label: "ICT Judas Min Sweep", keywords: ["ict", "judas", "sweep", "pips", "liquidity", "fine-tuning"] },
+  { tab: "ict2022", label: "ICT FVG Min Body Ratio", keywords: ["ict", "fvg", "body", "ratio", "doji", "fine-tuning"] },
+  { tab: "ict2022", label: "ICT Kill Zone Buffer", keywords: ["ict", "kill zone", "buffer", "minutes", "boundary", "fine-tuning"] },
   // Instruments
   { tab: "instruments", label: "Instruments", keywords: ["instruments", "pairs", "symbols", "forex", "crypto", "indices"] },
   { tab: "instruments", label: "Enable Spread Filter", keywords: ["spread", "filter", "broker"] },
@@ -1145,6 +1159,79 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       </div>
                       <ToggleField label="FVG Only Unfilled" description="Score only Fair Value Gaps that haven't been mitigated/filled yet. Recommended on." checked={config.strategy?.fvgOnlyUnfilled ?? true} onChange={v => updateField('strategy', 'fvgOnlyUnfilled', v)} />
                     </div>
+
+                    {/* ── Direction Engine ── */}
+                    <div className="border border-border/60 rounded-md p-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Direction Engine</p>
+                      <p className="text-[11px] text-muted-foreground -mt-2">How the bot determines trade direction from multiple timeframe signals.</p>
+                      <FieldGroup label="Direction Engine Mode" description="How HTF/MTF signals combine: consensus (majority vote), strict (all must agree), or veto (any dissent blocks)">
+                        <Select value={config.strategy?.directionEngineMode ?? 'consensus'} onValueChange={v => updateField('strategy', 'directionEngineMode', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="consensus">Consensus (majority vote)</SelectItem>
+                            <SelectItem value="strict">Strict (all must agree)</SelectItem>
+                            <SelectItem value="veto">Veto (any dissent blocks)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FieldGroup>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="Min Consensus (%)" description="Minimum agreement % across timeframes to confirm direction">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.directionEngineMinConsensus ?? 60]} onValueChange={v => updateField('strategy', 'directionEngineMinConsensus', v[0])} min={40} max={100} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.directionEngineMinConsensus ?? 60}%</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Veto Threshold (%)" description="If opposing signals exceed this %, direction is blocked">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.directionEngineVetoThreshold ?? 30]} onValueChange={v => updateField('strategy', 'directionEngineVetoThreshold', v[0])} min={10} max={50} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.directionEngineVetoThreshold ?? 30}%</span>
+                          </div>
+                        </FieldGroup>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="HTF Alignment Weight" description="How much weight to give higher timeframe (D1/H4) signals">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.htfAlignmentWeight ?? 2.0]} onValueChange={v => updateField('strategy', 'htfAlignmentWeight', v[0])} min={0.5} max={5.0} step={0.25} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.htfAlignmentWeight ?? 2.0}×</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="MTF Alignment Weight" description="How much weight to give mid timeframe (H1/M15) signals">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.mtfAlignmentWeight ?? 1.0]} onValueChange={v => updateField('strategy', 'mtfAlignmentWeight', v[0])} min={0.25} max={3.0} step={0.25} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.mtfAlignmentWeight ?? 1.0}×</span>
+                          </div>
+                        </FieldGroup>
+                      </div>
+                    </div>
+
+                    {/* ── Zone Engine Fine-Tuning ── */}
+                    <div className="border border-border/60 rounded-md p-4 space-y-4">
+                      <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Zone Engine Fine-Tuning</p>
+                      <p className="text-[11px] text-muted-foreground -mt-2">Control which zones qualify for trade entries. Stricter = fewer but higher-quality zones.</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        <FieldGroup label="Zone Quality Threshold" description="Minimum quality score (0-100) for a zone to be tradeable">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.zoneQualityThreshold ?? 40]} onValueChange={v => updateField('strategy', 'zoneQualityThreshold', v[0])} min={10} max={90} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.zoneQualityThreshold ?? 40}</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Zone Max Age (bars)" description="Discard zones older than this many bars. 0 = no age limit.">
+                          <Input type="number" value={config.strategy?.zoneMaxAgeBars ?? 200} onChange={e => updateField('strategy', 'zoneMaxAgeBars', parseInt(e.target.value) || 0)} min={0} max={1000} step={50} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Zone Min Body Ratio" description="OB candle body must be at least this % of total range (0-1). Filters doji-like OBs.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.zoneMinBodyRatio ?? 0.5]} onValueChange={v => updateField('strategy', 'zoneMinBodyRatio', v[0])} min={0.1} max={0.9} step={0.05} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{(config.strategy?.zoneMinBodyRatio ?? 0.5).toFixed(2)}</span>
+                          </div>
+                        </FieldGroup>
+                        <FieldGroup label="Zone Min Displacement (ATR)" description="Displacement candle must move at least this many ATRs to validate zone">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.zoneMinDisplacementATR ?? 1.5]} onValueChange={v => updateField('strategy', 'zoneMinDisplacementATR', v[0])} min={0.5} max={5.0} step={0.25} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.zoneMinDisplacementATR ?? 1.5}×</span>
+                          </div>
+                        </FieldGroup>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -1648,6 +1735,96 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         )}
                       </div>
 
+                      {/* ── Adaptive Trailing Stop ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Adaptive Trailing" description="Trail distance adjusts based on ATR and profit level. Widens near entry (room to breathe), tightens in profit (lock gains)." checked={config.strategy?.adaptiveTrailingEnabled ?? false} onChange={v => updateField('strategy', 'adaptiveTrailingEnabled', v)} />
+                        {config.strategy?.adaptiveTrailingEnabled && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <FieldGroup label="Base Trail (ATR Multiple)" description="Starting trail distance as ATR multiple. Lower = tighter trail.">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.strategy?.baseTrailATRMultiple ?? 1.5]} onValueChange={v => updateField('strategy', 'baseTrailATRMultiple', v[0])} min={0.5} max={4} step={0.1} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.baseTrailATRMultiple ?? 1.5}×</span>
+                              </div>
+                            </FieldGroup>
+                            <div className="grid grid-cols-2 gap-4">
+                              <FieldGroup label="Tighten Factor" description="Multiplier when in profit (lower = tighter)">
+                                <Input type="number" value={config.strategy?.trailTightenFactor ?? 0.6} onChange={e => updateField('strategy', 'trailTightenFactor', parseFloat(e.target.value) || 0.6)} step={0.1} min={0.1} max={1.0} className="h-9 text-sm" />
+                              </FieldGroup>
+                              <FieldGroup label="Widen Factor" description="Multiplier near entry (higher = more room)">
+                                <Input type="number" value={config.strategy?.trailWidenFactor ?? 1.3} onChange={e => updateField('strategy', 'trailWidenFactor', parseFloat(e.target.value) || 1.3)} step={0.1} min={1.0} max={3.0} className="h-9 text-sm" />
+                              </FieldGroup>
+                            </div>
+                            <FieldGroup label="Momentum Fade Threshold" description="When momentum drops below this (0-1), trail tightens aggressively. 0.4 = tighten when momentum fades 60%.">
+                              <div className="flex items-center gap-4">
+                                <Slider value={[config.strategy?.momentumFadeThreshold ?? 0.4]} onValueChange={v => updateField('strategy', 'momentumFadeThreshold', v[0])} min={0.1} max={0.9} step={0.05} className="flex-1" />
+                                <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.momentumFadeThreshold ?? 0.4}</span>
+                              </div>
+                            </FieldGroup>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Regime-Adaptive TP ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Regime-Adaptive TP" description="Automatically adjust R:R target based on market regime. Wider targets in trending markets, tighter in ranging." checked={config.strategy?.regimeAdaptiveTPEnabled ?? false} onChange={v => updateField('strategy', 'regimeAdaptiveTPEnabled', v)} />
+                        {config.strategy?.regimeAdaptiveTPEnabled && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <div className="grid grid-cols-2 gap-4">
+                              <FieldGroup label="Trending R:R Multiplier" description="Multiply base R:R by this in trending markets">
+                                <Input type="number" value={config.strategy?.trendingRRMultiplier ?? 1.5} onChange={e => updateField('strategy', 'trendingRRMultiplier', parseFloat(e.target.value) || 1.5)} step={0.1} min={0.5} max={5.0} className="h-9 text-sm" />
+                              </FieldGroup>
+                              <FieldGroup label="Ranging R:R Multiplier" description="Multiply base R:R by this in ranging markets">
+                                <Input type="number" value={config.strategy?.rangingRRMultiplier ?? 0.75} onChange={e => updateField('strategy', 'rangingRRMultiplier', parseFloat(e.target.value) || 0.75)} step={0.05} min={0.25} max={2.0} className="h-9 text-sm" />
+                              </FieldGroup>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ── Staging & Pending Orders ── */}
+                      <div className="border border-border/60 p-3 space-y-3">
+                        <ToggleField label="Staging Mode" description="Require signals to persist across multiple scan cycles before placing orders. Filters out fleeting setups." checked={config.strategy?.stagingEnabled ?? true} onChange={v => updateField('strategy', 'stagingEnabled', v)} />
+                        {config.strategy?.stagingEnabled !== false && (
+                          <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                            <div className="grid grid-cols-2 gap-4">
+                              <FieldGroup label="Min Staging Cycles" description="Signal must persist this many scan cycles">
+                                <Input type="number" value={config.strategy?.minStagingCycles ?? 1} onChange={e => updateField('strategy', 'minStagingCycles', parseInt(e.target.value) || 1)} min={1} max={10} className="h-9 text-sm" />
+                              </FieldGroup>
+                              <FieldGroup label="Staging TTL (min)" description="Max time in staging before expiry">
+                                <Input type="number" value={config.strategy?.stagingTTLMinutes ?? 240} onChange={e => updateField('strategy', 'stagingTTLMinutes', parseInt(e.target.value) || 240)} min={30} max={1440} step={30} className="h-9 text-sm" />
+                              </FieldGroup>
+                            </div>
+                          </div>
+                        )}
+                        <FieldGroup label="Watch Threshold (%)" description="Minimum confluence score to add pair to watchlist. Below this, pair is ignored entirely.">
+                          <div className="flex items-center gap-4">
+                            <Slider value={[config.strategy?.watchThreshold ?? 25]} onValueChange={v => updateField('strategy', 'watchThreshold', v[0])} min={10} max={50} step={5} className="flex-1" />
+                            <span className="text-sm font-mono font-bold w-12 text-right">{config.strategy?.watchThreshold ?? 25}%</span>
+                          </div>
+                        </FieldGroup>
+                        <div className="grid grid-cols-2 gap-4">
+                          <FieldGroup label="Limit Order Max Distance (pips)" description="Don't place pending order if zone is further than this">
+                            <Input type="number" value={config.strategy?.limitOrderMaxDistancePips ?? 30} onChange={e => updateField('strategy', 'limitOrderMaxDistancePips', parseInt(e.target.value) || 30)} min={5} max={100} className="h-9 text-sm" />
+                          </FieldGroup>
+                          <FieldGroup label="Limit Order Min Distance (pips)" description="Don't place if zone is closer (market fill instead)">
+                            <Input type="number" value={config.strategy?.limitOrderMinDistancePips ?? 3} onChange={e => updateField('strategy', 'limitOrderMinDistancePips', parseInt(e.target.value) || 3)} min={0} max={20} className="h-9 text-sm" />
+                          </FieldGroup>
+                        </div>
+                        <FieldGroup label="Pending Order Cooldown (min)" description="After a pending order expires without filling, wait this long before re-placing.">
+                          <Input type="number" value={config.strategy?.pendingOrderCooldownMinutes ?? 0} onChange={e => updateField('strategy', 'pendingOrderCooldownMinutes', parseInt(e.target.value) || 0)} min={0} max={480} step={15} className="h-9 text-sm" />
+                        </FieldGroup>
+                        <FieldGroup label="Zone Preference" description="When multiple zones exist, prefer OB, FVG, or nearest to price">
+                          <Select value={config.strategy?.limitOrderPreferZone ?? 'ob'} onValueChange={v => updateField('strategy', 'limitOrderPreferZone', v)}>
+                            <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="ob">Order Block (OB)</SelectItem>
+                              <SelectItem value="fvg">Fair Value Gap (FVG)</SelectItem>
+                              <SelectItem value="nearest">Nearest to Price</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FieldGroup>
+                      </div>
+
                       {/* ── Structure Invalidation ── */}
                       <div className="border border-border/60 p-3 space-y-3">
                         <ToggleField label="Structure Invalidation" description="Tighten SL by 50% when market structure breaks against your trade (CHoCH detected). Protects against holding through reversals." checked={config.exit?.structureInvalidationEnabled ?? false} onChange={v => updateField('exit', 'structureInvalidationEnabled', v)} />
@@ -1788,6 +1965,25 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       )}
                       {!(config.instruments?.correlationFilterEnabled) && (
                         <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot may open conflicting or doubling positions on correlated pairs.</p>
+                      )}
+                    </div>
+
+                    {/* ── ATR Filter (Entry Gate) ── */}
+                    <div className="border-t border-border pt-4 mt-4">
+                      <SectionHeader title="ATR Filter (Entry Gate)" description="Block entries when the current ATR is outside a pip range. Prevents trading in dead or excessively volatile conditions." />
+                      <ToggleField label="Enable ATR Filter" description="Gate entries based on the current ATR value in pips" checked={config.instruments?.atrFilterEnabled ?? false} onChange={v => updateField('instruments', 'atrFilterEnabled', v)} />
+                      {(config.instruments?.atrFilterEnabled) && (
+                        <div className="grid grid-cols-2 gap-4 mt-3">
+                          <FieldGroup label="ATR Min (pips)" description="Skip if ATR below this — market too quiet for clean structure">
+                            <Input type="number" value={config.instruments?.atrFilterMinPips ?? 5} onChange={e => updateField('instruments', 'atrFilterMinPips', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" />
+                          </FieldGroup>
+                          <FieldGroup label="ATR Max (pips)" description="Skip if ATR exceeds this — market too volatile for reliable zones">
+                            <Input type="number" value={config.instruments?.atrFilterMaxPips ?? 50} onChange={e => updateField('instruments', 'atrFilterMaxPips', parseFloat(e.target.value) || 0)} step={1} min={0} className="h-9 text-sm" />
+                          </FieldGroup>
+                        </div>
+                      )}
+                      {!(config.instruments?.atrFilterEnabled) && (
+                        <p className="text-[10px] text-muted-foreground italic mt-2">When disabled, the bot trades regardless of current ATR range.</p>
                       )}
                     </div>
 
@@ -2535,6 +2731,61 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
                       {gate === "hard" ? "BLOCKING" : "SCORING"}
                     </Badge>
                   )}
+                </div>
+              )}
+
+              {/* Per-module fine-tuning params */}
+              {enabled && m.key === "htf" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Bias Strength</Label>
+                    <Slider value={[strategy.ictHTFMinBias ?? 0.6]} onValueChange={v => updateStrategy('ictHTFMinBias', v[0])} min={0.3} max={1.0} step={0.05} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(strategy.ictHTFMinBias ?? 0.6).toFixed(2)}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Minimum weekly/daily bias confidence (0-1) required to confirm HTF direction. Lower = more permissive.</p>
+                </div>
+              )}
+              {enabled && m.key === "mss" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Displacement Ratio</Label>
+                    <Slider value={[strategy.ictDisplacementMinRatio ?? 0.6]} onValueChange={v => updateStrategy('ictDisplacementMinRatio', v[0])} min={0.3} max={0.9} step={0.05} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(strategy.ictDisplacementMinRatio ?? 0.6).toFixed(2)}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Body/range ratio threshold for displacement candle. Higher = stricter (only strong impulsive breaks count).</p>
+                </div>
+              )}
+              {enabled && m.key === "judas" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Sweep (pips)</Label>
+                    <Input type="number" value={strategy.ictJudasMinSweepPips ?? 5} onChange={e => updateStrategy('ictJudasMinSweepPips', parseFloat(e.target.value) || 5)} step={1} min={1} max={30} className="h-7 text-xs w-20" />
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Minimum pip distance the Judas sweep must travel past the liquidity level to count as a valid sweep.</p>
+                </div>
+              )}
+              {enabled && m.key === "fvg" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Body Ratio</Label>
+                    <Slider value={[strategy.ictFVGMinBodyRatio ?? 0.5]} onValueChange={v => updateStrategy('ictFVGMinBodyRatio', v[0])} min={0.2} max={0.9} step={0.05} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(strategy.ictFVGMinBodyRatio ?? 0.5).toFixed(2)}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">FVG-creating candle must have body/range at least this ratio. Filters doji-created FVGs.</p>
+                </div>
+              )}
+              {enabled && m.key === "kz" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-32">KZ Buffer (min)</Label>
+                    <Input type="number" value={strategy.ictKZBufferMinutes ?? 5} onChange={e => updateStrategy('ictKZBufferMinutes', parseInt(e.target.value) || 5)} step={1} min={0} max={30} className="h-7 text-xs w-20" />
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Minutes before/after Kill Zone boundaries that still count as "inside" the zone. 0 = exact boundaries only.</p>
                 </div>
               )}
             </div>
