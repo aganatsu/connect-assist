@@ -1,53 +1,47 @@
-# Task: Rebuild ICT Analysis Page to Use Full Bot-Scanner Data
-## Branch: manus/ict-page-rebuild
+# Task: Chart Overlays — BSL/SSL, IPDA, Zone Lifecycle
+## Branch: manus/chart-overlays-bsl-ipda-lifecycle
 ## Behavior changes
-1. ICT Analysis page no longer calls `smcApi.fullAnalysis()` or fetches raw candles for its own analysis. It now reads from `scan_logs` (same data source as BotView's scan panel).
-2. Instrument sidebar now shows per-pair direction arrow and score from the latest scan.
-3. Page displays 13 new/enhanced sections that were previously unavailable: Direction Verdict, Regime Detection, Zone Story, Tiered Scoring, Structure Intelligence, Entity Lifecycles, Confluence Stacking, Sweep & Reclaim, Pullback Health, Setup Classification, Fibonacci Levels, Gates, and enhanced Currency Strength (from scanner meta).
-4. Removed: Correlation Matrix section (was a standalone computation unrelated to scanner data; can be re-added later if needed).
-5. Removed: Premium/Discount visual zone (now covered by Zone Story panel which shows the full trade narrative).
-6. Removed: PD/PW Levels section (data is available in scanner's chartOverlays for Session 3 chart overlays).
+1. **New overlay: BSL/SSL** — Buy-Side and Sell-Side Liquidity levels now render as labeled horizontal lines on the chart. BSL lines are fuchsia, SSL lines are purple. Swept levels appear faded/dotted; active levels are solid and bright. Data sourced from scanner `chartOverlays.liquidityPools` (directional).
+2. **New overlay: IPDA** — Premium/Discount/Equilibrium zone boundaries render from scanner daily entity data. Shows: IPDA High/Low, Equilibrium (50%), Premium (55%), Discount (45%), and OTE (62-79%) boundaries when in OTE zone. Off by default (toggle via HUD chip).
+3. **Zone lifecycle coloring** — Order Blocks, FVGs, and Breaker Blocks are now color-coded by their lifecycle state:
+   - Active: full opacity, solid line
+   - Tested: 60% opacity
+   - Mitigating: 35% opacity, dashed line
+   - Broken/Filled: 15% opacity, dotted line
+   - State labels appear in the price line title (e.g., "OB [tested]", "FVG [partially_filled 45%]")
+4. **OBs no longer filtered by mitigated flag** — Previously only non-mitigated OBs/FVGs were shown. Now all are shown but visually distinguished by state (broken ones are nearly invisible). This gives better context of where zones were.
 
 ## Files modified
-- `src/pages/IctAnalysis.tsx` — Complete rewrite (339 lines removed, 632 lines added). Now uses `scannerApi.logs()` as sole data source, reuses existing components (TierFactorBreakdown, TierScoreSummary, ZoneStoryPanel, generateDetailNarrative).
+- `src/components/ChartOverlayHUD.tsx` — Added `bsl` and `ipda` to OverlayLayer type, OverlayVisibility interface, LAYERS array, and DEFAULT_VISIBILITY
+- `src/components/SMCChart.tsx` — Added ChartBSLSSL and ChartIPDA interfaces, new OverlayLayer values, BSL/SSL colors, IPDA rendering section, lifecycle state coloring for OB/FVG/Breaker, layerHasData updates
+- `src/pages/Chart.tsx` — Added bsl/ipda to smcVisibleLayers mapping, BSL/SSL data derivation from scanner, IPDA data derivation from scanner dailyEntities, lifecycle state passthrough for OB/FVG/Breaker, layerDetails entries for bsl and ipda
 
 ## Tests added
-None (pure frontend display page with no business logic to unit-test; all data comes from scanner which has its own tests).
+None — this is a pure frontend rendering change with no backend logic. The scanner data shape is unchanged; we're only consuming existing fields that were previously unused on the chart.
 
 ## Tests run
-TypeScript check: `npx tsc --noEmit` → Exit code 0, zero errors.
+```
+npx tsc --noEmit → EXIT: 0 (zero errors)
+```
 
 ## Regression check
-- This is a display-only page with no effect on trading behavior. It reads scan_logs (read-only) and renders data.
-- No backend files modified.
-- No scoring, gates, or trade execution logic touched.
+- No backend changes — scanner output is identical
+- Existing overlays (OB, FVG, Breaker, Liquidity, Fib, S/R, BOS, Displacement, Judas, Sessions, KZ) continue to render with the same logic, only with added lifecycle state coloring
+- IPDA is off by default so existing users see no change unless they toggle it on
+- BSL/SSL is on by default but only renders when scanner data is available (graceful no-op otherwise)
 
 ## Open questions
-1. The Correlation Matrix was removed — should it be re-added as a separate section? It required fetching 60 days of daily candles for 7 pairs independently of the scanner.
-2. The page currently shows "No scanner data for X. Run a scan from the Bot tab." if no scan_logs exist. Should we add a "Run Scan" button directly on this page?
-3. Session 3 (Chart Overlays) will use `d.chartOverlays` data that's already available in the scanner detail — the ICT page is now perfectly positioned to receive chart overlay rendering.
+- Should IPDA default to ON? Currently set to OFF since it adds 6-8 horizontal lines which could feel cluttered alongside Fibs and S/R. User can toggle it on.
+- The BSL/SSL classification uses `direction === 'bullish'` → BSL, everything else → SSL. If the scanner uses different direction values, the classification may need adjustment.
 
 ## Suggested PR title and description
-**Title:** feat: rebuild ICT Analysis page to use full bot-scanner data
+**Title:** feat: Chart overlays — BSL/SSL liquidity, IPDA zones, zone lifecycle coloring
 
 **Description:**
-Completely rewrites the ICT Analysis page to consume `scan_logs` (the same data source as BotView's scan panel) instead of running its own duplicate analysis from raw candles.
+Adds three new chart overlay capabilities:
 
-**What's new:**
-- Direction Verdict with confidence/agreement/blocking
-- Regime Detection (Daily + 4H with transitions)
-- Zone Story (reuses ZoneStoryPanel)
-- Full Tiered Scoring + Factor Breakdown
-- Structure Intelligence (BOS/CHoCH, S2F, derived S/R)
-- Entity Lifecycles dashboard (OBs, FVGs, Swing Points, Liquidity, Breakers, Unicorns)
-- Confluence Stacking zones
-- Sweep & Reclaim events
-- Pullback Health / Decay
-- Setup Classification + Style suggestion
-- Fibonacci Levels
-- Gates pass/fail
-- Enhanced sidebar with direction arrows + scores
+1. **BSL/SSL overlay** — Renders buy-side and sell-side liquidity levels from scanner data with distinct colors and swept/active styling
+2. **IPDA overlay** — Shows Premium/Discount/Equilibrium zone boundaries and OTE zone from HTF scanner analysis
+3. **Zone lifecycle states** — OB/FVG/Breaker overlays now visually indicate their lifecycle state (active → tested → mitigating → broken) through opacity and line style changes
 
-**Removed:** Correlation Matrix, standalone Premium/Discount visual, PD/PW levels (data available for chart overlays in Session 3).
-
-**Technical:** Zero new API calls — all data comes from existing scanner output. Reuses TierFactorBreakdown, TierScoreSummary, ZoneStoryPanel, and generateDetailNarrative components.
+All overlays are toggleable via the existing HUD chip panel. IPDA defaults to off to avoid clutter; BSL/SSL defaults to on.
