@@ -143,6 +143,7 @@ const STATE_COLORS: Record<string, string> = {
   confirmed: "text-cyan-400",
   at_zone: "text-yellow-400",
   watching: "text-orange-400",
+  waiting_for_sweep: "text-purple-400",
   no_zone: "text-zinc-400",
   no_impulse: "text-zinc-400",
   error: "text-red-400",
@@ -153,6 +154,7 @@ const STATE_LABELS: Record<string, string> = {
   confirmed: "✓ Confirmed",
   at_zone: "📍 At Zone",
   watching: "⏳ Watching",
+  waiting_for_sweep: "⏳ Sweep Wait",
   no_zone: "— No Zone",
   no_impulse: "— No Impulse",
   error: "⚠ Error",
@@ -249,9 +251,9 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {isLiveContext && gateData?.bestZone && (gateData.bestZone.priceInsideZone || gateData.bestZone.priceAtZoneStrict) && (
+          {isLiveContext && gateData?.bestZone && (gateData.bestZone.priceInsideZone || gateData.bestZone.priceAtZoneStrict) && !unifiedData.confirmation?.entryReady && unifiedData.state !== "triggered" && unifiedData.state !== "confirmed" && (
             <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-300 animate-pulse">
-              ⏳ Hunting CHoCH
+              ⏳ Awaiting Confirmation
             </span>
           )}
           <span className={`text-xs font-bold ${stateColor}`}>{stateLabel}</span>
@@ -430,7 +432,7 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                 </span>
               ) : (
                 <span className="text-zinc-400">
-                  Waiting for CHoCH/displacement in {unifiedData.impulse?.direction ?? "—"} direction
+                  Waiting for confirmation in {unifiedData.impulse?.direction ?? "—"} direction
                 </span>
               )}
             </td>
