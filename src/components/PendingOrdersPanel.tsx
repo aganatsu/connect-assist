@@ -177,7 +177,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
-              Price in zone — waiting for {order.direction === "short" ? "bearish" : "bullish"} CHoCH on 5m
+              Price in zone — awaiting {order.direction === "short" ? "bearish" : "bullish"} confirmation
             </span>
             <span className="text-muted-foreground">
               SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
@@ -213,7 +213,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {/* Narrative sentence */}
         <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
           {isHunting
-            ? `Price has entered the ${order.entry_zone_type} zone. Watching 5m candles for ${order.direction === "short" ? "bearish" : "bullish"} CHoCH confirmation before entry.`
+            ? `Price has entered the ${order.entry_zone_type} zone. Watching for ${order.direction === "short" ? "bearish" : "bullish"} confirmation (CHoCH, displacement, or reversal) before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>
