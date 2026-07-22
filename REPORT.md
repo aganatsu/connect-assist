@@ -1,51 +1,38 @@
-# Task: Config Keys and Currency Strength Fix
-## Branch: manus/config-keys-and-currency-strength
+# Task: Expandable Trade Detail (Post-Mortem)
+## Branch: manus/expandable-trade-detail
 ## Behavior changes
-none — pure UI additions. No backend logic, gate definitions, or scoring weights were modified. All new config keys use `??` defaults that match existing runtime defaults, so existing bot behavior is unchanged until a user actively changes a value.
+1. Trade history items in the paper-trading status API response now include a `postMortem` field (object or null) containing: outcome, holdDuration, whatWorked, whatFailed, lessonLearned, factorsPresent, factorsAbsent.
+2. Expanded rows in both "Closed Today" and "History" tabs now display a Post-Mortem section (amber-bordered card) showing outcome badge, hold duration, what worked, what failed, and lesson learned.
+3. Mobile trade cards now have a chevron indicator and expand on tap to show score, signal source badge, post-mortem, and metadata (size, order ID, SL, TP).
 
 ## Files modified
-- `src/pages/IctAnalysis.tsx` — Fixed Currency Strength section: replaced broken `smc-analysis` function call with local computation using 28 major pairs. Eliminates perpetual "Loading..." state.
-- `src/components/BotConfigModal.tsx` — Added 35 missing config keys across 4 tabs:
-  - **Entry/Exit tab**: Adaptive Trailing Stop (5 params), Regime-Adaptive TP (3 params), Staging & Pending Orders (8 params)
-  - **Strategy tab**: Direction Engine (5 params), Zone Engine Fine-Tuning (4 params)
-  - **Instruments tab**: ATR Filter Entry Gate (3 params)
-  - **ICT 2022 tab**: Per-module fine-tuning (5 params inline with each module)
-  - **SEARCH_INDEX**: 15 new searchable entries for all new settings
+- `supabase/functions/paper-trading/index.ts` — Added fetch of `trade_post_mortems` table in status action; builds a lookup map by position_id and attaches postMortem object to each history item.
+- `src/pages/BotView.tsx` — Added Post-Mortem display section to desktop expanded row (before Trade Metadata Grid); enhanced mobile cards with chevron, expandable detail including score/signal source/post-mortem/metadata.
 
 ## Tests added
-No new automated tests added for this change — these are pure UI form controls that write to the existing `config` JSON blob. The config resolution chain (`strategy.key ?? raw.key ?? RUNTIME_DEFAULTS`) means all new keys are inert until a user sets them. TypeScript compilation (`tsc --noEmit`) passes with exit code 0.
+None added (frontend-only display change + backend query addition; no logic to unit-test beyond what generatePostMortem already covers).
 
 ## Tests run
-```
-$ npx tsc --noEmit
-Exit code: 0
-```
+TypeScript check: `npx tsc --noEmit` → Exit code 0, zero errors.
 
 ## Regression check
-- All new config fields use `??` fallback to the same defaults the backend already uses (verified against bot-scanner/index.ts RUNTIME_DEFAULTS)
-- No existing fields were moved, renamed, or removed
-- The `updateField('strategy', key, value)` pattern is identical to all existing fields — no new mutation paths introduced
-- TypeScript confirms no type errors across the entire project
+- The `histArr` mapping is strictly additive — existing fields are unchanged, only `postMortem` is appended.
+- If `trade_post_mortems` table is empty or the query fails, `pmByPosId` is empty and all trades get `postMortem: null` — no visual change from before.
+- Desktop expanded row: Post-Mortem section is conditionally rendered only when `t.postMortem` is truthy, so existing rows without post-mortem data render identically to before.
+- Mobile cards: the only structural change is wrapping the P&L + chevron in a flex div and adding the expandable section below — collapsed state looks the same.
 
 ## Open questions
-1. **Deployment reminder**: The Supabase functions (bot-scanner, zone-confirmation-scanner) from the previous pending-order-confirmation fix still need deploying. User should run:
-   ```bash
-   supabase functions deploy bot-scanner
-   supabase functions deploy zone-confirmation-scanner
-   ```
-2. **requireLiquiditySweep toggle**: User confirmed they want this ON — they need to enable it manually in the dashboard UI after this deploys.
-3. **Remaining ~30 config keys**: Some keys from the original gap analysis (e.g., `minStagingCycles` edge cases, `directionEngineMode` backend wiring) may need backend support to fully function. The UI is ready; backend wiring is a separate task.
+- The paper-trading status endpoint now makes an additional Supabase query (`trade_post_mortems`). This adds ~50-100ms latency. If this is a concern, we could lazy-load post-mortems client-side instead.
+- Older trades that were closed before `generatePostMortem` was added will show `postMortem: null` — no section displayed. This is expected behavior.
 
 ## Suggested PR title and description
-**Title:** feat: fix currency strength + add 35 missing config keys to BotConfigModal
+**Title:** feat: add post-mortem data to expandable trade detail rows
 
 **Description:**
-Fixes the perpetual "Loading..." state in the ICT Analysis Currency Strength section by computing strength locally from 28 major pairs instead of calling the broken smc-analysis edge function.
+Adds post-mortem analysis (what worked, what failed, lesson learned) to the expandable trade detail rows in both "Closed Today" and "History" tabs.
 
-Adds 35 previously-missing config keys to the BotConfigModal across 4 tabs:
-- **Entry/Exit**: Adaptive Trailing Stop, Regime-Adaptive TP, Staging & Pending Orders
-- **Strategy**: Direction Engine params, Zone Engine fine-tuning
-- **Instruments**: ATR Filter (Entry Gate)
-- **ICT 2022**: Per-module fine-tuning (HTF bias, displacement ratio, Judas sweep, FVG body ratio, KZ buffer)
+**Backend:** paper-trading status now fetches `trade_post_mortems` and attaches the data to each history item.
 
-All new fields use safe `??` defaults matching existing runtime behavior. No backend changes — pure frontend.
+**Frontend:** Amber-bordered Post-Mortem card renders in expanded rows showing outcome badge, hold duration, and the three insight fields. Mobile cards also get full expandable detail with chevron indicator.
+
+Both tabs use the same `TradeHistoryTable` component so the change applies uniformly.
