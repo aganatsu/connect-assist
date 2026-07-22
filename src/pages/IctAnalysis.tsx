@@ -2,14 +2,16 @@ import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { AppShell } from "@/components/AppShell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Clock, Target, Calendar, BarChart3, Grid3X3 } from "lucide-react";
-import { smcApi, marketApi } from "@/lib/api";
+import { Clock, Target, BarChart3, Layers, Activity, TrendingUp, TrendingDown, Minus, Compass, Shield, Zap, ArrowUpDown } from "lucide-react";
+import { scannerApi, marketApi } from "@/lib/api";
 import { INSTRUMENTS, SESSIONS, KILL_ZONES } from "@/lib/marketData";
 import { formatPrice } from "@/lib/formatTime";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
+import { TierFactorBreakdown, TierScoreSummary } from "@/components/TierFactorBreakdown";
+import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
+import { generateDetailNarrative } from "@/lib/narrative";
 import {
   BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
@@ -34,16 +36,50 @@ export default function IctAnalysis() {
     return () => window.removeEventListener('smc-symbol-change', handler);
   }, []);
 
-  const { data: candles } = useQuery({ queryKey: ["candles", selectedSymbol], queryFn: () => marketApi.candles(selectedSymbol, "1h", 200), staleTime: 60000 });
-  const { data: dailyCandles } = useQuery({ queryKey: ["daily-candles", selectedSymbol], queryFn: () => marketApi.candles(selectedSymbol, "1day", 30), staleTime: 300000 });
-  const { data: analysis, isLoading: analysisLoading } = useQuery({
-    queryKey: ["smc-analysis", selectedSymbol, candles?.length],
-    queryFn: () => smcApi.fullAnalysis(candles!, dailyCandles),
-    enabled: !!candles && candles.length > 0, staleTime: 60000,
+  // ── Data Source: Bot Scanner scan_logs (same as BotView) ──
+  const { data: scanLogs, isLoading: scanLoading } = useQuery({
+    queryKey: ["scan-logs"],
+    queryFn: () => scannerApi.logs(),
+    staleTime: 30000,
+    refetchInterval: 60000,
   });
-  const { data: sessionInfo } = useQuery({ queryKey: ["session-info"], queryFn: () => smcApi.session(), refetchInterval: 60000 });
 
-  // Currency Strength — fetch 28 major+cross pairs for full 8-currency coverage
+  // Parse latest scan
+  const { meta, pairDetails, selectedDetail } = useMemo(() => {
+    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    const currentScan = logs[0];
+    if (!currentScan) return { meta: null, pairDetails: [], selectedDetail: null };
+    let dj = currentScan.details_json;
+    if (typeof dj === "string") { try { dj = JSON.parse(dj); } catch { return { meta: null, pairDetails: [], selectedDetail: null }; } }
+    const arr = Array.isArray(dj) ? dj : [];
+    const m = arr.find((d: any) => d?.__meta) ?? null;
+    const details = arr.filter((d: any) => !d?.__meta);
+    const selected = details.find((d: any) => d?.pair === selectedSymbol) || null;
+    return { meta: m, pairDetails: details, selectedDetail: selected };
+  }, [scanLogs, selectedSymbol]);
+
+  // Scanner timestamp
+  const scanTime = useMemo(() => {
+    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    if (logs[0]?.scanned_at) {
+      const d = new Date(logs[0].scanned_at);
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return null;
+  }, [scanLogs]);
+
+  // Currency Strength from scanner __meta (already computed)
+  const strengthData = useMemo(() => {
+    if (meta?.fotsiStrengths && typeof meta.fotsiStrengths === "object") {
+      return CURRENCIES
+        .map(c => ({ currency: c, score: meta.fotsiStrengths[c] ?? 0 }))
+        .sort((a, b) => b.score - a.score);
+    }
+    // Fallback: compute from per-pair scanner data if no meta
+    return [];
+  }, [meta]);
+
+  // Fallback currency strength from live quotes (if scanner meta doesn't have it)
   const strengthPairs = useMemo(() => [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF",
     "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "EUR/CHF",
@@ -53,24 +89,17 @@ export default function IctAnalysis() {
     "NZD/JPY", "NZD/CAD", "NZD/CHF",
     "CHF/JPY",
   ], []);
-  const { data: liveQuotes, isError: quotesError } = useQuery({
+  const { data: liveQuotes } = useQuery({
     queryKey: ["ict-live-quotes"],
     queryFn: async () => {
-      try {
-        return await marketApi.batchQuotes(strengthPairs);
-      } catch {
-        // Fallback: try just the 7 majors individually
-        const results: Record<string, any> = {};
-        const majors = strengthPairs.slice(0, 7);
-        await Promise.all(majors.map(async (pair) => { try { results[pair] = await marketApi.quote(pair); } catch { results[pair] = null; } }));
-        return Object.keys(results).length > 0 ? results : null;
-      }
+      try { return await marketApi.batchQuotes(strengthPairs); } catch { return null; }
     },
     staleTime: 30000,
     refetchInterval: 60000,
+    enabled: strengthData.length === 0, // only fetch if scanner doesn't provide it
   });
-  // Compute currency strength locally (no extra network hop to smc-analysis)
-  const strengthData = useMemo(() => {
+  const fallbackStrength = useMemo(() => {
+    if (strengthData.length > 0) return strengthData;
     if (!liveQuotes) return [];
     const scores: Record<string, number> = {};
     const counts: Record<string, number> = {};
@@ -84,375 +113,639 @@ export default function IctAnalysis() {
       if (scores[base] !== undefined) { scores[base] += pct; counts[base]++; }
       if (scores[quote] !== undefined) { scores[quote] -= pct; counts[quote]++; }
     }
-    // Normalize by pair count for fair comparison
     const result = CURRENCIES.map(c => ({
       currency: c,
       score: counts[c] > 0 ? Math.round((scores[c] / counts[c]) * 100) / 100 : 0,
     }));
     if (result.every(r => r.score === 0)) return [];
     return result.sort((a, b) => b.score - a.score);
-  }, [liveQuotes]);
-  const strengthUnavailable = quotesError || (liveQuotes && strengthData.length === 0);
+  }, [strengthData, liveQuotes]);
 
-  // Correlation matrix from real candle close % changes
-  const { data: correlationCandles } = useQuery({
-    queryKey: ["correlation-candles"],
-    queryFn: async () => {
-      const pairs = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "NZD/USD", "USD/CHF"];
-      const results: Record<string, number[]> = {};
-      await Promise.all(pairs.map(async (pair) => {
-        try {
-          const candles = await marketApi.candles(pair, "1day", 60);
-          if (candles && candles.length > 1) {
-            // Compute daily returns
-            results[pair] = candles.slice(1).map((c: any, i: number) => {
-              const prev = candles[i];
-              return prev.close > 0 ? ((c.close - prev.close) / prev.close) * 100 : 0;
-            });
-          }
-        } catch { /* skip pair */ }
-      }));
-      return results;
-    },
-    staleTime: 300000,
-  });
-
-  const correlationMatrix = useMemo(() => {
-    if (!correlationCandles) return null;
-    const pairs = Object.keys(correlationCandles).filter(p => correlationCandles[p]?.length > 5);
-    if (pairs.length < 3) return null;
-
-    // Pearson correlation
-    function pearson(a: number[], b: number[]): number {
-      const n = Math.min(a.length, b.length);
-      if (n < 5) return 0;
-      const x = a.slice(0, n), y = b.slice(0, n);
-      const mx = x.reduce((s, v) => s + v, 0) / n;
-      const my = y.reduce((s, v) => s + v, 0) / n;
-      let num = 0, dx = 0, dy = 0;
-      for (let i = 0; i < n; i++) {
-        const xi = x[i] - mx, yi = y[i] - my;
-        num += xi * yi; dx += xi * xi; dy += yi * yi;
-      }
-      const denom = Math.sqrt(dx * dy);
-      return denom > 0 ? num / denom : 0;
-    }
-
-    const matrix: Record<string, Record<string, number>> = {};
-    pairs.forEach(p1 => {
-      matrix[p1] = {};
-      pairs.forEach(p2 => {
-        if (p1 === p2) { matrix[p1][p2] = 1; return; }
-        matrix[p1][p2] = pearson(correlationCandles[p1], correlationCandles[p2]);
-      });
-    });
-    return { pairs, matrix };
-  }, [correlationCandles]);
+  const d = selectedDetail; // shorthand
 
   return (
     <AppShell>
       <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
-        {/* Instrument sidebar */}
-        <div className="w-full md:w-36 shrink-0 md:border-r border-b md:border-b-0 border-border md:pr-2 pb-2 md:pb-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-y-auto">
-          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Instruments</p>
-          {SYMBOLS.map(s => (
-            <button key={s} onClick={() => setSelectedSymbol(s)}
-              className={`w-full text-left px-2 py-1.5 text-xs transition-colors ${selectedSymbol === s ? "text-primary bg-primary/10 glow-border-left" : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"}`}>
-              {s}
-            </button>
-          ))}
+        {/* Instrument sidebar — shows score + direction from scanner */}
+        <div className="w-full md:w-40 shrink-0 md:border-r border-b md:border-b-0 border-border md:pr-2 pb-2 md:pb-0 flex md:flex-col gap-0.5 overflow-x-auto md:overflow-y-auto">
+          <div className="flex items-center justify-between px-2 mb-1">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Instruments</p>
+            {scanTime && <span className="text-[9px] text-muted-foreground font-mono">{scanTime}</span>}
+          </div>
+          {SYMBOLS.map(s => {
+            const pd = pairDetails.find((p: any) => p?.pair === s);
+            const score = pd?.score;
+            const dir = pd?.direction;
+            return (
+              <button key={s} onClick={() => setSelectedSymbol(s)}
+                className={`w-full text-left px-2 py-1.5 text-xs transition-colors flex items-center justify-between ${selectedSymbol === s ? "text-primary bg-primary/10 glow-border-left" : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"}`}>
+                <div className="flex items-center gap-1">
+                  {dir === "long" ? <TrendingUp className="h-2.5 w-2.5 text-success" /> : dir === "short" ? <TrendingDown className="h-2.5 w-2.5 text-destructive" /> : <Minus className="h-2.5 w-2.5 text-muted-foreground/50" />}
+                  <span>{s}</span>
+                </div>
+                {score != null && (
+                  <span className={`text-[9px] font-mono font-bold ${
+                    score > 10 ? (score >= 60 ? "text-success" : score >= 40 ? "text-warning" : "text-muted-foreground/60") : (score >= 6 ? "text-success" : score >= 4 ? "text-warning" : "text-muted-foreground/60")
+                  }`}>{score > 10 ? `${score.toFixed(0)}%` : `${score.toFixed(1)}`}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         {/* Analysis content */}
         <div className="flex-1 overflow-y-auto md:pl-3 pt-2 md:pt-0 space-y-3">
+          {/* Header */}
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-bold">ICT Analysis — {selectedSymbol}</h1>
-              {analysis && (
-                <div>
-                  <p className="text-xs text-muted-foreground">
-                    Confluence: <span className="text-primary font-mono font-bold">{analysis.confluenceScore > 10 ? `${analysis.confluenceScore.toFixed(1)}%` : `${analysis.confluenceScore}/10`}</span>
-                    {" · "}Bias: <span className={analysis.bias === "bullish" ? "text-success" : analysis.bias === "bearish" ? "text-destructive" : ""}>{analysis.bias}</span>
-                    {analysis.direction && <span className="ml-2 text-[10px] font-bold uppercase px-1.5 py-0.5 border border-primary/30 bg-primary/10 text-primary">{analysis.direction === "long" ? "BUY" : "SELL"}</span>}
-                  </p>
-                  {analysis.summary && <p className="text-[10px] text-muted-foreground mt-0.5">{analysis.summary}</p>}
+              <h1 className="text-xl font-bold flex items-center gap-2">
+                ICT Analysis — {selectedSymbol}
+                {d?.direction && (
+                  <span className={`text-sm font-bold uppercase px-2 py-0.5 border ${
+                    d.direction === "long" ? "border-success/30 bg-success/10 text-success" : "border-destructive/30 bg-destructive/10 text-destructive"
+                  }`}>{d.direction === "long" ? "BUY" : "SELL"}</span>
+                )}
+              </h1>
+              {d && (
+                <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                  <span className="text-xs text-muted-foreground">
+                    Score: <span className={`font-mono font-bold ${d.score >= 60 ? "text-success" : d.score >= 40 ? "text-warning" : "text-muted-foreground"}`}>
+                      {d.score > 10 ? `${d.score.toFixed(1)}%` : `${d.score}/10`}
+                    </span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Trend: <span className={d.trend === "bullish" ? "text-success" : d.trend === "bearish" ? "text-destructive" : ""}>{d.trend}</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Zone: <span className="text-primary">{d.zone} ({d.zonePercent?.toFixed(0)}%)</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Session: <span className="text-foreground">{d.session}</span>
+                    {d.killZone && <span className="ml-1 text-primary">● KZ</span>}
+                  </span>
                 </div>
               )}
+              {d?.summary && <p className="text-[10px] text-muted-foreground mt-0.5 max-w-2xl">{d.summary}</p>}
             </div>
           </div>
 
-          {/* Phase-1 cleanup: only the three most-used sections are open by default. */}
-          <Accordion type="multiple" defaultValue={["session", "structure", "strength"]}>
-            {/* Session Map */}
-            <AccordionItem value="session">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Session Map & Kill Zones</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3 space-y-3">
-                  <div className="relative h-20">
-                    <div className="absolute inset-0 flex">
-                      {Array.from({ length: 24 }, (_, h) => (
-                        <div key={h} className="flex-1 border-r border-border/30 relative">
-                          {h % 3 === 0 && <span className="absolute -bottom-5 left-0 text-[8px] text-muted-foreground font-mono">{h}:00</span>}
+          {scanLoading && <p className="text-xs text-muted-foreground animate-pulse">Loading scanner data...</p>}
+          {!scanLoading && !d && <p className="text-xs text-muted-foreground">No scanner data for {selectedSymbol}. Run a scan from the Bot tab.</p>}
+
+          {d && (
+            <Accordion type="multiple" defaultValue={["direction", "regime", "zone", "factors", "structure", "strength"]}>
+
+              {/* ── Direction Verdict ── */}
+              {d.directionVerdict && !d.directionVerdict.error && (
+                <AccordionItem value="direction">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Compass className="h-3.5 w-3.5" /> Direction Verdict</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-sm font-bold px-2 py-1 rounded ${
+                          d.directionVerdict.verdict === "long" ? "bg-success/15 text-success border border-success/30" :
+                          d.directionVerdict.verdict === "short" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                          "bg-muted/30 text-muted-foreground border border-border"
+                        }`}>
+                          {d.directionVerdict.verdict === "long" ? "↑ LONG" : d.directionVerdict.verdict === "short" ? "↓ SHORT" : "— NEUTRAL"}
+                        </span>
+                        <span className={`text-sm font-mono font-bold ${
+                          d.directionVerdict.confidence >= 70 ? "text-success" :
+                          d.directionVerdict.confidence >= 50 ? "text-warning" : "text-destructive"
+                        }`}>{d.directionVerdict.confidence}% confidence</span>
+                        <span className="text-xs text-muted-foreground">{Math.round(d.directionVerdict.agreement * 100)}% agreement</span>
+                        {d.directionVerdict.shouldBlock && (
+                          <span className="text-xs font-bold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded border border-destructive/30">BLOCKED</span>
+                        )}
+                      </div>
+                      {d.directionVerdict.scoreAdjustment !== 0 && (
+                        <p className={`text-xs font-mono ${d.directionVerdict.scoreAdjustment > 0 ? "text-success" : "text-destructive"}`}>
+                          Score adjustment: {d.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{d.directionVerdict.scoreAdjustment.toFixed(2)}
+                        </p>
+                      )}
+                      {/* Narrative */}
+                      {d.direction && d.direction !== "none" && (
+                        <p className="text-[11px] text-muted-foreground/80 italic leading-tight border-t border-border/30 pt-2">
+                          {generateDetailNarrative({
+                            pair: d.pair,
+                            direction: d.direction,
+                            score: d.score,
+                            status: d.status,
+                            factors: d.factors,
+                            tieredScoring: d.tieredScoring,
+                            regimeData: d.regimeData,
+                            rejectionReasons: d.rejectionReasons,
+                            gates: d.gates,
+                            staging: d.staging,
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Regime Detection ── */}
+              {d.regimeData && (
+                <AccordionItem value="regime">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> Regime Detection</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Daily */}
+                        <div className="space-y-1">
+                          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Daily Regime</p>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-bold ${
+                              d.regimeData.daily?.regime?.includes("trend") ? "text-success" :
+                              d.regimeData.daily?.regime?.includes("range") ? "text-warning" : "text-primary"
+                            }`}>{(d.regimeData.daily?.regime || "—").replace(/_/g, " ")}</span>
+                            <span className="text-xs text-muted-foreground font-mono">
+                              {Math.round((d.regimeData.daily?.confidence || 0) * 100)}%
+                            </span>
+                            {d.regimeData.daily?.bias && d.regimeData.daily.bias !== "neutral" && (
+                              <span className={`text-xs font-bold ${d.regimeData.daily.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                                {d.regimeData.daily.bias === "bullish" ? "↑ Bullish" : "↓ Bearish"}
+                              </span>
+                            )}
+                          </div>
+                          {d.regimeData.daily?.atrTrend && (
+                            <p className="text-[10px] text-muted-foreground">ATR: {d.regimeData.daily.atrTrend}</p>
+                          )}
+                          {d.regimeData.daily?.transition && d.regimeData.daily.transition.state !== "stable" && (
+                            <div className="flex items-center gap-1 mt-1">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                d.regimeData.daily.transition.state === "range_to_trending" ? "bg-success/15 text-success" :
+                                d.regimeData.daily.transition.state === "accelerating" ? "bg-primary/15 text-primary" :
+                                d.regimeData.daily.transition.state === "trending_to_range" ? "bg-warning/15 text-warning" :
+                                "bg-destructive/15 text-destructive"
+                              }`}>
+                                {d.regimeData.daily.transition.state.replace(/_/g, " ")}
+                              </span>
+                              <span className="text-[9px] text-muted-foreground font-mono">
+                                mom: {d.regimeData.daily.transition.momentum > 0 ? "+" : ""}{d.regimeData.daily.transition.momentum.toFixed(3)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        {/* 4H */}
+                        {d.regimeData.h4 && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">4H Regime</p>
+                            <div className="flex items-center gap-2">
+                              <span className={`text-sm font-bold ${
+                                d.regimeData.h4.regime?.includes("trend") ? "text-success" :
+                                d.regimeData.h4.regime?.includes("range") ? "text-warning" : "text-primary"
+                              }`}>{(d.regimeData.h4.regime || "—").replace(/_/g, " ")}</span>
+                              <span className="text-xs text-muted-foreground font-mono">
+                                {Math.round((d.regimeData.h4.confidence || 0) * 100)}%
+                              </span>
+                              {d.regimeData.h4.bias && d.regimeData.h4.bias !== "neutral" && (
+                                <span className={`text-xs font-bold ${d.regimeData.h4.bias === "bullish" ? "text-success" : "text-destructive"}`}>
+                                  {d.regimeData.h4.bias === "bullish" ? "↑" : "↓"}
+                                </span>
+                              )}
+                            </div>
+                            {d.regimeData.h4?.transition && d.regimeData.h4.transition.state !== "stable" && (
+                              <div className="flex items-center gap-1 mt-1">
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                  d.regimeData.h4.transition.state.includes("trend") || d.regimeData.h4.transition.state === "accelerating" ? "bg-success/15 text-success" : "bg-warning/15 text-warning"
+                                }`}>{d.regimeData.h4.transition.state.replace(/_/g, " ")}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {/* Multi-TF Alignment */}
+                      {d.regimeData.multiTFAlignment && (
+                        <div className="flex items-center gap-2 pt-2 border-t border-border/30">
+                          <span className="text-xs text-muted-foreground">Multi-TF:</span>
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+                            d.regimeData.multiTFAlignment === "agree" ? "bg-success/15 text-success border border-success/30" :
+                            d.regimeData.multiTFAlignment === "disagree" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                            "bg-warning/15 text-warning border border-warning/30"
+                          }`}>
+                            {d.regimeData.multiTFAlignment === "agree" ? "✓ ALIGNED" : d.regimeData.multiTFAlignment === "disagree" ? "✗ CONFLICTING" : "~ MIXED"}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Zone Story ── */}
+              {(d.unifiedZone || d.impulseZone) && (
+                <AccordionItem value="zone">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Zone Story</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3">
+                      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Tiered Scoring + Factor Breakdown ── */}
+              {d.factors && (
+                <AccordionItem value="factors">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Layers className="h-3.5 w-3.5" /> Confluence Factors ({d.factorCount}/{d.factors.length})</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-3">
+                      {d.tieredScoring && <TierScoreSummary tieredScoring={d.tieredScoring} />}
+                      <TierFactorBreakdown factors={d.factors} tieredScoring={d.tieredScoring ?? null} />
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Structure Intelligence ── */}
+              {d.structureIntel && (
+                <AccordionItem value="structure">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Shield className="h-3.5 w-3.5" /> Structure Intelligence</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <div className="p-2 bg-card/50 border border-border text-center">
+                          <p className="text-[9px] text-muted-foreground">Internal BOS</p>
+                          <p className="text-lg font-mono font-bold text-foreground">{d.structureIntel.counts?.internalBOS ?? 0}</p>
+                        </div>
+                        <div className="p-2 bg-card/50 border border-border text-center">
+                          <p className="text-[9px] text-muted-foreground">External BOS</p>
+                          <p className="text-lg font-mono font-bold text-foreground">{d.structureIntel.counts?.externalBOS ?? 0}</p>
+                        </div>
+                        <div className="p-2 bg-card/50 border border-border text-center">
+                          <p className="text-[9px] text-muted-foreground">Internal CHoCH</p>
+                          <p className="text-lg font-mono font-bold text-primary">{d.structureIntel.counts?.internalCHoCH ?? 0}</p>
+                        </div>
+                        <div className="p-2 bg-card/50 border border-border text-center">
+                          <p className="text-[9px] text-muted-foreground">External CHoCH</p>
+                          <p className="text-lg font-mono font-bold text-primary">{d.structureIntel.counts?.externalCHoCH ?? 0}</p>
+                        </div>
+                      </div>
+                      {/* S2F Rate */}
+                      {d.structureIntel.s2f && (
+                        <div className="flex items-center gap-3 pt-2 border-t border-border/30">
+                          <span className="text-xs text-muted-foreground">Structure-to-Fractal Rate:</span>
+                          <span className={`text-sm font-bold px-2 py-0.5 rounded ${
+                            d.structureIntel.s2f.overallRate > 0.4 ? "bg-success/15 text-success" :
+                            d.structureIntel.s2f.overallRate > 0.2 ? "bg-warning/15 text-warning" : "bg-destructive/15 text-destructive"
+                          }`}>{(d.structureIntel.s2f.overallRate * 100).toFixed(0)}%</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            ({d.structureIntel.s2f.totalFractals} fractals · Bull {(d.structureIntel.s2f.bullishRate * 100).toFixed(0)}% / Bear {(d.structureIntel.s2f.bearishRate * 100).toFixed(0)}%)
+                          </span>
+                        </div>
+                      )}
+                      {/* Derived S/R */}
+                      {d.structureIntel.derivedSR?.active?.length > 0 && (
+                        <div className="pt-2 border-t border-border/30">
+                          <p className="text-[10px] text-muted-foreground mb-1">Active S/R Levels</p>
+                          <div className="flex flex-wrap gap-1">
+                            {d.structureIntel.derivedSR.active.map((sr: any, i: number) => (
+                              <span key={i} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                                sr.type === "support" ? "bg-success/15 text-success border border-success/30" : "bg-destructive/15 text-destructive border border-destructive/30"
+                              }`}>{sr.type === "support" ? "S" : "R"} {sr.price?.toFixed(sr.price > 10 ? 3 : 5)}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Currency Strength ── */}
+              <AccordionItem value="strength">
+                <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><BarChart3 className="h-3.5 w-3.5" /> Currency Strength</span></AccordionTrigger>
+                <AccordionContent>
+                  <div className="bg-secondary/30 border border-border p-3">
+                    {fallbackStrength.length > 0 ? (
+                      <div>
+                        <div className="h-[220px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={fallbackStrength} layout="vertical" barSize={16}>
+                              <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.4} />
+                              <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
+                              <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} width={40} />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "12px", color: ct.axis }}
+                                labelStyle={{ color: ct.axis, fontWeight: 600 }}
+                                formatter={(value: number) => [`${value.toFixed(2)}%`, "Strength"]}
+                              />
+                              <Bar dataKey="score" radius={[0, 3, 3, 0]}>{fallbackStrength.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-1 text-center">
+                          {meta?.fotsiStrengths ? "From scanner FOTSI computation" : "Based on % change across 28 pairs"} · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
+                        </p>
+                      </div>
+                    ) : <p className="text-xs text-muted-foreground animate-pulse">Fetching strength data...</p>}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              {/* ── Entity Lifecycles ── */}
+              {d.analysis_snapshot?.entityLifecycles && (
+                <AccordionItem value="entities">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><ArrowUpDown className="h-3.5 w-3.5" /> Entity Lifecycles</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {/* Order Blocks */}
+                        <EntityCard title="Order Blocks" data={d.analysis_snapshot.entityLifecycles.orderBlocks} states={["active", "tested", "mitigating", "broken"]} />
+                        {/* FVGs */}
+                        <EntityCard title="Fair Value Gaps" data={d.analysis_snapshot.entityLifecycles.fvgs} states={["open", "respected", "partially_filled", "filled"]}
+                          extra={d.analysis_snapshot.entityLifecycles.fvgs.avgFillPercent > 0 ? `Avg fill: ${d.analysis_snapshot.entityLifecycles.fvgs.avgFillPercent.toFixed(0)}%` : undefined} />
+                        {/* Swing Points */}
+                        <EntityCard title="Swing Points" data={d.analysis_snapshot.entityLifecycles.swingPoints} states={["active", "tested", "swept", "broken"]} />
+                        {/* Liquidity Pools */}
+                        <EntityCard title="Liquidity Pools" data={d.analysis_snapshot.entityLifecycles.liquidityPools} states={["active", "swept_rejected", "swept_absorbed", "retested"]} />
+                        {/* Breaker Blocks */}
+                        <EntityCard title="Breaker Blocks" data={d.analysis_snapshot.entityLifecycles.breakerBlocks} states={["active", "tested", "respected", "broken"]} />
+                        {/* Unicorn Setups */}
+                        <EntityCard title="Unicorn Setups" data={d.analysis_snapshot.entityLifecycles.unicornSetups} states={["active", "invalidated"]} />
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Confluence Stacking ── */}
+              {d.confluenceStacking && (
+                <AccordionItem value="stacking">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Layers className="h-3.5 w-3.5" /> Confluence Stacking ({d.confluenceStacking.totalStacks} zones)</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      {d.confluenceStacking.bestStack && (
+                        <div className="flex items-center gap-2 pb-2 border-b border-border/30">
+                          <span className="text-[10px] text-muted-foreground uppercase tracking-wider">Best Stack:</span>
+                          <span className="text-xs font-bold text-primary">{d.confluenceStacking.bestStack.label}</span>
+                          <span className="text-[10px] text-muted-foreground">{d.confluenceStacking.bestStack.layerCount} layers</span>
+                          {d.confluenceStacking.bestStack.alignment && (
+                            <span className={`text-[10px] font-bold ${d.confluenceStacking.bestStack.alignment === "aligned" ? "text-success" : "text-warning"}`}>
+                              {d.confluenceStacking.bestStack.alignment}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <div className="space-y-1.5">
+                        {d.confluenceStacking.stacks.map((s: any, i: number) => (
+                          <div key={i} className="flex items-center justify-between px-2 py-1.5 bg-card/50 border border-border">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono font-bold text-primary">{s.layerCount}L</span>
+                              <span className="text-[11px] text-foreground">{s.label}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {s.overlapZone && (
+                                <span className="text-[9px] font-mono text-muted-foreground">
+                                  {formatPrice(s.overlapZone[0])} – {formatPrice(s.overlapZone[1])}
+                                </span>
+                              )}
+                              {s.directionalAlignment && (
+                                <span className={`text-[9px] font-bold ${s.directionalAlignment === "aligned" ? "text-success" : "text-warning"}`}>
+                                  {s.directionalAlignment}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Sweep & Reclaim ── */}
+              {d.sweepReclaim && (
+                <AccordionItem value="sweep">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Zap className="h-3.5 w-3.5" /> Sweep & Reclaim ({d.sweepReclaim.reclaimedCount}/{d.sweepReclaim.totalSweeps})</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-1.5">
+                      {d.sweepReclaim.sweeps.map((sr: any, i: number) => (
+                        <div key={i} className={`flex items-center justify-between px-2 py-1.5 border-l-2 ${sr.reclaimed ? "border-l-success bg-success/5" : "border-l-destructive bg-destructive/5"}`}>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-bold ${sr.reclaimed ? "text-success" : "text-destructive"}`}>
+                              {sr.reclaimed ? "✓ RECLAIMED" : "✗ SWEPT"}
+                            </span>
+                            <span className="text-[11px] text-foreground">{sr.type}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground">{formatPrice(sr.sweptLevel)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {sr.reclaimStrength && <span className="text-[9px] text-muted-foreground">str: {sr.reclaimStrength}</span>}
+                            {sr.createdFVG && <span className="text-[9px] text-primary">+FVG</span>}
+                            {sr.createdDisplacement && <span className="text-[9px] text-primary">+DISP</span>}
+                          </div>
                         </div>
                       ))}
                     </div>
-                    <div className="absolute top-0 bottom-0 w-0.5 bg-destructive z-10" style={{ left: `${(currentHour / 24) * 100}%` }} />
-                    {SESSIONS.map((s, i) => {
-                      const start = s.start < s.end ? s.start : 0;
-                      const end = s.start < s.end ? s.end : s.end;
-                      return (
-                        <div key={s.name} className="absolute opacity-70"
-                          style={{ left: `${(start / 24) * 100}%`, width: `${((end - start) / 24) * 100}%`, top: `${i * 18}px`, height: "16px", backgroundColor: s.color }}>
-                          <span className="text-[9px] font-semibold px-1 leading-[16px] text-foreground drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{s.name}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 mt-8">
-                    {KILL_ZONES.map(kz => {
-                      const isActive = currentHour >= kz.start && currentHour < kz.end;
-                      return (
-                        <span key={kz.name} className={`px-2 py-1 text-[10px] font-semibold border ${isActive ? "border-primary bg-primary/10 text-primary" : "border-border text-foreground/70"}`}>
-                          {kz.name} ({kz.start}:00-{kz.end}:00)
-                          {isActive && <span className="ml-1 text-success">● Active</span>}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-              </AccordionContent>
-            </AccordionItem>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
 
-            {/* Market Structure */}
-            <AccordionItem value="structure">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Market Structure</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3">
-                  {analysisLoading ? <p className="text-xs text-muted-foreground">Analyzing...</p> : analysis ? (
-                    <div className="space-y-3 text-[11px]">
+              {/* ── Pullback Health ── */}
+              {d.pullbackHealth && (
+                <AccordionItem value="pullback">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> Pullback Health</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
                       <div className="flex items-center gap-3">
-                        <span className="text-muted-foreground">Trend:</span>
-                        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
-                          analysis.structure.trend === "bullish" ? "bg-success/15 text-success border border-success/30" :
-                          analysis.structure.trend === "bearish" ? "bg-destructive/15 text-destructive border border-destructive/30" :
-                          "bg-muted/30 text-muted-foreground border border-border"
-                        }`}>{analysis.structure.trend}</span>
+                        <span className="text-xs text-muted-foreground">Trend:</span>
+                        <span className={`text-sm font-bold ${
+                          d.pullbackHealth.trend === "healthy" ? "text-success" :
+                          d.pullbackHealth.trend === "weakening" ? "text-warning" : "text-destructive"
+                        }`}>{d.pullbackHealth.trend}</span>
+                        <span className="text-xs text-muted-foreground">Decay Rate:</span>
+                        <span className={`text-sm font-mono font-bold ${
+                          d.pullbackHealth.decayRate < 0.3 ? "text-success" :
+                          d.pullbackHealth.decayRate < 0.6 ? "text-warning" : "text-destructive"
+                        }`}>{(d.pullbackHealth.decayRate * 100).toFixed(0)}%</span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
-                          <span className="text-muted-foreground">BOS</span>
-                          <span className="font-mono font-bold text-foreground">{analysis.structure.bos?.length || 0}</span>
+                      {d.pullbackHealth.detail && (
+                        <p className="text-[10px] text-muted-foreground">{d.pullbackHealth.detail}</p>
+                      )}
+                      {d.pullbackHealth.measurements?.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-border/30">
+                          {d.pullbackHealth.measurements.map((m: any, i: number) => (
+                            <span key={i} className="text-[9px] font-mono px-1.5 py-0.5 bg-card/50 border border-border rounded">
+                              {m.depthPercent.toFixed(1)}% → Fib {m.nearestFibLevel}
+                            </span>
+                          ))}
                         </div>
-                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
-                          <span className="text-muted-foreground">CHoCH</span>
-                          <span className="font-mono font-bold text-primary">{analysis.structure.choch?.length || 0}</span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
-                          <span className="text-muted-foreground">Active OBs</span>
-                          <span className="font-mono font-bold text-warning">{analysis.orderBlocks?.filter((ob: any) => !ob.mitigated).length || 0}</span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border">
-                          <span className="text-muted-foreground">Unfilled FVGs</span>
-                          <span className="font-mono font-bold text-primary">{analysis.fvgs?.filter((f: any) => !f.mitigated).length || 0}</span>
-                        </div>
-                        <div className="flex items-center justify-between p-2 bg-card/50 border border-border col-span-2">
-                          <span className="text-muted-foreground">Liquidity Pools</span>
-                          <span className="font-mono font-bold text-foreground">{analysis.liquidityPools?.length || 0}</span>
-                        </div>
+                      )}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Setup Classification ── */}
+              {d.setupClassification && (
+                <AccordionItem value="setup">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Setup Classification</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-primary">{d.setupClassification.setupType}</span>
+                        <span className={`text-xs font-mono font-bold px-1.5 py-0.5 rounded ${
+                          d.setupClassification.confidence >= 0.7 ? "bg-success/15 text-success" :
+                          d.setupClassification.confidence >= 0.4 ? "bg-warning/15 text-warning" : "bg-muted/30 text-muted-foreground"
+                        }`}>{(d.setupClassification.confidence * 100).toFixed(0)}% conf</span>
+                        {d.setupClassification.executionProfile && (
+                          <span className="text-[10px] text-muted-foreground border border-border px-1.5 py-0.5 rounded">{d.setupClassification.executionProfile}</span>
+                        )}
+                      </div>
+                      {d.setupClassification.rationale && (
+                        <p className="text-[10px] text-muted-foreground">{d.setupClassification.rationale}</p>
+                      )}
+                      {/* Style info */}
+                      <div className="flex items-center gap-3 pt-2 border-t border-border/30">
+                        <span className="text-[10px] text-muted-foreground">Style: <span className="text-foreground font-medium">{d.tradingStyle}</span></span>
+                        {d.suggestedStyle && d.suggestedStyle !== d.tradingStyle && (
+                          <span className="text-[10px] text-warning">Suggested: {d.suggestedStyle}</span>
+                        )}
+                        {d.styleMismatch && (
+                          <span className="text-[9px] text-warning italic">{d.styleMismatch}</span>
+                        )}
                       </div>
                     </div>
-                  ) : <p className="text-xs text-muted-foreground">No data</p>}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
 
-            {/* Currency Strength */}
-            <AccordionItem value="strength">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><BarChart3 className="h-3.5 w-3.5" /> Currency Strength</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3">
-                  {strengthData.length > 0 ? (
-                    <div>
-                      <div className="h-[220px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={strengthData} layout="vertical" barSize={16}>
-                            <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} strokeOpacity={0.4} />
-                            <XAxis type="number" tick={{ fontSize: 10, fontFamily: "'IBM Plex Mono'", fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} />
-                            <YAxis dataKey="currency" type="category" tick={{ fontSize: 11, fontFamily: "'IBM Plex Mono'", fontWeight: 600, fill: ct.axis }} stroke={ct.grid} axisLine={false} tickLine={false} width={40} />
-                            <Tooltip
-                              contentStyle={{ backgroundColor: ct.tooltipBg, border: `1px solid ${ct.tooltipBorder}`, borderRadius: "6px", fontSize: "12px", color: ct.axis }}
-                              labelStyle={{ color: ct.axis, fontWeight: 600 }}
-                              formatter={(value: number) => [`${value.toFixed(2)}%`, "Strength"]}
-                            />
-                            <Bar dataKey="score" radius={[0, 3, 3, 0]}>{strengthData.map((entry, i) => <Cell key={i} fill={entry.score >= 0 ? 'hsl(155, 70%, 45%)' : 'hsl(0, 72%, 51%)'} />)}</Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-1 text-center">
-                        Based on % change across 28 pairs · <span className="text-success">Green = strong</span> · <span className="text-destructive">Red = weak</span>
-                      </p>
-                    </div>
-                  ) : strengthUnavailable ? (
-                    <p className="text-xs text-muted-foreground">Market data unavailable (market may be closed)</p>
-                  ) : <p className="text-xs text-muted-foreground animate-pulse">Fetching live quotes...</p>}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            {/* Correlation Matrix */}
-            <AccordionItem value="correlation">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Grid3X3 className="h-3.5 w-3.5" /> Correlation Matrix</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3">
-                  {correlationMatrix ? (
-                    isMobile ? (
-                      /* Mobile: show significant correlations as a vertical list */
-                      <div className="space-y-1.5">
-                        <p className="text-[9px] text-muted-foreground mb-2">Showing pairs with |correlation| ≥ 0.3</p>
-                        {(() => {
-                          const significant: { p1: string; p2: string; val: number }[] = [];
-                          correlationMatrix.pairs.forEach((p1: string, i: number) => {
-                            correlationMatrix.pairs.forEach((p2: string, j: number) => {
-                              if (j <= i) return;
-                              const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
-                              if (Math.abs(val) >= 0.3) significant.push({ p1, p2, val });
-                            });
-                          });
-                          significant.sort((a, b) => Math.abs(b.val) - Math.abs(a.val));
-                          if (significant.length === 0) return <p className="text-[10px] text-muted-foreground">No significant correlations found</p>;
-                          return significant.map(({ p1, p2, val }) => (
-                            <div key={`${p1}-${p2}`} className="flex items-center justify-between py-1 px-2 rounded bg-muted/20">
-                              <span className="text-[10px] font-mono font-medium">{p1.replace("/", "")} / {p2.replace("/", "")}</span>
-                              <span className={`text-[10px] font-mono font-bold ${
-                                val > 0.5 ? "text-destructive" : val < -0.5 ? "text-primary" : val > 0.3 ? "text-destructive/70" : "text-primary/70"
-                              }`}>{val.toFixed(2)}</span>
-                            </div>
-                          ));
-                        })()}
-                      </div>
-                    ) : (
-                      /* Desktop: full NxN matrix table */
-                      <div className="overflow-x-auto max-w-full">
-                        <table className="text-[11px] font-mono">
-                          <thead>
-                            <tr><th className="px-2 py-1.5"></th>{correlationMatrix.pairs.map((p: string) => <th key={p} className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p.replace("/", "")}</th>)}</tr>
-                          </thead>
-                          <tbody>
-                            {correlationMatrix.pairs.map((p1: string) => (
-                              <tr key={p1}>
-                                <td className="px-2 py-1.5 text-foreground/80 font-semibold whitespace-nowrap">{p1.replace("/", "")}</td>
-                                {correlationMatrix.pairs.map((p2: string) => {
-                                  const val = correlationMatrix.matrix[p1]?.[p2] ?? 0;
-                                  const bg = p1 === p2 ? "bg-primary/25" : val > 0.5 ? "bg-destructive/40" : val < -0.5 ? "bg-primary/40" : val > 0.3 ? "bg-destructive/20" : val < -0.3 ? "bg-primary/20" : "bg-muted/15";
-                                  return <td key={p2} className={`px-2 py-1.5 text-center font-bold text-foreground ${bg}`}>{val.toFixed(2)}</td>;
-                                })}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )
-                  ) : <p className="text-xs text-muted-foreground">Insufficient data</p>}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            {/* Premium/Discount */}
-            <AccordionItem value="premium">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Premium / Discount Zone</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3">
-                  {analysis?.premiumDiscount ? (
-                    <div className="space-y-2">
-                      <div className="relative h-24 border border-border overflow-hidden">
-                        <div className="absolute top-0 left-0 right-0 h-1/3 bg-destructive/10 flex items-center px-2"><span className="text-[9px] text-destructive font-medium">PREMIUM — Sell Zone</span></div>
-                        <div className="absolute top-1/3 left-0 right-0 h-1/3 bg-muted/20 flex items-center justify-center border-y border-dashed border-muted-foreground/30">
-                          <span className="text-[9px] text-muted-foreground font-mono">{formatPrice(analysis.premiumDiscount?.equilibrium)}</span></div>
-                        <div className="absolute bottom-0 left-0 right-0 h-1/3 bg-success/10 flex items-center px-2"><span className="text-[9px] text-success font-medium">DISCOUNT — Buy Zone</span></div>
-                        <div className="absolute left-1/2 w-2.5 h-2.5 bg-primary -translate-x-1/2 -translate-y-1/2 z-10" style={{ top: `${100 - analysis.premiumDiscount.zonePercent}%` }} />
-                      </div>
-                      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                        <span>H: {formatPrice(analysis.premiumDiscount?.swingHigh)}</span>
-                        <span className="text-primary">{analysis.premiumDiscount?.currentZone ?? "—"} ({formatPrice(analysis.premiumDiscount?.zonePercent, undefined, 0)}%)</span>
-                        <span>L: {formatPrice(analysis.premiumDiscount?.swingLow)}</span>
-                      </div>
-                      {analysis.premiumDiscount.oteZone && <p className="text-[10px] text-primary font-medium">✦ OTE Zone Active</p>}
-                    </div>
-                  ) : <p className="text-xs text-muted-foreground">Loading...</p>}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            {/* PD/PW Levels */}
-            <AccordionItem value="pdpw">
-              <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Calendar className="h-3.5 w-3.5" /> PD / PW Levels</span></AccordionTrigger>
-              <AccordionContent>
-                <div className="bg-secondary/30 border border-border p-3 text-[11px]">
-                  {analysis?.pdLevels ? (
-                    <div className="space-y-3">
-                      <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Day</p>
-                        <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{formatPrice(analysis.pdLevels?.pdh)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{formatPrice(analysis.pdLevels?.pdl)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{formatPrice(analysis.pdLevels?.pdo)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{formatPrice(analysis.pdLevels?.pdc)}</span></div>
-                        </div></div>
-                      <div><p className="text-muted-foreground mb-1 font-medium text-[10px]">Previous Week</p>
-                        <div className="grid grid-cols-4 gap-2 font-mono">
-                          <div><span className="text-muted-foreground text-[9px]">High:</span> <span>{formatPrice(analysis.pdLevels?.pwh)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Low:</span> <span>{formatPrice(analysis.pdLevels?.pwl)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Open:</span> <span>{formatPrice(analysis.pdLevels?.pwo)}</span></div>
-                          <div><span className="text-muted-foreground text-[9px]">Close:</span> <span>{formatPrice(analysis.pdLevels?.pwc)}</span></div>
-                        </div></div>
-                    </div>
-                  ) : <p className="text-muted-foreground">No data</p>}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-
-            {/* Factor Breakdown (C1: unified with scanner scoring) */}
-            {analysis?.factors && analysis.factors.length > 0 && (
-              <AccordionItem value="factors">
-                <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Confluence Factors ({analysis.factors.filter((f: any) => f.present).length}/{analysis.factors.length})</span></AccordionTrigger>
+              {/* ── Session Map (static) ── */}
+              <AccordionItem value="session">
+                <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Session Map & Kill Zones</span></AccordionTrigger>
                 <AccordionContent>
-                  <div className="bg-secondary/30 border border-border p-3 space-y-1">
-                    {analysis.factors.map((f: any, i: number) => (
-                      <div key={i} className={`flex items-center justify-between px-2 py-1.5 text-[11px] border-l-2 ${
-                        f.present ? "border-l-primary bg-primary/5" : "border-l-border bg-card/30"
-                      }`}>
-                        <div className="flex items-center gap-2">
-                          <span className={`w-1.5 h-1.5 rounded-full ${f.present ? "bg-primary" : "bg-muted-foreground/30"}`} />
-                          <span className={`font-medium ${f.present ? "text-foreground" : "text-muted-foreground"}`}>{f.name}</span>
-                          {f.group && <span className="text-[9px] text-muted-foreground/60 px-1 py-0.5 bg-muted/30 rounded">{f.group}</span>}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground max-w-[300px] truncate text-right">{f.detail}</span>
-                          <span className={`font-mono text-[10px] font-bold min-w-[32px] text-right ${f.present ? "text-primary" : "text-muted-foreground/40"}`}>
-                            +{typeof f.weight === "number" ? f.weight.toFixed(1) : "0.0"}
+                  <div className="bg-secondary/30 border border-border p-3 space-y-3">
+                    <div className="relative h-20">
+                      <div className="absolute inset-0 flex">
+                        {Array.from({ length: 24 }, (_, h) => (
+                          <div key={h} className="flex-1 border-r border-border/30 relative">
+                            {h % 3 === 0 && <span className="absolute -bottom-5 left-0 text-[8px] text-muted-foreground font-mono">{h}:00</span>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="absolute top-0 bottom-0 w-0.5 bg-destructive z-10" style={{ left: `${(currentHour / 24) * 100}%` }} />
+                      {SESSIONS.map((s, i) => {
+                        const start = s.start < s.end ? s.start : 0;
+                        const end = s.start < s.end ? s.end : s.end;
+                        return (
+                          <div key={s.name} className="absolute opacity-70"
+                            style={{ left: `${(start / 24) * 100}%`, width: `${((end - start) / 24) * 100}%`, top: `${i * 18}px`, height: "16px", backgroundColor: s.color }}>
+                            <span className="text-[9px] font-semibold px-1 leading-[16px] text-foreground drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{s.name}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-8">
+                      {KILL_ZONES.map(kz => {
+                        const isActive = currentHour >= kz.start && currentHour < kz.end;
+                        return (
+                          <span key={kz.name} className={`px-2 py-1 text-[10px] font-semibold border ${isActive ? "border-primary bg-primary/10 text-primary" : "border-border text-foreground/70"}`}>
+                            {kz.name} ({kz.start}:00-{kz.end}:00)
+                            {isActive && <span className="ml-1 text-success">● Active</span>}
                           </span>
-                        </div>
-                      </div>
-                    ))}
+                        );
+                      })}
+                    </div>
                   </div>
                 </AccordionContent>
               </AccordionItem>
-            )}
 
-            {/* Judas Swing */}
-            {analysis?.judasSwing?.detected && (
-              <AccordionItem value="judas">
-                <AccordionTrigger className="text-xs"><span className="flex items-center gap-2 text-primary">⚡ Judas Swing Detected</span></AccordionTrigger>
-                <AccordionContent>
-                  <div className="bg-primary/5 border border-primary/20 p-3 text-[11px]">
-                    <p>{analysis.judasSwing.description}</p>
-                    {analysis.judasSwing.midnightOpen != null && <p className="mt-1 text-muted-foreground font-mono">Type: {analysis.judasSwing.type} · Midnight: {formatPrice(analysis.judasSwing.midnightOpen)}</p>}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            )}
-          </Accordion>
+              {/* ── Fib Levels ── */}
+              {d.fibLevels && (
+                <AccordionItem value="fib">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Fibonacci Levels</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-2">
+                      <div className="flex items-center gap-4 text-xs">
+                        <span className="text-muted-foreground">Swing High: <span className="font-mono text-foreground">{formatPrice(d.fibLevels.swingHigh)}</span></span>
+                        <span className="text-muted-foreground">Swing Low: <span className="font-mono text-foreground">{formatPrice(d.fibLevels.swingLow)}</span></span>
+                        <span className="text-muted-foreground">Direction: <span className={d.fibLevels.direction === "bullish" ? "text-success" : "text-destructive"}>{d.fibLevels.direction}</span></span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {d.fibLevels.retracements && (
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Retracements</p>
+                            <div className="space-y-0.5">
+                              {Object.entries(d.fibLevels.retracements).map(([level, price]) => (
+                                <div key={level} className="flex justify-between text-[10px]">
+                                  <span className="text-muted-foreground">{level}</span>
+                                  <span className="font-mono text-foreground">{formatPrice(price as number)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {d.fibLevels.extensions && (
+                          <div>
+                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Extensions</p>
+                            <div className="space-y-0.5">
+                              {Object.entries(d.fibLevels.extensions).map(([level, price]) => (
+                                <div key={level} className="flex justify-between text-[10px]">
+                                  <span className="text-muted-foreground">{level}</span>
+                                  <span className="font-mono text-foreground">{formatPrice(price as number)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+              {/* ── Gates ── */}
+              {d.gates && (
+                <AccordionItem value="gates">
+                  <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Shield className="h-3.5 w-3.5" /> Gates ({d.gates.filter((g: any) => g.passed).length}/{d.gates.length} passed)</span></AccordionTrigger>
+                  <AccordionContent>
+                    <div className="bg-secondary/30 border border-border p-3 space-y-0.5">
+                      {d.gates.map((g: any, i: number) => (
+                        <div key={i} className={`flex items-center gap-2 px-2 py-1 text-[11px] ${g.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${g.passed ? "bg-success" : "bg-destructive"}`} />
+                          <span className={g.passed ? "" : "font-medium"}>{g.reason || g.name || `Gate ${i + 1}`}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              )}
+
+            </Accordion>
+          )}
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// ── Entity Lifecycle Card ──
+function EntityCard({ title, data, states, extra }: { title: string; data: any; states: string[]; extra?: string }) {
+  if (!data) return null;
+  return (
+    <div className="p-2 bg-card/50 border border-border space-y-1">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">{title}</p>
+        <span className="text-sm font-mono font-bold text-foreground">{data.total}</span>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {states.map(s => {
+          const count = data.byState?.[s] ?? 0;
+          if (count === 0) return null;
+          const color = s === "active" || s === "open" ? "text-success" :
+            s === "tested" || s === "respected" || s === "partially_filled" ? "text-warning" :
+            s === "swept" || s === "broken" || s === "filled" || s === "invalidated" || s === "swept_absorbed" ? "text-destructive" :
+            s === "swept_rejected" || s === "retested" ? "text-primary" : "text-muted-foreground";
+          return (
+            <span key={s} className={`text-[9px] font-mono px-1 py-0.5 bg-muted/20 rounded ${color}`}>
+              {s.replace(/_/g, " ")}: {count}
+            </span>
+          );
+        })}
+      </div>
+      {extra && <p className="text-[9px] text-muted-foreground">{extra}</p>}
+    </div>
   );
 }
