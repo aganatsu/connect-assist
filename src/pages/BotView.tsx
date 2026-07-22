@@ -1353,7 +1353,10 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 <span className="font-medium text-[11px]">{t.symbol}</span>
                 <span className={`text-[10px] ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲ BUY" : "▼ SELL"}</span>
               </div>
-              <span className={`text-[11px] font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[11px] font-medium ${t.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(t.pnl, true)}</span>
+                <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${expanded === key ? "rotate-180" : ""}`} />
+              </div>
             </div>
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
               <span>{formatBrokerTime(t.closedAt)}</span>
@@ -1364,6 +1367,57 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
               <span>Exit: {parseFloat(t.exitPrice)?.toFixed(5)}</span>
               <span>{t.pnlPips?.toFixed(1)} pips</span>
             </div>
+            {expanded === key && (
+              <div className="mt-1.5 pt-1.5 border-t border-border/40 space-y-1.5">
+                {/* Score + Signal source */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className={`text-[10px] font-mono font-bold ${
+                    t.signalScore > 10 ? (t.signalScore >= 60 ? "text-success" : t.signalScore >= 40 ? "text-warning" : "text-muted-foreground") : "text-primary"
+                  }`}>{t.signalScore > 10 ? `${Number(t.signalScore).toFixed(1)}%` : `${t.signalScore}/10`}</span>
+                  {(() => { try { const sr = JSON.parse(t.signalReason || "{}"); return sr?.signalSource ? (
+                    <span className={`text-[8px] font-mono font-bold px-1 py-0.5 rounded ${
+                      sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
+                      sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+                      "bg-orange-500/15 text-orange-400 border border-orange-500/30"
+                    }`}>{sr.signalSource === "unified" ? "UNIFIED" : sr.signalSource === "cascade" ? "CASCADE" : "STANDALONE"}</span>
+                  ) : null; } catch { return null; } })()}
+                </div>
+                {/* Post-Mortem */}
+                {t.postMortem && (
+                  <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] uppercase tracking-wider font-bold text-amber-400">Post-Mortem</span>
+                      {t.postMortem.outcome && (
+                        <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                          t.postMortem.outcome === "Win" ? "bg-success/15 text-success border border-success/30" :
+                          t.postMortem.outcome === "Loss" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                          "bg-muted/30 text-muted-foreground border border-border"
+                        }`}>{t.postMortem.outcome}</span>
+                      )}
+                      {t.postMortem.holdDuration && (
+                        <span className="text-[8px] text-muted-foreground font-mono">{t.postMortem.holdDuration}</span>
+                      )}
+                    </div>
+                    {t.postMortem.whatWorked && (
+                      <div className="text-[9px] text-foreground/80"><span className="text-success font-semibold">✓</span> {t.postMortem.whatWorked}</div>
+                    )}
+                    {t.postMortem.whatFailed && (
+                      <div className="text-[9px] text-foreground/80"><span className="text-destructive font-semibold">✗</span> {t.postMortem.whatFailed}</div>
+                    )}
+                    {t.postMortem.lessonLearned && (
+                      <div className="text-[9px] text-foreground/80 italic">💡 {t.postMortem.lessonLearned}</div>
+                    )}
+                  </div>
+                )}
+                {/* Metadata */}
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px]">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Size</span><span className="font-mono">{t.size}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Order</span><span className="font-mono text-[8px]">{t.orderId?.slice(0,8)}</span></div>
+                  {t.stopLoss != null && <div className="flex justify-between"><span className="text-muted-foreground">SL</span><span className="font-mono text-loss">{Number(t.stopLoss).toFixed(5)}</span></div>}
+                  {t.takeProfit != null && <div className="flex justify-between"><span className="text-muted-foreground">TP</span><span className="font-mono text-profit">{Number(t.takeProfit).toFixed(5)}</span></div>}
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -1659,6 +1713,43 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       ) : (
                         /* ── Legacy fallback: old trades without rich data ── */
                         <SignalReasoningCard signalReason={t.signalReason || ""} />
+                      )}
+
+                      {/* ── Post-Mortem Analysis ── */}
+                      {t.postMortem && (
+                        <div className="rounded border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-[8px] uppercase tracking-wider font-bold text-amber-400">Post-Mortem</p>
+                            {t.postMortem.outcome && (
+                              <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                                t.postMortem.outcome === "Win" ? "bg-success/15 text-success border border-success/30" :
+                                t.postMortem.outcome === "Loss" ? "bg-destructive/15 text-destructive border border-destructive/30" :
+                                "bg-muted/30 text-muted-foreground border border-border"
+                              }`}>{t.postMortem.outcome}</span>
+                            )}
+                            {t.postMortem.holdDuration && (
+                              <span className="text-[8px] text-muted-foreground font-mono">Hold: {t.postMortem.holdDuration}</span>
+                            )}
+                          </div>
+                          {t.postMortem.whatWorked && (
+                            <div className="flex gap-1">
+                              <span className="text-[8px] text-success font-semibold shrink-0">✓ Worked:</span>
+                              <span className="text-[9px] text-foreground/80">{t.postMortem.whatWorked}</span>
+                            </div>
+                          )}
+                          {t.postMortem.whatFailed && (
+                            <div className="flex gap-1">
+                              <span className="text-[8px] text-destructive font-semibold shrink-0">✗ Failed:</span>
+                              <span className="text-[9px] text-foreground/80">{t.postMortem.whatFailed}</span>
+                            </div>
+                          )}
+                          {t.postMortem.lessonLearned && (
+                            <div className="flex gap-1">
+                              <span className="text-[8px] text-amber-400 font-semibold shrink-0">💡 Lesson:</span>
+                              <span className="text-[9px] text-foreground/80 italic">{t.postMortem.lessonLearned}</span>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       {/* ── Trade Metadata Grid ── */}
