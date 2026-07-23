@@ -127,7 +127,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             </span>
             <Badge
               variant="outline"
-              className={`text-[10px] px-1.5 py-0 ${
+              className={`text-[11px] px-1.5 py-0 ${
                 order.direction === "long"
                   ? "border-success/50 text-profit bg-badge-profit"
                   : "border-destructive/50 text-loss bg-badge-loss"
@@ -137,14 +137,14 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             </Badge>
             <Badge
               variant="outline"
-              className="text-[10px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
+              className="text-[11px] px-1.5 py-0 border-blue-500/50 text-info-c bg-badge-info"
             >
               {order.order_type === "limit_ob" ? "OB" : "FVG"}
             </Badge>
             {isHunting && (
               <Badge
                 variant="outline"
-                className="text-[10px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
+                className="text-[11px] px-1.5 py-0 border-amber-500/50 text-warn bg-badge-warn animate-pulse"
               >
                 <Crosshair className="w-2.5 h-2.5 mr-0.5" />
                 HUNTING
@@ -153,7 +153,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             {!isHunting && order.from_watchlist && (
               <Badge
                 variant="outline"
-                className="text-[10px] px-1.5 py-0 border-cyan-500/50 text-cyan-300 bg-cyan-500/10"
+                className="text-[11px] px-1.5 py-0 border-cyan-500/50 text-cyan-300 bg-cyan-500/10"
               >
                 WL
               </Badge>
@@ -174,19 +174,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Row 2: Status-specific info */}
         {isHunting ? (
-          <div className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center justify-between text-[12px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
               Price in zone — awaiting {order.direction === "short" ? "bearish" : "bullish"} confirmation
             </span>
-            <span className="text-muted-foreground">
+            <span className="text-foreground/60">
               SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
               {" · "}
               TP: <span className="text-profit font-mono">{Number(order.take_profit).toFixed(5)}</span>
             </span>
           </div>
         ) : (
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-between text-[12px] text-foreground/70">
             <span>
               Current: <span className="text-foreground font-mono">{order.current_price ? Number(order.current_price).toFixed(5) : "—"}</span>
               {" · "}
@@ -201,7 +201,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         )}
 
         {/* Row 3: Zone info */}
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-[12px] text-foreground/70">
           Zone: <span className={isHunting ? "text-warn" : "text-info-c"}>{order.entry_zone_type}</span>
           {" "}[{Number(order.entry_zone_low).toFixed(5)} – {Number(order.entry_zone_high).toFixed(5)}]
           {" · "}
@@ -211,7 +211,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         </div>
 
         {/* Narrative sentence */}
-        <p className="text-[9px] text-muted-foreground/80 italic leading-tight">
+        <p className="text-[11px] text-foreground/50 italic leading-tight">
           {isHunting
             ? `Price has entered the ${order.entry_zone_type} zone. Watching for ${order.direction === "short" ? "bearish" : "bullish"} confirmation (CHoCH, displacement, or reversal) before entry.`
             : generatePendingOrderNarrative(order)
@@ -221,18 +221,18 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {/* Row 4: Expiry bar (only for watching stage) */}
         {!isHunting && (
           <div className="space-y-1">
-            <div className="flex items-center justify-between text-[10px]">
+            <div className="flex items-center justify-between text-[11px]">
               <div className="flex items-center gap-1">
-                <Clock className="w-3 h-3 text-muted-foreground" />
-                <span className={isExpiringSoon ? "text-warn" : "text-muted-foreground"}>
+                <Clock className="w-3 h-3 text-foreground/50" />
+                <span className={isExpiringSoon ? "text-warn" : "text-foreground/60"}>
                   {getTimeRemaining(order.expires_at)}
                 </span>
               </div>
-              <span className="text-muted-foreground/60">
+              <span className="text-foreground/40">
                 {new Date(order.placed_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
-            <div className="h-1 bg-muted/30 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-muted/30 rounded-full overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
                   isExpiringSoon ? "bg-amber-500" : "bg-blue-500"
@@ -245,14 +245,14 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
         {/* Hunting stage: show confirmation info instead of expiry */}
         {isHunting && (
-          <div className="flex items-center justify-between text-[10px]">
+          <div className="flex items-center justify-between text-[11px]">
             <div className="flex items-center gap-1">
               <Crosshair className="w-3 h-3 text-warn animate-pulse" />
               <span className="text-warn">
                 Confirmation active — no time limit
               </span>
             </div>
-            <span className="text-muted-foreground/60">
+            <span className="text-foreground/40">
               Zone touched: {(order as any).zone_touch_time
                 ? new Date((order as any).zone_touch_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                 : "just now"
@@ -292,7 +292,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
 
       {/* Active Zone Setups */}
       {orders.length === 0 ? (
-        <div className="text-xs text-muted-foreground/60 py-2 text-center">
+        <div className="text-xs text-foreground/50 py-2 text-center">
           No active zone setups. When the bot identifies an impulse zone entry, it will appear here.
         </div>
       ) : (
@@ -300,7 +300,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {/* Hunting section (higher priority) */}
           {huntingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-warn uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[11px] text-warn uppercase tracking-wider font-semibold">
                 <Crosshair className="w-3 h-3" />
                 Hunting Confirmation ({huntingOrders.length})
               </div>
@@ -311,7 +311,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           {/* Watching section */}
           {watchingOrders.length > 0 && (
             <div className="space-y-2">
-              <div className="flex items-center gap-1.5 text-[10px] text-info-c uppercase tracking-wider font-semibold">
+              <div className="flex items-center gap-1.5 text-[11px] text-info-c uppercase tracking-wider font-semibold">
                 <Eye className="w-3 h-3" />
                 Watching — Waiting for Zone ({watchingOrders.length})
               </div>
@@ -326,7 +326,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         <div className="pt-1">
           <button
             onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+            className="flex items-center gap-1 text-[11px] text-foreground/50 hover:text-foreground/70 transition-colors"
           >
             {showHistory ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
             {showHistory ? "Hide" : "Show"} setup history ({history.length})
@@ -337,14 +337,14 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               {history.slice(0, 20).map((order) => (
                 <div
                   key={order.order_id}
-                  className="flex items-center justify-between text-[11px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
+                  className="flex items-center justify-between text-[12px] px-2 py-1.5 rounded bg-muted/10 border border-muted/20"
                 >
                   <div className="flex items-center gap-2">
                     {statusIcon(order.status)}
                     <span className="font-mono text-foreground">{order.symbol}</span>
                     <Badge
                       variant="outline"
-                      className={`text-[9px] px-1 py-0 ${
+                      className={`text-[10px] px-1 py-0 ${
                         order.direction === "long"
                           ? "border-success/30 text-profit"
                           : "border-destructive/30 text-loss"
@@ -352,13 +352,13 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                     >
                       {order.direction.toUpperCase()}
                     </Badge>
-                    <span className="text-muted-foreground">@ {Number(order.entry_price).toFixed(5)}</span>
+                    <span className="text-foreground/60">@ {Number(order.entry_price).toFixed(5)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`capitalize ${statusColor(order.status)}`}>
                       {order.status === "filled" ? "confirmed" : order.status}
                     </span>
-                    <span className="text-muted-foreground/50">
+                    <span className="text-foreground/40">
                       {order.resolved_at
                         ? new Date(order.resolved_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                         : ""}
