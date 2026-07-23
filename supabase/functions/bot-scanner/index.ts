@@ -4447,27 +4447,54 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // ── Effective direction for zone engine ──
-    // Use verdict when available and non-neutral; fall back to analysis.direction (15m scoring)
-    const effectiveDirection: "long" | "short" | null =
-      (directionVerdict && !directionVerdict.shouldBlock && directionVerdict.verdict !== "neutral")
-        ? directionVerdict.verdict as "long" | "short"
-        : analysis.direction;
-    const directionSource: "verdict" | "15m_fallback" =
-      (directionVerdict && !directionVerdict.shouldBlock && directionVerdict.verdict !== "neutral")
-        ? "verdict" : "15m_fallback";
+    // ── DIRECTION AUTHORITY: Verdict is the single source of truth ──
+    // If verdict blocks or is neutral → no trade (no 15m fallback).
+    // If verdict has a direction → that IS the direction, period.
+    // If verdict contradicts 15m scoring → flag conflict but use verdict.
+    let effectiveDirection: "long" | "short" | null = null;
+    let directionSource: "verdict" | "15m_fallback" | "blocked" = "blocked";
+    let directionConflict = false;
+
+    if (directionVerdict && directionVerdict.shouldBlock) {
+      // Verdict explicitly blocks — no trade
+      effectiveDirection = null;
+      directionSource = "blocked";
+      console.log(`[scan ${scanCycleId}] ${pair} Direction BLOCKED: ${directionVerdict.blockReason}`);
+    } else if (directionVerdict && directionVerdict.verdict !== "neutral") {
+      // Verdict has a clear direction — use it unconditionally
+      effectiveDirection = directionVerdict.verdict as "long" | "short";
+      directionSource = "verdict";
+      // Check for conflict with 15m scoring (informational, does not change direction)
+      if (analysis.direction && analysis.direction !== effectiveDirection) {
+        directionConflict = true;
+        console.log(`[scan ${scanCycleId}] ${pair} Direction CONFLICT: verdict=${effectiveDirection}, 15m=${analysis.direction} — using verdict`);
+      }
+    } else if (directionVerdict && directionVerdict.verdict === "neutral") {
+      // Verdict is neutral (below confidence or agreement threshold) — block
+      effectiveDirection = null;
+      directionSource = "blocked";
+      console.log(`[scan ${scanCycleId}] ${pair} Direction NEUTRAL (blocked): ${directionVerdict.summary}`);
+    } else {
+      // No verdict computed (error or missing data) — fall back to 15m as last resort
+      effectiveDirection = analysis.direction;
+      directionSource = "15m_fallback";
+      console.log(`[scan ${scanCycleId}] ${pair} Direction: no verdict available, using 15m fallback=${effectiveDirection}`);
+    }
+
     // ── DIRECTION SYNC: overwrite analysis.direction with verdict direction ──
     // This ensures ALL downstream code (SL/TP, pending orders, trade execution, broker)
     // uses the authoritative verdict direction, not the 15m confluenceScoring direction.
-    // The scoring factors were already computed — this only affects trade mechanics.
     if (effectiveDirection && effectiveDirection !== analysis.direction) {
       console.log(`[scan ${scanCycleId}] ${pair} Direction SYNC: analysis.direction ${analysis.direction} → ${effectiveDirection} (source: ${directionSource})`);
       analysis.direction = effectiveDirection;
     }
-    // Attach source to detail so frontend can show which system drove zone selection
+    // Attach source and conflict info to detail so frontend can show which system drove zone selection
     (detail as any).directionSource = directionSource;
+    (detail as any).directionConflict = directionConflict;
     if ((detail as any).directionVerdict && typeof (detail as any).directionVerdict === "object") {
       (detail as any).directionVerdict.directionSource = directionSource;
       (detail as any).directionVerdict.effectiveDirection = effectiveDirection;
+      (detail as any).directionVerdict.directionConflict = directionConflict;
     }
     // Build HTF confluence data from already-computed 4H analysis (used by impulse zone engine)
     const htfConfluenceData: HTFConfluenceData | null = effectiveDirection ? {

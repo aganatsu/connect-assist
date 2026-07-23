@@ -99,10 +99,12 @@ export interface DirectionVerdictInput {
 // ─── Configuration ───────────────────────────────────────────────────
 
 export interface DirectionVerdictConfig {
-  /** Minimum confidence to produce a non-neutral verdict (default: 40) */
+  /** Minimum confidence to produce a non-neutral verdict (default: 55) */
   minConfidence: number;
   /** Confidence below which the trade is blocked (default: 25) */
   blockThreshold: number;
+  /** Minimum agreement ratio (0-1) to produce a non-neutral verdict (default: 0.50) */
+  agreementFloor: number;
   /** Maximum score penalty for opposing context (default: -2.0) */
   maxPenalty: number;
   /** Maximum score bonus for aligned context (default: 1.5) */
@@ -114,8 +116,9 @@ export interface DirectionVerdictConfig {
 }
 
 export const DEFAULT_VERDICT_CONFIG: DirectionVerdictConfig = {
-  minConfidence: 40,
+  minConfidence: 55,
   blockThreshold: 25,
+  agreementFloor: 0.50,
   maxPenalty: -2.0,
   maxBonus: 1.5,
   regimeCanVeto: true,
@@ -351,16 +354,29 @@ export function computeDirectionVerdict(
 
   const finalConfidence = Math.max(0, Math.min(100, spineConfidence + contextAdjustment));
 
-  // ── 5. DETERMINE VERDICT ──
+  // ── 5. AGREEMENT CALCULATION (moved before verdict to use in decision) ──
+
+  const directionalSources = sources.filter(s => s.direction && s.direction !== "neutral");
+  const agreeing = directionalSources.filter(s => s.direction === spineDirection).length;
+  const agreement = directionalSources.length > 0 ? agreeing / directionalSources.length : 0;
+
+  // ── 6. DETERMINE VERDICT ──
+  // Verdict requires BOTH confidence threshold AND agreement floor.
+  // This eliminates low-conviction calls where one spine source says X but everything else disagrees.
 
   let verdict: VerdictDirection;
+  let verdictReason = "";
   if (finalConfidence < cfg.minConfidence) {
     verdict = "neutral";
+    verdictReason = `confidence ${finalConfidence.toFixed(0)}% < ${cfg.minConfidence}% threshold`;
+  } else if (agreement < cfg.agreementFloor) {
+    verdict = "neutral";
+    verdictReason = `agreement ${(agreement * 100).toFixed(0)}% < ${(cfg.agreementFloor * 100).toFixed(0)}% floor (${agreeing}/${directionalSources.length} sources agree)`;
   } else {
     verdict = spineDirection === "bullish" ? "long" : "short";
   }
 
-  // ── 6. BLOCK CHECK ──
+  // ── 7. BLOCK CHECK ──
 
   let shouldBlock = false;
   let blockReason: string | null = null;
@@ -369,6 +385,12 @@ export function computeDirectionVerdict(
   if (finalConfidence < cfg.blockThreshold) {
     shouldBlock = true;
     blockReason = `Direction confidence ${finalConfidence.toFixed(0)}% below block threshold ${cfg.blockThreshold}%`;
+  }
+
+  // Block if verdict is neutral (no directional edge = no trade)
+  if (!shouldBlock && verdict === "neutral" && verdictReason) {
+    shouldBlock = true;
+    blockReason = `No directional edge: ${verdictReason}`;
   }
 
   // Regime veto: if regime strongly opposes and confidence is high
@@ -384,7 +406,7 @@ export function computeDirectionVerdict(
     }
   }
 
-  // ── 7. SCORE ADJUSTMENT ──
+  // ── 8. SCORE ADJUSTMENT ──
   // Convert confidence into a score modifier (replaces regime + GP + Factor 22 adjustments)
 
   let scoreAdjustment = 0;
@@ -399,17 +421,12 @@ export function computeDirectionVerdict(
     scoreAdjustment = Math.max(cfg.maxPenalty, Math.min(cfg.maxBonus, scoreAdjustment));
   }
 
-  // ── 8. AGREEMENT CALCULATION ──
-
-  const directionalSources = sources.filter(s => s.direction && s.direction !== "neutral");
-  const agreeing = directionalSources.filter(s => s.direction === spineDirection).length;
-  const agreement = directionalSources.length > 0 ? agreeing / directionalSources.length : 0;
-
   // ── 9. SUMMARY ──
 
   const summaryParts: string[] = [];
   summaryParts.push(`${verdict.toUpperCase()} (${finalConfidence.toFixed(0)}% conf)`);
   if (shouldBlock) summaryParts.push(`BLOCKED: ${blockReason}`);
+  if (verdictReason && !shouldBlock) summaryParts.push(`Note: ${verdictReason}`);
   summaryParts.push(`Agreement: ${(agreement * 100).toFixed(0)}% (${agreeing}/${directionalSources.length} sources)`);
   summaryParts.push(`Score adj: ${scoreAdjustment >= 0 ? "+" : ""}${scoreAdjustment.toFixed(2)}`);
 
