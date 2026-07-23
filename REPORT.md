@@ -1,47 +1,42 @@
-# Task: Chart Overlays — BSL/SSL, IPDA, Zone Lifecycle
-## Branch: manus/chart-overlays-bsl-ipda-lifecycle
+# Task: Session 4 — Journal Auto-Tagging + Dashboard Pipeline + Fundamentals Interpretation
+## Branch: manus/journal-dashboard-fundamentals
 ## Behavior changes
-1. **New overlay: BSL/SSL** — Buy-Side and Sell-Side Liquidity levels now render as labeled horizontal lines on the chart. BSL lines are fuchsia, SSL lines are purple. Swept levels appear faded/dotted; active levels are solid and bright. Data sourced from scanner `chartOverlays.liquidityPools` (directional).
-2. **New overlay: IPDA** — Premium/Discount/Equilibrium zone boundaries render from scanner daily entity data. Shows: IPDA High/Low, Equilibrium (50%), Premium (55%), Discount (45%), and OTE (62-79%) boundaries when in OTE zone. Off by default (toggle via HUD chip).
-3. **Zone lifecycle coloring** — Order Blocks, FVGs, and Breaker Blocks are now color-coded by their lifecycle state:
-   - Active: full opacity, solid line
-   - Tested: 60% opacity
-   - Mitigating: 35% opacity, dashed line
-   - Broken/Filled: 15% opacity, dotted line
-   - State labels appear in the price line title (e.g., "OB [tested]", "FVG [partially_filled 45%]")
-4. **OBs no longer filtered by mitigated flag** — Previously only non-mitigated OBs/FVGs were shown. Now all are shown but visually distinguished by state (broken ones are nearly invisible). This gives better context of where zones were.
+1. **Journal page** now auto-extracts tags from `reasoning_json` (setup type, session, regime, key factors, confirmation method) and displays them as colored chips. Users can filter trades by clicking tags.
+2. **Dashboard** now shows a "Scanner Pipeline" card aggregating 24h scan funnel: pairs scanned → signals found → gate rejected → below threshold → staged → zone setups → trades placed, with signal rate, conversion rate, and net conversion percentage.
+3. **Fundamentals page** now fetches the `news_impact` action from the fundamentals edge function and displays: (a) a Currency Bias Summary card showing net bullish/bearish direction per currency, (b) directional impact badges inline on each event, (c) expandable interpretation with reasoning, category, confidence, and a plain-English trading implication.
+4. **api.ts** — added `fundamentalsApi.newsImpact(pair?)` method.
 
 ## Files modified
-- `src/components/ChartOverlayHUD.tsx` — Added `bsl` and `ipda` to OverlayLayer type, OverlayVisibility interface, LAYERS array, and DEFAULT_VISIBILITY
-- `src/components/SMCChart.tsx` — Added ChartBSLSSL and ChartIPDA interfaces, new OverlayLayer values, BSL/SSL colors, IPDA rendering section, lifecycle state coloring for OB/FVG/Breaker, layerHasData updates
-- `src/pages/Chart.tsx` — Added bsl/ipda to smcVisibleLayers mapping, BSL/SSL data derivation from scanner, IPDA data derivation from scanner dailyEntities, lifecycle state passthrough for OB/FVG/Breaker, layerDetails entries for bsl and ipda
+- `src/pages/Journal.tsx` — Full rewrite: auto-tagging from reasoning_json, tag-based filtering, enhanced detail panel with factor breakdown
+- `src/pages/Index.tsx` — Added pipelineMetrics useMemo and Scanner Pipeline card
+- `src/pages/Fundamentals.tsx` — Full rewrite: newsImpact query, currency bias summary, expandable event interpretation
+- `src/lib/api.ts` — Added `newsImpact` to `fundamentalsApi`
 
 ## Tests added
-None — this is a pure frontend rendering change with no backend logic. The scanner data shape is unchanged; we're only consuming existing fields that were previously unused on the chart.
+None — these are frontend-only UI changes consuming existing API endpoints. No backend logic was modified.
 
 ## Tests run
 ```
-npx tsc --noEmit → EXIT: 0 (zero errors)
+npx tsc --noEmit → 0 errors
 ```
 
 ## Regression check
-- No backend changes — scanner output is identical
-- Existing overlays (OB, FVG, Breaker, Liquidity, Fib, S/R, BOS, Displacement, Judas, Sessions, KZ) continue to render with the same logic, only with added lifecycle state coloring
-- IPDA is off by default so existing users see no change unless they toggle it on
-- BSL/SSL is on by default but only renders when scanner data is available (graceful no-op otherwise)
+- No backend code was modified (no edge functions changed).
+- The `fundamentals` edge function's `news_impact` action already existed and is simply being consumed by the frontend for the first time.
+- Dashboard pipeline metrics are derived purely from existing `scan_logs` data — no new writes or mutations.
+- Journal auto-tagging reads from `reasoning_json` which is already stored on every trade — no schema changes.
 
 ## Open questions
-- Should IPDA default to ON? Currently set to OFF since it adds 6-8 horizontal lines which could feel cluttered alongside Fibs and S/R. User can toggle it on.
-- The BSL/SSL classification uses `direction === 'bullish'` → BSL, everything else → SSL. If the scanner uses different direction values, the classification may need adjustment.
+- The `news_impact` endpoint requires the `fundamentals` edge function to be deployed. If it hasn't been deployed recently, the interpretation section will show empty (gracefully handled).
+- Should the Journal tags be persisted to a separate column for faster DB-level filtering, or is client-side filtering from reasoning_json sufficient for the current trade volume?
 
 ## Suggested PR title and description
-**Title:** feat: Chart overlays — BSL/SSL liquidity, IPDA zones, zone lifecycle coloring
+**Title:** feat: Journal auto-tagging, Dashboard pipeline funnel, Fundamentals interpretation
 
 **Description:**
-Adds three new chart overlay capabilities:
+Adds three major UI features:
+- **Journal**: Auto-extracts tags (setup type, session, regime, factors, confirmation) from trade reasoning_json. Click any tag to filter. Enhanced detail panel.
+- **Dashboard**: Scanner Pipeline card showing 24h funnel metrics with signal/conversion rates.
+- **Fundamentals**: News impact interpretation with per-currency bias summary, inline directional badges, and expandable event analysis with trading implications.
 
-1. **BSL/SSL overlay** — Renders buy-side and sell-side liquidity levels from scanner data with distinct colors and swept/active styling
-2. **IPDA overlay** — Shows Premium/Discount/Equilibrium zone boundaries and OTE zone from HTF scanner analysis
-3. **Zone lifecycle states** — OB/FVG/Breaker overlays now visually indicate their lifecycle state (active → tested → mitigating → broken) through opacity and line style changes
-
-All overlays are toggleable via the existing HUD chip panel. IPDA defaults to off to avoid clutter; BSL/SSL defaults to on.
+No backend changes — all features consume existing API endpoints.
