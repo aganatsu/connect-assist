@@ -725,13 +725,36 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                         {cp.description && <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{cp.description}</p>}
                         <p className="text-[9px] text-muted-foreground/60 mt-1">{formatBrokerTime(cp.updated_at)}</p>
                       </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(cp.id); }}
-                        className="absolute top-2.5 right-2.5 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all"
-                        title="Delete preset"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const bundle = {
+                              _meta: { version: 1, exportedAt: new Date().toISOString(), source: "smc-trading-bot", presetName: cp.name },
+                              config: cp.config_json,
+                            };
+                            const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `smc-preset-${cp.name.replace(/[^a-zA-Z0-9]/g, "-").toLowerCase()}-${new Date().toISOString().slice(0, 10)}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            toast.success(`Preset "${cp.name}" exported`);
+                          }}
+                          className="text-muted-foreground hover:text-primary transition-colors"
+                          title="Download preset"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(cp.id); }}
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                          title="Delete preset"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
