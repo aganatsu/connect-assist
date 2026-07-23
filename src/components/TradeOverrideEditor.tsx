@@ -25,6 +25,7 @@ import { toast } from "sonner";
 export interface TradeOverrides {
   breakEvenEnabled?: boolean;
   breakEvenPips?: number;
+  breakEvenOffsetPips?: number;
   trailingStopEnabled?: boolean;
   trailingStopPips?: number;
   trailingStopActivation?: string;
@@ -35,6 +36,20 @@ export interface TradeOverrides {
   maxHoldHours?: number;
 }
 
+export interface EffectiveConfig {
+  breakEvenEnabled: boolean;
+  breakEvenPips: number;
+  breakEvenOffsetPips: number;
+  trailingStopEnabled: boolean;
+  trailingStopPips: number;
+  trailingStopActivation: string;
+  partialTPEnabled: boolean;
+  partialTPPercent: number;
+  partialTPLevel: number;
+  maxHoldEnabled: boolean;
+  maxHoldHours: number;
+}
+
 interface TradeOverrideEditorProps {
   position: any;
   onSaved: () => void;
@@ -42,40 +57,66 @@ interface TradeOverrideEditorProps {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-function parseOverrides(position: any): TradeOverrides | null {
-  if (!position.trade_overrides && !position.tradeOverrides) return null;
-  const raw = position.trade_overrides || position.tradeOverrides;
+/** Fallback defaults when effectiveConfig is not available from API (pre-deploy) */
+const HARDCODED_DEFAULTS: EffectiveConfig = {
+  breakEvenEnabled: false,
+  breakEvenPips: 20,
+  breakEvenOffsetPips: 0,
+  trailingStopEnabled: false,
+  trailingStopPips: 15,
+  trailingStopActivation: "after_1r",
+  partialTPEnabled: false,
+  partialTPPercent: 50,
+  partialTPLevel: 1.5,
+  maxHoldEnabled: false,
+  maxHoldHours: 48,
+};
+
+function getEffectiveConfig(position: any): EffectiveConfig {
+  // Prefer the resolved effectiveConfig from the API (the single source of truth)
+  if (position.effectiveConfig && typeof position.effectiveConfig === "object") {
+    return { ...HARDCODED_DEFAULTS, ...position.effectiveConfig };
+  }
+  // Fallback for pre-deploy: try to parse from signalReason exitFlags
+  try {
+    const sr = JSON.parse(position.signalReason || "{}");
+    const ef = sr.exitFlags || {};
+    return {
+      breakEvenEnabled: ef.breakEvenEnabled ?? ef.breakEven ?? false,
+      breakEvenPips: ef.breakEvenPips ?? 20,
+      breakEvenOffsetPips: ef.breakEvenOffsetPips ?? 0,
+      trailingStopEnabled: ef.trailingStopEnabled ?? ef.trailingStop ?? false,
+      trailingStopPips: ef.trailingStopPips ?? 15,
+      trailingStopActivation: ef.trailingStopActivation ?? "after_1r",
+      partialTPEnabled: ef.partialTPEnabled ?? ef.partialTP ?? false,
+      partialTPPercent: ef.partialTPPercent ?? 50,
+      partialTPLevel: ef.partialTPLevel ?? 1.5,
+      maxHoldEnabled: ef.maxHoldEnabled !== false && (ef.maxHoldHours ?? 0) > 0,
+      maxHoldHours: ef.maxHoldHours ?? 48,
+    };
+  } catch {
+    return HARDCODED_DEFAULTS;
+  }
+}
+
+function getTradeOverrides(position: any): TradeOverrides | null {
+  // Prefer the parsed tradeOverrides from the API
+  if (position.tradeOverrides && typeof position.tradeOverrides === "object") {
+    return Object.keys(position.tradeOverrides).length > 0 ? position.tradeOverrides : null;
+  }
+  // Fallback for pre-deploy: try to parse from raw field
+  const raw = position.trade_overrides;
   if (!raw) return null;
   try {
-    return typeof raw === "string" ? JSON.parse(raw) : raw;
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return Object.keys(parsed).length > 0 ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function getGlobalDefaults(position: any): TradeOverrides {
-  // Extract from signalReason exitFlags (what the bot originally set)
-  let ef: any = {};
-  try {
-    const sr = JSON.parse(position.signalReason || "{}");
-    ef = sr.exitFlags || {};
-  } catch { /* ignore */ }
-
-  return {
-    breakEvenEnabled: ef.breakEvenEnabled ?? ef.breakEven ?? false,
-    breakEvenPips: ef.breakEvenPips ?? 20,
-    trailingStopEnabled: ef.trailingStopEnabled ?? ef.trailingStop ?? false,
-    trailingStopPips: ef.trailingStopPips ?? 15,
-    trailingStopActivation: ef.trailingStopActivation ?? "after_1r",
-    partialTPEnabled: ef.partialTPEnabled ?? ef.partialTP ?? false,
-    partialTPPercent: ef.partialTPPercent ?? 50,
-    partialTPLevel: ef.partialTPLevel ?? 1.5,
-    maxHoldEnabled: ef.maxHoldEnabled !== false && (ef.maxHoldHours ?? 0) > 0,
-    maxHoldHours: ef.maxHoldHours ?? 48,
-  };
-}
-
 const ACTIVATION_OPTIONS = [
+  { value: "immediate", label: "Immediate (0R)" },
   { value: "after_0.5r", label: "After 0.5R" },
   { value: "after_1r", label: "After 1R" },
   { value: "after_1.5r", label: "After 1.5R" },
@@ -85,8 +126,8 @@ const ACTIVATION_OPTIONS = [
 // ─── Override Badge (for position table row) ────────────────────────
 
 export function OverrideBadge({ position }: { position: any }) {
-  const overrides = parseOverrides(position);
-  if (!overrides || Object.keys(overrides).length === 0) return null;
+  const overrides = getTradeOverrides(position);
+  if (!overrides) return null;
 
   const count = Object.keys(overrides).length;
   const labels: string[] = [];
@@ -194,114 +235,106 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
 
-  const existing = useMemo(() => parseOverrides(position), [position]);
-  const defaults = useMemo(() => getGlobalDefaults(position), [position]);
+  // Read from API-resolved data (single source of truth)
+  const [effectiveCfg, setEffectiveCfg] = useState<EffectiveConfig>(() => getEffectiveConfig(position));
+  const [overrides, setOverrides] = useState<TradeOverrides | null>(() => getTradeOverrides(position));
 
-  // Local state — initialized from overrides (if any) or global defaults
-  const [beEnabled, setBeEnabled] = useState(existing?.breakEvenEnabled ?? defaults.breakEvenEnabled ?? false);
-  const [bePips, setBePips] = useState(String(existing?.breakEvenPips ?? defaults.breakEvenPips ?? 20));
-  const [trailEnabled, setTrailEnabled] = useState(existing?.trailingStopEnabled ?? defaults.trailingStopEnabled ?? false);
-  const [trailPips, setTrailPips] = useState(String(existing?.trailingStopPips ?? defaults.trailingStopPips ?? 15));
-  const [trailActivation, setTrailActivation] = useState(existing?.trailingStopActivation ?? defaults.trailingStopActivation ?? "after_1r");
-  const [ptpEnabled, setPtpEnabled] = useState(existing?.partialTPEnabled ?? defaults.partialTPEnabled ?? false);
-  const [ptpPercent, setPtpPercent] = useState(String(existing?.partialTPPercent ?? defaults.partialTPPercent ?? 50));
-  const [ptpLevel, setPtpLevel] = useState(String(existing?.partialTPLevel ?? defaults.partialTPLevel ?? 1.5));
-  const [holdEnabled, setHoldEnabled] = useState(existing?.maxHoldEnabled ?? defaults.maxHoldEnabled ?? false);
-  const [holdHours, setHoldHours] = useState(String(existing?.maxHoldHours ?? defaults.maxHoldHours ?? 48));
+  // Local editing state — initialized from effective config
+  const [beEnabled, setBeEnabled] = useState(effectiveCfg.breakEvenEnabled);
+  const [bePips, setBePips] = useState(String(effectiveCfg.breakEvenPips));
+  const [trailEnabled, setTrailEnabled] = useState(effectiveCfg.trailingStopEnabled);
+  const [trailPips, setTrailPips] = useState(String(effectiveCfg.trailingStopPips));
+  const [trailActivation, setTrailActivation] = useState(effectiveCfg.trailingStopActivation);
+  const [ptpEnabled, setPtpEnabled] = useState(effectiveCfg.partialTPEnabled);
+  const [ptpPercent, setPtpPercent] = useState(String(effectiveCfg.partialTPPercent));
+  const [ptpLevel, setPtpLevel] = useState(String(effectiveCfg.partialTPLevel));
+  const [holdEnabled, setHoldEnabled] = useState(effectiveCfg.maxHoldEnabled);
+  const [holdHours, setHoldHours] = useState(String(effectiveCfg.maxHoldHours));
 
-  // Reset local state when position changes
+  // Sync from position prop ONLY when effectiveConfig/tradeOverrides actually change
   useEffect(() => {
-    const ov = parseOverrides(position);
-    const def = getGlobalDefaults(position);
-    setBeEnabled(ov?.breakEvenEnabled ?? def.breakEvenEnabled ?? false);
-    setBePips(String(ov?.breakEvenPips ?? def.breakEvenPips ?? 20));
-    setTrailEnabled(ov?.trailingStopEnabled ?? def.trailingStopEnabled ?? false);
-    setTrailPips(String(ov?.trailingStopPips ?? def.trailingStopPips ?? 15));
-    setTrailActivation(ov?.trailingStopActivation ?? def.trailingStopActivation ?? "after_1r");
-    setPtpEnabled(ov?.partialTPEnabled ?? def.partialTPEnabled ?? false);
-    setPtpPercent(String(ov?.partialTPPercent ?? def.partialTPPercent ?? 50));
-    setPtpLevel(String(ov?.partialTPLevel ?? def.partialTPLevel ?? 1.5));
-    setHoldEnabled(ov?.maxHoldEnabled ?? def.maxHoldEnabled ?? false);
-    setHoldHours(String(ov?.maxHoldHours ?? def.maxHoldHours ?? 48));
-  }, [position]);
+    const newCfg = getEffectiveConfig(position);
+    const newOv = getTradeOverrides(position);
+    setEffectiveCfg(newCfg);
+    setOverrides(newOv);
+    // Reset local state to match the new effective config
+    setBeEnabled(newCfg.breakEvenEnabled);
+    setBePips(String(newCfg.breakEvenPips));
+    setTrailEnabled(newCfg.trailingStopEnabled);
+    setTrailPips(String(newCfg.trailingStopPips));
+    setTrailActivation(newCfg.trailingStopActivation);
+    setPtpEnabled(newCfg.partialTPEnabled);
+    setPtpPercent(String(newCfg.partialTPPercent));
+    setPtpLevel(String(newCfg.partialTPLevel));
+    setHoldEnabled(newCfg.maxHoldEnabled);
+    setHoldHours(String(newCfg.maxHoldHours));
+  }, [position.effectiveConfig, position.tradeOverrides]);
 
-  // Build the overrides payload — only include fields that differ from global defaults
+  // Build the overrides payload — always send the full set of values the user sees
+  // This ensures what's displayed = what's saved = what the scanner uses
   const buildPayload = (): TradeOverrides => {
-    const overrides: TradeOverrides = {};
-
-    if (beEnabled !== defaults.breakEvenEnabled) overrides.breakEvenEnabled = beEnabled;
-    if (beEnabled) {
-      const pips = parseFloat(bePips);
-      if (!isNaN(pips) && pips !== defaults.breakEvenPips) overrides.breakEvenPips = pips;
-      // If enabling BE but it was disabled globally, always include pips
-      if (beEnabled !== defaults.breakEvenEnabled) overrides.breakEvenPips = isNaN(pips) ? (defaults.breakEvenPips ?? 20) : pips;
-    }
-
-    if (trailEnabled !== defaults.trailingStopEnabled) overrides.trailingStopEnabled = trailEnabled;
-    if (trailEnabled) {
-      const pips = parseFloat(trailPips);
-      if (!isNaN(pips) && pips !== defaults.trailingStopPips) overrides.trailingStopPips = pips;
-      if (trailActivation !== defaults.trailingStopActivation) overrides.trailingStopActivation = trailActivation;
-      // If enabling trail but it was disabled globally, always include pips + activation
-      if (trailEnabled !== defaults.trailingStopEnabled) {
-        overrides.trailingStopPips = isNaN(pips) ? (defaults.trailingStopPips ?? 15) : pips;
-        overrides.trailingStopActivation = trailActivation;
-      }
-    }
-
-    if (ptpEnabled !== defaults.partialTPEnabled) overrides.partialTPEnabled = ptpEnabled;
-    if (ptpEnabled) {
-      const pct = parseFloat(ptpPercent);
-      const lvl = parseFloat(ptpLevel);
-      if (!isNaN(pct) && pct !== defaults.partialTPPercent) overrides.partialTPPercent = pct;
-      if (!isNaN(lvl) && lvl !== defaults.partialTPLevel) overrides.partialTPLevel = lvl;
-      if (ptpEnabled !== defaults.partialTPEnabled) {
-        overrides.partialTPPercent = isNaN(pct) ? (defaults.partialTPPercent ?? 50) : pct;
-        overrides.partialTPLevel = isNaN(lvl) ? (defaults.partialTPLevel ?? 1.5) : lvl;
-      }
-    }
-
-    if (holdEnabled !== defaults.maxHoldEnabled) overrides.maxHoldEnabled = holdEnabled;
-    if (holdEnabled) {
-      const hrs = parseFloat(holdHours);
-      if (!isNaN(hrs) && hrs !== defaults.maxHoldHours) overrides.maxHoldHours = hrs;
-      if (holdEnabled !== defaults.maxHoldEnabled) {
-        overrides.maxHoldHours = isNaN(hrs) ? (defaults.maxHoldHours ?? 48) : hrs;
-      }
-    }
-
-    return overrides;
+    return {
+      breakEvenEnabled: beEnabled,
+      breakEvenPips: parseFloat(bePips) || 20,
+      trailingStopEnabled: trailEnabled,
+      trailingStopPips: parseFloat(trailPips) || 15,
+      trailingStopActivation: trailActivation,
+      partialTPEnabled: ptpEnabled,
+      partialTPPercent: parseFloat(ptpPercent) || 50,
+      partialTPLevel: parseFloat(ptpLevel) || 1.5,
+      maxHoldEnabled: holdEnabled,
+      maxHoldHours: parseFloat(holdHours) || 48,
+    };
   };
 
-  // Check if any field differs from what's currently saved
+  // Check if any field differs from the current effective config
   const hasChanges = useMemo(() => {
-    const payload = buildPayload();
-    // Compare with existing overrides
-    if (!existing && Object.keys(payload).length === 0) return false;
-    if (!existing && Object.keys(payload).length > 0) return true;
-    if (existing && Object.keys(payload).length === 0) return true; // clearing overrides
-    return JSON.stringify(payload) !== JSON.stringify(existing);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beEnabled, bePips, trailEnabled, trailPips, trailActivation, ptpEnabled, ptpPercent, ptpLevel, holdEnabled, holdHours, existing, defaults]);
+    const cfg = effectiveCfg;
+    if (beEnabled !== cfg.breakEvenEnabled) return true;
+    if (beEnabled && parseFloat(bePips) !== cfg.breakEvenPips) return true;
+    if (trailEnabled !== cfg.trailingStopEnabled) return true;
+    if (trailEnabled && parseFloat(trailPips) !== cfg.trailingStopPips) return true;
+    if (trailEnabled && trailActivation !== cfg.trailingStopActivation) return true;
+    if (ptpEnabled !== cfg.partialTPEnabled) return true;
+    if (ptpEnabled && parseFloat(ptpPercent) !== cfg.partialTPPercent) return true;
+    if (ptpEnabled && parseFloat(ptpLevel) !== cfg.partialTPLevel) return true;
+    if (holdEnabled !== cfg.maxHoldEnabled) return true;
+    if (holdEnabled && parseFloat(holdHours) !== cfg.maxHoldHours) return true;
+    return false;
+  }, [beEnabled, bePips, trailEnabled, trailPips, trailActivation, ptpEnabled, ptpPercent, ptpLevel, holdEnabled, holdHours, effectiveCfg]);
 
-  const hasActiveOverrides = existing && Object.keys(existing).length > 0;
+  const hasActiveOverrides = overrides !== null;
 
   // Check which sections have overrides
-  const beOverridden = existing?.breakEvenEnabled !== undefined || existing?.breakEvenPips !== undefined;
-  const trailOverridden = existing?.trailingStopEnabled !== undefined || existing?.trailingStopPips !== undefined || existing?.trailingStopActivation !== undefined;
-  const ptpOverridden = existing?.partialTPEnabled !== undefined || existing?.partialTPPercent !== undefined || existing?.partialTPLevel !== undefined;
-  const holdOverridden = existing?.maxHoldEnabled !== undefined || existing?.maxHoldHours !== undefined;
+  const beOverridden = overrides?.breakEvenEnabled !== undefined || overrides?.breakEvenPips !== undefined;
+  const trailOverridden = overrides?.trailingStopEnabled !== undefined || overrides?.trailingStopPips !== undefined || overrides?.trailingStopActivation !== undefined;
+  const ptpOverridden = overrides?.partialTPEnabled !== undefined || overrides?.partialTPPercent !== undefined || overrides?.partialTPLevel !== undefined;
+  const holdOverridden = overrides?.maxHoldEnabled !== undefined || overrides?.maxHoldHours !== undefined;
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const overrides = buildPayload();
-      // If no overrides differ from defaults, send null to clear
-      const payload = Object.keys(overrides).length === 0 ? null : overrides;
-      await paperApi.updatePosition(position.id, { tradeOverrides: payload });
-      toast.success(payload ? "Trade overrides saved — takes effect next scan cycle" : "Overrides cleared — using global config");
-      onSaved();
-      if (!payload) setIsOpen(false);
+      const payload = buildPayload();
+      const response = await paperApi.updatePosition(position.id, { tradeOverrides: payload });
+      // Use the response to update local state immediately — no flicker
+      if (response?.effectiveConfig) {
+        const newCfg = { ...HARDCODED_DEFAULTS, ...response.effectiveConfig };
+        setEffectiveCfg(newCfg);
+        setOverrides(response.tradeOverrides || payload);
+        // Sync local editing state to match what was just saved
+        setBeEnabled(newCfg.breakEvenEnabled);
+        setBePips(String(newCfg.breakEvenPips));
+        setTrailEnabled(newCfg.trailingStopEnabled);
+        setTrailPips(String(newCfg.trailingStopPips));
+        setTrailActivation(newCfg.trailingStopActivation);
+        setPtpEnabled(newCfg.partialTPEnabled);
+        setPtpPercent(String(newCfg.partialTPPercent));
+        setPtpLevel(String(newCfg.partialTPLevel));
+        setHoldEnabled(newCfg.maxHoldEnabled);
+        setHoldHours(String(newCfg.maxHoldHours));
+      }
+      toast.success("Trade overrides saved — takes effect next scan cycle");
+      onSaved(); // Still trigger parent refresh for other data (PnL, prices)
     } catch (e: any) {
       toast.error(e?.message || "Failed to save overrides");
     } finally {
@@ -312,7 +345,23 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
   const handleReset = async () => {
     setResetting(true);
     try {
-      await paperApi.updatePosition(position.id, { tradeOverrides: null });
+      const response = await paperApi.updatePosition(position.id, { tradeOverrides: null });
+      // Use response to update state immediately
+      if (response?.effectiveConfig) {
+        const newCfg = { ...HARDCODED_DEFAULTS, ...response.effectiveConfig };
+        setEffectiveCfg(newCfg);
+        setOverrides(null);
+        setBeEnabled(newCfg.breakEvenEnabled);
+        setBePips(String(newCfg.breakEvenPips));
+        setTrailEnabled(newCfg.trailingStopEnabled);
+        setTrailPips(String(newCfg.trailingStopPips));
+        setTrailActivation(newCfg.trailingStopActivation);
+        setPtpEnabled(newCfg.partialTPEnabled);
+        setPtpPercent(String(newCfg.partialTPPercent));
+        setPtpLevel(String(newCfg.partialTPLevel));
+        setHoldEnabled(newCfg.maxHoldEnabled);
+        setHoldHours(String(newCfg.maxHoldHours));
+      }
       toast.success("Overrides cleared — using global config");
       onSaved();
       setIsOpen(false);
@@ -336,7 +385,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
           Trade Management Overrides
           {hasActiveOverrides && (
             <span className="ml-1 px-1.5 py-0.5 rounded bg-badge-info text-[9px] font-bold">
-              {Object.keys(existing!).length} active
+              {Object.keys(overrides!).length} active
             </span>
           )}
         </Button>
@@ -365,8 +414,8 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-[280px]">
                 <p className="text-[10px]">
-                  Override the global bot config for this specific trade. Changes take effect on the next scan cycle (~15 min).
-                  Fields not overridden will continue using the global config.
+                  These are the <strong>effective values</strong> the scanner will use for this trade.
+                  Fields marked CUSTOM override your global config. Changes take effect on the next scan cycle (~15 min).
                 </p>
               </TooltipContent>
             </Tooltip>
@@ -535,7 +584,7 @@ export function TradeOverrideEditor({ position, onSaved }: TradeOverrideEditorPr
 
       {/* Info footer */}
       <p className="text-[10px] text-muted-foreground/60 italic">
-        Changes take effect on the next bot scan cycle (~15 min). Only overridden fields are saved — everything else uses your global bot config.
+        Showing effective values (global config + your overrides). Changes take effect on the next bot scan cycle (~15 min).
       </p>
     </div>
   );
