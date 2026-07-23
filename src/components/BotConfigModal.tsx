@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target } from "lucide-react";
+import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target, Download, Upload } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -570,6 +570,65 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     onError: (e: any) => toast.error(e.message),
   });
 
+  // ─── Export / Import ─────────────────────────────────────────────
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = () => {
+    if (!config) return;
+    const bundle = {
+      _meta: { version: 1, exportedAt: new Date().toISOString(), source: "smc-trading-bot", connectionId: connectionId || null },
+      config,
+    };
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const suffix = connectionId ? `-${connectionName || connectionId}` : "-global";
+    a.download = `smc-bot-config${suffix}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Config exported");
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        // Support both wrapped format { _meta, config } and raw config
+        const configPayload = parsed.config || parsed;
+        const meta = parsed._meta;
+        if (!configPayload || typeof configPayload !== "object") {
+          toast.error("Invalid config file", { description: "No valid configuration found in the file." });
+          return;
+        }
+        // Basic validation: check at least one known section exists
+        const knownSections = ["strategy", "risk", "entry", "exit", "instruments", "sessions", "notifications", "protection", "account"];
+        const foundSections = knownSections.filter(s => s in configPayload);
+        if (foundSections.length === 0) {
+          toast.error("Invalid config file", { description: "File does not contain any recognized config sections." });
+          return;
+        }
+        const exportInfo = meta?.exportedAt ? ` (exported ${meta.exportedAt.slice(0, 10)})` : "";
+        if (confirm(`Import config${exportInfo}?\n\nThis will load ${foundSections.length} sections into the editor.\nYou still need to click \"Save Config\" to apply.`)) {
+          setConfig(JSON.parse(JSON.stringify(configPayload)));
+          toast.success(`Config loaded from file`, { description: `${foundSections.length} sections imported. Click Save to apply.` });
+        }
+      } catch {
+        toast.error("Invalid file", { description: "Could not parse JSON. Make sure this is a valid config file." });
+      }
+    };
+    reader.readAsText(file);
+    // Reset input so same file can be re-imported
+    e.target.value = "";
+  };
+
   const applyPresetConfig = (presetConfig: any, label: string) => {
     if (!config) return;
     // Deep clone to avoid reference sharing
@@ -625,6 +684,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
             {connectionId && (
               <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => copyFromGlobalMut.mutate()}>Copy from Global</Button>
             )}
+            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={handleExport} title="Export config as JSON file">
+              <Download className="h-3 w-3" /> Export
+            </Button>
+            <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1" onClick={handleImportClick} title="Import config from JSON file">
+              <Upload className="h-3 w-3" /> Import
+            </Button>
+            <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileChange} />
             <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={() => resetMut.mutate()}>Reset Defaults</Button>
             <Button variant="outline" size="sm" className="text-xs gap-1" onClick={() => { setPresetName(""); setPresetDescription(""); setShowSavePresetDialog(true); }}>
               <Bookmark className="h-3 w-3" /> Save as Preset
