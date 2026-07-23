@@ -570,6 +570,17 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     onError: (e: any) => toast.error(e.message),
   });
 
+  // ─── Active Preset Detection ────────────────────────────────────
+  const isPresetActive = (presetConfig: any): boolean => {
+    if (!rawConfig || !presetConfig) return false;
+    // Compare the key sections that define behavior
+    const sections = ["strategy", "risk", "entry", "exit", "instruments", "sessions", "protection"];
+    for (const section of sections) {
+      if (JSON.stringify(rawConfig[section]) !== JSON.stringify(presetConfig[section])) return false;
+    }
+    return true;
+  };
+
   // ─── Export / Import ─────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -716,12 +727,21 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               {showMyPresets && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                   {customPresets.map((cp: any) => (
-                    <div key={cp.id} className="group relative p-3 border border-border hover:border-primary/50 hover:bg-primary/5 transition-colors text-left">
+                    <div key={cp.id} className={`group relative p-3 border transition-colors text-left ${
+                      isPresetActive(cp.config_json)
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:border-primary/50 hover:bg-primary/5"
+                    }`}>
                       <button
                         onClick={() => applyPresetConfig(cp.config_json, cp.name)}
                         className="w-full text-left"
                       >
-                        <p className="text-xs font-bold truncate pr-6">{cp.name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-bold truncate pr-6">{cp.name}</p>
+                          {isPresetActive(cp.config_json) && (
+                            <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-primary text-primary shrink-0">Active</Badge>
+                          )}
+                        </div>
                         {cp.description && <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{cp.description}</p>}
                         <p className="text-[9px] text-muted-foreground/60 mt-1">{formatBrokerTime(cp.updated_at)}</p>
                       </button>
