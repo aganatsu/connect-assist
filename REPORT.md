@@ -1,84 +1,64 @@
-# Task: Per-Trade Override Fix
-## Branch: manus/fix-trade-overrides
-
+# Task: SL/TP Recalculation on Verdict Direction
+## Branch: manus/sltp-recalc-on-verdict
 ## Behavior changes
-
-1. **Status API now returns `tradeOverrides` and `effectiveConfig` per position** — previously these fields were absent from the status response, causing the frontend to guess from stale `exitFlags` data.
-2. **Update position API now returns `effectiveConfig` and `tradeOverrides`** — previously only returned `{ success, position }`. The frontend now uses this to update state immediately without a full refresh.
-3. **TradeOverrideEditor no longer flickers back to "After 1R"** — the root cause was that after saving overrides, the next status poll returned positions without `trade_overrides` data, so the UI re-initialized from `exitFlags` (which always showed the original signal-time defaults). Now the UI reads from `effectiveConfig` (the resolved merge of global config + per-trade overrides).
+1. Pairs that previously failed Gate 10 ("No valid SL/TP for R:R check") because `simpleDirection` returned null — but the Direction Verdict later assigned a valid direction — will now have SL/TP recalculated using the verdict direction. This means more pairs may pass the R:R gate and potentially be taken as trades.
+2. The recalculation uses identical inputs to what `runConfluenceAnalysis()` would have used (structure swingPoints, orderBlocks, liquidityPools, ATR, FVGs, fib extensions, DOL targets), ensuring the SL/TP values are structurally sound and not arbitrary.
 
 ## Files modified
+- `supabase/functions/bot-scanner/index.ts` — Added SL/TP recalculation block (lines 4492-4525) after the direction sync. When `effectiveDirection` is non-null but `analysis.stopLoss` or `analysis.takeProfit` are null, calls `calculateSLTP()` with the verdict direction and all structural inputs from the analysis object. Logs the recalculated values or failure reason.
+- `supabase/functions/_shared/sltpRecalc.test.ts` — New test file with 9 regression tests.
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/_shared/resolveTradeConfig.ts` | **NEW** — Shared helper with `extractGlobalExitConfig()`, `parseTradeOverrides()`, and `resolveTradeConfig()`. Single source of truth for merging global bot config with per-trade overrides. |
-| `supabase/functions/_shared/resolveTradeConfig.test.ts` | **NEW** — 12 Deno tests covering extraction, parsing, and resolution logic. |
-| `supabase/functions/paper-trading/index.ts` | **MODIFIED** — Status response now includes `tradeOverrides` + `effectiveConfig` per position. `update_position` response now returns `effectiveConfig` + `tradeOverrides` after saving. |
-| `src/components/TradeOverrideEditor.tsx` | **REWRITTEN** — Reads `effectiveConfig` from API response (single source of truth). `handleSave()` and `handleReset()` update local state from API response immediately. Eliminates flicker and stale defaults. |
-
-## Caution-file explanation: paper-trading/index.ts
-
-Two targeted additions were made to `paper-trading/index.ts`:
-
-1. **Status handler** (around line 1212): After building the position array for the status response, each position now includes `tradeOverrides: parseTradeOverrides(p.trade_overrides)` and `effectiveConfig: resolveTradeConfig(globalExitConfig, parseTradeOverrides(p.trade_overrides))`. The `globalExitConfig` is computed once from the user's bot_config before the position loop. This is purely additive — it adds two new fields to the response object without changing any existing fields or logic.
-
-2. **update_position handler** (around line 1460): After the position is updated in the database, instead of just returning `{ success, position }`, it now also fetches the user's bot_config, resolves the effective config, and returns `{ success, position, tradeOverrides, effectiveConfig }`. This allows the frontend to update its state immediately from the response without needing to poll status again.
-
-Neither change affects trade execution, position sizing, or gate logic. They are purely response-enrichment for the frontend.
+## Why this change was needed (bot-scanner/index.ts — extra caution file)
+The `calculateSLTP()` function is called inside `runConfluenceAnalysis()` with the direction from `_overrideDirection`. When `simpleDirection` returns null (no trade signal from the direction engine), `_overrideDirection = null`, and `calculateSLTP()` immediately returns `{ stopLoss: null, takeProfit: null }`. Later, the Direction Verdict (which aggregates multiple bias sources) may assign a valid direction and sync it to `analysis.direction`. However, the SL/TP fields remain null because they were computed before the verdict ran. Gate 10 then checks `analysis.stopLoss && analysis.takeProfit` and auto-fails. The fix adds a targeted recalculation that only fires when: (a) verdict provides a direction, AND (b) SL/TP are currently null. This is safe because `calculateSLTP()` is a pure function with well-defined fallbacks.
 
 ## Tests added
-
-| Test | Assertion |
-|------|-----------|
-| `extractGlobalExitConfig — extracts from nested exit object` | Correctly reads all fields from `config.exit.*` |
-| `extractGlobalExitConfig — falls back to top-level keys` | Falls back to `config.breakEvenEnabled` etc. when no `exit` sub-object |
-| `extractGlobalExitConfig — uses defaults for empty config` | Returns sensible defaults (BE=true/20pips, trail=false/15pips, etc.) |
-| `extractGlobalExitConfig — handles null/undefined input` | Doesn't crash on null config |
-| `parseTradeOverrides — returns null for null/undefined/empty` | Null/empty/"{}" all return null |
-| `parseTradeOverrides — parses JSON string` | Correctly parses stringified overrides |
-| `parseTradeOverrides — handles object directly` | Passes through already-parsed objects |
-| `parseTradeOverrides — returns null for invalid JSON` | Gracefully handles malformed strings |
-| `resolveTradeConfig — returns global config when no overrides` | Null overrides = global config unchanged |
-| `resolveTradeConfig — overrides specific fields only` | Only overridden fields change; rest stays global |
-| `resolveTradeConfig — override can disable a globally-enabled feature` | `{ breakEvenEnabled: false }` correctly disables |
-| `resolveTradeConfig — full override replaces all fields` | Complete override set replaces every field |
+1. `direction=null returns null SL/TP` — confirms the bug scenario (null direction → null SL/TP)
+2. `direction='long' with same inputs produces valid SL/TP` — proves recalculation works for longs
+3. `direction='short' with same inputs produces valid SL/TP` — proves recalculation works for shorts
+4. `recalculation with no swings still produces valid SL/TP` — verifies fixedSLPips fallback
+5. `recalculation with Gold (large pip size) produces valid SL/TP` — verifies non-forex instruments
+6. `recalculation produces identical result to upfront direction (deterministic)` — proves idempotency
+7. `below_ob SL method works in recalculation scenario` — verifies OB-based SL method
+8. `atr_based SL method works in recalculation scenario` — verifies ATR-based SL method
+9. `next_level TP method works with recalculated SL` — verifies structural TP method
 
 ## Tests run
-
 ```
-$ deno test --no-check --allow-all supabase/functions/_shared/resolveTradeConfig.test.ts
-running 12 tests from ./supabase/functions/_shared/resolveTradeConfig.test.ts
-ok | 12 passed | 0 failed (11ms)
+running 9 tests from ./supabase/functions/_shared/sltpRecalc.test.ts
+REGRESSION: direction=null returns null SL/TP (confirms the bug scenario) ... ok (1ms)
+REGRESSION: direction='long' with same inputs produces valid SL/TP (the recalculation scenario) ... ok (250µs)
+REGRESSION: direction='short' with same inputs produces valid SL/TP (the recalculation scenario) ... ok (139µs)
+REGRESSION: recalculation with no swings still produces valid SL/TP (fallback to fixedSLPips) ... ok (83µs)
+REGRESSION: recalculation with Gold (large pip size) produces valid SL/TP ... ok (164µs)
+REGRESSION: recalculation produces identical result to upfront direction (deterministic) ... ok (174µs)
+REGRESSION: below_ob SL method works in recalculation scenario ... ok (157µs)
+REGRESSION: atr_based SL method works in recalculation scenario ... ok (239µs)
+REGRESSION: next_level TP method works with recalculated SL ... ok (347µs)
+ok | 9 passed | 0 failed (11ms)
+
+Full suite: FAILED | 1398 passed | 7 failed (14s)
+(7 failures are pre-existing — beTrailingRace, brokerFillPriceBE, zoneLiquidity — confirmed on main)
 ```
-
-Full suite (1384 tests): 1377 passed, 7 failed. All 7 failures are **pre-existing** (beTrailingRace, brokerFillPriceBE, zoneLiquidity) — verified by running the same tests on `main` without our changes and observing identical failures.
-
-TypeScript: `npx tsc --noEmit` → EXIT: 0 (zero errors)
 
 ## Regression check
-
-- **Pre-existing behavior preserved**: The `resolveTradeConfig` helper is additive — it's only called in the status/update_position response paths to compute display data. The actual trade management logic in `scannerManagement.ts` was not modified.
-- **No change to what trades get taken or how positions are sized**: The override system already existed in the database (`trade_overrides` column) and was already read by `scannerManagement.ts`. This fix only ensures the frontend correctly displays and persists those overrides.
-- **Verified on `main` branch**: The 7 failing tests fail identically without our changes, confirming zero regression.
+- Verified the 7 test failures exist identically on `main` branch (not introduced by this change)
+- The fix is additive: it only fires when `analysis.stopLoss/takeProfit` are null AND `effectiveDirection` is non-null. If SL/TP were already computed (the normal case where simpleDirection returned a direction), this code path is never entered.
+- `calculateSLTP()` is a pure function — same inputs always produce same outputs. The recalculation uses the exact same input sources as the original call in `confluenceScoring.ts`.
 
 ## Open questions
-
-1. **Supabase Edge Function deployment**: The `resolveTradeConfig.ts` shared helper and `paper-trading/index.ts` changes need to be deployed to Supabase for the fix to take effect in production. User needs to run `supabase functions deploy paper-trading` after merge.
-2. **Pre-existing test failures**: 7 tests in `beTrailingRace.test.ts`, `brokerFillPriceBE.test.ts`, and `zoneLiquidity.test.ts` fail on `main` — these appear to be tests written ahead of implementation or with outdated assertions. Not related to this task.
+1. Should there be a dashboard indicator showing when SL/TP was recalculated (vs computed in the original scoring pass)? Currently it only logs to console.
+2. The recalculation fires for ALL cases where SL/TP are null + direction is non-null. This includes the rare case where `calculateSLTP()` returned null even WITH a direction (e.g., no valid swing structure AND fixedSLPips=0). The code handles this gracefully (logs "RECALC failed") but won't change behavior for those edge cases.
 
 ## Suggested PR title and description
-
-**Title:** fix(overrides): proper per-trade override system with resolved effective config
+**Title:** fix: recalculate SL/TP after direction sync when verdict provides direction
 
 **Description:**
-Fixes the TradeOverrideEditor flicker bug where saved overrides would revert to "After 1R" defaults on every status refresh.
+Fixes the "No valid SL/TP for R:R check" gate failure that occurs when:
+1. SimpleDirection returns null (no trade signal)
+2. `_overrideDirection = null` → `calculateSLTP()` returns null SL/TP
+3. Direction Verdict later assigns a valid direction
+4. SL/TP remain null → Gate 10 auto-fails
 
-**Root cause:** The status API didn't return `trade_overrides` or resolved config, so the UI re-initialized from stale `exitFlags` data (which reflected signal-time defaults, not current overrides).
+The fix adds a targeted `calculateSLTP()` call after the direction sync (line 4490) that only fires when `effectiveDirection` is non-null but `analysis.stopLoss/takeProfit` are null. Uses the same structural inputs (swings, OBs, liquidity, ATR, FVGs, fib extensions, DOL targets) as the original call.
 
-**Fix:**
-- New `resolveTradeConfig.ts` shared helper (single source of truth for merging global config + per-trade overrides)
-- Status API now returns `tradeOverrides` + `effectiveConfig` per position
-- `update_position` API returns `effectiveConfig` + `tradeOverrides` after saving
-- `TradeOverrideEditor` rewritten to use API-resolved config; updates state from response immediately without needing refresh
-
-**Testing:** 12 new Deno tests, 0 TypeScript errors, no behavior changes to trade execution logic.
+**Behavior change:** Pairs that previously auto-failed the R:R gate due to null SL/TP will now get valid SL/TP computed and may pass → more trades evaluated.
