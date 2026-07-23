@@ -571,12 +571,31 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   });
 
   // ─── Active Preset Detection ────────────────────────────────────
+  const deepMatch = (saved: any, preset: any): boolean => {
+    // Check that every key in the preset matches the saved config
+    // (saved config may have extra keys the preset doesn't define — that's fine)
+    if (preset === saved) return true;
+    if (preset == null || saved == null) return preset == saved;
+    if (typeof preset !== typeof saved) return false;
+    if (typeof preset !== "object") return String(preset) === String(saved);
+    if (Array.isArray(preset)) {
+      if (!Array.isArray(saved) || preset.length !== saved.length) return false;
+      return preset.every((v: any, i: number) => deepMatch(saved[i], v));
+    }
+    // For objects: every key in preset must match in saved
+    for (const key of Object.keys(preset)) {
+      if (!deepMatch(saved[key], preset[key])) return false;
+    }
+    return true;
+  };
+
   const isPresetActive = (presetConfig: any): boolean => {
     if (!rawConfig || !presetConfig) return false;
-    // Compare the key sections that define behavior
+    // Compare the key sections — preset keys must match saved config
     const sections = ["strategy", "risk", "entry", "exit", "instruments", "sessions", "protection"];
     for (const section of sections) {
-      if (JSON.stringify(rawConfig[section]) !== JSON.stringify(presetConfig[section])) return false;
+      if (!presetConfig[section]) continue; // preset doesn't define this section, skip
+      if (!deepMatch(rawConfig[section], presetConfig[section])) return false;
     }
     return true;
   };
