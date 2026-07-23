@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
+import { extractGlobalExitConfig, parseTradeOverrides, resolveTradeConfig } from "../_shared/resolveTradeConfig.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -892,6 +893,7 @@ Deno.serve(async (req) => {
           liveConfig = cfgRow?.config_json || {};
         } catch {}
         const liveExit = liveConfig.exit || {};
+        const globalExitConfig = extractGlobalExitConfig(liveConfig);
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
@@ -1210,6 +1212,8 @@ Deno.serve(async (req) => {
           botId: p.bot_id || "smc",
           mirroredConnectionIds: mirroredIds,
           mirrorStatus,
+          tradeOverrides: parseTradeOverrides(p.trade_overrides),
+          effectiveConfig: resolveTradeConfig(globalExitConfig, parseTradeOverrides(p.trade_overrides)),
         };
       });
       const unrealizedPnl = posArr.reduce((s: number, p: any) => s + p.pnl, 0);
@@ -1456,7 +1460,15 @@ Deno.serve(async (req) => {
         .select()
         .single();
       if (updErr) throw updErr;
-      return respond({ success: true, position: updated });
+      // Return resolved effective config so frontend can update immediately without refetch
+      const updatedOverrides = parseTradeOverrides(updated.trade_overrides);
+      let updGlobalCfg: any = {};
+      try {
+        const { data: _cfgRow } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        updGlobalCfg = _cfgRow?.config_json || {};
+      } catch {}
+      const updEffectiveConfig = resolveTradeConfig(extractGlobalExitConfig(updGlobalCfg), updatedOverrides);
+      return respond({ success: true, position: updated, tradeOverrides: updatedOverrides, effectiveConfig: updEffectiveConfig });
     }
 
     // ── Close position ──

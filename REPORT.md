@@ -1,54 +1,84 @@
-# Task: Direction Engine — Eliminate Split-Brain
-## Branch: manus/direction-engine-fix
+# Task: Per-Trade Override Fix
+## Branch: manus/fix-trade-overrides
+
 ## Behavior changes
-1. Pairs where only 1 out of 4+ direction sources agree (agreement < 0.50) are now **BLOCKED** — previously could produce a directional signal and trade.
-2. Pairs with confidence 40–54% are now **BLOCKED** — previously the threshold was 40%, now raised to 55%.
-3. When the Direction Verdict is "neutral" (below thresholds), the pair is **blocked entirely** — previously it would fall back to the 15m confluenceScoring direction and potentially trade against the HTF verdict.
-4. When the Direction Verdict has a clear direction but the 15m scoring disagrees, the verdict wins unconditionally (was already the case, now explicit with conflict logging).
+
+1. **Status API now returns `tradeOverrides` and `effectiveConfig` per position** — previously these fields were absent from the status response, causing the frontend to guess from stale `exitFlags` data.
+2. **Update position API now returns `effectiveConfig` and `tradeOverrides`** — previously only returned `{ success, position }`. The frontend now uses this to update state immediately without a full refresh.
+3. **TradeOverrideEditor no longer flickers back to "After 1R"** — the root cause was that after saving overrides, the next status poll returned positions without `trade_overrides` data, so the UI re-initialized from `exitFlags` (which always showed the original signal-time defaults). Now the UI reads from `effectiveConfig` (the resolved merge of global config + per-trade overrides).
 
 ## Files modified
-- `supabase/functions/_shared/directionVerdict.ts` — Added `agreementFloor: 0.50` to DEFAULT_VERDICT_CONFIG. Raised `minConfidence` from 40 to 55. Added agreement floor check that blocks when agreement < floor (checked after confidence threshold). Updated blockReason messages.
-- `supabase/functions/bot-scanner/index.ts` — Replaced the effectiveDirection logic: verdict is now the single authority. Neutral/blocked verdict = no trade (no 15m fallback). Added `directionConflict` flag for informational logging when verdict and 15m disagree.
-- `supabase/functions/_shared/directionVerdict.test.ts` — Added 7 regression tests covering the GBP/CAD scenario, agreement floor edge cases, minConfidence threshold, full-alignment pass-through, and split-brain prevention.
+
+| File | Description |
+|------|-------------|
+| `supabase/functions/_shared/resolveTradeConfig.ts` | **NEW** — Shared helper with `extractGlobalExitConfig()`, `parseTradeOverrides()`, and `resolveTradeConfig()`. Single source of truth for merging global bot config with per-trade overrides. |
+| `supabase/functions/_shared/resolveTradeConfig.test.ts` | **NEW** — 12 Deno tests covering extraction, parsing, and resolution logic. |
+| `supabase/functions/paper-trading/index.ts` | **MODIFIED** — Status response now includes `tradeOverrides` + `effectiveConfig` per position. `update_position` response now returns `effectiveConfig` + `tradeOverrides` after saving. |
+| `src/components/TradeOverrideEditor.tsx` | **REWRITTEN** — Reads `effectiveConfig` from API response (single source of truth). `handleSave()` and `handleReset()` update local state from API response immediately. Eliminates flicker and stale defaults. |
+
+## Caution-file explanation: paper-trading/index.ts
+
+Two targeted additions were made to `paper-trading/index.ts`:
+
+1. **Status handler** (around line 1212): After building the position array for the status response, each position now includes `tradeOverrides: parseTradeOverrides(p.trade_overrides)` and `effectiveConfig: resolveTradeConfig(globalExitConfig, parseTradeOverrides(p.trade_overrides))`. The `globalExitConfig` is computed once from the user's bot_config before the position loop. This is purely additive — it adds two new fields to the response object without changing any existing fields or logic.
+
+2. **update_position handler** (around line 1460): After the position is updated in the database, instead of just returning `{ success, position }`, it now also fetches the user's bot_config, resolves the effective config, and returns `{ success, position, tradeOverrides, effectiveConfig }`. This allows the frontend to update its state immediately from the response without needing to poll status again.
+
+Neither change affects trade execution, position sizing, or gate logic. They are purely response-enrichment for the frontend.
 
 ## Tests added
-1. `REGRESSION: GBP/CAD scenario — weak spine + opposing context → blocked (not LONG)` — Proves the exact bug scenario (confirmedTrend=bullish, regime/weekly/gamePlan=bearish) is now blocked.
-2. `REGRESSION: agreement exactly 0.50 (2/4 agree) → NOT blocked by agreement floor` — Proves the floor is exclusive (< 0.50 blocks, = 0.50 passes).
-3. `REGRESSION: agreement below 0.50 (1/4) with strong spine → still blocked` — Proves even confirmedTrend (strong spine) can't override the agreement floor.
-4. `REGRESSION: minConfidence=55 — simpleDirection alone at ~50% confidence → blocked` — Proves weak signals below 55% are now blocked.
-5. `REGRESSION: full alignment still passes (no false positives from new thresholds)` — Proves high-conviction setups are unaffected.
-6. `REGRESSION: confirmedTrend alone still passes (strong spine = high confidence + 100% agreement)` — Proves single strong source with no opposition still works.
-7. `REGRESSION: split-brain scenario never produces contradicting signal` — Proves blocked verdicts never produce an actionable direction.
+
+| Test | Assertion |
+|------|-----------|
+| `extractGlobalExitConfig — extracts from nested exit object` | Correctly reads all fields from `config.exit.*` |
+| `extractGlobalExitConfig — falls back to top-level keys` | Falls back to `config.breakEvenEnabled` etc. when no `exit` sub-object |
+| `extractGlobalExitConfig — uses defaults for empty config` | Returns sensible defaults (BE=true/20pips, trail=false/15pips, etc.) |
+| `extractGlobalExitConfig — handles null/undefined input` | Doesn't crash on null config |
+| `parseTradeOverrides — returns null for null/undefined/empty` | Null/empty/"{}" all return null |
+| `parseTradeOverrides — parses JSON string` | Correctly parses stringified overrides |
+| `parseTradeOverrides — handles object directly` | Passes through already-parsed objects |
+| `parseTradeOverrides — returns null for invalid JSON` | Gracefully handles malformed strings |
+| `resolveTradeConfig — returns global config when no overrides` | Null overrides = global config unchanged |
+| `resolveTradeConfig — overrides specific fields only` | Only overridden fields change; rest stays global |
+| `resolveTradeConfig — override can disable a globally-enabled feature` | `{ breakEvenEnabled: false }` correctly disables |
+| `resolveTradeConfig — full override replaces all fields` | Complete override set replaces every field |
 
 ## Tests run
+
 ```
-$ deno test directionVerdict.test.ts directionEngine.test.ts --allow-all --no-check
-ok | 76 passed | 0 failed (193ms)
+$ deno test --no-check --allow-all supabase/functions/_shared/resolveTradeConfig.test.ts
+running 12 tests from ./supabase/functions/_shared/resolveTradeConfig.test.ts
+ok | 12 passed | 0 failed (11ms)
 ```
+
+Full suite (1384 tests): 1377 passed, 7 failed. All 7 failures are **pre-existing** (beTrailingRace, brokerFillPriceBE, zoneLiquidity) — verified by running the same tests on `main` without our changes and observing identical failures.
+
+TypeScript: `npx tsc --noEmit` → EXIT: 0 (zero errors)
 
 ## Regression check
-- The GBP/CAD scenario (the original bug) now correctly blocks instead of producing "LONG 50% confidence 25% agreement"
-- Full-alignment scenarios (all sources agree) produce identical outputs to before — confidence >= 85%, agreement = 1.0, shouldBlock = false
-- confirmedTrend alone still passes (confidence >= 70%, agreement = 1.0) — no false positives
-- The old "regime veto" test still passes (trade is blocked, just by a different mechanism now — minConfidence catches it before regime veto fires)
-- TypeScript: 0 errors (npx tsc --noEmit)
+
+- **Pre-existing behavior preserved**: The `resolveTradeConfig` helper is additive — it's only called in the status/update_position response paths to compute display data. The actual trade management logic in `scannerManagement.ts` was not modified.
+- **No change to what trades get taken or how positions are sized**: The override system already existed in the database (`trade_overrides` column) and was already read by `scannerManagement.ts`. This fix only ensures the frontend correctly displays and persists those overrides.
+- **Verified on `main` branch**: The 7 failing tests fail identically without our changes, confirming zero regression.
 
 ## Open questions
-1. **Deploy timing**: This change will reduce the number of trades taken (more pairs blocked). You may want to monitor the first few scan cycles after deploy to see how many pairs are now blocked vs before. Consider deploying during a quiet market period.
-2. **Tuning**: The `agreementFloor: 0.50` and `minConfidence: 55` are configurable via `bot_configs`. If the bot becomes too conservative, you can lower them without code changes.
-3. **15m fallback removal**: The only case where 15m scoring still drives direction is when `computeDirectionVerdict()` itself throws an error (the `else` branch). This should be extremely rare in production.
+
+1. **Supabase Edge Function deployment**: The `resolveTradeConfig.ts` shared helper and `paper-trading/index.ts` changes need to be deployed to Supabase for the fix to take effect in production. User needs to run `supabase functions deploy paper-trading` after merge.
+2. **Pre-existing test failures**: 7 tests in `beTrailingRace.test.ts`, `brokerFillPriceBE.test.ts`, and `zoneLiquidity.test.ts` fail on `main` — these appear to be tests written ahead of implementation or with outdated assertions. Not related to this task.
 
 ## Suggested PR title and description
-**Title:** fix: eliminate Direction Engine split-brain (agreement floor + minConfidence=55)
+
+**Title:** fix(overrides): proper per-trade override system with resolved effective config
 
 **Description:**
-Fixes the bug where the Direction Verdict could output "LONG 50% confidence, 25% agreement" while the trend was bearish and the signal was SELL — a contradicting split-brain state.
+Fixes the TradeOverrideEditor flicker bug where saved overrides would revert to "After 1R" defaults on every status refresh.
 
-**Root cause:** The minConfidence threshold (40%) was too low, and there was no agreement floor. A single spine source could produce a directional verdict even when 3/4 of all sources disagreed.
+**Root cause:** The status API didn't return `trade_overrides` or resolved config, so the UI re-initialized from stale `exitFlags` data (which reflected signal-time defaults, not current overrides).
 
 **Fix:**
-- Raise minConfidence from 40 to 55 (coin-flip confidence no longer passes)
-- Add agreement floor at 0.50 (less than half of sources agreeing = blocked)
-- Make verdict the single authority — neutral/blocked = no trade, no 15m fallback
+- New `resolveTradeConfig.ts` shared helper (single source of truth for merging global config + per-trade overrides)
+- Status API now returns `tradeOverrides` + `effectiveConfig` per position
+- `update_position` API returns `effectiveConfig` + `tradeOverrides` after saving
+- `TradeOverrideEditor` rewritten to use API-resolved config; updates state from response immediately without needing refresh
 
-**Impact:** More conservative — fewer trades, but every trade that fires has genuine multi-timeframe alignment. Configurable via `bot_configs` if too strict.
+**Testing:** 12 new Deno tests, 0 TypeScript errors, no behavior changes to trade execution logic.
