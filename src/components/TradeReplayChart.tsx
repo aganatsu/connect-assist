@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, memo } from "react";
+import { useEffect, useRef, memo } from "react";
 import {
   createChart,
   type IChartApi,
@@ -20,11 +20,12 @@ export interface TradeMarker {
 }
 
 export interface ZoneOverlay {
-  type: "ob" | "fvg" | "sr" | "liquidity" | "breaker";
+  type: "ob" | "fvg" | "sr" | "liquidity" | "breaker" | "bsl" | "ssl" | "fib";
   high: number;
   low: number;
   label: string;
-  state?: string; // lifecycle state
+  state?: string; // lifecycle state: active, tested, mitigating, broken, filled, swept
+  strength?: number; // for liquidity/bsl/ssl
 }
 
 export interface TradeLevels {
@@ -46,12 +47,41 @@ interface Props {
 
 /* ─── color map ─── */
 const ZONE_COLORS: Record<string, { line: string; bg: string }> = {
-  ob:        { line: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
-  fvg:       { line: "#a855f7", bg: "rgba(168,85,247,0.12)" },
-  sr:        { line: "#f59e0b", bg: "rgba(245,158,11,0.08)" },
-  liquidity: { line: "#06b6d4", bg: "rgba(6,182,212,0.10)" },
-  breaker:   { line: "#ec4899", bg: "rgba(236,72,153,0.10)" },
+  ob:        { line: "#3b82f6", bg: "rgba(59,130,246,0.15)" },
+  fvg:       { line: "#a855f7", bg: "rgba(168,85,247,0.15)" },
+  sr:        { line: "#f59e0b", bg: "rgba(245,158,11,0.10)" },
+  liquidity: { line: "#06b6d4", bg: "rgba(6,182,212,0.12)" },
+  breaker:   { line: "#ec4899", bg: "rgba(236,72,153,0.12)" },
+  bsl:       { line: "#d946ef", bg: "rgba(217,70,239,0.10)" },
+  ssl:       { line: "#8b5cf6", bg: "rgba(139,92,246,0.10)" },
+  fib:       { line: "#fbbf24", bg: "rgba(251,191,36,0.06)" },
 };
+
+/* ─── state-based styling ─── */
+function getStateStyle(state?: string): { lineStyle: LineStyle; opacity: number } {
+  switch (state?.toLowerCase()) {
+    case "active":
+    case "untested":
+      return { lineStyle: LineStyle.Solid, opacity: 1.0 };
+    case "tested":
+      return { lineStyle: LineStyle.Dashed, opacity: 0.7 };
+    case "mitigating":
+    case "partially_filled":
+      return { lineStyle: LineStyle.Dotted, opacity: 0.5 };
+    case "broken":
+    case "filled":
+    case "swept":
+      return { lineStyle: LineStyle.SparseDotted, opacity: 0.25 };
+    default:
+      return { lineStyle: LineStyle.Solid, opacity: 0.85 };
+  }
+}
+
+/* ─── apply opacity to hex color ─── */
+function hexWithOpacity(hex: string, opacity: number): string {
+  const alpha = Math.round(opacity * 255).toString(16).padStart(2, "0");
+  return hex.length === 7 ? hex + alpha : hex;
+}
 
 function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, className }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -90,7 +120,7 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       handleScale: true,
     });
 
-    // Derive price precision from candle data (check decimal places of first candle close)
+    // Derive price precision from candle data
     const inferPrecision = (): number => {
       if (!candles.length) return 5;
       const sample = candles[0].close;
@@ -98,7 +128,7 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       const dotIdx = str.indexOf(".");
       if (dotIdx === -1) return 2;
       const decimals = str.length - dotIdx - 1;
-      return Math.max(decimals, 4); // At least 4 decimal places
+      return Math.max(decimals, 4);
     };
     const precision = inferPrecision();
     const minMove = 1 / Math.pow(10, precision);
@@ -179,21 +209,15 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
     );
   }, [markers]);
 
-  /* ─── update trade levels (price lines) ─── */
+  /* ─── update trade levels & zone overlays ─── */
   useEffect(() => {
     const series = candleSeriesRef.current;
     if (!series) return;
 
-    // Remove all existing price lines first
-    // lightweight-charts doesn't have removeAllPriceLines, so we recreate
-    // by tracking them. For simplicity, we'll use a fresh approach each time.
-
-    // Clear existing lines by removing series and re-adding data
-    // Actually, we can use createPriceLine and store refs
     const lines: ReturnType<typeof series.createPriceLine>[] = [];
 
+    // ── Trade levels ──
     if (levels) {
-      // Entry
       lines.push(
         series.createPriceLine({
           price: levels.entry,
@@ -205,7 +229,6 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
         })
       );
 
-      // Original SL (only if we have a real value)
       if (levels.originalSL && levels.originalSL > 0) {
         lines.push(
           series.createPriceLine({
@@ -219,7 +242,6 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
         );
       }
 
-      // Current SL (if trailed)
       if (levels.currentSL && levels.currentSL !== levels.originalSL) {
         lines.push(
           series.createPriceLine({
@@ -233,7 +255,6 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
         );
       }
 
-      // Take Profit (only if we have a real value)
       if (levels.takeProfit && levels.takeProfit > 0) {
         lines.push(
           series.createPriceLine({
@@ -248,32 +269,68 @@ function TradeReplayChart({ candles, markers, zones, levels, overlayToggles, cla
       }
     }
 
-    // Zone overlays as price lines (pairs of lines for high/low)
+    // ── Zone overlays with state-based styling ──
     if (zones?.length) {
       for (const zone of zones) {
+        // Check toggle — bsl/ssl have their own keys passed from parent
         const toggle = overlayToggles?.[zone.type];
         if (toggle === false) continue;
+
         const colors = ZONE_COLORS[zone.type] || ZONE_COLORS.ob;
-        lines.push(
-          series.createPriceLine({
-            price: zone.high,
-            color: colors.line,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: false,
-            title: "",
-          })
-        );
-        lines.push(
-          series.createPriceLine({
-            price: zone.low,
-            color: colors.line,
-            lineWidth: 1,
-            lineStyle: LineStyle.Dotted,
-            axisLabelVisible: false,
-            title: "",
-          })
-        );
+        const stateStyle = getStateStyle(zone.state);
+        const lineColor = hexWithOpacity(colors.line, stateStyle.opacity);
+
+        // For zones with meaningful height (OB, FVG, Breaker), render both high and low
+        const isRange = zone.high !== zone.low && Math.abs(zone.high - zone.low) > 0.00001;
+
+        if (isRange) {
+          // High boundary with label
+          lines.push(
+            series.createPriceLine({
+              price: zone.high,
+              color: lineColor,
+              lineWidth: 1,
+              lineStyle: stateStyle.lineStyle,
+              axisLabelVisible: false,
+              title: zone.label,
+            })
+          );
+          // Low boundary
+          lines.push(
+            series.createPriceLine({
+              price: zone.low,
+              color: lineColor,
+              lineWidth: 1,
+              lineStyle: stateStyle.lineStyle,
+              axisLabelVisible: false,
+              title: "",
+            })
+          );
+          // Midpoint (very faint) to give visual fill effect
+          const mid = (zone.high + zone.low) / 2;
+          lines.push(
+            series.createPriceLine({
+              price: mid,
+              color: hexWithOpacity(colors.line, stateStyle.opacity * 0.3),
+              lineWidth: 1,
+              lineStyle: LineStyle.SparseDotted,
+              axisLabelVisible: false,
+              title: "",
+            })
+          );
+        } else {
+          // Single level (S/R, liquidity, BSL/SSL, Fib)
+          lines.push(
+            series.createPriceLine({
+              price: zone.high || zone.low,
+              color: lineColor,
+              lineWidth: zone.type === "fib" ? 1 : 2,
+              lineStyle: stateStyle.lineStyle,
+              axisLabelVisible: zone.type === "fib" || zone.type === "sr",
+              title: zone.label,
+            })
+          );
+        }
       }
     }
 

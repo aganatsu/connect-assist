@@ -23,6 +23,8 @@ import {
   Shield,
   Maximize2,
   Minimize2,
+  Target,
+  Hash,
 } from "lucide-react";
 
 /* ─── Timeframe options ─── */
@@ -41,13 +43,15 @@ const OVERLAY_TOGGLES = [
   { key: "sr", label: "S/R", icon: TrendingUp, color: "#f59e0b" },
   { key: "liquidity", label: "Liq", icon: Droplets, color: "#06b6d4" },
   { key: "breaker", label: "BRK", icon: Shield, color: "#ec4899" },
+  { key: "fib", label: "Fib", icon: Hash, color: "#fbbf24" },
+  { key: "bslssl", label: "BSL/SSL", icon: Target, color: "#d946ef" },
 ];
 
 export default function TradeReplay() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState("4h");
   const [overlays, setOverlays] = useState<Record<string, boolean>>({
-    ob: true, fvg: true, sr: true, liquidity: true, breaker: true,
+    ob: true, fvg: true, sr: true, liquidity: true, breaker: true, fib: true, bslssl: true,
   });
   const [detailsExpanded, setDetailsExpanded] = useState(true);
 
@@ -242,12 +246,15 @@ export default function TradeReplay() {
     };
   }, [selectedTrade]);
 
-  /* ─── Zone overlays from scan detail ─── */
+  /* ─── Zone overlays from scan detail + signal_reason (entry-time data) ─── */
   const zones: ZoneOverlay[] = useMemo(() => {
-    if (!selectedTrade || !scanLogs) return [];
+    if (!selectedTrade) return [];
     const z: ZoneOverlay[] = [];
 
-    // Find the most recent scan log that has details for this symbol
+    // Priority 1: Use signal_reason (entry-time snapshot) for entity lifecycles
+    const sr = selectedTrade.signal_reason || {};
+
+    // Priority 2: Fall back to scan_logs analysis_snapshot (latest data)
     const logs = Array.isArray(scanLogs) ? scanLogs : (scanLogs?.logs ? (Array.isArray(scanLogs.logs) ? scanLogs.logs : []) : []);
     let scanDetail: any = null;
     for (const log of logs) {
@@ -258,84 +265,117 @@ export default function TradeReplay() {
       }
     }
 
-    if (!scanDetail?.analysis_snapshot) return z;
-    const snap = scanDetail.analysis_snapshot;
+    const snap = scanDetail?.analysis_snapshot || {};
 
-    // Order Blocks
-    if (snap.orderBlock?.zones || snap.orderBlocks) {
-      const obsRaw = snap.orderBlock?.zones || snap.orderBlocks || [];
-      const obs = Array.isArray(obsRaw) ? obsRaw : [];
-      for (const ob of obs) {
-        z.push({
-          type: "ob",
-          high: ob.high || ob.top || 0,
-          low: ob.low || ob.bottom || 0,
-          label: `OB ${ob.type || ""} ${ob.state || ""}`.trim(),
-          state: ob.state,
-        });
-      }
+    // ── Order Blocks ──
+    const obsSource = sr.entityLifecycles?.orderBlocks || snap.orderBlock?.zones || snap.orderBlocks || [];
+    const obs = Array.isArray(obsSource) ? obsSource : [];
+    for (const ob of obs) {
+      const high = ob.high || ob.top || 0;
+      const low = ob.low || ob.bottom || 0;
+      if (!high && !low) continue;
+      z.push({
+        type: "ob",
+        high,
+        low,
+        label: `OB ${ob.type || ob.direction || ""} [${ob.state || "active"}]`.trim(),
+        state: ob.state || "active",
+      });
     }
 
-    // FVGs
-    if (snap.fvg?.zones || snap.fvgs) {
-      const fvgsRaw = snap.fvg?.zones || snap.fvgs || [];
-      const fvgs = Array.isArray(fvgsRaw) ? fvgsRaw : [];
-      for (const fvg of fvgs) {
-        z.push({
-          type: "fvg",
-          high: fvg.high || fvg.top || 0,
-          low: fvg.low || fvg.bottom || 0,
-          label: `FVG ${fvg.type || ""} ${fvg.state || ""}`.trim(),
-          state: fvg.state,
-        });
-      }
+    // ── FVGs ──
+    const fvgSource = sr.entityLifecycles?.fvgs || snap.fvg?.zones || snap.fvgs || [];
+    const fvgs = Array.isArray(fvgSource) ? fvgSource : [];
+    for (const fvg of fvgs) {
+      const high = fvg.high || fvg.top || 0;
+      const low = fvg.low || fvg.bottom || 0;
+      if (!high && !low) continue;
+      z.push({
+        type: "fvg",
+        high,
+        low,
+        label: `FVG ${fvg.type || fvg.direction || ""} [${fvg.state || "active"}]`.trim(),
+        state: fvg.state || "active",
+      });
     }
 
-    // S/R levels from structure intel
-    if (snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR) {
-      const srRaw = snap.structureIntel?.derivedSR || scanDetail.structureIntel?.derivedSR || [];
-      const srLevels = Array.isArray(srRaw) ? srRaw : [];
-      for (const sr of srLevels) {
-        const price = sr.price || sr.level || 0;
-        z.push({
-          type: "sr",
-          high: price + (price * 0.0002),
-          low: price - (price * 0.0002),
-          label: `S/R ${sr.type || ""} ${sr.state || ""}`.trim(),
-          state: sr.state,
-        });
-      }
+    // ── S/R levels ──
+    const srSource = sr.structureIntel?.derivedSR || snap.structureIntel?.derivedSR || scanDetail?.structureIntel?.derivedSR || [];
+    const srLevels = Array.isArray(srSource) ? srSource : [];
+    for (const level of srLevels) {
+      const price = level.price || level.level || 0;
+      if (!price) continue;
+      z.push({
+        type: "sr",
+        high: price,
+        low: price,
+        label: `S/R ${level.type || ""} ${level.touches ? `(${level.touches}x)` : ""}`.trim(),
+        state: level.state || "active",
+      });
     }
 
-    // Liquidity pools
-    if (snap.liquiditySweep?.pools || snap.liquidityPools) {
-      const poolsRaw = snap.liquiditySweep?.pools || snap.liquidityPools || [];
-      const pools = Array.isArray(poolsRaw) ? poolsRaw : [];
-      for (const pool of pools.slice(0, 10)) { // limit to 10 most relevant
-        const price = pool.level || pool.price || 0;
-        z.push({
-          type: "liquidity",
-          high: price + (price * 0.0001),
-          low: price - (price * 0.0001),
-          label: `Liq ${pool.type || ""} ${pool.state || ""}`.trim(),
-          state: pool.state,
-        });
-      }
+    // ── Liquidity pools ──
+    const poolSource = sr.entityLifecycles?.liquidityPools || snap.liquiditySweep?.pools || snap.liquidityPools || [];
+    const pools = Array.isArray(poolSource) ? poolSource : [];
+    for (const pool of pools.slice(0, 10)) {
+      const price = pool.level || pool.price || 0;
+      if (!price) continue;
+      z.push({
+        type: "liquidity",
+        high: price,
+        low: price,
+        label: `Liq ${pool.type || pool.direction || ""} [${pool.state || "active"}]`.trim(),
+        state: pool.state || "active",
+        strength: pool.strength,
+      });
     }
 
-    // Breaker blocks
-    if (snap.breakerBlock?.zones || snap.breakerBlocks) {
-      const breakersRaw = snap.breakerBlock?.zones || snap.breakerBlocks || [];
-      const breakers = Array.isArray(breakersRaw) ? breakersRaw : [];
-      for (const brk of breakers) {
-        z.push({
-          type: "breaker",
-          high: brk.high || brk.top || 0,
-          low: brk.low || brk.bottom || 0,
-          label: `BRK ${brk.type || ""} ${brk.state || ""}`.trim(),
-          state: brk.state,
-        });
-      }
+    // ── Breaker blocks ──
+    const brkSource = sr.entityLifecycles?.breakerBlocks || snap.breakerBlock?.zones || snap.breakerBlocks || [];
+    const breakers = Array.isArray(brkSource) ? brkSource : [];
+    for (const brk of breakers) {
+      const high = brk.high || brk.top || 0;
+      const low = brk.low || brk.bottom || 0;
+      if (!high && !low) continue;
+      z.push({
+        type: "breaker",
+        high,
+        low,
+        label: `BRK ${brk.type || ""} [${brk.state || "active"}]`.trim(),
+        state: brk.state || "active",
+      });
+    }
+
+    // ── BSL/SSL (Buy-Side / Sell-Side Liquidity) ──
+    const bslSslSource = sr.entityLifecycles?.swingPoints || snap.swingPoints || snap.liquiditySweep?.pools || [];
+    const bslSsl = Array.isArray(bslSslSource) ? bslSslSource : [];
+    for (const pt of bslSsl) {
+      const price = pt.level || pt.price || pt.high || 0;
+      if (!price) continue;
+      const isBuy = pt.type === "high" || pt.direction === "bullish" || pt.side === "buy";
+      z.push({
+        type: isBuy ? "bsl" : "ssl",
+        high: price,
+        low: price,
+        label: `${isBuy ? "BSL" : "SSL"} ${pt.state === "swept" ? "[swept]" : ""}`.trim(),
+        state: pt.state || "active",
+        strength: pt.strength || pt.touches,
+      });
+    }
+
+    // ── Fibonacci levels ──
+    const fibSource = sr.fibLevels || snap.fibonacci?.levels || scanDetail?.fibLevels || [];
+    const fibs = Array.isArray(fibSource) ? fibSource : [];
+    for (const fib of fibs) {
+      const price = fib.price || fib.level || 0;
+      if (!price) continue;
+      z.push({
+        type: "fib",
+        high: price,
+        low: price,
+        label: `Fib ${fib.ratio || fib.label || ""}`.trim(),
+        state: "active",
+      });
     }
 
     return z;
@@ -458,7 +498,12 @@ export default function TradeReplay() {
                 markers={markers}
                 zones={zones}
                 levels={levels}
-                overlayToggles={overlays}
+                overlayToggles={{
+                  ...overlays,
+                  // Map bslssl toggle to both bsl and ssl types in the chart
+                  bsl: overlays.bslssl,
+                  ssl: overlays.bslssl,
+                }}
               />
             )}
 
@@ -549,6 +594,18 @@ export default function TradeReplay() {
                     <div className="flex items-center gap-1.5">
                       <div className="w-3 h-2 rounded-sm" style={{ background: "rgba(236,72,153,0.3)" }} />
                       <span className="text-muted-foreground">Breaker</span>
+                    </div>
+                  )}
+                  {overlays.fib && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-0.5" style={{ background: "#fbbf24" }} />
+                      <span className="text-muted-foreground">Fibonacci</span>
+                    </div>
+                  )}
+                  {overlays.bslssl && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-0.5" style={{ background: "#d946ef" }} />
+                      <span className="text-muted-foreground">BSL/SSL</span>
                     </div>
                   )}
                 </div>
