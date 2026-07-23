@@ -8,20 +8,111 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { tradesApi, paperApi } from "@/lib/api";
 import { SignalReasoningCard } from "@/components/SignalReasoningCard";
 import { toast } from "sonner";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, Cell, CartesianGrid,
+  BarChart, Bar, Cell, CartesianGrid, PieChart, Pie,
 } from "recharts";
-import { Filter, Calculator, Plus, X, BookOpen, Download, Import } from "lucide-react";
+import { Filter, Calculator, Plus, X, BookOpen, Download, Import, Tag, ChevronDown } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 
 const ALL_SYMBOLS = ["all", ...INSTRUMENTS.map(i => i.symbol)];
 const SETUP_TYPES = ["BOS + Order Block", "CHoCH + FVG Fill", "Liquidity Sweep + OB", "Premium/Discount + BOS", "FVG Fill + Confluence", "Manual"];
+
+// ─── Auto-Tag Extraction ─────────────────────────────────────────────
+interface AutoTags {
+  setupType: string | null;
+  session: string | null;
+  regime: string | null;
+  confirmation: string | null;
+  keyFactors: string[];
+  signalSource: string | null;
+  score: number | null;
+}
+
+function getSessionFromTime(entryTime: string | null): string | null {
+  if (!entryTime) return null;
+  const d = new Date(entryTime);
+  const h = d.getUTCHours();
+  if (h >= 0 && h < 8) return "Asian";
+  if (h >= 7 && h < 12) return "London";
+  if (h >= 12 && h < 17) return "New York";
+  if (h >= 17 && h < 21) return "NY PM";
+  return "Off-Hours";
+}
+
+function extractAutoTags(trade: any): AutoTags {
+  const tags: AutoTags = { setupType: null, session: null, regime: null, confirmation: null, keyFactors: [], signalSource: null, score: null };
+  tags.session = getSessionFromTime(trade.entry_time);
+
+  let reasoning: any = null;
+  if (trade.reasoning_json) {
+    reasoning = typeof trade.reasoning_json === "string"
+      ? (() => { try { return JSON.parse(trade.reasoning_json); } catch { return null; } })()
+      : trade.reasoning_json;
+  }
+  if (!reasoning) return tags;
+
+  // Setup type from scanner classification
+  tags.setupType = reasoning.setupType || reasoning.setupClassification?.setupType || null;
+  // Signal source
+  tags.signalSource = reasoning.signalSource || (reasoning.filledFromLimitOrder ? "limit_order" : reasoning.paper_position_id ? "bot" : null);
+  // Confirmation method
+  tags.confirmation = reasoning.confirmationMethod || reasoning.confirmation?.type || null;
+  // Regime
+  if (reasoning.regimeData?.daily?.regime) {
+    tags.regime = reasoning.regimeData.daily.regime;
+  }
+  // Score
+  tags.score = reasoning.signal_score != null ? parseFloat(reasoning.signal_score) : null;
+  // Key factors (top 3 present factors by weight)
+  if (reasoning.factorScores && Array.isArray(reasoning.factorScores)) {
+    tags.keyFactors = reasoning.factorScores
+      .filter((f: any) => f.present)
+      .sort((a: any, b: any) => (b.weight || 0) - (a.weight || 0))
+      .slice(0, 3)
+      .map((f: any) => f.name);
+  } else if (reasoning.tieredScoring) {
+    // Extract from tiered scoring
+    const allFactors: string[] = [];
+    for (const tier of ["t1", "t2", "t3"]) {
+      const t = reasoning.tieredScoring[tier];
+      if (t?.factors) {
+        allFactors.push(...t.factors.filter((f: any) => f.pass || f.present).map((f: any) => f.name || f.label));
+      }
+    }
+    tags.keyFactors = allFactors.slice(0, 3);
+  }
+  return tags;
+}
+
+const TAG_COLORS: Record<string, string> = {
+  // Sessions
+  "Asian": "bg-violet-500/15 text-violet-400 border-violet-500/30",
+  "London": "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  "New York": "bg-amber-500/15 text-amber-400 border-amber-500/30",
+  "NY PM": "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  "Off-Hours": "bg-gray-500/15 text-gray-400 border-gray-500/30",
+  // Regimes
+  "trending": "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+  "ranging": "bg-sky-500/15 text-sky-400 border-sky-500/30",
+  "volatile": "bg-red-500/15 text-red-400 border-red-500/30",
+  "transitioning": "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
+  // Sources
+  "bot": "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
+  "limit_order": "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
+  // Default
+  "default": "bg-muted/40 text-muted-foreground border-border",
+};
+
+function getTagColor(tag: string): string {
+  return TAG_COLORS[tag] || TAG_COLORS.default;
+}
 
 export default function JournalView() {
   const queryClient = useQueryClient();
@@ -29,8 +120,10 @@ export default function JournalView() {
   const ct = getChartTheme(resolvedTheme);
   const [filterSymbol, setFilterSymbol] = useState("all");
   const [filterDirection, setFilterDirection] = useState<"all" | "long" | "short">("all");
+  const [filterTag, setFilterTag] = useState<string>("all");
   const [addOpen, setAddOpen] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<any>(null);
+  const [showTagFilters, setShowTagFilters] = useState(false);
 
   const [formSymbol, setFormSymbol] = useState("EUR/USD");
   const [formDirection, setFormDirection] = useState<"long" | "short">("long");
@@ -81,13 +174,17 @@ export default function JournalView() {
   };
 
   const handleExportCSV = () => {
-    const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Notes"];
-    const rows = filteredTrades.map((t: any) => [
-      t.entry_time?.split("T")[0] ?? "", t.symbol, t.direction, t.setup_type || "",
-      t.entry_price, t.exit_price || "", t.pnl_amount || "", t.risk_reward || "",
-      t.risk_percent || "", (t.notes || "").replace(/"/g, '""'),
-    ]);
-    const csv = [headers.join(","), ...rows.map(r => r.map((v: string) => `"${v}"`).join(","))].join("\n");
+    const headers = ["Date", "Symbol", "Direction", "Setup", "Entry", "Exit", "P&L", "R:R", "Risk%", "Session", "Regime", "Score", "Notes"];
+    const rows = filteredTrades.map((t: any) => {
+      const tags = extractAutoTags(t);
+      return [
+        t.entry_time?.split("T")[0] ?? "", t.symbol, t.direction, tags.setupType || t.setup_type || "",
+        t.entry_price, t.exit_price || "", t.pnl_amount || "", t.risk_reward || "",
+        t.risk_percent || "", tags.session || "", tags.regime || "", tags.score ?? "",
+        (t.notes || "").replace(/"/g, '""'),
+      ];
+    });
+    const csv = [headers.join(","), ...rows.map(r => r.map((v: any) => `"${v}"`).join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `trades_${new Date().toISOString().split("T")[0]}.csv`; a.click();
@@ -95,13 +192,40 @@ export default function JournalView() {
     toast.success("CSV downloaded");
   };
 
+  // Extract all unique tags for the filter dropdown
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    trades.forEach((t: any) => {
+      const tags = extractAutoTags(t);
+      if (tags.session) tagSet.add(`session:${tags.session}`);
+      if (tags.regime) tagSet.add(`regime:${tags.regime}`);
+      if (tags.setupType) tagSet.add(`setup:${tags.setupType}`);
+      if (tags.signalSource) tagSet.add(`source:${tags.signalSource}`);
+      if (tags.confirmation) tagSet.add(`confirm:${tags.confirmation}`);
+      tags.keyFactors.forEach(f => tagSet.add(`factor:${f}`));
+    });
+    return Array.from(tagSet).sort();
+  }, [trades]);
+
   const filteredTrades = useMemo(() => {
     return (trades as any[]).filter((t: any) => {
       if (filterSymbol !== "all" && t.symbol !== filterSymbol) return false;
       if (filterDirection !== "all" && t.direction !== filterDirection) return false;
+      if (filterTag !== "all") {
+        const tags = extractAutoTags(t);
+        const [category, value] = filterTag.split(":");
+        switch (category) {
+          case "session": if (tags.session !== value) return false; break;
+          case "regime": if (tags.regime !== value) return false; break;
+          case "setup": if (tags.setupType !== value) return false; break;
+          case "source": if (tags.signalSource !== value) return false; break;
+          case "confirm": if (tags.confirmation !== value) return false; break;
+          case "factor": if (!tags.keyFactors.includes(value)) return false; break;
+        }
+      }
       return true;
     });
-  }, [trades, filterSymbol, filterDirection]);
+  }, [trades, filterSymbol, filterDirection, filterTag]);
 
   const computedStats = useMemo(() => {
     const wins = filteredTrades.filter((t: any) => parseFloat(t.pnl_amount || "0") > 0);
@@ -117,12 +241,10 @@ export default function JournalView() {
   }, [filteredTrades]);
 
   const equityCurveData = useMemo(() => {
-    // Reconstruct starting balance: current balance minus total closed P&L
     const closedTrades = filteredTrades.filter((t: any) => t.status === "closed");
     const totalClosedPnl = closedTrades.reduce((s: number, t: any) => s + parseFloat(t.pnl_amount || "0"), 0);
     const currentBalance = accountStatus?.balance ?? 10000;
     let cum = currentBalance - totalClosedPnl;
-    // Sort oldest-first for chronological equity curve
     const sorted = [...closedTrades].sort((a: any, b: any) => {
       const da = a.exit_time || a.entry_time || "";
       const db = b.exit_time || b.entry_time || "";
@@ -138,11 +260,49 @@ export default function JournalView() {
   const dailyPnlData = useMemo(() => {
     const map: Record<string, number> = {};
     filteredTrades.filter((t: any) => t.status === "closed").forEach((t: any) => {
-      // Use exit_time (when P&L was realized) for daily grouping, consistent with backend
       const date = (t.exit_time || t.entry_time)?.split("T")[0] ?? "";
       map[date] = (map[date] || 0) + parseFloat(t.pnl_amount || "0");
     });
     return Object.entries(map).map(([date, pnl]) => ({ date, pnl })).sort((a, b) => a.date.localeCompare(b.date));
+  }, [filteredTrades]);
+
+  // ─── Analytics: Performance by Tag ─────────────────────────────────
+  const tagPerformance = useMemo(() => {
+    const closedTrades = filteredTrades.filter((t: any) => t.status === "closed" && t.pnl_amount != null);
+    // By session
+    const bySession: Record<string, { wins: number; total: number; pnl: number }> = {};
+    // By setup type
+    const bySetup: Record<string, { wins: number; total: number; pnl: number }> = {};
+    // By regime
+    const byRegime: Record<string, { wins: number; total: number; pnl: number }> = {};
+
+    closedTrades.forEach((t: any) => {
+      const tags = extractAutoTags(t);
+      const pnl = parseFloat(t.pnl_amount || "0");
+      const isWin = pnl > 0;
+
+      if (tags.session) {
+        if (!bySession[tags.session]) bySession[tags.session] = { wins: 0, total: 0, pnl: 0 };
+        bySession[tags.session].total++;
+        if (isWin) bySession[tags.session].wins++;
+        bySession[tags.session].pnl += pnl;
+      }
+      const setup = tags.setupType || t.setup_type;
+      if (setup) {
+        if (!bySetup[setup]) bySetup[setup] = { wins: 0, total: 0, pnl: 0 };
+        bySetup[setup].total++;
+        if (isWin) bySetup[setup].wins++;
+        bySetup[setup].pnl += pnl;
+      }
+      if (tags.regime) {
+        if (!byRegime[tags.regime]) byRegime[tags.regime] = { wins: 0, total: 0, pnl: 0 };
+        byRegime[tags.regime].total++;
+        if (isWin) byRegime[tags.regime].wins++;
+        byRegime[tags.regime].pnl += pnl;
+      }
+    });
+
+    return { bySession, bySetup, byRegime };
   }, [filteredTrades]);
 
   return (
@@ -150,9 +310,9 @@ export default function JournalView() {
       <div className="flex flex-col md:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4.5rem)]">
         {/* Main content */}
         <div className={`${selectedTrade ? 'flex-[2]' : 'flex-1'} flex flex-col min-h-0 space-y-3 overflow-y-auto pr-2`}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <h1 className="text-xl font-bold">Trade Journal</h1>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Dialog open={addOpen} onOpenChange={setAddOpen}>
                 <DialogTrigger asChild><Button size="sm" className="h-7 text-[11px]"><Plus className="h-3 w-3 mr-1" /> Add Trade</Button></DialogTrigger>
               <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => importMutation.mutate()} disabled={importMutation.isPending}>
@@ -190,11 +350,33 @@ export default function JournalView() {
                   </div>
                 </DialogContent>
               </Dialog>
-              <Filter className="h-3.5 w-3.5 text-muted-foreground" />
-              <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="bg-card border border-border px-2 py-1 text-[11px]">{ALL_SYMBOLS.map(s => <option key={s} value={s}>{s === "all" ? "All Symbols" : s}</option>)}</select>
-              <select value={filterDirection} onChange={e => setFilterDirection(e.target.value as any)} className="bg-card border border-border px-2 py-1 text-[11px]"><option value="all">All</option><option value="long">Long</option><option value="short">Short</option></select>
+              <div className="flex items-center gap-1.5">
+                <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                <select value={filterSymbol} onChange={e => setFilterSymbol(e.target.value)} className="bg-card border border-border px-2 py-1 text-[11px]">{ALL_SYMBOLS.map(s => <option key={s} value={s}>{s === "all" ? "All Symbols" : s}</option>)}</select>
+                <select value={filterDirection} onChange={e => setFilterDirection(e.target.value as any)} className="bg-card border border-border px-2 py-1 text-[11px]"><option value="all">All</option><option value="long">Long</option><option value="short">Short</option></select>
+                <button onClick={() => setShowTagFilters(!showTagFilters)} className={`flex items-center gap-1 px-2 py-1 text-[11px] border rounded ${showTagFilters ? 'bg-primary/10 border-primary/40 text-primary' : 'bg-card border-border text-muted-foreground'}`}>
+                  <Tag className="h-3 w-3" /> Tags <ChevronDown className={`h-2.5 w-2.5 transition-transform ${showTagFilters ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Tag filter chips */}
+          {showTagFilters && (
+            <div className="flex flex-wrap gap-1.5 pb-1">
+              <button onClick={() => setFilterTag("all")} className={`px-2 py-0.5 text-[10px] rounded border ${filterTag === "all" ? "bg-primary/15 border-primary/40 text-primary" : "bg-card border-border text-muted-foreground"}`}>All</button>
+              {allTags.map(tag => {
+                const [cat, val] = tag.split(":");
+                const label = `${cat === "factor" ? "" : cat + ": "}${val}`;
+                return (
+                  <button key={tag} onClick={() => setFilterTag(filterTag === tag ? "all" : tag)}
+                    className={`px-2 py-0.5 text-[10px] rounded border ${filterTag === tag ? "bg-primary/15 border-primary/40 text-primary font-medium" : getTagColor(val)}`}>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Summary KPIs */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
@@ -213,6 +395,7 @@ export default function JournalView() {
           <Tabs defaultValue="journal">
             <TabsList className="h-7">
               <TabsTrigger value="journal" className="text-[11px] h-6">Trades</TabsTrigger>
+              <TabsTrigger value="analytics" className="text-[11px] h-6">Analytics</TabsTrigger>
               <TabsTrigger value="performance" className="text-[11px] h-6">Performance</TabsTrigger>
               <TabsTrigger value="calculator" className="text-[11px] h-6">Calculator</TabsTrigger>
             </TabsList>
@@ -231,21 +414,35 @@ export default function JournalView() {
                     <table className="w-full text-[11px]">
                       <thead><tr className="border-b border-border text-muted-foreground text-[10px]">
                         <th className="text-left py-1 px-1">Symbol</th><th className="text-left py-1 px-1">Dir</th>
-                        <th className="text-left py-1 px-1">Setup</th><th className="text-left py-1 px-1">Date</th>
-                        <th className="text-right py-1 px-1">R:R</th><th className="text-right py-1 px-1">P&L</th>
+                        <th className="text-left py-1 px-1">Tags</th><th className="text-left py-1 px-1">Date</th>
+                        <th className="text-right py-1 px-1">Score</th><th className="text-right py-1 px-1">P&L</th>
                       </tr></thead>
                       <tbody>
-                        {filteredTrades.map((t: any) => (
-                          <tr key={t.id} className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${selectedTrade?.id === t.id ? 'bg-primary/5' : ''}`}
-                            onClick={() => setSelectedTrade(selectedTrade?.id === t.id ? null : t)}>
-                            <td className="py-1.5 px-1 font-medium">{t.symbol}</td>
-                            <td className={`py-1.5 px-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</td>
-                            <td className="py-1.5 px-1 text-muted-foreground">{t.setup_type || "-"}</td>
-                            <td className="py-1.5 px-1 text-muted-foreground font-mono">{t.entry_time?.split("T")[0]}</td>
-                            <td className="py-1.5 px-1 text-right font-mono">{t.risk_reward || "-"}</td>
-                            <td className={`py-1.5 px-1 text-right font-mono font-medium ${parseFloat(t.pnl_amount || "0") >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(parseFloat(t.pnl_amount || "0"), true)}</td>
-                          </tr>
-                        ))}
+                        {filteredTrades.map((t: any) => {
+                          const tags = extractAutoTags(t);
+                          return (
+                            <tr key={t.id} className={`border-b border-border/30 hover:bg-secondary/30 cursor-pointer ${selectedTrade?.id === t.id ? 'bg-primary/5' : ''}`}
+                              onClick={() => setSelectedTrade(selectedTrade?.id === t.id ? null : t)}>
+                              <td className="py-1.5 px-1">
+                                <span className="font-medium">{t.symbol}</span>
+                                <span className={`ml-1 ${t.direction === "long" ? "text-success" : "text-destructive"}`}>{t.direction === "long" ? "▲" : "▼"}</span>
+                              </td>
+                              <td className={`py-1.5 px-1 text-[10px] ${t.direction === "long" ? "text-success" : "text-destructive"}`}>
+                                {t.direction}
+                              </td>
+                              <td className="py-1.5 px-1">
+                                <div className="flex flex-wrap gap-0.5">
+                                  {tags.session && <Badge variant="outline" className={`text-[8px] px-1 py-0 h-4 ${getTagColor(tags.session)}`}>{tags.session}</Badge>}
+                                  {tags.setupType && <Badge variant="outline" className="text-[8px] px-1 py-0 h-4 bg-muted/40 text-muted-foreground border-border">{tags.setupType.replace(/_/g, " ")}</Badge>}
+                                  {tags.regime && <Badge variant="outline" className={`text-[8px] px-1 py-0 h-4 ${getTagColor(tags.regime)}`}>{tags.regime}</Badge>}
+                                </div>
+                              </td>
+                              <td className="py-1.5 px-1 text-muted-foreground font-mono">{t.entry_time?.split("T")[0]}</td>
+                              <td className="py-1.5 px-1 text-right font-mono">{tags.score != null ? tags.score.toFixed(1) : (t.risk_reward || "-")}</td>
+                              <td className={`py-1.5 px-1 text-right font-mono font-medium ${parseFloat(t.pnl_amount || "0") >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(parseFloat(t.pnl_amount || "0"), true)}</td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}
@@ -262,6 +459,22 @@ export default function JournalView() {
                       </div>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ─── Analytics Tab: Tag Performance ─────────────────────── */}
+            <TabsContent value="analytics" className="mt-2 space-y-3">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <TagPerformanceCard title="By Session" data={tagPerformance.bySession} ct={ct} />
+                <TagPerformanceCard title="By Setup Type" data={tagPerformance.bySetup} ct={ct} />
+                <TagPerformanceCard title="By Regime" data={tagPerformance.byRegime} ct={ct} />
+              </div>
+              {/* Factor frequency heatmap */}
+              <Card>
+                <CardHeader className="pb-1"><CardTitle className="text-sm">Factor Frequency (Top Factors in Winning Trades)</CardTitle></CardHeader>
+                <CardContent>
+                  <FactorHeatmap trades={filteredTrades} />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -316,47 +529,7 @@ export default function JournalView() {
               <h3 className="text-sm font-bold">Trade Detail</h3>
               <button onClick={() => setSelectedTrade(null)} className="text-muted-foreground hover:text-foreground"><X className="h-4 w-4" /></button>
             </div>
-            <div className="space-y-3 text-[11px]">
-              <div className="space-y-1.5">
-                <div className="flex justify-between"><span className="text-muted-foreground">Symbol</span><span className="font-bold">{selectedTrade.symbol}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Direction</span><span className={selectedTrade.direction === "long" ? "text-success" : "text-destructive"}>{selectedTrade.direction === "long" ? "▲ Long" : "▼ Short"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span>{selectedTrade.status}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Entry</span><span className="font-mono">{selectedTrade.entry_price}</span></div>
-                {selectedTrade.exit_price && <div className="flex justify-between"><span className="text-muted-foreground">Exit</span><span className="font-mono">{selectedTrade.exit_price}</span></div>}
-                {selectedTrade.stop_loss && <div className="flex justify-between"><span className="text-muted-foreground">SL</span><span className="font-mono">{selectedTrade.stop_loss}</span></div>}
-                {selectedTrade.take_profit && <div className="flex justify-between"><span className="text-muted-foreground">TP</span><span className="font-mono">{selectedTrade.take_profit}</span></div>}
-                <div className="flex justify-between"><span className="text-muted-foreground">Setup</span><span>{selectedTrade.setup_type || "—"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Timeframe</span><span>{selectedTrade.timeframe || "—"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">R:R</span><span className="font-mono">{selectedTrade.risk_reward || "—"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">P&L</span>
-                  <span className={`font-mono font-bold ${parseFloat(selectedTrade.pnl_amount || "0") >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(parseFloat(selectedTrade.pnl_amount || "0"), true)}</span>
-                </div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Date</span><span className="font-mono">{selectedTrade.entry_time?.split("T")[0]}</span></div>
-              </div>
-
-              {selectedTrade.notes && (
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
-                  <p className="text-[11px] text-foreground bg-secondary/30 border border-border p-2">{selectedTrade.notes}</p>
-                </div>
-              )}
-
-              {selectedTrade.reasoning_json && (
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Signal Reasoning</p>
-                  <div className="bg-secondary/30 border border-border p-2">
-                    <SignalReasoningCard signalReason={typeof selectedTrade.reasoning_json === "string" ? selectedTrade.reasoning_json : JSON.stringify(selectedTrade.reasoning_json)} />
-                  </div>
-                </div>
-              )}
-
-              {selectedTrade.post_mortem_json && (
-                <div>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Post-Mortem</p>
-                  <pre className="text-[10px] text-muted-foreground bg-secondary/30 border border-border p-2 whitespace-pre-wrap font-mono">{JSON.stringify(selectedTrade.post_mortem_json, null, 2)}</pre>
-                </div>
-              )}
-            </div>
+            <TradeDetailPanel trade={selectedTrade} />
           </div>
         )}
       </div>
@@ -364,6 +537,175 @@ export default function JournalView() {
   );
 }
 
+// ─── Trade Detail Panel ──────────────────────────────────────────────
+function TradeDetailPanel({ trade }: { trade: any }) {
+  const tags = extractAutoTags(trade);
+
+  return (
+    <div className="space-y-3 text-[11px]">
+      {/* Auto-Tags */}
+      <div>
+        <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">Auto-Tags</p>
+        <div className="flex flex-wrap gap-1">
+          {tags.session && <Badge variant="outline" className={`text-[9px] ${getTagColor(tags.session)}`}>{tags.session}</Badge>}
+          {tags.setupType && <Badge variant="outline" className="text-[9px] bg-muted/40 text-muted-foreground border-border">{tags.setupType.replace(/_/g, " ")}</Badge>}
+          {tags.regime && <Badge variant="outline" className={`text-[9px] ${getTagColor(tags.regime)}`}>{tags.regime}</Badge>}
+          {tags.confirmation && <Badge variant="outline" className="text-[9px] bg-indigo-500/15 text-indigo-400 border-indigo-500/30">{tags.confirmation}</Badge>}
+          {tags.signalSource && <Badge variant="outline" className={`text-[9px] ${getTagColor(tags.signalSource)}`}>{tags.signalSource === "limit_order" ? "Limit Fill" : tags.signalSource}</Badge>}
+          {tags.keyFactors.map(f => (
+            <Badge key={f} variant="outline" className="text-[9px] bg-emerald-500/10 text-emerald-400 border-emerald-500/25">{f}</Badge>
+          ))}
+          {tags.score != null && <Badge variant="outline" className="text-[9px] bg-primary/10 text-primary border-primary/30 font-mono">{tags.score.toFixed(1)} pts</Badge>}
+        </div>
+      </div>
+
+      {/* Trade Metadata */}
+      <div className="space-y-1.5">
+        <div className="flex justify-between"><span className="text-muted-foreground">Symbol</span><span className="font-bold">{trade.symbol}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Direction</span><span className={trade.direction === "long" ? "text-success" : "text-destructive"}>{trade.direction === "long" ? "▲ Long" : "▼ Short"}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Status</span><span>{trade.status}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Entry</span><span className="font-mono">{trade.entry_price}</span></div>
+        {trade.exit_price && <div className="flex justify-between"><span className="text-muted-foreground">Exit</span><span className="font-mono">{trade.exit_price}</span></div>}
+        {trade.stop_loss && <div className="flex justify-between"><span className="text-muted-foreground">SL</span><span className="font-mono">{trade.stop_loss}</span></div>}
+        {trade.take_profit && <div className="flex justify-between"><span className="text-muted-foreground">TP</span><span className="font-mono">{trade.take_profit}</span></div>}
+        <div className="flex justify-between"><span className="text-muted-foreground">R:R</span><span className="font-mono">{trade.risk_reward || "—"}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">P&L</span>
+          <span className={`font-mono font-bold ${parseFloat(trade.pnl_amount || "0") >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(parseFloat(trade.pnl_amount || "0"), true)}</span>
+        </div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Date</span><span className="font-mono">{trade.entry_time?.split("T")[0]}</span></div>
+      </div>
+
+      {trade.notes && (
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
+          <p className="text-[11px] text-foreground bg-secondary/30 border border-border p-2">{trade.notes}</p>
+        </div>
+      )}
+
+      {trade.reasoning_json && (
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Signal Reasoning</p>
+          <div className="bg-secondary/30 border border-border p-2">
+            <SignalReasoningCard signalReason={typeof trade.reasoning_json === "string" ? trade.reasoning_json : JSON.stringify(trade.reasoning_json)} />
+          </div>
+        </div>
+      )}
+
+      {trade.post_mortem_json && (
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Post-Mortem</p>
+          <PostMortemDisplay data={trade.post_mortem_json} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Post-Mortem Display ─────────────────────────────────────────────
+function PostMortemDisplay({ data }: { data: any }) {
+  const pm = typeof data === "string" ? (() => { try { return JSON.parse(data); } catch { return null; } })() : data;
+  if (!pm) return <pre className="text-[10px] text-muted-foreground bg-secondary/30 border border-border p-2 whitespace-pre-wrap font-mono">{JSON.stringify(data, null, 2)}</pre>;
+
+  return (
+    <div className="bg-secondary/30 border border-border p-2 space-y-2">
+      {pm.outcome && (
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className={`text-[9px] ${pm.outcome === "win" ? "bg-success/15 text-success border-success/30" : pm.outcome === "loss" ? "bg-destructive/15 text-destructive border-destructive/30" : "bg-muted/40 text-muted-foreground border-border"}`}>
+            {pm.outcome.toUpperCase()}
+          </Badge>
+          {pm.holdDuration && <span className="text-[10px] text-muted-foreground">{pm.holdDuration}</span>}
+        </div>
+      )}
+      {pm.whatWorked && (
+        <div><p className="text-[9px] text-success/80 uppercase">What Worked</p><p className="text-[10px] text-foreground">{pm.whatWorked}</p></div>
+      )}
+      {pm.whatFailed && (
+        <div><p className="text-[9px] text-destructive/80 uppercase">What Failed</p><p className="text-[10px] text-foreground">{pm.whatFailed}</p></div>
+      )}
+      {pm.lessonLearned && (
+        <div><p className="text-[9px] text-primary/80 uppercase">Lesson</p><p className="text-[10px] text-foreground">{pm.lessonLearned}</p></div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tag Performance Card ────────────────────────────────────────────
+function TagPerformanceCard({ title, data, ct }: { title: string; data: Record<string, { wins: number; total: number; pnl: number }>; ct: any }) {
+  const entries = Object.entries(data).sort((a, b) => b[1].total - a[1].total);
+  if (entries.length === 0) return (
+    <Card><CardHeader className="pb-1"><CardTitle className="text-sm">{title}</CardTitle></CardHeader>
+      <CardContent><p className="text-xs text-muted-foreground py-4 text-center">No data yet</p></CardContent></Card>
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-1"><CardTitle className="text-sm">{title}</CardTitle></CardHeader>
+      <CardContent>
+        <div className="space-y-1.5">
+          {entries.slice(0, 8).map(([key, stats]) => {
+            const wr = stats.total > 0 ? (stats.wins / stats.total * 100) : 0;
+            return (
+              <div key={key} className="flex items-center justify-between text-[10px]">
+                <span className="text-muted-foreground truncate max-w-[100px]">{key.replace(/_/g, " ")}</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-muted-foreground">{stats.total}t</span>
+                  <span className={`font-mono font-medium ${wr >= 50 ? "text-success" : "text-destructive"}`}>{wr.toFixed(0)}%</span>
+                  <span className={`font-mono w-14 text-right ${stats.pnl >= 0 ? "text-success" : "text-destructive"}`}>{formatMoney(stats.pnl, true)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Factor Heatmap ──────────────────────────────────────────────────
+function FactorHeatmap({ trades }: { trades: any[] }) {
+  const factorStats = useMemo(() => {
+    const stats: Record<string, { winCount: number; lossCount: number; total: number }> = {};
+    const closedTrades = trades.filter((t: any) => t.status === "closed" && t.pnl_amount != null);
+
+    closedTrades.forEach((t: any) => {
+      const tags = extractAutoTags(t);
+      const isWin = parseFloat(t.pnl_amount || "0") > 0;
+      tags.keyFactors.forEach(f => {
+        if (!stats[f]) stats[f] = { winCount: 0, lossCount: 0, total: 0 };
+        stats[f].total++;
+        if (isWin) stats[f].winCount++;
+        else stats[f].lossCount++;
+      });
+    });
+
+    return Object.entries(stats)
+      .filter(([, s]) => s.total >= 2)
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 12);
+  }, [trades]);
+
+  if (factorStats.length === 0) return <p className="text-xs text-muted-foreground py-4 text-center">Import bot trades to see factor performance</p>;
+
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+      {factorStats.map(([name, stats]) => {
+        const wr = stats.total > 0 ? (stats.winCount / stats.total * 100) : 0;
+        const intensity = Math.min(1, stats.total / 10);
+        return (
+          <div key={name} className="p-2 rounded border border-border bg-secondary/20" style={{ opacity: 0.5 + intensity * 0.5 }}>
+            <p className="text-[9px] text-muted-foreground truncate">{name}</p>
+            <div className="flex items-baseline gap-1 mt-0.5">
+              <span className={`text-sm font-bold font-mono ${wr >= 55 ? "text-success" : wr >= 45 ? "text-foreground" : "text-destructive"}`}>{wr.toFixed(0)}%</span>
+              <span className="text-[9px] text-muted-foreground">({stats.total})</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Risk Calculator ─────────────────────────────────────────────────
 function RiskCalculator() {
   const [accountBalance, setAccountBalance] = useState(10000);
   const [riskPercent, setRiskPercent] = useState(1);

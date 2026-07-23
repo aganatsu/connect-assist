@@ -154,6 +154,31 @@ export default function Dashboard() {
     return details.filter((d: any) => d.score >= 4).slice(0, 5);
   }, [scanLogs]);
 
+  // ─── Pipeline Funnel Metrics ──────────────────────────────────────
+  const pipelineMetrics = useMemo(() => {
+    const logs = Array.isArray(scanLogs) ? scanLogs : [];
+    // Aggregate from last 24h of scans
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const recentLogs = logs.filter((l: any) => new Date(l.scanned_at).getTime() > cutoff);
+    let totalScanned = 0, totalSignals = 0, totalTradesPlaced = 0;
+    let gateRejected = 0, belowThreshold = 0, staged = 0, zoneSetups = 0;
+    recentLogs.forEach((log: any) => {
+      totalScanned += log.pairs_scanned || 0;
+      totalSignals += log.signals_found || 0;
+      totalTradesPlaced += log.trades_placed || 0;
+      const details = Array.isArray(log.details_json) ? log.details_json : [];
+      details.forEach((d: any) => {
+        if (d.status === "rejected") gateRejected++;
+        if (d.status === "below_threshold") belowThreshold++;
+        if (d.status?.startsWith("staged_")) staged++;
+        if (d.status?.startsWith("zone_setup")) zoneSetups++;
+      });
+    });
+    const passRate = totalScanned > 0 ? ((totalSignals / totalScanned) * 100) : 0;
+    const conversionRate = totalSignals > 0 ? ((totalTradesPlaced / totalSignals) * 100) : 0;
+    return { totalScanned, totalSignals, totalTradesPlaced, gateRejected, belowThreshold, staged, zoneSetups, passRate, conversionRate, scanCount: recentLogs.length };
+  }, [scanLogs]);
+
   // Bot activity timeline
   const activityLog = useMemo(() => {
     const logs = Array.isArray(scanLogs) ? scanLogs : [];
@@ -402,6 +427,37 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Scanner Pipeline (24h) */}
+        <Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Scanner Pipeline <span className="text-[10px] text-muted-foreground font-normal ml-2">(last 24h — {pipelineMetrics.scanCount} scans)</span></CardTitle></CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center">
+              {[
+                { label: "Pairs Scanned", value: pipelineMetrics.totalScanned, color: "" },
+                { label: "Signals Found", value: pipelineMetrics.totalSignals, color: "text-primary" },
+                { label: "Gate Rejected", value: pipelineMetrics.gateRejected, color: "text-destructive" },
+                { label: "Below Threshold", value: pipelineMetrics.belowThreshold, color: "text-warning" },
+                { label: "Staged", value: pipelineMetrics.staged, color: "text-violet-400" },
+                { label: "Zone Setups", value: pipelineMetrics.zoneSetups, color: "text-sky-400" },
+                { label: "Trades Placed", value: pipelineMetrics.totalTradesPlaced, color: "text-success" },
+              ].map(m => (
+                <div key={m.label} className="p-2 bg-secondary/30 border border-border rounded">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">{m.label}</p>
+                  <p className={`text-lg font-bold font-mono ${m.color}`}>{m.value}</p>
+                </div>
+              ))}
+            </div>
+            {/* Funnel rates */}
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-muted-foreground">
+              <span>Signal Rate: <strong className="text-foreground">{pipelineMetrics.passRate.toFixed(1)}%</strong></span>
+              <span>→</span>
+              <span>Conversion: <strong className="text-foreground">{pipelineMetrics.conversionRate.toFixed(1)}%</strong></span>
+              <span>→</span>
+              <span>Net: <strong className="text-foreground">{pipelineMetrics.totalScanned > 0 ? ((pipelineMetrics.totalTradesPlaced / pipelineMetrics.totalScanned) * 100).toFixed(2) : "0.00"}%</strong> of scanned pairs become trades</span>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Bot Activity Timeline */}
         <Card>

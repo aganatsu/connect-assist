@@ -543,6 +543,7 @@ export const fundamentalsApi = {
   eventsForPair: (pair: string) => invokeFunction("fundamentals", { action: "events_for_pair", pair }),
   highImpactCheck: (pair: string, withinMinutes = 30) =>
     invokeFunction("fundamentals", { action: "high_impact_check", pair, withinMinutes }),
+  newsImpact: (pair?: string) => invokeFunction("fundamentals", { action: "news_impact", pair }),
 };
 
 // ── Broker Execution ──
