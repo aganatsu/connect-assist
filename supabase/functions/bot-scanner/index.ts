@@ -4488,6 +4488,42 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       console.log(`[scan ${scanCycleId}] ${pair} Direction SYNC: analysis.direction ${analysis.direction} → ${effectiveDirection} (source: ${directionSource})`);
       analysis.direction = effectiveDirection;
     }
+
+    // ── SL/TP Recalculation: when verdict provides direction but original SL/TP are null ──
+    // Root cause: calculateSLTP() inside runConfluenceAnalysis() returns null when direction is null.
+    // If the Direction Verdict later assigns a valid direction, we must recalculate SL/TP
+    // so the R:R gate (Gate 10) can evaluate the trade instead of auto-failing.
+    if (effectiveDirection && (!analysis.stopLoss || !analysis.takeProfit)) {
+      const _spec = SPECS[pair] || SPECS["EUR/USD"];
+      const _atrVal = (analysis as any).atrValue ?? calculateATR(candles, pairConfig.slATRPeriod || 14);
+      const _gpCtx = (pairConfig as any)._gamePlanContext;
+      const _dolEnabled = (pairConfig as any).dolTPExtensionEnabled !== false;
+      const _dolTargets = _dolEnabled && _gpCtx?.dol
+        ? (Array.isArray(_gpCtx.dol) ? _gpCtx.dol : [_gpCtx.dol])
+        : undefined;
+      const { stopLoss: recalcSL, takeProfit: recalcTP } = calculateSLTP({
+        direction: effectiveDirection,
+        lastPrice: analysis.lastPrice,
+        pipSize: _spec.pipSize,
+        config: pairConfig,
+        swings: analysis.structure?.swingPoints || [],
+        orderBlocks: analysis.orderBlocks || [],
+        liquidityPools: analysis.liquidityPools || [],
+        pdLevels: analysis.pdLevels || null,
+        atrValue: _atrVal,
+        fvgs: analysis.fvgs || [],
+        fibExtensions: analysis.fibLevels?.extensions,
+        dolTargets: _dolTargets,
+      });
+      if (recalcSL && recalcTP) {
+        analysis.stopLoss = recalcSL;
+        analysis.takeProfit = recalcTP;
+        console.log(`[scan ${scanCycleId}] ${pair} SL/TP RECALC (verdict direction=${effectiveDirection}): SL=${recalcSL.toFixed(_spec.pipSize < 0.01 ? 3 : 5)} TP=${recalcTP.toFixed(_spec.pipSize < 0.01 ? 3 : 5)}`);
+      } else {
+        console.log(`[scan ${scanCycleId}] ${pair} SL/TP RECALC failed — calculateSLTP returned null even with direction=${effectiveDirection}`);
+      }
+    }
+
     // Attach source and conflict info to detail so frontend can show which system drove zone selection
     (detail as any).directionSource = directionSource;
     (detail as any).directionConflict = directionConflict;
