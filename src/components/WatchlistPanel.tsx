@@ -100,19 +100,19 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
             ? <TrendingUp className="h-3 w-3 shrink-0 text-success" />
             : <TrendingDown className="h-3 w-3 shrink-0 text-destructive" />
           }
-          <span className="font-bold text-[13px]">{setup.symbol}</span>
+          <span className="font-bold text-[13px] text-foreground">{setup.symbol}</span>
           <Badge variant="outline" className={`text-[9px] h-4 px-1.5 ${
             setup.direction === "long" ? "text-success border-success/30" : "text-destructive border-destructive/30"
           }`}>
             {setup.direction.toUpperCase()}
           </Badge>
           {setup.setup_type && (
-            <span className="text-[12px] text-muted-foreground truncate">{setup.setup_type}</span>
+            <span className="text-[12px] text-foreground/70 truncate">{setup.setup_type}</span>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className={`font-mono font-bold text-[13px] ${
-            setup.current_score >= gate ? "text-success" : isNearGate ? "text-warn" : "text-muted-foreground"
+            setup.current_score >= gate ? "text-success" : isNearGate ? "text-warn" : "text-foreground/80"
           }`}>
             {setup.current_score.toFixed(1)}%
           </span>
@@ -130,14 +130,14 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
       {/* Score bar */}
       <div className="mt-1.5">
         <ScoreBar current={setup.current_score} gate={gate} watchThreshold={setup.watch_threshold} />
-        <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
+        <div className="flex justify-between text-[10px] text-foreground/60 mt-0.5">
           <span>Watch: {setup.watch_threshold}%</span>
           <span className="font-mono">{setup.current_score.toFixed(1)}% / {gate}%</span>
         </div>
       </div>
 
       {/* Meta row */}
-      <div className="flex items-center justify-between mt-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between mt-1.5 text-[11px] text-foreground/70">
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-0.5">
             <RefreshCw className="h-3 w-3" /> Cycle {setup.scan_cycles}
@@ -162,7 +162,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
       <div className="flex items-center gap-2 mt-1.5 text-[11px]">
         <span className="text-warn font-medium">T1: {setup.tier1_count}/4</span>
         <span className="text-info-c font-medium">T2: {setup.tier2_count}/5</span>
-        <span className="text-muted-foreground">T3: {setup.tier3_count}</span>
+        <span className="text-foreground/60">T3: {setup.tier3_count}</span>
         {setup.current_score > setup.initial_score && (
           <span className="text-success text-[10px]">↑ {(setup.current_score - setup.initial_score).toFixed(1)}%</span>
         )}
@@ -172,14 +172,14 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
       </div>
 
       {/* Narrative sentence */}
-      <p className="text-[11px] text-muted-foreground/80 italic mt-1.5 leading-tight">
+      <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
         {generateWatchlistNarrative(setup)}
       </p>
 
       {/* Expand/collapse for factors */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-foreground mt-1 transition-colors"
+        className="flex items-center gap-0.5 text-[11px] text-foreground/60 hover:text-foreground mt-1 transition-colors"
       >
         {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         {expanded ? "Hide factors" : "Show factors"}
@@ -189,7 +189,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
         <div className="mt-1.5 space-y-1">
           {/* Present factors */}
           <div>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Present</p>
+            <p className="text-[10px] text-foreground/50 uppercase tracking-wider mb-0.5">Present</p>
             <div className="flex flex-wrap gap-0.5">
               {setup.current_factors.map((f, i) => (
                 <FactorPill key={i} name={f.name} tier={f.tier} present />
@@ -199,7 +199,7 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           {/* Missing factors */}
           {setup.missing_factors.length > 0 && (
             <div>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Missing</p>
+              <p className="text-[10px] text-foreground/50 uppercase tracking-wider mb-0.5">Missing</p>
               <div className="flex flex-wrap gap-0.5">
                 {setup.missing_factors.map((f, i) => (
                   <FactorPill key={i} name={f.name} tier={f.tier} present={false} />
@@ -210,9 +210,9 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           {/* Key levels */}
           {(setup.entry_price || setup.sl_level || setup.tp_level) && (
             <div className="flex gap-3 text-[11px] font-mono mt-1">
-              {setup.entry_price && <span className="text-muted-foreground">Entry: <span className="text-foreground">{Number(setup.entry_price).toFixed(5)}</span></span>}
-              {setup.sl_level && <span className="text-muted-foreground">SL: <span className="text-destructive">{Number(setup.sl_level).toFixed(5)}</span></span>}
-              {setup.tp_level && <span className="text-muted-foreground">TP: <span className="text-success">{Number(setup.tp_level).toFixed(5)}</span></span>}
+              {setup.entry_price && <span className="text-foreground/60">Entry: <span className="text-foreground">{Number(setup.entry_price).toFixed(5)}</span></span>}
+              {setup.sl_level && <span className="text-foreground/60">SL: <span className="text-destructive">{Number(setup.sl_level).toFixed(5)}</span></span>}
+              {setup.tp_level && <span className="text-foreground/60">TP: <span className="text-success">{Number(setup.tp_level).toFixed(5)}</span></span>}
             </div>
           )}
         </div>
@@ -264,7 +264,7 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
         >
           <div className="flex items-center gap-1.5">
             <Eye className="h-3.5 w-3.5 text-warn" />
-            <span className="text-xs text-muted-foreground uppercase tracking-wider font-medium">
+            <span className="text-xs text-foreground/70 uppercase tracking-wider font-medium">
               Watchlist
             </span>
             {active.length > 0 && (
@@ -288,7 +288,7 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             ) : active.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-3">
+              <p className="text-xs text-foreground/50 text-center py-3">
                 No setups being watched. Setups scoring {confluenceGate > 0 ? `${Math.round(confluenceGate * 0.45)}%–${confluenceGate}%` : "between watch threshold and gate"} with at least 1 Tier 1 factor will appear here.
               </p>
             ) : (
@@ -307,7 +307,7 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
             <div className="border-t border-border/30 pt-1 mt-1">
               <button
                 onClick={() => setShowHistory(!showHistory)}
-                className="flex items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground transition-colors"
+                className="flex items-center gap-1 text-[11px] text-foreground/60 hover:text-foreground transition-colors"
               >
                 {showHistory ? <EyeOff className="h-2.5 w-2.5" /> : <Eye className="h-2.5 w-2.5" />}
                 {showHistory ? "Hide history" : "Show resolved setups"}
@@ -318,16 +318,16 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                   {loadingAll ? (
                     <Loader2 className="h-3 w-3 animate-spin text-muted-foreground mx-auto" />
                   ) : history.length === 0 ? (
-                    <p className="text-[13px] text-muted-foreground text-center py-2">No resolved setups yet</p>
+                    <p className="text-[11px] text-foreground/50 text-center py-2">No resolved setups yet</p>
                   ) : (
                     history.slice(0, 20).map(s => (
-                      <div key={s.id} className="flex items-center justify-between text-[13px] py-0.5 px-1.5 rounded bg-muted/10">
+                      <div key={s.id} className="flex items-center justify-between text-[11px] py-0.5 px-1.5 rounded bg-muted/10">
                         <div className="flex items-center gap-1.5 min-w-0">
                           {s.direction === "long"
                             ? <TrendingUp className="h-2.5 w-2.5 text-success shrink-0" />
                             : <TrendingDown className="h-2.5 w-2.5 text-destructive shrink-0" />
                           }
-                          <span className="font-medium">{s.symbol}</span>
+                          <span className="font-medium text-foreground">{s.symbol}</span>
                           <Badge variant="outline" className={`text-[9px] h-3.5 px-1 ${
                             s.status === "promoted" ? "text-success border-success/30"
                             : s.status === "expired" ? "text-muted-foreground border-border"
@@ -338,9 +338,9 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                           </Badge>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="font-mono text-[10px]">{s.initial_score.toFixed(0)}% → {s.current_score.toFixed(0)}%</span>
-                          <span className="text-muted-foreground text-[10px]">{s.scan_cycles} cycles</span>
-                          <span className="text-muted-foreground text-[10px]">{timeAgo(s.resolved_at || s.updated_at)}</span>
+                          <span className="font-mono text-[10px] text-foreground/70">{s.initial_score.toFixed(0)}% → {s.current_score.toFixed(0)}%</span>
+                          <span className="text-foreground/50 text-[10px]">{s.scan_cycles} cycles</span>
+                          <span className="text-foreground/50 text-[10px]">{timeAgo(s.resolved_at || s.updated_at)}</span>
                         </div>
                       </div>
                     ))
