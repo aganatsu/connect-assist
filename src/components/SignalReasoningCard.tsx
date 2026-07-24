@@ -256,6 +256,63 @@ export function SignalReasoningCard({ signalReason, compact = false }: SignalRea
         </div>
       )}
 
+      {/* SMC Enhancement Factors (from smcEnhancements module) */}
+      {parsed?.smcEnhancementFactors && parsed.smcEnhancementFactors.length > 0 && (
+        <div>
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">SMC Enhancements</p>
+          <div className="flex flex-wrap gap-1">
+            {parsed.smcEnhancementFactors.map((f: any, i: number) => (
+              <span
+                key={i}
+                className={`rounded border px-1.5 py-0.5 text-[9px] font-mono ${
+                  f.present && f.weight > 0
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                    : f.present && f.weight < 0
+                    ? "bg-red-500/10 border-red-500/30 text-red-400"
+                    : "bg-muted/40 border-border/60 text-muted-foreground"
+                }`}
+              >
+                {f.name}{f.weight ? ` (${f.weight > 0 ? "+" : ""}${f.weight.toFixed(1)})` : ""}
+              </span>
+            ))}
+          </div>
+          {parsed.smcEnhancementFactors.some((f: any) => f.detail) && (
+            <div className="mt-1 space-y-0.5">
+              {parsed.smcEnhancementFactors.filter((f: any) => f.detail && f.present).map((f: any, i: number) => (
+                <p key={i} className="text-[8px] text-muted-foreground/80 leading-tight">
+                  {f.name}: {f.detail}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Breaker Block Entry (from smcEnhancements module) */}
+      {parsed?.breakerData && (
+        <div>
+          <p className="text-[8px] text-muted-foreground uppercase tracking-wider mb-1 font-bold">Breaker Block</p>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+              <span className="text-muted-foreground text-[9px]">Direction</span>
+              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.direction}</span>
+            </div>
+            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+              <span className="text-muted-foreground text-[9px]">Confidence</span>
+              <span className="font-mono text-[9px] text-foreground">{(parsed.breakerData.confidence * 100).toFixed(0)}%</span>
+            </div>
+            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+              <span className="text-muted-foreground text-[9px]">Displacement</span>
+              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.displacementStrength?.toFixed(2)}x ATR</span>
+            </div>
+            <div className="flex justify-between gap-2 border-b border-border/30 py-0.5">
+              <span className="text-muted-foreground text-[9px]">Sweep</span>
+              <span className="font-mono text-[9px] text-foreground">{parsed.breakerData.hadLiquiditySweep ? "Yes" : "No"}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Zone Qualifiers — impulseZoneEngine gate outcomes */}
       {zoneQualifiers.length > 0 && (
         <div>

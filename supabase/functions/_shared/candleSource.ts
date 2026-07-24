@@ -76,7 +76,7 @@ function getCachedCandles(symbol: string, interval: string): CacheEntry | null {
   const key = getCacheKey(symbol, interval);
   const entry = _candleCache.get(key);
   if (!entry) return null;
-  const ttl = interval.includes("d") || interval.includes("w") ? CACHE_TTL_DAILY_MS : CACHE_TTL_INTRADAY_MS;
+  const ttl = interval.includes("d") || interval.includes("w") || interval.includes("mo") ? CACHE_TTL_DAILY_MS : CACHE_TTL_INTRADAY_MS;
   if (Date.now() - entry.timestamp > ttl) {
     _candleCache.delete(key);
     return null;
@@ -155,6 +155,7 @@ function canonicalInterval(input: string): string {
     "4h": "4h", "240m": "4h",
     "1d": "1d", "1day": "1d",
     "1w": "1w", "1week": "1w", "1wk": "1w",
+    "1mo": "1mo", "1month": "1mo", "1M": "1mo",
   };
   return m[input] || input;
 }
@@ -170,6 +171,7 @@ function polygonTimespan(canon: string): { multiplier: number; timespan: string 
     "4h": { multiplier: 4, timespan: "hour" },
     "1d": { multiplier: 1, timespan: "day" },
     "1w": { multiplier: 1, timespan: "week" },
+    "1mo": { multiplier: 1, timespan: "month" },
   };
   return m[canon] || { multiplier: 15, timespan: "minute" };
 }
@@ -178,7 +180,7 @@ function polygonTimespan(canon: string): { multiplier: number; timespan: string 
 function polygonLookbackDays(canon: string): number {
   const m: Record<string, number> = {
     "1m": 1, "5m": 5, "15m": 7, "30m": 14,
-    "1h": 30, "4h": 60, "1d": 365, "1w": 730,
+    "1h": 30, "4h": 60, "1d": 365, "1w": 730, "1mo": 1825,
   };
   return m[canon] || 7;
 }
@@ -186,7 +188,7 @@ function polygonLookbackDays(canon: string): number {
 function twelveDataInterval(canon: string): string {
   const m: Record<string, string> = {
     "1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min",
-    "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week",
+    "1h": "1h", "4h": "4h", "1d": "1day", "1w": "1week", "1mo": "1month",
   };
   return m[canon] || "15min";
 }
@@ -195,7 +197,7 @@ function metaapiTimeframe(canon: string): string {
   // MetaAPI uses MT5-style timeframe codes
   const m: Record<string, string> = {
     "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
-    "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
+    "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w", "1mo": "1MN",
   };
   return m[canon] || "15m";
 }

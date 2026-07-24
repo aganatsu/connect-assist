@@ -87,6 +87,7 @@ import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
+import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -3836,6 +3837,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Style-aware: scalper needs 15m for structure TF, swing needs weekly for bias TF
     const needsM15 = resolvedStyle === "scalper" && entryInterval !== "15m";
     const needsWeekly = resolvedStyle === "swing_trader" || pairConfig.ictHTFEnabled !== false;
+    const needsMonthly = !!config.smcEnhancements?.enableMonthlyContainment;
     const fetchPromises: Promise<Candle[]>[] = [
       cachedFetch(pair, entryInterval, entryRange),
       cachedFetch(pair, "1d", "1y"),
@@ -3849,6 +3851,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     if (smtFlag) fetchPromises.push(cachedFetch(smtPair!, entryInterval, entryRange));
     // Fetch weekly candles for ICT HTF framework OR swing_trader bias (cached — same data reused across pairs)
     if (needsWeekly) fetchPromises.push(cachedFetch(pair, "1w", "1y"));
+    // Fetch monthly candles for SMC monthly containment analysis
+    if (needsMonthly) fetchPromises.push(cachedFetch(pair, "1M", "5y"));
     const fetched = await Promise.all(fetchPromises);
     const candles = fetched[0];
     const dailyCandles = fetched[1];
@@ -3860,8 +3864,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const m15Offset = needsM15 ? 1 : 0;
     const m15Candles: Candle[] = needsM15 ? (fetched[3 + h4Offset] || []) : [];
     const smtCandles = smtFlag ? fetched[3 + h4Offset + m15Offset] : null;
-    // Weekly candles (last in fetch array when needed)
-    const weeklyCandles: Candle[] | null = needsWeekly ? (fetched[fetched.length - 1] || null) : null;
+    // Weekly candles (when needed — second-to-last if monthly also fetched)
+    const weeklyCandles: Candle[] | null = needsWeekly
+      ? (needsMonthly ? (fetched[fetched.length - 2] || null) : (fetched[fetched.length - 1] || null))
+      : null;
+    // Monthly candles (always last in fetch array when needed)
+    const monthlyCandles: Candle[] | null = needsMonthly ? (fetched[fetched.length - 1] || null) : null;
     // Legacy alias for ICT HTF active check (used downstream)
     const ictHTFActive = pairConfig.ictHTFEnabled !== false;
 
@@ -5818,6 +5826,40 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.warn(`[scan ${scanCycleId}] News alignment check error (non-fatal): ${naErr?.message}`);
         }
       }
+      // ── SMC Video Enhancements (opt-in) ──────────────────────────────────────
+      // Runs additional analysis modules when config.smcEnhancements is non-null.
+      // Results are APPENDED to existing gates/factors — never replacing.
+      let smcEnhResult: SMCEnhancementsResult | null = null;
+      if (config.smcEnhancements) {
+        try {
+          const zoneHigh = analysis.impulseZone?.high ?? analysis.pd?.premiumStart ?? null;
+          const zoneLow = analysis.impulseZone?.low ?? analysis.pd?.discountEnd ?? null;
+          smcEnhResult = runSMCEnhancements(
+            candles,
+            dailyCandles.length >= 10 ? dailyCandles : null,
+            analysis.orderBlocks || [],
+            analysis.direction as "long" | "short" | null,
+            zoneHigh,
+            zoneLow,
+            analysis.lastPrice ?? null,
+            config.smcEnhancements,
+            monthlyCandles,
+          );
+          // Append supplementary gates
+          if (smcEnhResult.additionalGates.length > 0) {
+            gates.push(...smcEnhResult.additionalGates);
+          }
+          // Attach enhancement factors to analysis for dashboard visibility
+          if (smcEnhResult.additionalFactors.length > 0) {
+            (analysis as any).smcEnhancementFactors = smcEnhResult.additionalFactors;
+          }
+          // Attach full result for downstream use (TP override, breaker entries)
+          (analysis as any).smcEnhancements = smcEnhResult;
+        } catch (enhErr: any) {
+          console.warn(`[scan ${scanCycleId}] SMC enhancements error (non-fatal): ${enhErr?.message}`);
+        }
+      }
+
       const allPassed = gates.every(g => g.passed);
       // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
       // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,
@@ -5848,6 +5890,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (tpOnCorrectSide && structureRR >= (config.minRiskReward ?? 1.0)) {
               return analysis.takeProfit;
             }
+          }
+          // ── Fib 3-Point Extension TP (SMC Enhancement) ──
+          // Measures extensions from the ENTRY point (Point C), not from the swing origin.
+          // Uses the first extension level that satisfies minRiskReward.
+          if (config.tpMethod === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
+            const ext = smcEnhResult.fibExtension;
+            // Try each extension level (ordered from nearest to farthest)
+            for (const level of ext.levels) {
+              const tpCandidate = level.price;
+              const tpOnCorrectSide = direction === "long"
+                ? tpCandidate > entry
+                : tpCandidate < entry;
+              if (!tpOnCorrectSide) continue;
+              const extensionRR = Math.abs(tpCandidate - entry) / risk;
+              if (extensionRR >= (config.minRiskReward ?? 1.0)) {
+                return tpCandidate;
+              }
+            }
+            // Fallback: no extension level satisfies R:R, use default ratio
           }
           return direction === "long" ? entry + risk * config.tpRatio : entry - risk * config.tpRatio;
         };
@@ -7043,6 +7104,93 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         } catch (rsErr: any) {
           // Non-fatal: logging failure must never block the scanner
           console.warn(`[rejected-setup] Logging error for ${pair}: ${rsErr?.message}`);
+        }
+
+        // ── Breaker Block Entry Signal (SMC Enhancement) ──
+        // Even when the main signal is gate-blocked, a breaker block can fire its own
+        // pending order. Breakers are independent entry models with their own confluence.
+        if (smcEnhResult?.breakerBlocks && smcEnhResult.breakerBlocks.length > 0 && config.smcEnhancements?.enableBreakerBlocks) {
+          for (const breaker of smcEnhResult.breakerBlocks) {
+            if (!breaker.retestComplete) continue; // Only fire when retest is confirmed
+            if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
+
+            const breakerDir = breaker.direction === "bullish" ? "long" : "short";
+            // Entry at the 50% of the breaker zone (OTE within the zone)
+            const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
+            // SL beyond the far boundary of the breaker zone
+            const breakerSL = breakerDir === "long"
+              ? breaker.entryZone.low - (adjustedSlBuffer * spec.pipSize)
+              : breaker.entryZone.high + (adjustedSlBuffer * spec.pipSize);
+            const breakerRisk = Math.abs(breakerEntry - breakerSL);
+            const breakerTP = breakerDir === "long"
+              ? breakerEntry + breakerRisk * config.tpRatio
+              : breakerEntry - breakerRisk * config.tpRatio;
+
+            // Orientation check
+            const breakerOrientationOk = breakerDir === "long"
+              ? (breakerSL < breakerEntry && breakerTP > breakerEntry)
+              : (breakerSL > breakerEntry && breakerTP < breakerEntry);
+            if (!breakerOrientationOk) continue;
+
+            // R:R check
+            const breakerRR = Math.abs(breakerTP - breakerEntry) / breakerRisk;
+            if (breakerRR < (config.minRiskReward ?? 1.0)) continue;
+
+            // Size calculation
+            const breakerSizing = computePositionSize(
+              { balance, riskPercent: pairConfig.riskPerTrade * 0.5, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
+              undefined, volCtx, propFirmCtx,
+            );
+            let breakerSize = Math.max(breakerSizing.lots, 0.01);
+
+            const breakerOrderId = `brk-${crypto.randomUUID().slice(0, 6)}`;
+            const breakerExpiry = config.limitOrderExpiryMinutes || 60;
+            const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
+
+            const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
+              user_id: userId,
+              bot_id: BOT_ID,
+              order_id: breakerOrderId,
+              symbol: pair,
+              direction: breakerDir,
+              order_type: "limit",
+              entry_price: breakerEntry,
+              current_price: analysis.lastPrice,
+              stop_loss: breakerSL,
+              take_profit: breakerTP,
+              size: breakerSize,
+              entry_zone_type: "breaker_block",
+              entry_zone_low: breaker.entryZone.low,
+              entry_zone_high: breaker.entryZone.high,
+              status: "pending",
+              expiry_minutes: breakerExpiry,
+              expires_at: breakerExpiresAt,
+              signal_reason: JSON.stringify({
+                bot: BOT_ID,
+                signalSource: "breaker",
+                summary: breaker.detail,
+                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB },
+                entryTimeframe: pairConfig.entryTimeframe,
+                originalSL: breakerSL,
+                originalTP: breakerTP,
+                tpMethod: config.tpMethod || "rr_ratio",
+              }),
+              signal_score: breaker.confidence * 100,
+              setup_type: "breaker_retest",
+              setup_confidence: breaker.confidence,
+              exit_flags: exitFlags,
+              placed_at: new Date().toISOString(),
+            });
+
+            if (!breakerInsertErr) {
+              pendingPlaced++;
+              console.log(`[breaker] ${pair} ${breakerDir}: Pending order placed at ${breakerEntry.toFixed(5)} (conf=${(breaker.confidence * 100).toFixed(0)}%, disp=${breaker.displacementStrength.toFixed(2)}x ATR)`);
+              (detail as any).breakerEntry = { orderId: breakerOrderId, direction: breakerDir, entry: breakerEntry, sl: breakerSL, tp: breakerTP, confidence: breaker.confidence };
+            } else {
+              console.warn(`[breaker] ${pair}: Insert failed — ${breakerInsertErr.message}`);
+            }
+            break; // Only place one breaker order per pair per cycle
+          }
         }
       }
     } else {

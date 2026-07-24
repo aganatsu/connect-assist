@@ -84,9 +84,10 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               <span className={`text-[8px] font-mono font-bold px-1 py-0 rounded shrink-0 ${
                 sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
                 sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+                sr.signalSource === "breaker" ? "bg-amber-500/15 text-amber-400 border border-amber-500/30" :
                 "bg-orange-500/15 text-orange-400 border border-orange-500/30"
               }`}>
-                {sr.signalSource === "unified" ? "UNI" : sr.signalSource === "cascade" ? "CAS" : "STD½"}
+                {sr.signalSource === "unified" ? "UNI" : sr.signalSource === "cascade" ? "CAS" : sr.signalSource === "breaker" ? "BRK½" : "STD½"}
               </span>
             )}
           </div>
@@ -222,9 +223,10 @@ export function MobilePositionCard({ position: p, isExpanded, onToggle, onClose 
               <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
                 sr.signalSource === "unified" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30" :
                 sr.signalSource === "cascade" ? "bg-purple-500/15 text-purple-400 border border-purple-500/30" :
+                sr.signalSource === "breaker" ? "bg-amber-500/15 text-amber-400 border border-amber-500/30" :
                 "bg-orange-500/15 text-orange-400 border border-orange-500/30"
               }`}>
-                {sr.signalSource === "unified" ? "UNIFIED \u00d71" : sr.signalSource === "cascade" ? "CASCADE \u00d71" : "STANDALONE \u00d70.5"}
+                {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : sr.signalSource === "breaker" ? "BREAKER ×0.5" : "STANDALONE ×0.5"}
               </span>
             ) : (
               <span className="text-[9px] font-mono text-muted-foreground px-1.5 py-0.5 rounded border border-border">
