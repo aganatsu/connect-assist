@@ -880,6 +880,13 @@ Deno.serve(async (req) => {
       }
       // Engine processing (SL/TP/trail/BE logic) only runs when explicitly triggered.
       // Dashboard polling must not perform broker mirror actions.
+      // Extract global exit config once — used both by engine processing (below)
+      // and by the response serializer (effectiveConfig per position).
+      let globalExitConfig: any = extractGlobalExitConfig({});
+      try {
+        const { data: cfgRowTop } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        globalExitConfig = extractGlobalExitConfig(cfgRowTop?.config_json || {});
+      } catch {}
       if (payload.processEngine === true && positions && positions.length > 0) {
         await updatePositionPrices(supabase, positions);
         const { data: refreshed } = await supabase.from("paper_positions").select("*").eq("user_id", user.id).eq("position_status", "open").order("open_time", { ascending: true });
@@ -893,7 +900,7 @@ Deno.serve(async (req) => {
           liveConfig = cfgRow?.config_json || {};
         } catch {}
         const liveExit = liveConfig.exit || {};
-        const globalExitConfig = extractGlobalExitConfig(liveConfig);
+        globalExitConfig = extractGlobalExitConfig(liveConfig);
         const closedIds: string[] = [];
         for (const pos of (positions || [])) {
           const currentPrice = parseFloat(pos.current_price);
