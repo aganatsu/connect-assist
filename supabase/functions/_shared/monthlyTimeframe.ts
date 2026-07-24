@@ -111,9 +111,16 @@ export function synthesizeMonthlyCandles(dailyCandles: Candle[]): Candle[] {
 
 /**
  * Run full monthly analysis: synthesize candles, detect OBs, extract key levels.
+ * When nativeMonthlyCandles are provided (from TwelveData "1M" interval), they are
+ * used directly instead of synthesizing from daily candles — more accurate OHLCV.
  */
-export function analyzeMonthlyStructure(dailyCandles: Candle[]): MonthlyAnalysis {
-  const monthlyCandles = synthesizeMonthlyCandles(dailyCandles);
+export function analyzeMonthlyStructure(
+  dailyCandles: Candle[],
+  nativeMonthlyCandles?: Candle[] | null,
+): MonthlyAnalysis {
+  const monthlyCandles = (nativeMonthlyCandles && nativeMonthlyCandles.length >= 3)
+    ? nativeMonthlyCandles
+    : synthesizeMonthlyCandles(dailyCandles);
 
   if (monthlyCandles.length < 3) {
     return {

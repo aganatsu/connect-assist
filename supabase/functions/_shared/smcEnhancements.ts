@@ -156,6 +156,7 @@ export function runSMCEnhancements(
   zoneLow: number | null,
   entryPrice: number | null,
   config: Partial<SMCEnhancementsConfig> = {},
+  monthlyCandles?: Candle[] | null,
 ): SMCEnhancementsResult {
   const cfg = { ...DEFAULT_SMC_ENHANCEMENTS_CONFIG, ...config };
   const additionalFactors: ReasoningFactor[] = [];
@@ -336,7 +337,7 @@ export function runSMCEnhancements(
   let monthlyContainment: MonthlyContainmentResult | null = null;
   if (cfg.enableMonthlyContainment && dailyCandles && dailyCandles.length >= 60 && normalizedDir) {
     enabledModules.push("monthly");
-    monthlyAnalysis = analyzeMonthlyStructure(dailyCandles);
+    monthlyAnalysis = analyzeMonthlyStructure(dailyCandles, monthlyCandles);
 
     if (zoneHigh !== null && zoneLow !== null) {
       monthlyContainment = checkMonthlyContainment(zoneHigh, zoneLow, normalizedDir, monthlyAnalysis);

@@ -309,6 +309,7 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
       next_level: "Next Structure Level",
       fixed_pips: "Fixed Pips",
       atr_multiple: "ATR Multiple",
+      fib_extension_3pt: "Fib Extension (3-Point)",
     };
     exitConfig.push({ label: "TP Target", value: tpMethodLabels[sr.tpMethod] || sr.tpMethod });
   }
@@ -385,9 +386,10 @@ export function ExpandedPositionCard({ position: p, onSaved }: ExpandedPositionC
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold ${
               sr.signalSource === "unified" ? "bg-cyan-500/15 border border-cyan-500/40 text-cyan-400" :
               sr.signalSource === "cascade" ? "bg-purple-500/15 border border-purple-500/40 text-purple-400" :
+              sr.signalSource === "breaker" ? "bg-amber-500/15 border border-amber-500/40 text-amber-400" :
               "bg-orange-500/15 border border-orange-500/40 text-orange-400"
-            }`} title={sr.signalSource === "unified" ? "Full unified confirmation — full position size" : sr.signalSource === "cascade" ? "Cascade zone confirmation — full position size" : "Standalone impulse zone entry — position size halved (×0.5)"}>
-              {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : "STANDALONE ×0.5"}
+            }`} title={sr.signalSource === "unified" ? "Full unified confirmation — full position size" : sr.signalSource === "cascade" ? "Cascade zone confirmation — full position size" : sr.signalSource === "breaker" ? "Breaker block retest entry — half position size" : "Standalone impulse zone entry — position size halved (×0.5)"}>
+              {sr.signalSource === "unified" ? "UNIFIED ×1" : sr.signalSource === "cascade" ? "CASCADE ×1" : sr.signalSource === "breaker" ? "BREAKER ×0.5" : "STANDALONE ×0.5"}
             </span>
           )}
         </div>

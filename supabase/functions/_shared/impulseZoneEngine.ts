@@ -18,6 +18,7 @@ import type {
 import {
   analyzeMarketStructure, detectOrderBlocks, detectFVGs, calculateATR,
 } from "./smcAnalysis.ts";
+import { evaluateZoneLifecycle, type ZoneLifecycleConfig, type ZoneLifecycleResult } from "./zoneLifecycle.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -268,7 +269,10 @@ function validateImpulseFromBOS(
 export function mapImpulsePOIs(
   candles: Candle[],
   impulse: ImpulseLeg,
-  options?: { originOBRetest?: boolean },
+  options?: {
+    originOBRetest?: boolean;
+    zoneLifecycleV2?: { enabled: boolean; config?: Partial<ZoneLifecycleConfig>; allCandles?: Candle[] };
+  },
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
 
@@ -323,14 +327,37 @@ export function mapImpulsePOIs(
     const impLow = Math.min(impulse.high, impulse.low);
     if (ob.high < impLow || ob.low > impHigh) continue;
 
-    if (ob.type === impulse.direction && ob.state !== "broken" && ob.state !== "mitigated") {
-      pois.push({
-        type: "ob",
-        high: ob.high,
-        low: ob.low,
-        candleIndex: fullIndex,
-        direction: ob.type,
-      });
+    if (ob.type !== impulse.direction) continue;
+
+    // Zone Lifecycle v2: use close-based invalidation instead of state check
+    if (options?.zoneLifecycleV2?.enabled && options.zoneLifecycleV2.allCandles) {
+      // Get candles AFTER this OB formed
+      const candlesAfterOB = options.zoneLifecycleV2.allCandles.slice(fullIndex + 1);
+      const lifecycleResult = evaluateZoneLifecycle(
+        { high: ob.high, low: ob.low, direction: ob.type === "bullish" ? "bullish" : "bearish" },
+        candlesAfterOB,
+        options.zoneLifecycleV2.config,
+      );
+      if (lifecycleResult.canStillTrade) {
+        pois.push({
+          type: "ob",
+          high: ob.high,
+          low: ob.low,
+          candleIndex: fullIndex,
+          direction: ob.type,
+        });
+      }
+    } else {
+      // Default: original state-based filter
+      if (ob.state !== "broken" && ob.state !== "mitigated") {
+        pois.push({
+          type: "ob",
+          high: ob.high,
+          low: ob.low,
+          candleIndex: fullIndex,
+          direction: ob.type,
+        });
+      }
     }
   }
 
@@ -877,7 +904,10 @@ export function findBestEntryZone(
   }
 
   // Step 2: Map POIs within the impulse
-  const pois = mapImpulsePOIs(htfCandles, impulse, { originOBRetest: options?.originOBRetest });
+  const pois = mapImpulsePOIs(htfCandles, impulse, {
+    originOBRetest: options?.originOBRetest,
+    zoneLifecycleV2: options?.zoneLifecycleV2,
+  });
   if (pois.length === 0) {
     return {
       bestZone: null,
@@ -1068,6 +1098,18 @@ export interface ZoneEngineOptions {
    * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
    */
   originOBRetest?: boolean;
+  /**
+   * Zone Lifecycle v2: When enabled, replaces the default 50% penetration invalidation
+   * with close-based invalidation. Zones survive wick penetration and can be traded
+   * multiple times with decreasing confidence.
+   * When null/undefined, uses the default state-based filter (broken/mitigated = skip).
+   */
+  zoneLifecycleV2?: {
+    enabled: boolean;
+    config?: Partial<ZoneLifecycleConfig>;
+    /** All candles available AFTER zone formation for lifecycle evaluation */
+    allCandles?: Candle[];
+  };
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
