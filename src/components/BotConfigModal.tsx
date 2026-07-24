@@ -262,7 +262,16 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (rawConfig && open) setConfig(JSON.parse(JSON.stringify(rawConfig)));
+    if (rawConfig && open) {
+      const parsed = JSON.parse(JSON.stringify(rawConfig));
+      // Migrate old allowedInstruments format → enabled array
+      if (parsed.instruments?.allowedInstruments && !parsed.instruments?.enabled) {
+        const allowed = parsed.instruments.allowedInstruments;
+        parsed.instruments.enabled = Object.keys(allowed).filter((k: string) => allowed[k]);
+        delete parsed.instruments.allowedInstruments;
+      }
+      setConfig(parsed);
+    }
   }, [rawConfig, open]);
 
   useEffect(() => {
@@ -450,7 +459,15 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
 
   const applyPresetConfig = (presetConfig: any, label: string) => {
     if (!config) return;
-    setConfig(JSON.parse(JSON.stringify(presetConfig)));
+    // Handle case where config_json might be a string
+    let parsed = typeof presetConfig === 'string' ? JSON.parse(presetConfig) : JSON.parse(JSON.stringify(presetConfig));
+    // Migrate old allowedInstruments format → enabled array
+    if (parsed.instruments?.allowedInstruments && !parsed.instruments?.enabled) {
+      const allowed = parsed.instruments.allowedInstruments;
+      parsed.instruments.enabled = Object.keys(allowed).filter(k => allowed[k]);
+      delete parsed.instruments.allowedInstruments;
+    }
+    setConfig(parsed);
     toast.info(`Applied preset: ${label}`);
   };
 

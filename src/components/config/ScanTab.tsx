@@ -147,13 +147,14 @@ const SMC_ENHANCEMENT_MODULES: {
 // ─── Component ────────────────────────────────────────────────────────────────
 export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
   // Count active instruments
-  const enabledPairs = config.instruments?.enabledPairs || [];
-  const totalPairs = FOREX_PAIRS.length + CRYPTO_PAIRS.length + COMMODITY_PAIRS.length + INDEX_PAIRS.length;
-  const activePairCount = enabledPairs.length || totalPairs;
+  const ALL_INSTRUMENTS = [...FOREX_PAIRS, ...CRYPTO_PAIRS, ...COMMODITY_PAIRS, ...INDEX_PAIRS];
+  const totalPairs = ALL_INSTRUMENTS.length;
+  const enabledPairs: string[] = config.instruments?.enabled || ALL_INSTRUMENTS;
+  const activePairCount = enabledPairs.length;
 
-  // Count active sessions
-  const sessions = config.sessions || {};
-  const activeSessionCount = [sessions.asian !== false, sessions.london !== false, sessions.newYork !== false, sessions.offHours === true].filter(Boolean).length;
+  // Count active sessions — uses filter array format: ["asian", "london", "newyork", "offhours"]
+  const sessionFilter: string[] = Array.isArray(config.sessions?.filter) ? config.sessions.filter : ["london", "newyork"];
+  const activeSessionCount = sessionFilter.length;
 
   // Count active analysis modules
   const strat = config.strategy || {};
@@ -214,12 +215,12 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                 onClick={() => {
                   const allEnabled = group.pairs.every(p => enabledPairs.includes(p));
                   setConfig((prev: any) => {
-                    const current = prev.instruments?.enabledPairs || [];
+                    const current = prev.instruments?.enabled || ALL_INSTRUMENTS;
                     if (allEnabled) {
-                      return { ...prev, instruments: { ...prev.instruments, enabledPairs: current.filter((p: string) => !group.pairs.includes(p)) } };
+                      return { ...prev, instruments: { ...prev.instruments, enabled: current.filter((p: string) => !group.pairs.includes(p)) } };
                     } else {
                       const merged = [...new Set([...current, ...group.pairs])];
-                      return { ...prev, instruments: { ...prev.instruments, enabledPairs: merged } };
+                      return { ...prev, instruments: { ...prev.instruments, enabled: merged } };
                     }
                   });
                 }}
@@ -229,15 +230,15 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
             <div className="flex flex-wrap gap-1">
               {group.pairs.map(pair => {
-                const isEnabled = enabledPairs.length === 0 || enabledPairs.includes(pair);
+                const isEnabled = enabledPairs.includes(pair);
                 return (
                   <button
                     key={pair}
                     onClick={() => {
                       setConfig((prev: any) => {
-                        const current = prev.instruments?.enabledPairs || [];
+                        const current = prev.instruments?.enabled || ALL_INSTRUMENTS;
                         const next = current.includes(pair) ? current.filter((p: string) => p !== pair) : [...current, pair];
-                        return { ...prev, instruments: { ...prev.instruments, enabledPairs: next } };
+                        return { ...prev, instruments: { ...prev.instruments, enabled: next } };
                       });
                     }}
                     className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
@@ -287,10 +288,34 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={false}
       >
         <div className="grid grid-cols-2 gap-3">
-          <ToggleField label="Asian Session" checked={config.sessions?.asian !== false} onChange={v => updateField('sessions', 'asian', v)} />
-          <ToggleField label="London Session" checked={config.sessions?.london !== false} onChange={v => updateField('sessions', 'london', v)} />
-          <ToggleField label="New York Session" checked={config.sessions?.newYork !== false} onChange={v => updateField('sessions', 'newYork', v)} />
-          <ToggleField label="Off-Hours" description="Trade outside main sessions" checked={config.sessions?.offHours ?? false} onChange={v => updateField('sessions', 'offHours', v)} />
+          <ToggleField label="Asian Session" checked={sessionFilter.includes('asian')} onChange={v => {
+            setConfig((prev: any) => {
+              const current: string[] = Array.isArray(prev.sessions?.filter) ? [...prev.sessions.filter] : ['london', 'newyork'];
+              const updated = v ? [...new Set([...current, 'asian'])] : current.filter(s => s !== 'asian');
+              return { ...prev, sessions: { ...prev.sessions, filter: updated } };
+            });
+          }} />
+          <ToggleField label="London Session" checked={sessionFilter.includes('london')} onChange={v => {
+            setConfig((prev: any) => {
+              const current: string[] = Array.isArray(prev.sessions?.filter) ? [...prev.sessions.filter] : ['london', 'newyork'];
+              const updated = v ? [...new Set([...current, 'london'])] : current.filter(s => s !== 'london');
+              return { ...prev, sessions: { ...prev.sessions, filter: updated } };
+            });
+          }} />
+          <ToggleField label="New York Session" checked={sessionFilter.includes('newyork')} onChange={v => {
+            setConfig((prev: any) => {
+              const current: string[] = Array.isArray(prev.sessions?.filter) ? [...prev.sessions.filter] : ['london', 'newyork'];
+              const updated = v ? [...new Set([...current, 'newyork'])] : current.filter(s => s !== 'newyork');
+              return { ...prev, sessions: { ...prev.sessions, filter: updated } };
+            });
+          }} />
+          <ToggleField label="Off-Hours" description="Trade outside main sessions" checked={sessionFilter.includes('offhours')} onChange={v => {
+            setConfig((prev: any) => {
+              const current: string[] = Array.isArray(prev.sessions?.filter) ? [...prev.sessions.filter] : ['london', 'newyork'];
+              const updated = v ? [...new Set([...current, 'offhours'])] : current.filter(s => s !== 'offhours');
+              return { ...prev, sessions: { ...prev.sessions, filter: updated } };
+            });
+          }} />
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <ToggleField label="News Event Filter" description="Pause trading around high-impact news" checked={config.sessions?.newsFilterEnabled ?? true} onChange={v => updateField('sessions', 'newsFilterEnabled', v)} />
