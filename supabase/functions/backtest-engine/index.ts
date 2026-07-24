@@ -100,8 +100,14 @@ import {
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
-import { determineDirection, type DirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
+import { runICTHTFAnalysis, type ICTHTFResult } from "../_shared/ictHTFIntegration.ts";
+import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
+import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
+import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
+import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -2002,8 +2008,151 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
 
-        // ── Effective Score ──
-        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal;
+        // ── Direction Verdict (mirrors bot-scanner pre-zone direction consensus) ──
+        let directionVerdict: DirectionVerdictResult | null = null;
+        try {
+          const ctResult = relevantDaily.length >= 20 && config.useConfirmedTrend !== false
+            ? computeConfirmedTrend(relevantDaily, config.confirmedTrendFibFactor ?? 0.25, config.confirmedTrendSwingLookback ?? 5)
+            : null;
+          directionVerdict = computeDirectionVerdict({
+            confirmedTrend: ctResult,
+            simpleDirection: directionResult ? {
+              direction: directionResult.direction,
+              bias: directionResult.bias,
+              biasSource: directionResult.biasSource,
+              h4Retrace: directionResult.h4Retrace,
+              h4ChochAgainst: directionResult.h4ChochAgainst,
+              h1Confirmed: directionResult.h1Confirmed,
+              reason: directionResult.reason,
+            } : null,
+            regime: analysis.regimeInfo ? {
+              regime: analysis.regimeInfo.regime,
+              confidence: analysis.regimeInfo.confidence,
+              directionalBias: analysis.regimeInfo.bias,
+            } : null,
+            weeklyBias: null,     // No weekly candles in backtest currently
+            gamePlanBias: null,   // No game plan in backtest
+          });
+        } catch { directionVerdict = null; }
+
+        // ── ICT HTF Analysis (Daily OB containment + weekly bias) ──
+        let ictHTFResult: ICTHTFResult | null = null;
+        if (config.ictHTFEnabled && analysis.direction) {
+          try {
+            const ltfZone = izData?.bestZone ? { high: izData.bestZone.high, low: izData.bestZone.low } : null;
+            ictHTFResult = runICTHTFAnalysis(
+              null, // No weekly candles in backtest
+              relevantDaily,
+              candle.close,
+              analysis.direction as "long" | "short",
+              ltfZone,
+              {
+                ictHTFEnabled: config.ictHTFEnabled ?? true,
+                ictHTFGateMode: config.ictHTFGateMode ?? "soft",
+                ictHTFAlignedBonus: config.ictHTFAlignedBonus ?? 2.0,
+                ictHTFMisalignedPenalty: config.ictHTFMisalignedPenalty ?? 3.0,
+                ictHTFMinContainment: config.ictHTFMinContainment ?? 50,
+                ictWeeklyBiasRequired: config.ictWeeklyBiasRequired ?? true,
+                ictDailyContainmentRequired: config.ictDailyContainmentRequired ?? true,
+              },
+            );
+          } catch { ictHTFResult = null; }
+        }
+
+        // ── ICT Displacement MSS Validation ──
+        let ictMSSResult: MSSValidationResult | null = null;
+        if (config.ictDisplacementMSSEnabled && analysis.structure) {
+          try {
+            const mssConfig: DisplacementMSSConfig = {
+              ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
+              gateMode: config.ictDisplacementMSSGateMode ?? "off",
+              minBodyRatio: config.ictDisplacementMSSMinBodyRatio ?? 0.6,
+              minRangeATRMult: config.ictDisplacementMSSMinRangeATR ?? 1.2,
+              lookbackCandles: config.ictDisplacementMSSLookback ?? 3,
+            };
+            const breaks = [...(analysis.structure.bos || []), ...(analysis.structure.choch || [])].map((b: any) => ({
+              index: b.index as number,
+              type: b.type as "bullish" | "bearish",
+            }));
+            const tradeDir = analysis.direction === "long" ? "bullish" : "bearish";
+            ictMSSResult = validateRecentMSS(analysisCandles, breaks, tradeDir as "bullish" | "bearish", mssConfig);
+          } catch { ictMSSResult = null; }
+        }
+
+        // ── ICT Judas Swing Detection ──
+        let ictJudasResult: JudasSwingResult | null = null;
+        if (config.ictJudasSwingEnabled && analysis.structure) {
+          try {
+            const judasConfig: JudasSwingConfig = {
+              ...DEFAULT_JUDAS_SWING_CONFIG,
+              gateMode: config.ictJudasSwingGateMode ?? "off",
+              sweepLookback: config.ictJudasSwingLookback ?? 10,
+              minSweepDepthATR: config.ictJudasSwingMinDepthATR ?? 0.1,
+              requireCloseBack: config.ictJudasSwingRequireCloseBack ?? true,
+            };
+            const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
+            const allBreaks = [...(analysis.structure.bos || []), ...(analysis.structure.choch || [])];
+            const alignedBreaks = allBreaks.filter((b: any) => b.type === judasDirection);
+            const mssIndex = alignedBreaks.length > 0
+              ? alignedBreaks.reduce((latest: any, b: any) => b.index > latest.index ? b : latest).index
+              : analysisCandles.length - 5;
+            ictJudasResult = detectICTJudasSwing(analysisCandles, mssIndex, judasDirection as "bullish" | "bearish", judasConfig);
+          } catch { ictJudasResult = null; }
+        }
+
+        // ── ICT FVG Invalidation ──
+        let ictFVGInvalidatedCount = 0;
+        let ictFVGExhaustedCount = 0;
+        let ictFVGTotalCount = 0;
+        if (config.ictFVGInvalidationEnabled && analysis.fvgs && analysis.fvgs.length > 0) {
+          try {
+            const fvgConfig: FVGInvalidationConfig = {
+              ...DEFAULT_FVG_INVALIDATION_CONFIG,
+              gateMode: config.ictFVGInvalidationGateMode ?? "off",
+              bodyCloseOnly: config.ictFVGBodyCloseOnly ?? true,
+              ruleOfTwo: config.ictFVGRuleOfTwo ?? true,
+            };
+            const tradeDir = analysis.direction === "long" ? "bullish" : "bearish";
+            const fvgResult = validateFVGBatch(analysis.fvgs, analysisCandles, tradeDir as "bullish" | "bearish", fvgConfig);
+            ictFVGTotalCount = fvgResult.results.length;
+            ictFVGInvalidatedCount = fvgResult.results.filter((r: any) => r.status === "invalidated").length;
+            ictFVGExhaustedCount = fvgResult.results.filter((r: any) => r.status === "exhausted").length;
+          } catch { /* non-fatal */ }
+        }
+
+        // ── ICT Kill Zone Time Filter ──
+        let ictKZResult: ICTKillZoneResult | null = null;
+        if (config.ictKillZoneEnabled) {
+          try {
+            const kzConfig: ICTKillZoneConfig = {
+              ...DEFAULT_ICT_KILLZONE_CONFIG,
+              enabled: true,
+              gateMode: config.ictKillZoneGateMode ?? "off",
+              enableSilverBullet: config.ictKillZoneSilverBullet ?? true,
+              enablePMSession: config.ictKillZonePMSession ?? true,
+            };
+            const candleTime = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z");
+            ictKZResult = evaluateICTKillZone(candleTime, kzConfig);
+          } catch { ictKZResult = null; }
+        }
+
+        // ── ICT Score Adjustments (mirrors bot-scanner effective score formula) ──
+        const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
+        const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
+        const ictMSSAdj = (config.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
+          ? -(config.ictDisplacementMSSPenalty ?? 2.0) : 0;
+        const ictJudasAdj = (config.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
+          ? -(config.ictJudasSwingPenalty ?? 1.5) : 0;
+        const ictFVGAdj = (config.ictFVGInvalidationGateMode === "soft" && ictFVGTotalCount > 0)
+          ? -(ictFVGInvalidatedCount * (config.ictFVGInvalidatedPenalty ?? 3.0) + ictFVGExhaustedCount * (config.ictFVGExhaustedPenalty ?? 1.5)) / Math.max(ictFVGTotalCount, 1)
+          : 0;
+        const ictKZAdj = (config.ictKillZoneGateMode === "soft" && ictKZResult)
+          ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? (config.ictKillZonePrimeBonus ?? 1.5) : 0) : -(config.ictKillZoneOutsidePenalty ?? 1.0))
+          : 0;
+        const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
+
+        // ── Effective Score (now matches live scanner formula) ──
+        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
 
         // ── Bidirectional Conflict Counter ──
         const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
