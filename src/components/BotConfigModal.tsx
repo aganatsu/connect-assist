@@ -328,7 +328,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const [showSavePresetDialog, setShowSavePresetDialog] = useState(false);
   const [presetName, setPresetName] = useState("");
   const [presetDescription, setPresetDescription] = useState("");
-  const [showMyPresets, setShowMyPresets] = useState(false);
+  const [showMyPresets, setShowMyPresets] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const { data: customPresets = [], refetch: refetchPresets } = useQuery({
@@ -383,11 +383,13 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   };
 
   const isPresetActive = (presetConfig: any): boolean => {
-    if (!rawConfig || !presetConfig) return false;
+    if (!presetConfig) return false;
+    const compareTarget = config || rawConfig;
+    if (!compareTarget) return false;
     const sections = ["strategy", "risk", "entry", "exit", "instruments", "sessions", "protection"];
     for (const section of sections) {
       if (!presetConfig[section]) continue;
-      if (!deepMatch(rawConfig[section], presetConfig[section])) return false;
+      if (!deepMatch(compareTarget[section], presetConfig[section])) return false;
     }
     return true;
   };
@@ -571,11 +573,14 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                   {customPresets.map((cp: any) => (
                     <div
                       key={cp.id}
-                      className={`group relative p-2.5 border text-left transition-colors cursor-pointer ${isPresetActive(cp.config_json ?? cp.config) ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
+                      className={`group relative p-2.5 border-2 text-left transition-all cursor-pointer ${isPresetActive(cp.config_json ?? cp.config) ? "border-primary bg-primary/10 ring-1 ring-primary/30 shadow-[0_0_8px_rgba(0,255,255,0.15)]" : "border-border hover:border-border/80"}`}
                       onClick={() => applyPresetConfig(cp.config_json ?? cp.config, cp.name)}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium truncate">{cp.name}</span>
+                        <span className={`text-xs font-medium truncate ${isPresetActive(cp.config_json ?? cp.config) ? "text-primary" : ""}`}>
+                          {isPresetActive(cp.config_json ?? cp.config) && <span className="inline-block mr-1">✓</span>}
+                          {cp.name}
+                        </span>
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(cp.id); }}
                           className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
