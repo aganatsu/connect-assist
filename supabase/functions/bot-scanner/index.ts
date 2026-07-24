@@ -1528,8 +1528,8 @@ async function runSafetyGates(
       // Numeric correlation from static matrix (returns 0 if pair unknown)
       const rawCorr = getCorrelation(symbol, pos.symbol);
       const effCorr = getDirectionalCorrelation(
-        { symbol, direction },
-        { symbol: pos.symbol, direction: posDir },
+        { symbol, direction: direction as "long" | "short" },
+        { symbol: pos.symbol, direction: posDir as "long" | "short" },
       );
 
       let matched = false;
@@ -4956,8 +4956,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const kzConfig: ICTKillZoneConfig = {
           ...DEFAULT_ICT_KILLZONE_CONFIG,
-          silverBullet: pairConfig.ictKillZoneSilverBullet,
-          pmSession: pairConfig.ictKillZonePMSession,
+          enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
+          enablePMSession: pairConfig.ictKillZonePMSession,
         };
         ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
@@ -4984,7 +4984,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           ...DEFAULT_ICT_RISK_CONFIG,
           baseRiskPercent: pairConfig.ictRiskBasePercent,
           drawdownHalving: pairConfig.ictRiskDrawdownHalving,
-          maxConsecutiveLosses: pairConfig.ictRiskMaxConsecLosses,
+          maxConsecutiveLossesBeforeStop: pairConfig.ictRiskMaxConsecLosses,
           dailyLossLimit: pairConfig.ictRiskDailyLimit,
           weeklyLossLimit: pairConfig.ictRiskWeeklyLimit,
           maxTradesPerDay: pairConfig.ictRiskMaxTradesPerDay,
@@ -4993,21 +4993,38 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const { data: recentTrades } = await supabase
           .from("trade_history")
           .select("pnl_percent, closed_at")
-          .eq("bot_config_id", configId)
+          .eq("user_id", userId)
           .order("closed_at", { ascending: false })
           .limit(20);
-        const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
         const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
-        ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
+        // Count consecutive losses from most recent trades
+        let consecutiveLosses = 0;
+        for (const pnl of tradePnLs) {
+          if (pnl < 0) consecutiveLosses++;
+          else break;
+        }
+        // Count trades today and compute daily/weekly PnL
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+        const todayTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= todayStart);
+        const weekTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= weekStart);
+        const dailyPnLPercent = todayTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        const weeklyPnLPercent = weekTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        ictRiskResult = assessRisk({
+          consecutiveLosses,
+          tradesToday: todayTrades.length,
+          dailyPnLPercent,
+          weeklyPnLPercent,
+          config: riskConfig,
+        });
         const modeTag = "OFF"; // Risk is always informational for now
-        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.adjustedRiskPercent * 100).toFixed(2)}%, reason=${ictRiskResult.reason}`);
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.effectiveRiskPercent * 100).toFixed(2)}%, reasons=${ictRiskResult.reasons.join("; ")}`);
         (detail as any).ictRisk = {
           canTrade: ictRiskResult.canTrade,
-          adjustedRiskPercent: ictRiskResult.adjustedRiskPercent,
-          reason: ictRiskResult.reason,
-          consecutiveLosses: ictRiskResult.consecutiveLosses,
-          dailyLossPercent: ictRiskResult.dailyLossPercent,
-          weeklyLossPercent: ictRiskResult.weeklyLossPercent,
+          effectiveRiskPercent: ictRiskResult.effectiveRiskPercent,
+          reasons: ictRiskResult.reasons,
+          riskMultiplier: ictRiskResult.riskMultiplier,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Risk error (non-fatal): ${e?.message}`);
@@ -5781,8 +5798,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ICT Risk hard gate: block trade if risk limits exceeded
     if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
       detail.status = "rejected";
-      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reason}`];
-      detail.reason = ictRiskResult.reason;
+      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reasons.join("; ")}`];
+      detail.reason = ictRiskResult.reasons.join("; ");
       rejectedCount++;
       scanDetails.push(detail);
       continue;
@@ -5853,8 +5870,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       let smcEnhResult: SMCEnhancementsResult | null = null;
       if (config.smcEnhancements) {
         try {
-          const zoneHigh = analysis.impulseZone?.high ?? analysis.pd?.premiumStart ?? null;
-          const zoneLow = analysis.impulseZone?.low ?? analysis.pd?.discountEnd ?? null;
+          const zoneHigh = (analysis as any).impulseZone?.high ?? (analysis.pd as any)?.premiumStart ?? null;
+          const zoneLow = (analysis as any).impulseZone?.low ?? (analysis.pd as any)?.discountEnd ?? null;
           smcEnhResult = runSMCEnhancements(
             candles,
             dailyCandles.length >= 10 ? dailyCandles : null,
@@ -5915,7 +5932,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // ── Fib 3-Point Extension TP (SMC Enhancement) ──
           // Measures extensions from the ENTRY point (Point C), not from the swing origin.
           // Uses the first extension level that satisfies minRiskReward.
-          if (config.tpMethod === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
+          if ((config.tpMethod as string) === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
             const ext = smcEnhResult.fibExtension;
             // Try each extension level (ordered from nearest to farthest)
             for (const level of ext.levels) {
@@ -6138,7 +6155,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             detail.correlationAdvisory = {
               concentrationScore: portfolioCheck.concentrationScore,
               sizeMultiplier: correlationSizeMultiplier,
-              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictsWith?.[0] ?? "unknown", correlation: c.severity, detail: c.detail })),
               currencyExposure: portfolioCheck.currencyExposure,
             };
           }
@@ -6192,7 +6209,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // This reflects the higher confidence when the full story (impulse + liquidity +
         // confirmation) aligns vs just the impulse zone engine alone.
         if ((detail as any).signalSource !== "unified") {
-          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, pairConfig.standaloneMultiplier ?? 0.5));
+          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, (pairConfig as any).standaloneMultiplier ?? 0.5));
           const prevSize = size;
           size = Math.round(size * standaloneMultiplier * 100) / 100;
           if (size < 0.01) size = 0.01; // Floor at minimum lot
@@ -6223,7 +6240,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Break-even
           breakEvenEnabled: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
-          breakEvenOffsetPips: pairConfig.breakEvenOffsetPips,
+          breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
           breakEvenActivated: false,
           // Partial TP
           partialTPEnabled: pairConfig.partialTPEnabled,
@@ -7042,13 +7059,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
                      // Circuit breaker: record failure
                      const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
-                     brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
+                     brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
                   // Circuit breaker: record transient failure
-                  brokerHealthMap[conn.id] = updateHealth(connHealth, {
+                  brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), {
                     connectionId: conn.id, success: false, latencyMs: 0,
                     error: connErr?.message || "unknown", isTransient: true,
                   });
@@ -7109,8 +7126,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
             tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
             entryPrice: analysis.lastPrice,
-            stopLoss: analysis.stopLoss,
-            takeProfit: analysis.takeProfit,
+            stopLoss: analysis.stopLoss ?? undefined,
+            takeProfit: analysis.takeProfit ?? undefined,
             rrRatio: analysis.stopLoss && analysis.takeProfit
               ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
               : undefined,
@@ -7136,12 +7153,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
+            const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
             // Entry at the 50% of the breaker zone (OTE within the zone)
             const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
             // SL beyond the far boundary of the breaker zone
             const breakerSL = breakerDir === "long"
-              ? breaker.entryZone.low - (adjustedSlBuffer * spec.pipSize)
-              : breaker.entryZone.high + (adjustedSlBuffer * spec.pipSize);
+              ? breaker.entryZone.low - (adjustedSlBuffer * breakerSpec.pipSize)
+              : breaker.entryZone.high + (adjustedSlBuffer * breakerSpec.pipSize);
             const breakerRisk = Math.abs(breakerEntry - breakerSL);
             const breakerTP = breakerDir === "long"
               ? breakerEntry + breakerRisk * config.tpRatio
@@ -7157,10 +7175,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const breakerRR = Math.abs(breakerTP - breakerEntry) / breakerRisk;
             if (breakerRR < (config.minRiskReward ?? 1.0)) continue;
 
-            // Size calculation
+            // Size calculation (breaker uses half risk, no vol/prop-firm context)
             const breakerSizing = computePositionSize(
               { balance, riskPercent: pairConfig.riskPerTrade * 0.5, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
-              undefined, volCtx, propFirmCtx,
+              undefined, undefined, undefined,
             );
             let breakerSize = Math.max(breakerSizing.lots, 0.01);
 
@@ -7199,7 +7217,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               signal_score: breaker.confidence * 100,
               setup_type: "breaker_retest",
               setup_confidence: breaker.confidence,
-              exit_flags: exitFlags,
+              exit_flags: {
+                trailingStopEnabled: pairConfig.trailingStopEnabled,
+                trailingStopPips: pairConfig.trailingStopPips,
+                trailingStopActivation: pairConfig.trailingStopActivation,
+                trailingStopActivated: false,
+                trailingStopLevel: null,
+                breakEvenEnabled: pairConfig.breakEvenEnabled,
+                breakEvenPips: pairConfig.breakEvenPips,
+                breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
+                breakEvenActivated: false,
+                partialTPEnabled: pairConfig.partialTPEnabled,
+                partialTPPercent: pairConfig.partialTPPercent,
+                partialTPLevel: pairConfig.partialTPLevel,
+                partialTPActivated: false,
+                maxHoldEnabled: pairConfig.maxHoldEnabled,
+                maxHoldHours: pairConfig.maxHoldHours,
+                tpRatio: pairConfig.tpRatio,
+              },
               placed_at: new Date().toISOString(),
             });
 
@@ -7232,8 +7267,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
               tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
               entryPrice: analysis.lastPrice,
-              stopLoss: analysis.stopLoss,
-              takeProfit: analysis.takeProfit,
+              stopLoss: analysis.stopLoss ?? undefined,
+              takeProfit: analysis.takeProfit ?? undefined,
               rrRatio: analysis.stopLoss && analysis.takeProfit
                 ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
                 : undefined,
