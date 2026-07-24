@@ -181,6 +181,32 @@ interface BacktestStats {
   netPnl: number;
 }
 
+interface WalkForwardFold {
+  fold: number;
+  startDate: string;
+  endDate: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  pnl: number;
+  pnlPips: number;
+  profitFactor: number;
+  maxDrawdownPct: number;
+  expectancy: number;
+}
+
+interface WalkForwardSummary {
+  folds: WalkForwardFold[];
+  consistencyScore: number;  // profitable folds / total folds
+  verdict: "robust" | "moderate" | "fragile";
+  winRateStdDev: number;
+  avgWinRate: number;
+  bestFold: number;   // fold index
+  worstFold: number;  // fold index
+  pnlStdDev: number;
+}
+
 interface OpenPosition {
   id: string;
   symbol: string;
@@ -1065,6 +1091,114 @@ function calculateStats(trades: BacktestTrade[], startingBalance: number, months
     consecutiveLosses: maxConsLosses,
     totalCommission,
     netPnl: totalPnl,
+  };
+}
+
+// ─── Walk-Forward Validation ───────────────────────────────────────
+function computeWalkForward(
+  trades: BacktestTrade[],
+  startMs: number,
+  endMs: number,
+  foldCount: number,
+  startingBalance: number,
+): WalkForwardSummary {
+  const foldDuration = (endMs - startMs) / foldCount;
+
+  // Build fold boundaries
+  const foldBoundaries: { start: number; end: number }[] = [];
+  for (let i = 0; i < foldCount; i++) {
+    foldBoundaries.push({
+      start: startMs + i * foldDuration,
+      end: startMs + (i + 1) * foldDuration,
+    });
+  }
+
+  // Assign trades to folds by entryTime
+  const foldTrades: BacktestTrade[][] = Array.from({ length: foldCount }, () => []);
+  for (const trade of trades) {
+    const tradeMs = new Date(trade.entryTime).getTime();
+    const foldIndex = Math.min(Math.floor((tradeMs - startMs) / foldDuration), foldCount - 1);
+    if (foldIndex >= 0 && foldIndex < foldCount) {
+      foldTrades[foldIndex].push(trade);
+    }
+  }
+
+  // Compute per-fold stats
+  const folds: WalkForwardFold[] = foldBoundaries.map((boundary, i) => {
+    const ft = foldTrades[i];
+    const fullTrades = ft.filter(t => !t.id.includes("_partial"));
+    const wins = fullTrades.filter(t => t.pnl > 0);
+    const losses = fullTrades.filter(t => t.pnl <= 0);
+    const pnl = ft.reduce((s, t) => s + t.pnl, 0);
+    const pnlPips = ft.reduce((s, t) => s + t.pnlPips, 0);
+    const grossProfit = wins.reduce((s, t) => s + t.pnl, 0);
+    const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+
+    // Max drawdown for this fold
+    let peak = startingBalance;
+    let maxDDPct = 0;
+    let equity = startingBalance;
+    for (const t of ft) {
+      equity += t.pnl;
+      if (equity > peak) peak = equity;
+      const ddPct = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+      if (ddPct > maxDDPct) maxDDPct = ddPct;
+    }
+
+    return {
+      fold: i,
+      startDate: new Date(boundary.start).toISOString().slice(0, 10),
+      endDate: new Date(boundary.end).toISOString().slice(0, 10),
+      trades: fullTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: fullTrades.length > 0 ? (wins.length / fullTrades.length) * 100 : 0,
+      pnl,
+      pnlPips,
+      profitFactor: grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0,
+      maxDrawdownPct: maxDDPct,
+      expectancy: fullTrades.length > 0 ? pnl / fullTrades.length : 0,
+    };
+  });
+
+  // Consistency score = profitable folds / total folds
+  const profitableFolds = folds.filter(f => f.pnl > 0).length;
+  const consistencyScore = foldCount > 0 ? profitableFolds / foldCount : 0;
+
+  // Verdict classification
+  const verdict: "robust" | "moderate" | "fragile" =
+    consistencyScore >= 0.75 ? "robust" :
+    consistencyScore >= 0.50 ? "moderate" : "fragile";
+
+  // Win rate standard deviation
+  const winRates = folds.map(f => f.winRate);
+  const avgWinRate = winRates.length > 0 ? winRates.reduce((a, b) => a + b, 0) / winRates.length : 0;
+  const winRateVariance = winRates.length > 1
+    ? winRates.reduce((sum, wr) => sum + (wr - avgWinRate) ** 2, 0) / winRates.length
+    : 0;
+  const winRateStdDev = Math.sqrt(winRateVariance);
+
+  // PnL standard deviation
+  const pnls = folds.map(f => f.pnl);
+  const avgPnl = pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : 0;
+  const pnlVariance = pnls.length > 1
+    ? pnls.reduce((sum, p) => sum + (p - avgPnl) ** 2, 0) / pnls.length
+    : 0;
+  const pnlStdDev = Math.sqrt(pnlVariance);
+
+  // Best/worst fold by PnL
+  const bestFold = folds.reduce((a, b) => a.pnl > b.pnl ? a : b, folds[0]).fold;
+  const worstFold = folds.reduce((a, b) => a.pnl < b.pnl ? a : b, folds[0]).fold;
+
+  return {
+    folds,
+    consistencyScore,
+    verdict,
+    winRateStdDev,
+    avgWinRate,
+    bestFold,
+    worstFold,
+    pnlStdDev,
   };
 }
 
@@ -2575,6 +2709,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     await updateProgress(92, "Calculating statistics...");
     const stats = calculateStats(allTrades, startingBalance, monthsSpan);
 
+    // ── Walk-Forward Validation ──
+    let walkForward: WalkForwardSummary | null = null;
+    if (walkForwardFolds >= 2 && allTrades.length >= walkForwardFolds) {
+      await updateProgress(93, `Running walk-forward validation (${walkForwardFolds} folds)...`);
+      walkForward = computeWalkForward(allTrades, startMs, endMs, walkForwardFolds, startingBalance);
+      console.log(`[backtest:${runId}] Walk-forward: ${walkForward.verdict} (consistency ${(walkForward.consistencyScore * 100).toFixed(0)}%, WR σ=${walkForward.winRateStdDev.toFixed(1)}%)`);
+    }
+
     // ── Research Analytics ──
     let researchAnalytics: ResearchAnalytics | null = null;
     if (researchMode) {
@@ -2607,6 +2749,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
       ),
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
+      walkForward,
       researchAnalytics: researchAnalytics ? {
         gateEffectiveness: researchAnalytics.gateEffectiveness,
         factorEdge: researchAnalytics.factorEdge,
@@ -2623,7 +2766,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       status: "completed",
       completed_at: new Date().toISOString(),
       progress: 100,
-      progress_message: `Done: ${stats.totalTrades} trades, ${stats.winRate.toFixed(1)}% WR, PF ${stats.profitFactor.toFixed(2)}`,
+      progress_message: walkForward
+        ? `Done: ${stats.totalTrades} trades, ${stats.winRate.toFixed(1)}% WR, PF ${stats.profitFactor.toFixed(2)} | WF: ${walkForward.verdict} (${(walkForward.consistencyScore * 100).toFixed(0)}%)`
+        : `Done: ${stats.totalTrades} trades, ${stats.winRate.toFixed(1)}% WR, PF ${stats.profitFactor.toFixed(2)}`,
       results: result,
     }).eq("id", runId);
 
