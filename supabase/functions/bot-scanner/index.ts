@@ -87,6 +87,7 @@ import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
+import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import {
   detectSession as sharedDetectSession,
   toNYTime as sharedToNYTime,
@@ -5818,6 +5819,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.warn(`[scan ${scanCycleId}] News alignment check error (non-fatal): ${naErr?.message}`);
         }
       }
+      // ── SMC Video Enhancements (opt-in) ──────────────────────────────────────
+      // Runs additional analysis modules when config.smcEnhancements is non-null.
+      // Results are APPENDED to existing gates/factors — never replacing.
+      let smcEnhResult: SMCEnhancementsResult | null = null;
+      if (config.smcEnhancements) {
+        try {
+          const zoneHigh = analysis.impulseZone?.high ?? analysis.pd?.premiumStart ?? null;
+          const zoneLow = analysis.impulseZone?.low ?? analysis.pd?.discountEnd ?? null;
+          smcEnhResult = runSMCEnhancements(
+            candles,
+            dailyCandles.length >= 10 ? dailyCandles : null,
+            analysis.orderBlocks || [],
+            analysis.direction as "long" | "short" | null,
+            zoneHigh,
+            zoneLow,
+            analysis.lastPrice ?? null,
+            config.smcEnhancements,
+          );
+          // Append supplementary gates
+          if (smcEnhResult.additionalGates.length > 0) {
+            gates.push(...smcEnhResult.additionalGates);
+          }
+          // Attach enhancement factors to analysis for dashboard visibility
+          if (smcEnhResult.additionalFactors.length > 0) {
+            (analysis as any).smcEnhancementFactors = smcEnhResult.additionalFactors;
+          }
+          // Attach full result for downstream use (TP override, breaker entries)
+          (analysis as any).smcEnhancements = smcEnhResult;
+        } catch (enhErr: any) {
+          console.warn(`[scan ${scanCycleId}] SMC enhancements error (non-fatal): ${enhErr?.message}`);
+        }
+      }
+
       const allPassed = gates.every(g => g.passed);
       // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
       // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,

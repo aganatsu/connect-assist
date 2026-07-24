@@ -24,6 +24,38 @@
 
 import { normalizeSessionFilter } from "./sessions.ts";
 
+/**
+ * SMC Video Enhancement configuration — opt-in module toggles.
+ * When the entire object is null (default), no enhancement modules run.
+ * When provided, only modules with their flag set to true will execute.
+ */
+export interface SMCEnhancementsConfig {
+  /** Enable price-action phase detection (consolidation/expansion/trend) */
+  enablePhaseDetection?: boolean;
+  /** Enable breaker block detection (break & retest entry model) */
+  enableBreakerBlocks?: boolean;
+  /** Enable zone lifecycle v2 (close-based invalidation, multi-retest) */
+  enableZoneLifecycleV2?: boolean;
+  /** Enable 3-point Fibonacci extension TP (measured from entry) */
+  enableFib3PointTP?: boolean;
+  /** Enable trendline liquidity analysis (4th-touch trap, broken TL bonus) */
+  enableTrendlineLiquidity?: boolean;
+  /** Enable monthly timeframe structural containment */
+  enableMonthlyContainment?: boolean;
+  /** Max retests before zone is exhausted (zone lifecycle v2). Default: 3 */
+  maxZoneRetests?: number;
+  /** Confidence decay per retest (0-1). Default: 0.3 */
+  retestDecay?: number;
+  /** Min displacement ATR multiple for breaker detection. Default: 1.5 */
+  breakerMinDisplacementATR?: number;
+  /** Fib extension levels for 3-point TP. Default: [1.272, 1.618, 2.0] */
+  fib3PointLevels?: number[];
+  /** Min trendline touches to qualify. Default: 3 */
+  trendlineMinTouches?: number;
+  /** Consolidation detection threshold (regime score). Default: 4 */
+  consolidationThreshold?: number;
+}
+
 // ─── Runtime Defaults ─────────────────────────────────────────────────
 // These are the FLAT runtime defaults used by the scanning/backtesting engine.
 // They represent the values used when no config is saved or a field is missing.
@@ -288,6 +320,11 @@ export const RUNTIME_DEFAULTS = {
   // When a symbol has an entry here, those fields override the global config
   // for that symbol only. Non-overridden fields fall through to global values.
   pairGateOverrides: {} as Record<string, PairGateOverride>,
+
+  // ── SMC Video Enhancements (opt-in) ──
+  // When non-null, enables additional SMC analysis modules.
+  // All sub-flags default to false — user must explicitly enable each module.
+  smcEnhancements: null as SMCEnhancementsConfig | null,
 
   // ── Per-pair scratch (set during scan) ──
   _currentSymbol: "" as string,
@@ -637,6 +674,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── Per-Pair Gate Overrides ──
     pairGateOverrides: raw.pairGateOverrides ?? RUNTIME_DEFAULTS.pairGateOverrides,
+
+    // ── SMC Video Enhancements ──
+    smcEnhancements: raw.smcEnhancements ?? strategy.smcEnhancements ?? RUNTIME_DEFAULTS.smcEnhancements,
 
     // ── Per-pair scratch ──
     _currentSymbol: "",
