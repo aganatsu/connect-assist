@@ -383,7 +383,7 @@ function getCorrelationGroup(symbol: string): string | null {
   return null;
 }
 
-// ─── Safety Gates (all 22 gates — mirrors bot-scanner runSafetyGates exactly) ──
+// ─── Safety Gates (29 gates + 2 pre-gates — mirrors bot-scanner runSafetyGates) ──
 function runBacktestSafetyGates(
   symbol: string,
   direction: "long" | "short",
@@ -399,6 +399,12 @@ function runBacktestSafetyGates(
   fotsiResult: FOTSIResult | null,
   smtResult: any,
   session: SessionResult,
+  directionVerdict: DirectionVerdictResult | null = null,
+  ictHTFResult: ICTHTFResult | null = null,
+  ictMSSResult: MSSValidationResult | null = null,
+  ictJudasResult: JudasSwingResult | null = null,
+  ictFVGCounts: { invalidated: number; exhausted: number; total: number; valid: number } | null = null,
+  ictKZResult: ICTKillZoneResult | null = null,
 ): { passed: boolean; reason: string }[] {
   const gates: { passed: boolean; reason: string }[] = [];
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -568,8 +574,15 @@ function runBacktestSafetyGates(
     }
   }
 
-  // Gate 17: HTF Bias Alignment
-  if (config.htfBiasRequired && dailyCandles && dailyCandles.length >= 10) {
+  // Gate 17: Direction Verdict (replaces legacy HTF Bias when available)
+  if (directionVerdict) {
+    if (directionVerdict.shouldBlock) {
+      gates.push({ passed: false, reason: `Direction BLOCKED: ${directionVerdict.blockReason} (conf: ${directionVerdict.confidence}%, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    } else {
+      gates.push({ passed: true, reason: `Direction OK: ${directionVerdict.verdict.toUpperCase()} (conf: ${directionVerdict.confidence}%, adj: ${directionVerdict.scoreAdjustment >= 0 ? "+" : ""}${directionVerdict.scoreAdjustment.toFixed(2)}, agreement: ${(directionVerdict.agreement * 100).toFixed(0)}%)` });
+    }
+  } else if (config.htfBiasRequired && dailyCandles && dailyCandles.length >= 10) {
+    // Legacy fallback: original HTF bias logic when verdict unavailable
     const htfStructure = analyzeMarketStructure(dailyCandles);
     const htfTrend = htfStructure.trend;
     const entryBias = direction === "long" ? "bullish" : "bearish";
@@ -577,16 +590,16 @@ function runBacktestSafetyGates(
       gates.push({
         passed: htfTrend === entryBias,
         reason: htfTrend === entryBias
-          ? `HTF bias aligned (hard veto): Daily ${htfTrend}`
-          : `HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked`,
+          ? `[legacy] HTF bias aligned (hard veto): Daily ${htfTrend}`
+          : `[legacy] HTF HARD VETO: Daily is ${htfTrend}, ${entryBias} entry blocked`,
       });
     } else {
       const blocked = htfTrend !== "ranging" && htfTrend !== entryBias;
       gates.push({
         passed: !blocked,
         reason: blocked
-          ? `HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}`
-          : `HTF bias aligned: Daily ${htfTrend}`,
+          ? `[legacy] HTF bias mismatch: Daily is ${htfTrend}, entry is ${entryBias}`
+          : `[legacy] HTF bias aligned: Daily ${htfTrend}`,
       });
     }
   } else {
@@ -659,6 +672,87 @@ function runBacktestSafetyGates(
     } else {
       gates.push({ passed: true, reason: "SMT aligned or neutral" });
     }
+  }
+
+  // Gate 23: Structural Conviction — blocks when conviction-TF shows zero structural support
+  if (!config.structuralConvictionEnabled) {
+    gates.push({ passed: true, reason: `Structural Conviction: DISABLED by config` });
+  } else {
+    // Use entry-TF structure (conviction-TF candles not separately fetched in backtest)
+    const s2f = analysis.structure?.structureToFractal;
+    const s2fOverall = s2f?.overallRate ?? 1;
+    const bullRate = s2f?.bullishRate ?? 0.5;
+    const bearRate = s2f?.bearishRate ?? 0.5;
+    const directionRate = direction === "long" ? bullRate : bearRate;
+    const oppositeRate = direction === "long" ? bearRate : bullRate;
+    const s2fBlockThreshold = direction === "short"
+      ? (config.structuralConvictionS2FShort ?? 0.25)
+      : (config.structuralConvictionS2FLong ?? 0.25);
+    const oppositeBlockThreshold = direction === "short"
+      ? (config.structuralConvictionOppositeShort ?? 0.4)
+      : (config.structuralConvictionOppositeLong ?? 0.4);
+
+    if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
+    } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+    } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
+    } else {
+      gates.push({ passed: true, reason: `Structural Conviction: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
+    }
+  }
+
+  // Gate 24: Reaction Confirmation in Ranging Markets
+  {
+    const entryTrend = analysis.structure?.trend;
+    if (entryTrend === "ranging") {
+      const factors = analysis.factors || [];
+      const reactionFactors = [
+        "Displacement",
+        "Reversal Candle",
+        "Liquidity Sweep",
+        "AMD Phase",
+      ];
+      const hasReaction = factors.some((f: any) =>
+        f.present && reactionFactors.some((rf: string) => f.name?.includes(rf))
+      );
+      if (!hasReaction) {
+        gates.push({ passed: false, reason: `Reaction Confirmation BLOCKED: Ranging market with no reaction factor (need Displacement, Reversal, Sweep, or AMD)` });
+      } else {
+        const presentReactions = factors
+          .filter((f: any) => f.present && reactionFactors.some((rf: string) => f.name?.includes(rf)))
+          .map((f: any) => f.name);
+        gates.push({ passed: true, reason: `Reaction confirmed in ranging market: ${presentReactions.join(", ")}` });
+      }
+    } else {
+      gates.push({ passed: true, reason: `Reaction gate skipped: trend is ${entryTrend} (not ranging)` });
+    }
+  }
+
+  // Gate 25: ICT HTF Hard Gate — blocks when weekly bias or containment fails
+  if (config.ictHTFGateMode === "hard" && ictHTFResult && !ictHTFResult.passed) {
+    gates.push({ passed: false, reason: `ICT HTF BLOCKED: ${ictHTFResult.reason}` });
+  }
+
+  // Gate 26: ICT Displacement MSS Hard Gate — blocks when MSS lacks displacement
+  if (config.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.isValid) {
+    gates.push({ passed: false, reason: `ICT MSS BLOCKED: ${ictMSSResult.reason}` });
+  }
+
+  // Gate 27: ICT Judas Swing Hard Gate — blocks when no liquidity sweep before MSS
+  if (config.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.found) {
+    gates.push({ passed: false, reason: `ICT Judas BLOCKED: ${ictJudasResult.reason}` });
+  }
+
+  // Gate 28: ICT FVG Invalidation Hard Gate — blocks when all FVGs invalidated
+  if (config.ictFVGInvalidationGateMode === "hard" && ictFVGCounts && ictFVGCounts.valid === 0 && ictFVGCounts.total > 0) {
+    gates.push({ passed: false, reason: `ICT FVG BLOCKED: All ${ictFVGCounts.total} FVGs invalidated/exhausted (${ictFVGCounts.invalidated} closed, ${ictFVGCounts.exhausted} exhausted)` });
+  }
+
+  // Gate 29: ICT Kill Zone Hard Gate — blocks when outside all kill zones
+  if (config.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.isKillZone) {
+    gates.push({ passed: false, reason: `ICT KZ BLOCKED: ${ictKZResult.reason}` });
   }
 
   return gates;
@@ -2202,13 +2296,49 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           continue;
         }
 
+        // ── Zone Score Gate (pre-gate: reject weak impulse zones) ──
+        if (izData?.bestZone) {
+          const minZoneScore = config.minZoneScore ?? 4;
+          if (izData.bestZone.totalScore < minZoneScore) {
+            diagnostics.skippedGateBlocked++;
+            const label = "Zone Score Gate";
+            diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
+            continue;
+          }
+        }
+
+        // ── Minimum TP Distance Gate (pre-gate: reject trades where TP is too small) ──
+        {
+          const MIN_TP_PIPS: Record<string, number> = {
+            "GBP/JPY": 30, "EUR/JPY": 25, "USD/JPY": 20,
+            "GBP/USD": 20, "EUR/USD": 15, "AUD/USD": 15, "NZD/USD": 15,
+            "USD/CAD": 15, "USD/CHF": 15, "EUR/GBP": 12,
+            "XAU/USD": 40, "BTC/USD": 100,
+          };
+          const minTpPips = MIN_TP_PIPS[symbol] ?? 12;
+          const actualTpPips = Math.abs(analysis.takeProfit - analysis.lastPrice) / spec.pipSize;
+          if (actualTpPips < minTpPips) {
+            diagnostics.skippedGateBlocked++;
+            const label = "Min TP Distance";
+            diagnostics.gateBlockReasons[label] = (diagnostics.gateBlockReasons[label] || 0) + 1;
+            continue;
+          }
+        }
+
         diagnostics.signalsGenerated++;
 
         // ── Run Safety Gates ──
+        const ictFVGCounts = (ictFVGTotalCount > 0) ? {
+          invalidated: ictFVGInvalidatedCount,
+          exhausted: ictFVGExhaustedCount,
+          total: ictFVGTotalCount,
+          valid: ictFVGTotalCount - ictFVGInvalidatedCount - ictFVGExhaustedCount,
+        } : null;
         const gates = runBacktestSafetyGates(
           symbol, analysis.direction, analysis, config, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
           allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
+          directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
 
         const failedGates = gates.filter(g => !g.passed);
