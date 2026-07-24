@@ -129,7 +129,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
     const o = overrides[symbol];
     return o && Object.keys(o).length > 0;
   };
-  const enabledInstruments = config.instruments?.enabledPairs || INSTRUMENTS.map((i: any) => i.symbol);
+  const enabledInstruments = config.instruments?.enabled || INSTRUMENTS.map((i: any) => i.symbol);
 
   return (
     <div className="space-y-3">
@@ -163,7 +163,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
           </FieldGroup>
         )}
         <div className="border-t border-border pt-3 space-y-3">
-          <ToggleField label="Score Normalization" description="Normalize raw score to 0-100 scale" checked={config.strategy?.normalizationEnabled ?? true} onChange={v => updateField('strategy', 'normalizationEnabled', v)} />
+          <ToggleField label="Score Normalization" description="Normalize raw score to 0-100 scale" checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
           <ToggleField label="Thesis Conviction" description="Bonus/penalty based on thesis alignment" checked={config.strategy?.thesisConvictionEnabled ?? false} onChange={v => updateField('strategy', 'thesisConvictionEnabled', v)} />
         </div>
       </CollapsibleSection>

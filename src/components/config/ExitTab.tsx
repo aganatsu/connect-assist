@@ -18,17 +18,17 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={true}
       >
         <FieldGroup label="SL Method" description="How the stop loss is calculated">
-          <Select value={config.exit?.slMethod ?? "structure"} onValueChange={v => updateField('exit', 'slMethod', v)}>
+          <Select value={config.exit?.stopLossMethod ?? config.exit?.slMethod ?? "structure"} onValueChange={v => { updateField('exit', 'stopLossMethod', v); updateField('exit', 'slMethod', v); }}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="structure">Structure — Beyond swing point</SelectItem>
               <SelectItem value="below_ob">Below OB — Beyond order block boundary</SelectItem>
-              <SelectItem value="atr">ATR — Fixed ATR multiple</SelectItem>
+              <SelectItem value="atr_based">ATR — Fixed ATR multiple</SelectItem>
               <SelectItem value="fixed_pips">Fixed Pips</SelectItem>
             </SelectContent>
           </Select>
         </FieldGroup>
-        {config.exit?.slMethod === "atr" && (
+        {(config.exit?.stopLossMethod ?? config.exit?.slMethod) === "atr_based" && (
           <FieldGroup label="ATR Multiple" description="SL distance as multiple of ATR">
             <div className="flex items-center gap-4">
               <Slider value={[config.exit?.slATRMultiple ?? 1.5]} onValueChange={v => updateField('exit', 'slATRMultiple', v[0])} min={0.5} max={4.0} step={0.25} className="flex-1" />
@@ -36,9 +36,9 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
           </FieldGroup>
         )}
-        {config.exit?.slMethod === "fixed_pips" && (
+        {(config.exit?.stopLossMethod ?? config.exit?.slMethod) === "fixed_pips" && (
           <FieldGroup label="Fixed SL (pips)">
-            <Input type="number" value={config.exit?.slFixedPips ?? 20} onChange={e => updateField('exit', 'slFixedPips', parseFloat(e.target.value) || 20)} min={5} max={200} step={5} className="h-9 text-sm" />
+            <Input type="number" value={config.exit?.fixedSLPips ?? 25} onChange={e => updateField('exit', 'fixedSLPips', parseFloat(e.target.value) || 25)} min={5} max={200} step={5} className="h-9 text-sm" />
           </FieldGroup>
         )}
         <FieldGroup label="SL Buffer (pips)" description="Extra buffer beyond the calculated SL level">
@@ -64,27 +64,27 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         defaultOpen={true}
       >
         <FieldGroup label="TP Method" description="How take profit is calculated">
-          <Select value={config.exit?.tpMethod ?? "rr_ratio"} onValueChange={v => updateField('exit', 'tpMethod', v)}>
+          <Select value={config.exit?.takeProfitMethod ?? config.exit?.tpMethod ?? "rr_ratio"} onValueChange={v => { updateField('exit', 'takeProfitMethod', v); updateField('exit', 'tpMethod', v); }}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="rr_ratio">R:R Ratio — Fixed risk/reward</SelectItem>
               <SelectItem value="next_level">Next Level — Zone-to-zone TP</SelectItem>
               <SelectItem value="fib_extension">Fib Extension — From impulse swing</SelectItem>
               <SelectItem value="fib_extension_3pt">Fib Extension 3-Point — From entry</SelectItem>
-              <SelectItem value="atr">ATR Multiple</SelectItem>
+              <SelectItem value="atr_multiple">ATR Multiple</SelectItem>
               <SelectItem value="structure">Structure — Next HTF level</SelectItem>
             </SelectContent>
           </Select>
         </FieldGroup>
-        {config.exit?.tpMethod === "rr_ratio" && (
+        {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod ?? "rr_ratio") === "rr_ratio" && (
           <FieldGroup label="R:R Target" description="Target reward as multiple of risk">
             <div className="flex items-center gap-4">
-              <Slider value={[config.exit?.rrTarget ?? 3.0]} onValueChange={v => updateField('exit', 'rrTarget', v[0])} min={1.0} max={10.0} step={0.5} className="flex-1" />
-              <span className="text-sm font-mono font-bold text-primary w-12 text-right">{(config.exit?.rrTarget ?? 3.0).toFixed(1)}R</span>
+              <Slider value={[config.exit?.tpRRRatio ?? 2.0]} onValueChange={v => updateField('exit', 'tpRRRatio', v[0])} min={1.0} max={10.0} step={0.5} className="flex-1" />
+              <span className="text-sm font-mono font-bold text-primary w-12 text-right">{(config.exit?.tpRRRatio ?? 2.0).toFixed(1)}R</span>
             </div>
           </FieldGroup>
         )}
-        {config.exit?.tpMethod === "fib_extension_3pt" && (
+        {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod) === "fib_extension_3pt" && (
           <FieldGroup label="Primary TP Level" description="Which fib extension to target">
             <Select value={String(config.exit?.fib3ptLevel ?? -0.272)} onValueChange={v => updateField('exit', 'fib3ptLevel', parseFloat(v))}>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
@@ -96,34 +96,30 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             </Select>
           </FieldGroup>
         )}
-        <FieldGroup label="Min R:R" description="Minimum R:R to accept a trade — skip if TP/SL ratio is below this">
-          <div className="flex items-center gap-4">
-            <Slider value={[config.exit?.minRR ?? 2.0]} onValueChange={v => updateField('exit', 'minRR', v[0])} min={1.0} max={5.0} step={0.5} className="flex-1" />
-            <span className="text-sm font-mono font-bold w-12 text-right">{(config.exit?.minRR ?? 2.0).toFixed(1)}R</span>
-          </div>
-        </FieldGroup>
+        {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod) === "atr_multiple" && (
+          <FieldGroup label="TP ATR Multiple" description="TP distance as multiple of ATR">
+            <div className="flex items-center gap-4">
+              <Slider value={[config.exit?.tpATRMultiple ?? 2.0]} onValueChange={v => updateField('exit', 'tpATRMultiple', v[0])} min={1.0} max={5.0} step={0.5} className="flex-1" />
+              <span className="text-sm font-mono font-bold w-12 text-right">{(config.exit?.tpATRMultiple ?? 2.0).toFixed(1)}×</span>
+            </div>
+          </FieldGroup>
+        )}
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Multi-TP (Partial Exits)</p>
-          <ToggleField label="Enable Multi-TP" description="Take partial profits at multiple levels" checked={config.exit?.multiTPEnabled ?? false} onChange={v => updateField('exit', 'multiTPEnabled', v)} />
-          {config.exit?.multiTPEnabled && (
-            <div className="grid grid-cols-3 gap-3">
-              <FieldGroup label="TP1 (R)">
-                <Input type="number" value={config.exit?.tp1R ?? 1.5} onChange={e => updateField('exit', 'tp1R', parseFloat(e.target.value) || 1.5)} step={0.5} min={0.5} className="h-9 text-sm" />
+          <ToggleField label="Enable Partial TP" description="Close a portion at an R-multiple target, let the rest run" checked={config.exit?.partialTP ?? config.exit?.partialTPEnabled ?? false} onChange={v => { updateField('exit', 'partialTP', v); updateField('exit', 'partialTPEnabled', v); }} />
+          {(config.exit?.partialTP ?? config.exit?.partialTPEnabled) && (
+            <div className="grid grid-cols-2 gap-3">
+              <FieldGroup label="Close %">
+                <div className="flex items-center gap-3">
+                  <Slider value={[config.exit?.partialTPPercent ?? 50]} onValueChange={v => updateField('exit', 'partialTPPercent', v[0])} min={10} max={90} step={5} className="flex-1" />
+                  <span className="text-[11px] font-mono w-8 text-right">{config.exit?.partialTPPercent ?? 50}%</span>
+                </div>
               </FieldGroup>
-              <FieldGroup label="TP2 (R)">
-                <Input type="number" value={config.exit?.tp2R ?? 3.0} onChange={e => updateField('exit', 'tp2R', parseFloat(e.target.value) || 3.0)} step={0.5} min={1.0} className="h-9 text-sm" />
-              </FieldGroup>
-              <FieldGroup label="TP3 (R)">
-                <Input type="number" value={config.exit?.tp3R ?? 5.0} onChange={e => updateField('exit', 'tp3R', parseFloat(e.target.value) || 5.0)} step={0.5} min={1.5} className="h-9 text-sm" />
-              </FieldGroup>
-              <FieldGroup label="TP1 Close %">
-                <Input type="number" value={config.exit?.tp1Pct ?? 40} onChange={e => updateField('exit', 'tp1Pct', parseInt(e.target.value) || 40)} min={10} max={90} step={10} className="h-9 text-sm" />
-              </FieldGroup>
-              <FieldGroup label="TP2 Close %">
-                <Input type="number" value={config.exit?.tp2Pct ?? 30} onChange={e => updateField('exit', 'tp2Pct', parseInt(e.target.value) || 30)} min={10} max={90} step={10} className="h-9 text-sm" />
-              </FieldGroup>
-              <FieldGroup label="TP3 Close %">
-                <Input type="number" value={config.exit?.tp3Pct ?? 30} onChange={e => updateField('exit', 'tp3Pct', parseInt(e.target.value) || 30)} min={10} max={90} step={10} className="h-9 text-sm" />
+              <FieldGroup label="At R-level">
+                <div className="flex items-center gap-3">
+                  <Slider value={[config.exit?.partialTPLevel ?? 1.0]} onValueChange={v => updateField('exit', 'partialTPLevel', v[0])} min={0.3} max={5} step={0.1} className="flex-1" />
+                  <span className="text-[11px] font-mono w-8 text-right">{(config.exit?.partialTPLevel ?? 1.0).toFixed(1)}R</span>
+                </div>
               </FieldGroup>
             </div>
           )}
@@ -141,17 +137,20 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         {/* Break-Even */}
         <div className="space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Break-Even</p>
-          <ToggleField label="Auto Break-Even" description="Move SL to entry after reaching target" checked={config.management?.breakEvenEnabled ?? true} onChange={v => updateField('management', 'breakEvenEnabled', v)} />
-          {(config.management?.breakEvenEnabled ?? true) && (
+          <ToggleField label="Auto Break-Even" description="Move SL to entry after reaching target" checked={config.exit?.breakEven ?? config.exit?.breakEvenEnabled ?? false} onChange={v => { updateField('exit', 'breakEven', v); updateField('exit', 'breakEvenEnabled', v); }} />
+          {(config.exit?.breakEven ?? config.exit?.breakEvenEnabled) && (
             <div className="grid grid-cols-2 gap-3">
-              <FieldGroup label="Trigger (R)">
+              <FieldGroup label="Trigger (pips profit)">
                 <div className="flex items-center gap-3">
-                  <Slider value={[config.management?.breakEvenTriggerR ?? 1.0]} onValueChange={v => updateField('management', 'breakEvenTriggerR', v[0])} min={0.5} max={3.0} step={0.25} className="flex-1" />
-                  <span className="text-[11px] font-mono w-8 text-right">{(config.management?.breakEvenTriggerR ?? 1.0).toFixed(2)}R</span>
+                  <Slider value={[config.exit?.breakEvenTriggerPips ?? 20]} onValueChange={v => updateField('exit', 'breakEvenTriggerPips', v[0])} min={1} max={100} step={1} className="flex-1" />
+                  <span className="text-[11px] font-mono w-8 text-right">{config.exit?.breakEvenTriggerPips ?? 20}p</span>
                 </div>
               </FieldGroup>
-              <FieldGroup label="Lock Profit (pips)">
-                <Input type="number" value={config.management?.breakEvenLockPips ?? 2} onChange={e => updateField('management', 'breakEvenLockPips', parseFloat(e.target.value) || 0)} min={0} max={20} step={1} className="h-9 text-sm" />
+              <FieldGroup label="Offset (pips)">
+                <div className="flex items-center gap-3">
+                  <Slider value={[config.exit?.breakEvenOffsetPips ?? 3]} onValueChange={v => updateField('exit', 'breakEvenOffsetPips', v[0])} min={0} max={20} step={1} className="flex-1" />
+                  <span className="text-[11px] font-mono w-8 text-right">{config.exit?.breakEvenOffsetPips ?? 3}p</span>
+                </div>
               </FieldGroup>
             </div>
           )}
@@ -160,53 +159,49 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         {/* Trailing Stop */}
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Trailing Stop</p>
-          <ToggleField label="Enable Trailing" description="Trail SL behind price as trade moves in profit" checked={config.management?.trailingEnabled ?? false} onChange={v => updateField('management', 'trailingEnabled', v)} />
-          {config.management?.trailingEnabled && (
+          <ToggleField label="Enable Trailing" description="Trail SL behind price as trade moves in profit" checked={config.exit?.trailingStop ?? config.exit?.trailingStopEnabled ?? false} onChange={v => { updateField('exit', 'trailingStop', v); updateField('exit', 'trailingStopEnabled', v); }} />
+          {(config.exit?.trailingStop ?? config.exit?.trailingStopEnabled) && (
             <>
-              <FieldGroup label="Trailing Method">
-                <Select value={config.management?.trailingMethod ?? "atr"} onValueChange={v => updateField('management', 'trailingMethod', v)}>
+              <FieldGroup label="Trailing Distance (pips)">
+                <div className="flex items-center gap-3">
+                  <Slider value={[config.exit?.trailingStopPips ?? 15]} onValueChange={v => updateField('exit', 'trailingStopPips', v[0])} min={1} max={100} step={1} className="flex-1" />
+                  <span className="text-[11px] font-mono w-8 text-right">{config.exit?.trailingStopPips ?? 15}p</span>
+                </div>
+              </FieldGroup>
+              <FieldGroup label="Activation" description="When trailing begins">
+                <Select value={config.exit?.trailingStopActivation ?? "after_1r"} onValueChange={v => updateField('exit', 'trailingStopActivation', v)}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="atr">ATR-based</SelectItem>
-                    <SelectItem value="structure">Structure-based (swing points)</SelectItem>
-                    <SelectItem value="fixed">Fixed distance</SelectItem>
-                    <SelectItem value="chandelier">Chandelier (ATR from high)</SelectItem>
+                    <SelectItem value="immediate">Immediate</SelectItem>
+                    <SelectItem value="after_1r">After 1R profit</SelectItem>
+                    <SelectItem value="after_1.5r">After 1.5R profit</SelectItem>
+                    <SelectItem value="after_2r">After 2R profit</SelectItem>
                   </SelectContent>
                 </Select>
               </FieldGroup>
-              <FieldGroup label="Trailing Activation (R)" description="Start trailing after this R is reached">
-                <div className="flex items-center gap-3">
-                  <Slider value={[config.management?.trailingActivationR ?? 1.5]} onValueChange={v => updateField('management', 'trailingActivationR', v[0])} min={0.5} max={5.0} step={0.25} className="flex-1" />
-                  <span className="text-[11px] font-mono w-8 text-right">{(config.management?.trailingActivationR ?? 1.5).toFixed(2)}R</span>
-                </div>
-              </FieldGroup>
-              {config.management?.trailingMethod === "atr" && (
-                <FieldGroup label="ATR Multiple" description="Trail distance as ATR multiple">
-                  <div className="flex items-center gap-3">
-                    <Slider value={[config.management?.trailingATRMultiple ?? 2.0]} onValueChange={v => updateField('management', 'trailingATRMultiple', v[0])} min={0.5} max={5.0} step={0.25} className="flex-1" />
-                    <span className="text-[11px] font-mono w-8 text-right">{(config.management?.trailingATRMultiple ?? 2.0).toFixed(1)}×</span>
-                  </div>
-                </FieldGroup>
-              )}
             </>
           )}
+        </div>
+
+        {/* Structure Invalidation */}
+        <div className="border-t border-border pt-3 space-y-3">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Structure Invalidation</p>
+          <ToggleField label="Structure Invalidation" description="Tighten SL by 50% when market structure breaks against your trade (CHoCH detected)" checked={config.exit?.structureInvalidationEnabled ?? false} onChange={v => updateField('exit', 'structureInvalidationEnabled', v)} />
         </div>
 
         {/* Time-Based Exits */}
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Time-Based Exits</p>
-          <ToggleField label="Max Trade Duration" description="Close trade after maximum time" checked={config.management?.maxDurationEnabled ?? false} onChange={v => updateField('management', 'maxDurationEnabled', v)} />
-          {config.management?.maxDurationEnabled && (
+          <ToggleField label="Max Trade Duration" description="Close trade after maximum time" checked={config.exit?.maxHoldEnabled ?? config.exit?.timeBasedExitEnabled ?? false} onChange={v => { updateField('exit', 'maxHoldEnabled', v); updateField('exit', 'timeBasedExitEnabled', v); if (!v) { updateField('exit', 'timeExitHours', 0); updateField('exit', 'maxHoldHours', 0); } }} />
+          {(config.exit?.maxHoldEnabled ?? config.exit?.timeBasedExitEnabled) && (
             <FieldGroup label="Max Duration (hours)">
-              <Input type="number" value={config.management?.maxDurationHours ?? 24} onChange={e => updateField('management', 'maxDurationHours', parseInt(e.target.value) || 24)} min={1} max={168} step={1} className="h-9 text-sm" />
+              <div className="flex items-center gap-3">
+                <Slider value={[config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 24]} onValueChange={v => { updateField('exit', 'timeExitHours', v[0]); updateField('exit', 'maxHoldHours', v[0]); }} min={1} max={168} step={1} className="flex-1" />
+                <span className="text-[11px] font-mono w-8 text-right">{config.exit?.timeExitHours ?? config.exit?.maxHoldHours ?? 24}h</span>
+              </div>
             </FieldGroup>
           )}
-          <ToggleField label="Friday Close" description="Close all positions before weekend" checked={config.management?.fridayCloseEnabled ?? true} onChange={v => updateField('management', 'fridayCloseEnabled', v)} />
-          {(config.management?.fridayCloseEnabled ?? true) && (
-            <FieldGroup label="Friday Close Hour (UTC)">
-              <Input type="number" value={config.management?.fridayCloseHour ?? 20} onChange={e => updateField('management', 'fridayCloseHour', parseInt(e.target.value) || 20)} min={15} max={23} step={1} className="h-9 text-sm" />
-            </FieldGroup>
-          )}
+          <ToggleField label="End-of-Session Close" description="Close all positions at end of trading session" checked={config.exit?.endOfSessionClose ?? false} onChange={v => updateField('exit', 'endOfSessionClose', v)} />
         </div>
       </CollapsibleSection>
     </div>
