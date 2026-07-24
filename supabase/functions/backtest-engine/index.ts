@@ -108,6 +108,7 @@ import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig
 import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type JudasSwingConfig, DEFAULT_JUDAS_SWING_CONFIG } from "../_shared/ictJudasSwing.ts";
 import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
+import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -2390,6 +2391,55 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               analysis.takeProfit = candle.close - newSlDist * origRR;
             }
           }
+        }
+
+        // ── Impulse Zone SL Override (matching bot-scanner) ──
+        // When impulse zone gate is active and zone is confirmed, override SL to impulse origin.
+        // This gives structural protection: SL is below where the impulse started (for longs)
+        // or above where it started (for shorts).
+        if (izGateMode === "hard" && izData?.hasZone && izData.bestZone?.priceAtZone && izData.impulse) {
+          const slBufferPips = config.slBufferPips ?? 2;
+          const impulseSL = analysis.direction === "long"
+            ? izData.impulse.low - (slBufferPips * spec.pipSize)
+            : izData.impulse.high + (slBufferPips * spec.pipSize);
+          const impulseSlDistance = Math.abs(candle.close - impulseSL);
+          const currentSlDistance = Math.abs(candle.close - analysis.stopLoss);
+          const staticMinSlPips = MIN_SL_PIPS[symbol] ?? MIN_SL_PIPS["EUR/USD"] ?? 10;
+          const maxImpulseSlPips = staticMinSlPips * (config.impulseSlCapMultiplier ?? 4);
+          const impulseSlPips = impulseSlDistance / spec.pipSize;
+          // Only override if impulse SL is wider (more protective) and within cap
+          if (impulseSlDistance > currentSlDistance && impulseSlPips <= maxImpulseSlPips) {
+            analysis.stopLoss = impulseSL;
+            // Recalculate TP to maintain R:R
+            const newRisk = Math.abs(candle.close - analysis.stopLoss);
+            if (analysis.direction === "long") {
+              analysis.takeProfit = candle.close + newRisk * (config.tpRatio ?? 2);
+            } else {
+              analysis.takeProfit = candle.close - newRisk * (config.tpRatio ?? 2);
+            }
+          }
+        }
+
+        // ── Regime-Adaptive TP Adjustment (matching bot-scanner) ──
+        // When enabled, adjusts TP based on market regime (trending → extend, ranging → tighten).
+        if (config.regimeAdaptiveTPEnabled && analysis.regimeInfo) {
+          try {
+            const recentCandlesForATR = entryCandles.slice(Math.max(0, i - 20), i);
+            const atrForTP = recentCandlesForATR.length >= 14 ? calculateATR(recentCandlesForATR, 14) : 0;
+            const tpAdjust = adjustTPForRegime({
+              currentTP: analysis.takeProfit,
+              entryPrice: candle.close,
+              stopLoss: analysis.stopLoss,
+              direction: analysis.direction as "long" | "short",
+              regimeInfo: analysis.regimeInfo,
+              atrValue: atrForTP,
+              trendingRRMultiplier: config.trendingRRMultiplier ?? 1.5,
+              rangingRRMultiplier: config.rangingRRMultiplier ?? 0.75,
+            });
+            if (tpAdjust.adjustedTP !== analysis.takeProfit) {
+              analysis.takeProfit = tpAdjust.adjustedTP;
+            }
+          } catch { /* non-fatal */ }
         }
 
         // ── Position Sizing ──
