@@ -1,0 +1,20 @@
+{
+  "maxTrials": 50,
+  "walkForwardFolds": 4,
+  "minConsistencyScore": 0.75,
+  "minImprovementPercent": 0.15,
+  "maxDeltaPercent": 0.50,
+  "fullSpace": true,
+  "instruments": [
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
+    "NZDUSD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY",
+    "XAUUSD", "BTCUSD"
+  ],
+  "userId": "",
+  "configId": "",
+  "historyPath": "optimizer/results/history.json",
+  "tpeConfig": {
+    "gamma": 0.25,
+    "nStartupTrials": 15
+  }
+}
