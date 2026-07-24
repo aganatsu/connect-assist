@@ -11,7 +11,7 @@ import { botConfigApi } from "@/lib/api";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
-import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target, Download, Upload } from "lucide-react";
+import { X, Shield, TrendingUp, Clock, Globe, ShieldAlert, LogIn, LogOut, BarChart3, Gauge, Search, SlidersHorizontal, RotateCcw, Save, Trash2, FolderOpen, ChevronDown, ChevronUp, Bookmark, Crosshair, Sparkles, Target, Download, Upload, Layers } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { formatBrokerTime } from "@/lib/formatTime";
@@ -228,6 +228,17 @@ const ICT2022_SEARCH_ENTRIES = ICT2022_MODULES.flatMap(m => [
 SEARCH_INDEX.push(
   { tab: "ict2022", label: "ICT 2022 Mentorship", keywords: ["ict", "mentorship", "2022", "smc", "inner circle trader"] },
   ...ICT2022_SEARCH_ENTRIES
+);
+
+// Append SMC Enhancements entries to the main search index
+SEARCH_INDEX.push(
+  { tab: "smcEnhancements", label: "SMC Enhancements", keywords: ["smc", "enhancement", "video", "upgrade", "phase", "breaker", "zone lifecycle", "trendline", "monthly"] },
+  { tab: "smcEnhancements", label: "Phase Detection", keywords: ["phase", "consolidation", "expansion", "trend", "price action", "regime"] },
+  { tab: "smcEnhancements", label: "Zone Lifecycle v2", keywords: ["zone", "lifecycle", "invalidation", "close", "retest", "multi-entry", "penetration"] },
+  { tab: "smcEnhancements", label: "Breaker Blocks", keywords: ["breaker", "break and retest", "failed ob", "flip", "role reversal"] },
+  { tab: "smcEnhancements", label: "Fib 3-Point TP", keywords: ["fib", "fibonacci", "extension", "3-point", "tp", "take profit", "-27"] },
+  { tab: "smcEnhancements", label: "Trendline Liquidity", keywords: ["trendline", "liquidity", "trap", "4th touch", "broken trendline"] },
+  { tab: "smcEnhancements", label: "Monthly Containment", keywords: ["monthly", "containment", "htf", "structural", "timeframe"] }
 );
 
 const HighlightContext = createContext<Set<string>>(new Set());
@@ -681,6 +692,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     { id: "openingRange", label: "Opening Range", icon: BarChart3 },
     { id: "gamePlan", label: "Game Plan", icon: Crosshair },
     { id: "ict2022", label: "ICT 2022", icon: Sparkles },
+    { id: "smcEnhancements", label: "SMC Enhancements", icon: Layers },
   ];
 
   // Search filtering — compute once per render
@@ -2308,6 +2320,9 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 {effectiveActiveTab === "ict2022" && (
                   <ICT2022Tab config={config} setConfig={setConfig} />
                 )}
+                {effectiveActiveTab === "smcEnhancements" && (
+                  <SMCEnhancementsTab config={config} setConfig={setConfig} />
+                )}
               </>
             )}
             {config && filteredTabs.length === 0 && (
@@ -2926,6 +2941,315 @@ function ICT2022Tab({ config, setConfig }: { config: any; setConfig: (fn: any) =
           <span className="font-bold text-foreground">Note:</span> The scanner reads these flags from{" "}
           <span className="font-mono">config.strategy</span> first, then falls back to its compiled defaults.
           Saving here persists overrides to your bot config — no redeploy required.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── SMC Enhancements Tab ──────────────────────────────────────────────
+// Frontend surface for the 6 new SMC video enhancement modules.
+// Values are written into config.smcEnhancements.* which the bot-scanner
+// reads via configMapper's SMCEnhancementsConfig resolution.
+
+const SMC_ENHANCEMENT_MODULES: {
+  key: string;
+  label: string;
+  description: string;
+  configField: string;
+  hasGate: boolean;
+  gateField?: string;
+  hasParams?: boolean;
+}[] = [
+  {
+    key: "phase",
+    label: "Phase Detection",
+    description: "Classifies market as consolidation/expansion/trend using price action. Blocks trades from zones formed during consolidation — the 'not inside consolidation' rule.",
+    configField: "enablePhaseDetection",
+    hasGate: true,
+    gateField: "phaseGateMode",
+    hasParams: true,
+  },
+  {
+    key: "zoneLifecycle",
+    label: "Zone Lifecycle v2",
+    description: "Close-based zone invalidation replaces the 50% penetration model. Zones survive wicks, support 2-3 retests with decreasing confidence. Only a candle CLOSE through the far boundary kills a zone.",
+    configField: "enableZoneLifecycleV2",
+    hasGate: false,
+    hasParams: true,
+  },
+  {
+    key: "breaker",
+    label: "Breaker Blocks",
+    description: "Detects failed OBs that flip role after sweep → displacement → retest. Creates its own trade signal at half size. Complete Break & Retest entry model.",
+    configField: "enableBreakerBlocks",
+    hasGate: true,
+    gateField: "breakerGateMode",
+    hasParams: true,
+  },
+  {
+    key: "fib3pt",
+    label: "Fib 3-Point TP",
+    description: "Measures fib extensions from your ENTRY point (Point C), not the swing origin. Adds -27.2%, -61.8%, -100% extension levels for take profit.",
+    configField: "enableFib3PointTP",
+    hasGate: false,
+    hasParams: true,
+  },
+  {
+    key: "trendline",
+    label: "Trendline Liquidity",
+    description: "Detects multi-touch trendlines. Warns when zones are at trap-prone 4th touches (liquidity grab). Rewards zones below just-broken trendlines.",
+    configField: "enableTrendlineLiquidity",
+    hasGate: true,
+    gateField: "trendlineGateMode",
+    hasParams: true,
+  },
+  {
+    key: "monthly",
+    label: "Monthly Containment",
+    description: "Adds monthly timeframe structural analysis. Checks if your LTF zone is contained within a monthly OB or key level for ultimate HTF confluence.",
+    configField: "enableMonthlyContainment",
+    hasGate: true,
+    gateField: "monthlyGateMode",
+    hasParams: false,
+  },
+];
+
+function SMCEnhancementsTab({ config, setConfig }: { config: any; setConfig: (fn: any) => void }) {
+  const enhancements = config.smcEnhancements || {};
+
+  const updateEnhancement = (key: string, value: any) => {
+    setConfig((prev: any) => ({
+      ...prev,
+      smcEnhancements: { ...(prev.smcEnhancements || {}), [key]: value },
+    }));
+  };
+
+  const getEnabled = (field: string) => !!enhancements[field];
+  const getGate = (field: string): "off" | "soft" | "hard" =>
+    (enhancements[field] as "off" | "soft" | "hard") || "off";
+
+  const enabledCount = SMC_ENHANCEMENT_MODULES.filter(m => getEnabled(m.configField)).length;
+  const activeGates = SMC_ENHANCEMENT_MODULES.filter(m => m.hasGate && getGate(m.gateField!) !== "off").length;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <SectionHeader
+          title="SMC Video Enhancements"
+          description="Advanced SMC concepts from the video audit. Each module is independent — enable one at a time to observe its effect."
+        />
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="text-[9px] font-mono">
+            {enabledCount}/{SMC_ENHANCEMENT_MODULES.length} enabled
+          </Badge>
+          {activeGates > 0 && (
+            <Badge variant="outline" className="text-[9px] font-mono">
+              {activeGates} gate{activeGates === 1 ? "" : "s"}
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Info banner */}
+      <div className="rounded border border-primary/30 bg-primary/5 p-3 space-y-1.5">
+        <p className="text-[10px] text-primary font-bold uppercase tracking-wider">How these modules work</p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          Each module adds new <span className="font-mono font-bold text-foreground">confluence factors</span> and optional <span className="font-mono font-bold text-foreground">gates</span> to the scanner.
+          When disabled, the module has zero impact — the bot runs identically to before.
+        </p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          <span className="font-mono font-bold text-foreground">Recommended:</span> Enable one module at a time. Watch scan details for a few sessions. Then enable the next.
+        </p>
+      </div>
+
+      {/* Module cards */}
+      <div className="space-y-3">
+        {SMC_ENHANCEMENT_MODULES.map(m => {
+          const enabled = getEnabled(m.configField);
+          const gate = m.hasGate ? getGate(m.gateField!) : null;
+          return (
+            <div
+              key={m.key}
+              className={`border p-3 space-y-3 transition-colors ${
+                enabled ? "border-primary/40 bg-primary/[0.02]" : "border-border/40 opacity-70"
+              }`}
+            >
+              {/* Header row */}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold">{m.label}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">{m.description}</p>
+                </div>
+                <Switch
+                  checked={enabled}
+                  onCheckedChange={v => updateEnhancement(m.configField, v)}
+                  className="shrink-0 mt-0.5"
+                />
+              </div>
+
+              {/* Gate mode selector */}
+              {m.hasGate && enabled && (
+                <div className="flex items-center gap-3 pt-1 border-t border-border/40">
+                  <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">
+                    Gate Mode
+                  </Label>
+                  <Select
+                    value={gate || "off"}
+                    onValueChange={(v: "off" | "soft" | "hard") => updateEnhancement(m.gateField!, v)}
+                  >
+                    <SelectTrigger className="h-8 text-xs w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="off" className="text-xs">Off — log only</SelectItem>
+                      <SelectItem value="soft" className="text-xs">Soft — score impact</SelectItem>
+                      <SelectItem value="hard" className="text-xs">Hard — block trade</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {gate && gate !== "off" && (
+                    <Badge
+                      variant="outline"
+                      className={`text-[9px] font-mono ${
+                        gate === "hard" ? "text-loss border-loss/40" : "text-warn border-warn/40"
+                      }`}
+                    >
+                      {gate === "hard" ? "BLOCKING" : "SCORING"}
+                    </Badge>
+                  )}
+                </div>
+              )}
+
+              {/* Per-module fine-tuning */}
+              {enabled && m.key === "phase" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Consolidation Threshold</Label>
+                    <Slider value={[enhancements.consolidationThreshold ?? 4]} onValueChange={v => updateEnhancement('consolidationThreshold', v[0])} min={2} max={8} step={1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.consolidationThreshold ?? 4}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Regime score below this = consolidation. Lower = more aggressive (fewer zones blocked). Default: 4.</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Trend Threshold</Label>
+                    <Slider value={[enhancements.trendThreshold ?? 6]} onValueChange={v => updateEnhancement('trendThreshold', v[0])} min={4} max={12} step={1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.trendThreshold ?? 6}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Regime score above this = trending. Higher = stricter (only strong trends qualify). Default: 6.</p>
+                </div>
+              )}
+
+              {enabled && m.key === "zoneLifecycle" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Max Retests</Label>
+                    <Slider value={[enhancements.maxRetests ?? 3]} onValueChange={v => updateEnhancement('maxRetests', v[0])} min={1} max={5} step={1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.maxRetests ?? 3}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">How many times a zone can be traded before it's considered exhausted. Default: 3.</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Confidence Decay</Label>
+                    <Slider value={[enhancements.confidenceDecay ?? 0.3]} onValueChange={v => updateEnhancement('confidenceDecay', v[0])} min={0.1} max={0.5} step={0.05} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(enhancements.confidenceDecay ?? 0.3).toFixed(2)}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">How much confidence drops per retest. 0.3 = 1st touch 100%, 2nd 70%, 3rd 40%. Default: 0.30.</p>
+                </div>
+              )}
+
+              {enabled && m.key === "breaker" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Min Displacement</Label>
+                    <Slider value={[enhancements.breakerMinDisplacement ?? 1.5]} onValueChange={v => updateEnhancement('breakerMinDisplacement', v[0])} min={1.0} max={3.0} step={0.1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(enhancements.breakerMinDisplacement ?? 1.5).toFixed(1)}×</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Minimum ATR multiple for the displacement candle that breaks the OB. Higher = stricter. Default: 1.5×.</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Size Multiplier</Label>
+                    <Slider value={[enhancements.breakerSizeMultiplier ?? 0.5]} onValueChange={v => updateEnhancement('breakerSizeMultiplier', v[0])} min={0.25} max={1.0} step={0.05} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">{(enhancements.breakerSizeMultiplier ?? 0.5).toFixed(2)}×</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Position size multiplier for breaker entries vs normal entries. Default: 0.5× (half size).</p>
+                </div>
+              )}
+
+              {enabled && m.key === "fib3pt" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Extension Levels</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Primary TP Level</Label>
+                    <Select value={String(enhancements.primaryFibLevel ?? -0.272)} onValueChange={v => updateEnhancement('primaryFibLevel', parseFloat(v))}>
+                      <SelectTrigger className="h-8 text-xs flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="-0.272" className="text-xs">-27.2% (conservative)</SelectItem>
+                        <SelectItem value="-0.618" className="text-xs">-61.8% (standard)</SelectItem>
+                        <SelectItem value="-1.0" className="text-xs">-100% (aggressive)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Which fib extension level to use as the primary TP target. Measured from your entry point. Default: -27.2%.</p>
+                </div>
+              )}
+
+              {enabled && m.key === "trendline" && (
+                <div className="pt-2 border-t border-border/30 space-y-2">
+                  <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Min Touches</Label>
+                    <Slider value={[enhancements.trendlineMinTouches ?? 3]} onValueChange={v => updateEnhancement('trendlineMinTouches', v[0])} min={2} max={5} step={1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.trendlineMinTouches ?? 3}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Minimum touch points to confirm a trendline exists. Default: 3.</p>
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Trap Touch #</Label>
+                    <Slider value={[enhancements.trendlineTrapTouch ?? 4]} onValueChange={v => updateEnhancement('trendlineTrapTouch', v[0])} min={3} max={6} step={1} className="flex-1" />
+                    <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.trendlineTrapTouch ?? 4}</span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">Which touch number is considered a liquidity trap. Default: 4 (4th touch = likely fake breakout).</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Quick enable/disable all */}
+      <div className="flex items-center gap-3 pt-2 border-t border-border/40">
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-[10px] h-7"
+          onClick={() => {
+            SMC_ENHANCEMENT_MODULES.forEach(m => updateEnhancement(m.configField, true));
+          }}
+        >
+          Enable All
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-[10px] h-7"
+          onClick={() => {
+            SMC_ENHANCEMENT_MODULES.forEach(m => updateEnhancement(m.configField, false));
+          }}
+        >
+          Disable All
+        </Button>
+        <span className="text-[9px] text-muted-foreground ml-auto">
+          Changes are saved when you click Save at the bottom of this modal.
+        </span>
+      </div>
+
+      {/* Info note */}
+      <div className="rounded border border-border/50 bg-secondary/20 p-3 mt-3">
+        <p className="text-[10px] text-muted-foreground">
+          <span className="font-bold text-foreground">Note:</span> These settings are stored in{" "}
+          <span className="font-mono">config.smcEnhancements</span>. The scanner reads them on every scan cycle — no redeploy required.
+          Enhancement factors appear in the scan detail panel when enabled.
         </p>
       </div>
     </div>
