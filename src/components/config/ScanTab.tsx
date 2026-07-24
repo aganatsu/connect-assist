@@ -7,19 +7,15 @@ import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, ConfigTabProps } from "./ConfigShared";
 
-// ─── Instruments Data ─────────────────────────────────────────────────────────
-const FOREX_PAIRS = ["EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","NZDUSD","USDCHF","EURGBP","EURJPY","GBPJPY","AUDJPY","CADJPY","EURAUD","EURNZD","GBPAUD","GBPNZD","GBPCAD","AUDNZD","AUDCAD","NZDCAD","NZDJPY","CHFJPY","EURCAD","EURCHF","GBPCHF","AUDCHF","CADCHF","NZDCHF"];
-const CRYPTO_PAIRS = ["BTCUSD","ETHUSD","SOLUSD","XRPUSD"];
-const COMMODITY_PAIRS = ["XAUUSD","XAGUSD","USOIL","UKOIL"];
-const INDEX_PAIRS = ["US30","US500","US100","GER40","UK100","JPN225"];
-const INSTRUMENT_GROUPS = [
-  { label: "Forex Majors & Crosses", key: "forex", pairs: FOREX_PAIRS },
-  { label: "Crypto", key: "crypto", pairs: CRYPTO_PAIRS },
-  { label: "Commodities", key: "commodity", pairs: COMMODITY_PAIRS },
-  { label: "Indices", key: "index", pairs: INDEX_PAIRS },
-];
+// ─── Instruments Data (derived from canonical marketData.ts) ─────────────────
+const INSTRUMENT_GROUPS = INSTRUMENT_TYPES.map(type => ({
+  label: INSTRUMENT_TYPE_LABELS[type] || type,
+  key: type,
+  pairs: INSTRUMENTS.filter(i => i.type === type).map(i => i.symbol),
+}));
 
 // ─── ICT 2022 Mentorship Modules ─────────────────────────────────────────────
 const ICT2022_MODULES: {
@@ -147,7 +143,7 @@ const SMC_ENHANCEMENT_MODULES: {
 // ─── Component ────────────────────────────────────────────────────────────────
 export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
   // Count active instruments
-  const ALL_INSTRUMENTS = [...FOREX_PAIRS, ...CRYPTO_PAIRS, ...COMMODITY_PAIRS, ...INDEX_PAIRS];
+  const ALL_INSTRUMENTS = INSTRUMENTS.map(i => i.symbol);
   const totalPairs = ALL_INSTRUMENTS.length;
   const enabledPairs: string[] = config.instruments?.enabled || ALL_INSTRUMENTS;
   const activePairCount = enabledPairs.length;
@@ -243,8 +239,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                     }}
                     className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
                       isEnabled
-                        ? "border-primary/50 bg-primary/10 text-primary"
-                        : "border-border bg-muted/30 text-muted-foreground"
+                        ? "border-primary bg-primary/20 text-primary font-bold ring-1 ring-primary/40"
+                        : "border-border/40 bg-transparent text-muted-foreground/50 hover:text-muted-foreground hover:border-border"
                     }`}
                   >
                     {pair}
