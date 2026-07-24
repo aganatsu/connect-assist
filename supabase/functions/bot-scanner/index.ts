@@ -4857,16 +4857,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const mssConfig: DisplacementMSSConfig = {
           ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
           minBodyRatio: pairConfig.ictDisplacementMSSMinBodyRatio,
-          minRangeATR: pairConfig.ictDisplacementMSSMinRangeATR,
-          lookback: pairConfig.ictDisplacementMSSLookback,
+          minRangeATRMult: pairConfig.ictDisplacementMSSMinRangeATR,
+          lookbackCandles: pairConfig.ictDisplacementMSSLookback,
         };
-        ictMSSResult = validateRecentMSS(candles, mssConfig);
+        // Build structure breaks from analysis for MSS validation
+        const mssBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])]
+          .map((b: any) => ({ index: b.index as number, type: b.type as "bullish" | "bearish" }));
+        const mssDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        ictMSSResult = validateRecentMSS(candles, mssBreaks, mssDirection, mssConfig);
         const modeTag = pairConfig.ictDisplacementMSSGateMode.toUpperCase();
-        const statusTag = ictMSSResult.valid ? "VALID" : "INVALID";
+        const statusTag = ictMSSResult.isValid ? "VALID" : "INVALID";
         console.log(`[scan ${scanCycleId}] ${pair} ICT MSS [${modeTag}]: ${statusTag} — ${ictMSSResult.reason}`);
         (detail as any).ictMSS = {
           gateMode: pairConfig.ictDisplacementMSSGateMode,
-          valid: ictMSSResult.valid,
+          valid: ictMSSResult.isValid,
           reason: ictMSSResult.reason,
           displacementStrength: ictMSSResult.displacementStrength,
         };
@@ -4882,21 +4886,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const judasConfig: JudasSwingConfig = {
           ...DEFAULT_JUDAS_SWING_CONFIG,
-          lookback: pairConfig.ictJudasSwingLookback,
-          minDepthATR: pairConfig.ictJudasSwingMinDepthATR,
+          sweepLookback: pairConfig.ictJudasSwingLookback,
+          minSweepDepthATR: pairConfig.ictJudasSwingMinDepthATR,
           requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
+        // Find the most recent structure break index for Judas sweep lookback
+        const allBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])];
+        const alignedBreaks = allBreaks.filter((b: any) => b.type === judasDirection);
+        const mssIndex = alignedBreaks.length > 0
+          ? Math.max(...alignedBreaks.map((b: any) => b.index as number))
+          : candles.length - 1;
+        ictJudasResult = detectICTJudasSwing(candles, mssIndex, judasDirection, judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
-        const statusTag = ictJudasResult.detected ? "DETECTED" : "NOT_FOUND";
+        const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
         (detail as any).ictJudas = {
           gateMode: pairConfig.ictJudasSwingGateMode,
-          detected: ictJudasResult.detected,
+          detected: ictJudasResult.found,
           reason: ictJudasResult.reason,
-          sweepLevel: ictJudasResult.sweepLevel,
-          sweepDepthATR: ictJudasResult.sweepDepthATR,
+          sweepLevel: ictJudasResult.sweep?.sweptLevel ?? null,
+          sweepDepthATR: ictJudasResult.sweep?.wickDepthATR ?? null,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Judas error (non-fatal): ${e?.message}`);
@@ -4905,7 +4915,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // ── ICT FVG Invalidation (log-only in "off" mode) ──
-    let ictFVGResult: BatchFVGValidationResult | null = null;
+    let ictFVGResult: (BatchFVGValidationResult & { validCount: number; invalidatedCount: number; exhaustedCount: number; totalCount: number }) | null = null;
     if (pairConfig.ictFVGInvalidationEnabled && analysis.fvgs && analysis.fvgs.length > 0) {
       try {
         const fvgConfig: FVGInvalidationConfig = {
@@ -4913,7 +4923,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           bodyCloseOnly: pairConfig.ictFVGBodyCloseOnly,
           ruleOfTwo: pairConfig.ictFVGRuleOfTwo,
         };
-        ictFVGResult = validateFVGBatch(analysis.fvgs, candles, fvgConfig);
+        const fvgDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        const fvgsForValidation = analysis.fvgs.map((f: any) => ({
+          index: f.index, high: f.high, low: f.low, type: f.type,
+          midpoint: (f.high + f.low) / 2,
+        }));
+        const rawFVGResult = validateFVGBatch(fvgsForValidation, candles, fvgDirection, fvgConfig);
+        // Derive count fields from results array (not on interface but needed downstream)
+        const totalCount = rawFVGResult.results.length;
+        const validCount = rawFVGResult.results.filter((r: any) => r.status === "fresh" || r.status === "first_touch").length;
+        const invalidatedCount = rawFVGResult.results.filter((r: any) => r.status === "invalidated").length;
+        const exhaustedCount = rawFVGResult.results.filter((r: any) => r.status === "exhausted").length;
+        ictFVGResult = { ...rawFVGResult, validCount, invalidatedCount, exhaustedCount, totalCount };
         const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
         console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${ictFVGResult.validCount}/${ictFVGResult.totalCount} valid, ${ictFVGResult.invalidatedCount} invalidated, ${ictFVGResult.exhaustedCount} exhausted`);
         (detail as any).ictFVG = {
@@ -4940,12 +4961,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         };
         ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
-        const statusTag = ictKZResult.inKillZone ? `IN (${ictKZResult.activeZone})` : `OUT (${ictKZResult.reason})`;
+        const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.windowLabel})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
         (detail as any).ictKillZone = {
           gateMode: pairConfig.ictKillZoneGateMode,
-          inKillZone: ictKZResult.inKillZone,
-          activeZone: ictKZResult.activeZone,
+          inKillZone: ictKZResult.isKillZone,
+          activeZone: ictKZResult.windowLabel,
           isPrime: ictKZResult.isPrime,
           reason: ictKZResult.reason,
         };
@@ -5556,15 +5577,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
     const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
-    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
+    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
-    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.detected)
+    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
       ? -pairConfig.ictJudasSwingPenalty : 0;
     const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
       ? -(ictFVGResult.invalidatedCount * pairConfig.ictFVGInvalidatedPenalty + ictFVGResult.exhaustedCount * pairConfig.ictFVGExhaustedPenalty) / Math.max(ictFVGResult.totalCount, 1)
       : 0;
     const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
-      ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
+      ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
     const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
@@ -5722,7 +5743,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
-    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.valid) {
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.isValid) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
       detail.reason = ictMSSResult.reason;
@@ -5731,7 +5752,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
-    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.detected) {
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.found) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
       detail.reason = ictJudasResult.reason;
@@ -5749,7 +5770,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Kill Zone hard gate: block trade if outside all kill zones
-    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.inKillZone) {
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.isKillZone) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
       detail.reason = ictKZResult.reason;
