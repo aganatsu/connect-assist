@@ -1,51 +1,58 @@
-# Task: Backtest Parity — Phase A3: SL Override Chain
-## Branch: manus/backtest-sl-override
+# Task: Backtest Walk-Forward Implementation (Phase A4)
+## Branch: manus/backtest-walk-forward
 ## Behavior changes
-1. **Impulse Zone SL Override** — When `izGateMode === "hard"` and an impulse zone is confirmed with price at zone, the backtest now overrides SL to the impulse origin (minus buffer). This widens the SL for structural protection, matching the live scanner. Only fires when the impulse SL is wider than current AND within the cap (staticMinSlPips × impulseSlCapMultiplier). TP is recalculated to maintain the configured R:R ratio.
-2. **Regime-Adaptive TP Adjustment** — When `regimeAdaptiveTPEnabled === true`, the backtest now adjusts TP based on market regime: trending markets extend TP (×1.5 R:R), ranging markets tighten TP (×0.75 R:R), transitional/unknown leaves TP unchanged. Uses the same `adjustTPForRegime()` function from `_shared/exitEngine.ts` as the live scanner.
-
-Both features are **off by default** (impulse zone requires `izGateMode: "hard"` with a confirmed zone; regime TP requires `regimeAdaptiveTPEnabled: true`). Users who haven't enabled these settings see zero change.
+1. When `walkForwardFolds >= 2` is set in backtest config, results now include a `walkForward` object with per-fold statistics, consistency score, and verdict classification (robust/moderate/fragile)
+2. Previously, setting `walkForwardFolds` did nothing — the parameter was accepted but ignored. Now it activates real time-series cross-validation.
+3. Progress message now includes walk-forward verdict when enabled (e.g., "Done: 45 trades, 62.5% WR, PF 1.85 | WF: robust (100%)")
+4. Walk-forward only activates when `walkForwardFolds >= 2` AND `allTrades.length >= walkForwardFolds` (minimum 1 trade per fold)
 
 ## Files modified
-- `supabase/functions/backtest-engine/index.ts` — Added import for `adjustTPForRegime`, inserted Impulse Zone SL Override block (lines 2396-2421) and Regime-Adaptive TP block (lines 2423-2443) between the SL floor enforcement and position sizing.
-- `supabase/functions/backtest-engine/slOverride.test.ts` — New test file with 12 regression tests.
+- `supabase/functions/backtest-engine/index.ts` — Added WalkForwardFold and WalkForwardSummary interfaces (lines 184-208), computeWalkForward function (lines 1097-1196), invocation after stats calculation (lines 2712-2718), result inclusion (line 2752), and enhanced progress message (lines 2769-2771)
+- `supabase/functions/backtest-engine/walkForward.test.ts` — New test file with 14 test cases
 
 ## Tests added
-1. `Impulse SL Override: widens SL to impulse origin for long` — Verifies SL moves to impulse.low - buffer
-2. `Impulse SL Override: widens SL to impulse origin for short` — Verifies SL moves to impulse.high + buffer
-3. `Impulse SL Override: does NOT override when impulse SL is tighter than current` — Guards against narrowing SL
-4. `Impulse SL Override: does NOT override when impulse SL exceeds cap` — Verifies cap enforcement
-5. `Impulse SL Override: XAU/USD with larger pip size` — Tests with non-standard pip size
-6. `Regime TP: trending regime extends TP (long)` — Verifies TP extension in trends
-7. `Regime TP: ranging regime tightens TP (long)` — Verifies TP tightening in ranges
-8. `Regime TP: transitional regime leaves TP unchanged` — No adjustment for transitional
-9. `Regime TP: null regime leaves TP unchanged` — No adjustment when regime unknown
-10. `Regime TP: disabled config means no adjustment` — Verifies no-op when disabled
-11. `Backward compat: no impulse zone means no SL override` — Zero-value impulse doesn't fire
-12. `Backward compat: soft izGateMode skips impulse SL override` — Soft mode doesn't trigger
+1. "4 folds with equal trade distribution" — verifies trades split correctly across 4 equal time periods
+2. "verdict classification - robust (>= 0.75)" — all folds profitable → robust
+3. "verdict classification - moderate (>= 0.50, < 0.75)" — 2/4 folds profitable → moderate
+4. "verdict classification - fragile (< 0.50)" — 1/4 folds profitable → fragile
+5. "fold boundaries are equal time slices" — verifies temporal boundaries are evenly spaced
+6. "trades assigned by entryTime" — confirms trade-to-fold assignment uses entry timestamp
+7. "empty fold handled gracefully" — folds with 0 trades produce 0 stats without errors
+8. "best and worst fold identification" — correct fold indices for extremes
+9. "win rate standard deviation computed correctly" — mathematical verification
+10. "per-fold drawdown calculated correctly" — peak-to-trough within fold
+11. "partial trades excluded from trade count but included in PnL" — _partial suffix filtering
+12. "boundary trade goes to correct fold" — edge case at fold boundary
+13. "PnL standard deviation measures fold-to-fold variance" — equal PnL → 0 stddev
+14. "profitFactor per fold computed correctly" — grossProfit / grossLoss
 
 ## Tests run
 ```
 $ deno test supabase/functions/backtest-engine/ --no-check --allow-read
-ok | 195 passed | 0 failed (709ms)
+ok | 209 passed | 0 failed (1s)
 ```
 
 ## Regression check
-- All 183 existing tests (determinism + score parity + gates parity) still pass
-- 12 new tests verify the override logic in isolation
-- Backward compatibility confirmed: when izGateMode !== "hard" or regimeAdaptiveTPEnabled is false, the new code is completely skipped
-
-## What was NOT ported (and why)
-- **Unified Zone SL Override** — Requires `unifiedZoneData` which comes from a separate zone engine not present in the backtest. Would require porting the entire unified zone engine first.
-- **Cascade Zone SL Override** — Requires `cascadeResult` from the cascade zone engine, also not present.
-- **Direction-flipped SL recalculation** — The backtest uses `analysis.stopLoss` from `runConfluenceAnalysis` which already handles direction. The scanner's swing-point recalculation is part of its entry logic, not an override.
+- All 195 existing tests (determinism, score parity, gates parity, SL override) continue to pass
+- When walkForwardFolds = 0 (default), the code path is completely skipped — zero impact on existing behavior
+- The function is pure (no side effects, no DB calls) — it only reads the already-computed trades array
 
 ## Open questions
-1. Should unified zone and cascade zone engines be ported to the backtest? This would be a significant effort (each is ~200-400 lines of logic with their own data requirements).
-2. The `impulseSlCapMultiplier` default is 4 — is this still your preferred cap, or should it be configurable per-instrument?
+1. Should the dashboard UI display walk-forward results? (Currently they're in the JSON results but not surfaced in the frontend)
+2. Should walk-forward be enabled by default (e.g., 4 folds) or remain opt-in?
+3. The existing `determinism.test.ts` has walk-forward contract tests (lines 279-392) that define the expected behavior — our implementation matches that contract exactly.
 
 ## Suggested PR title and description
-**Title:** `[backtest-parity] Phase A3: Port SL override chain to backtest engine`
+**Title:** feat(backtest): implement walk-forward validation
 
 **Description:**
-Ports the Impulse Zone SL Override and Regime-Adaptive TP Adjustment from the live scanner to the backtest engine. When impulse zone gate is in hard mode and a zone is confirmed, SL is widened to the impulse origin for structural protection (capped at 4× static minimum). When regime-adaptive TP is enabled, TP is extended in trending markets and tightened in ranging markets. Both features are off by default — zero behavior change for existing configs. Includes 12 new regression tests; all 195 tests pass.
+The `walkForwardFolds` parameter was previously accepted but never used (phantom feature). This PR implements proper time-series cross-validation:
+
+- Splits trades into N equal time-based folds by `entryTime`
+- Computes per-fold statistics (win rate, PF, drawdown, expectancy)
+- Calculates consistency score (profitable folds / total folds)
+- Classifies result as robust (≥75%), moderate (≥50%), or fragile (<50%)
+- Reports win rate standard deviation and PnL standard deviation across folds
+- Only activates when `walkForwardFolds >= 2` and sufficient trades exist
+
+This enables users to validate that their config performs consistently across different time periods, not just in aggregate.
