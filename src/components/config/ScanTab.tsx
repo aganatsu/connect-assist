@@ -17,7 +17,7 @@ const INSTRUMENT_GROUPS = INSTRUMENT_TYPES.map(type => ({
   pairs: INSTRUMENTS.filter(i => i.type === type).map(i => i.symbol),
 }));
 
-// ─── ICT 2022 Mentorship Modules ─────────────────────────────────────────────
+// ─── Precision Filter Modules ────────────────────────────────────────────────
 const ICT2022_MODULES: {
   key: string;
   label: string;
@@ -451,11 +451,11 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         )}
       </CollapsibleSection>
 
-      {/* ── ICT 2022 Mentorship ── */}
+      {/* ── Precision Filters ── */}
       <CollapsibleSection
         id="ict2022"
-        title="ICT 2022 Mentorship"
-        subtitle="Inner Circle Trader 2022 modules with gate modes"
+        title="Precision Filters"
+        subtitle="Multi-timeframe validation gates"
         icon={<BookOpen className="h-4 w-4" />}
         badge={
           <div className="flex items-center gap-1">

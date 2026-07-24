@@ -64,7 +64,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "scan", label: "News Pause (minutes)", keywords: ["news", "pause", "minutes", "before"] },
   { tab: "scan", label: "Opening Range", keywords: ["opening range", "or", "candle", "bias", "judas"] },
   { tab: "scan", label: "Game Plan", keywords: ["game plan", "session", "dol", "ipda", "bias"] },
-  { tab: "scan", label: "ICT 2022 Mentorship", keywords: ["ict", "mentorship", "2022", "smc", "inner circle trader"] },
+  { tab: "scan", label: "Precision Filters", keywords: ["precision", "filters", "htf", "displacement", "judas", "fvg", "kill zone", "validation", "gates"] },
   { tab: "scan", label: "HTF Framework", keywords: ["ict", "htf", "framework", "weekly", "daily", "containment"] },
   { tab: "scan", label: "Displacement-Validated MSS", keywords: ["ict", "displacement", "mss", "market structure shift"] },
   { tab: "scan", label: "Judas Swing / Liquidity Sweep", keywords: ["ict", "judas", "sweep", "false move"] },
