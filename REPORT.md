@@ -1,104 +1,106 @@
-# Task: Backtest Score Parity + Missing Gates (Phase A1 + A2)
+# Task: Fix ICT Integration Bugs + All TypeScript Errors in Bot-Scanner
 
-## Branch: manus/backtest-score-parity
+## Branch: manus/scanner-ict-field-fix
 
 ## Behavior changes
 
-1. **Effective score calculation now includes ICT module adjustments (A1)** — when ICT modules are enabled in a backtest config, the effective score will now be adjusted by the same penalties/bonuses the live scanner applies. Configs with ICT modules disabled (the default) produce identical results to the previous version.
+1. **ICT Displacement MSS module now functional** — Previously, `validateRecentMSS` was called with 2 args (candles, config) instead of 4 (candles, breaks, direction, config), causing it to throw silently. The result was always `null`. Now it correctly validates MSS displacement and can:
+   - **Soft mode:** Apply score penalty when MSS lacks displacement
+   - **Hard mode:** Block trades when MSS lacks displacement
 
-2. **Direction Verdict score adjustment now applies (A1)** — when `useConfirmedTrend` is enabled and daily candles are available, the Direction Verdict consensus engine contributes a score adjustment.
+2. **ICT Judas Swing module now functional** — Previously, `detectJudasSwing` was called with 3 args (candles, direction, config) instead of 4 (candles, mssIndex, direction, config), with a string passed where a number was expected. Now it correctly detects liquidity sweeps and can:
+   - **Soft mode:** Apply score penalty when no sweep found
+   - **Hard mode:** Block trades when no sweep found
 
-3. **Direction Verdict gate now active (Gate 17, A2):** When the backtest computes a Direction Verdict, it replaces the legacy HTF Bias check. Trades where the verdict says `shouldBlock=true` will now be rejected.
+3. **ICT FVG Invalidation module now functional** — Previously, `validateFVGBatch` was called without the required `direction` argument, and the result accessed `.validCount`/`.invalidatedCount`/`.exhaustedCount`/`.totalCount` which don't exist on the interface (producing `NaN` in score calculations). Now it correctly validates FVGs and derives count fields from the results array.
 
-4. **Structural Conviction gate added (Gate 23, A2):** Trades in directions with zero structural support are now blocked when `structuralConvictionEnabled=true` (default).
+4. **ICT Kill Zone module now functional** — Previously accessed `.inKillZone` (undefined) instead of `.isKillZone`, so the soft penalty ALWAYS fired (treating every trade as outside KZ) and the hard gate ALWAYS blocked. Now it correctly reads the KZ result. Config now passes `enableSilverBullet`/`enablePMSession` (previously passed non-existent `silverBullet`/`pmSession`).
 
-5. **Reaction Confirmation gate added (Gate 24, A2):** In ranging markets, trades without at least one reaction factor (Displacement, Reversal Candle, Liquidity Sweep, or AMD Phase) are now blocked.
+5. **ICT Risk Management module now functional** — Previously called `assessRisk` with wrong signature (3 positional args instead of 1 object), accessed `.adjustedRiskPercent` (doesn't exist, should be `.recommendedRiskPercent`), and `.reason` (should be `.reasons`). Now correctly assesses risk and can gate/adjust position sizing.
 
-6. **ICT hard gates added (Gates 25-29, A2):** When ICT modules are set to `"hard"` gate mode, the backtest now respects those blocks. Default mode is `"off"` so no impact unless explicitly enabled.
+6. **Breaker Block entries now functional** — Previously used undefined `spec` variable (would throw at runtime), undefined `volCtx`/`propFirmCtx`/`exitFlags` (would throw). Now uses `SPECS[pair]`, passes `undefined` for vol/prop contexts, and builds exitFlags locally.
 
-7. **Zone Score pre-gate added (A2):** Impulse zones with `totalScore < minZoneScore` (default 4) are now rejected.
+7. **Circuit breaker in MetaApi mirror failure path now functional** — Previously referenced undeclared `connHealth` variable (would throw). Now correctly derives health from `brokerHealthMap[conn.id] || createInitialHealth(conn.id)`.
 
-8. **Minimum TP Distance pre-gate added (A2):** Trades where the TP distance is below the per-symbol minimum (e.g., 15 pips for EUR/USD, 40 pips for XAU/USD) are now rejected.
+8. **Correlation conflict logging now correct** — Previously accessed `.conflictingSymbol` and `.correlation` (don't exist). Now uses `.conflictsWith[0]` and `.severity`.
 
-**Net effect:** The backtest will now produce fewer trades and lower scores when ICT modules are enabled — closer to what the live scanner actually does. Default configs are unchanged.
+9. **Net effect for users with ICT modules disabled (default):** Zero change. All ICT code paths are gated behind `pairConfig.ict*Enabled` flags.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/backtest-engine/index.ts` | Added 6 ICT imports; 140 lines of ICT score logic (A1); replaced Gate 17 with Direction Verdict + legacy fallback; added Gates 23-29; added Zone Score and Min TP pre-gates (A2) |
-| `supabase/functions/backtest-engine/scoreParity.test.ts` | 32 tests for Phase A1 score formula correctness |
-| `supabase/functions/backtest-engine/gatesParity.test.ts` | 29 tests for Phase A2 gate logic correctness |
+| `supabase/functions/bot-scanner/index.ts` | Fixed 8 ICT integration bugs + 10 additional TypeScript errors. Total: 18 errors → 0 in bot-scanner. |
+| `supabase/functions/bot-scanner/ictFieldFix.test.ts` | New regression test file with 14 tests proving correct field names, function signatures, and penalty/gate logic. |
 
 ## Tests added
 
-### scoreParity.test.ts (32 tests)
-- Direction Verdict score adjustment (positive, negative, neutral)
-- ICT HTF score adjustment (enabled, disabled, null)
-- ICT MSS penalty (valid, invalid, disabled)
-- ICT Judas penalty (found, not found, disabled)
-- ICT FVG weighted penalty (none invalid, all invalid, partial)
-- ICT KZ bonus/penalty (in zone, out of zone, disabled)
-- Regression: all ICT off = old formula (5 cases)
-- Regression: hard mode = zero adjustment
-- Regression: off mode = zero adjustment
-
-### gatesParity.test.ts (29 tests)
-- Gate 17: Direction Verdict blocks/passes/fallback to legacy (4 tests)
-- Gate 23: Structural Conviction (5 scenarios)
-- Gate 24: Reaction Confirmation (3 scenarios)
-- Zone Score Gate: passes/blocks/skipped (3 tests)
-- Min TP Gate: passes/blocks/default/XAU (4 tests)
-- Gates 25-29: ICT hard gates (9 tests)
-- Backward compatibility: default config = no new blocks (1 test)
+| Test | Assertion |
+|------|-----------|
+| MSSValidationResult has .isValid field, not .valid | `.isValid` is boolean, `.valid` does not exist |
+| MSSValidationResult returns isValid=true when disabled | Disabled config returns isValid=true (passthrough) |
+| validateRecentMSS requires 4 args | 4-arg call succeeds without throwing |
+| JudasSwingResult has .found field, not .detected | `.found` is boolean, `.detected` does not exist |
+| detectJudasSwing requires 4 args | 4-arg call succeeds without throwing |
+| ICTKillZoneResult has .isKillZone, not .inKillZone | `.isKillZone` is boolean, `.inKillZone` does not exist |
+| BatchFVGValidationResult needs derived count fields | Raw result lacks `.validCount` etc., but has `.results` array for derivation |
+| validateFVGBatch requires 4 args | 4-arg call (with direction) succeeds |
+| Soft mode MSS penalty uses .isValid correctly | Penalty fires only when isValid=false |
+| Soft mode Judas penalty uses .found correctly | Penalty fires only when found=false |
+| Soft mode KZ penalty uses .isKillZone correctly | Prime bonus when in KZ, penalty when outside |
+| Hard gate MSS blocks correctly with .isValid | Does NOT block when isValid=true |
+| Hard gate Judas blocks correctly with .found | Blocks when found=false |
+| Hard gate KZ blocks correctly with .isKillZone | Blocks when isKillZone=false |
 
 ## Tests run
 
 ```
-$ deno test --no-check --allow-read supabase/functions/backtest-engine/gatesParity.test.ts
-ok | 29 passed | 0 failed (42ms)
+$ deno test --no-check --allow-read supabase/functions/bot-scanner/
+ok | 131 passed | 0 failed (1s)
 
-$ deno test --no-check --allow-read supabase/functions/backtest-engine/determinism.test.ts supabase/functions/backtest-engine/scoreParity.test.ts
-ok | 63 passed | 0 failed (166ms)
-
-TOTAL: 92 passed | 0 failed
+$ deno test --no-check --allow-read supabase/functions/backtest-engine/
+ok | 122 passed | 0 failed (522ms)
 ```
 
 ## Regression check
 
-1. **Backward compatibility proven:** Test "Regression: when all ICT configs are off/default, score equals old formula" runs 5 input combinations proving identical results when ICT modules are disabled.
-
-2. **Default config no-ops:** Test "All new gates are no-ops when features disabled" proves default config produces zero new blocks.
-
-3. **Gate function signature backward compatible:** All new parameters have default values (`= null`), so the function signature is non-breaking.
-
-4. **No new TypeScript errors:** All 17 errors in `deno check` are pre-existing (shared module TS2367, chunkProgress declarations, diagnostics type gaps). Zero errors in new code.
-
-5. **All 92 tests passing** including 31 pre-existing determinism tests.
+- **Type check:** `deno check bot-scanner/index.ts` → 0 errors in bot-scanner itself (3 harmless TS2367 remain in shared ICT modules — dead code in "off" mode branches)
+- **Baseline comparison:** Main branch has same 2 permission-related test failures. Our branch: 0 failures with proper permissions.
+- **Users with ICT disabled (default):** Zero code path change — all ICT blocks are gated behind `pairConfig.ict*Enabled` flags
+- **Users with ICT enabled:** Behavior changes from "silently broken" to "working as documented." This is intentional.
+- **No changes to gate definitions, factor weights, or scoring formula** — only integration points fixed.
 
 ## Open questions
 
-1. **Structural Conviction uses entry-TF structure only:** The live scanner uses a separate "conviction timeframe." The backtest uses entry-TF structure data. Minor divergence, acceptable for now.
+1. **The 3 TS2367 errors in shared ICT modules** (`_shared/ictDisplacementMSS.ts`, `_shared/ictJudasSwing.ts`, `_shared/ictKillZones.ts`) are harmless dead-code comparisons in `gateMode === "off"` branches. Fixing requires modifying `_shared/` files — want me to do that on a separate branch?
 
-2. **Min TP pip table hardcoded:** Matches the live scanner's hardcoded table. Should it become configurable?
+2. **configMapper.ts** doesn't map `breakEvenOffsetPips` or `standaloneMultiplier` — these are accessed via `(pairConfig as any)` casts. Should I add them to the mapper for type safety?
 
-3. **Weekly candles not available in backtest:** Direction Verdict and ICT HTF pass `null` for weekly candles. Adding weekly candle fetching would be a separate task.
+3. **Deployment timing:** Since ICT modules were completely non-functional, enabling them now will change trading behavior for any user who had them toggled on. Recommend deploying during low-activity hours and monitoring the first scan cycle.
+
+4. **Structure breaks for MSS:** The fix passes `analysis.structure?.bos ?? []` as the breaks array. This is the best available data, but worth monitoring if the MSS module expects a specific format.
 
 ## Suggested PR title and description
 
-**Title:** `feat(backtest): Port missing gates + ICT score components for live parity`
+**Title:** fix: ICT modules completely non-functional + 18 TypeScript errors resolved
 
 **Description:**
-Brings the backtest engine into alignment with the live bot-scanner by adding:
+The ICT integration layer (Displacement MSS, Judas Swing, FVG Invalidation, Kill Zone, Risk Management) was entirely broken in the live scanner due to:
+- 3 field name mismatches (accessing undefined properties)
+- 3 wrong function call signatures (throwing silently in try/catch)
+- 2 missing derived fields (producing NaN in calculations)
+- 1 config field name error (enableSilverBullet/enablePMSession)
+- 1 ICT Risk module completely wrong call signature + field names
 
-- 5 missing effective score components (Direction Verdict, ICT HTF, MSS, Judas, FVG, KZ adjustments)
-- Direction Verdict gate (Gate 17) replacing legacy HTF Bias
-- Structural Conviction gate (Gate 23)
-- Reaction Confirmation gate (Gate 24)
-- ICT hard gates (Gates 25-29)
-- Zone Score pre-gate
-- Minimum TP Distance pre-gate
+Additionally fixes 8 pre-existing TypeScript errors:
+- Undeclared variables in breaker block path (spec, volCtx, propFirmCtx, exitFlags)
+- Undeclared connHealth in MetaApi mirror failure path
+- null→undefined coercions for rejected setup logger
+- Type narrowing for direction parameter
+- CorrelationConflict field name mismatches
 
-All additions are backward compatible — default config produces identical behavior to before. 92 tests passing.
+**Result:** Bot-scanner TypeScript errors: 18 → 0.
 
-**BEHAVIOR CHANGE:** Backtests with ICT modules enabled or Direction Verdict active will now produce fewer trades and more realistic metrics.
+**Impact:** Zero change for users with ICT disabled (default). For users with ICT enabled, behavior changes from "inert" to "working as documented." Recommend monitoring first scan cycle after deploy.
+
+**Tests:** 14 new regression tests + 131 bot-scanner tests passing + 122 backtest tests passing.

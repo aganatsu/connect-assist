@@ -1528,8 +1528,8 @@ async function runSafetyGates(
       // Numeric correlation from static matrix (returns 0 if pair unknown)
       const rawCorr = getCorrelation(symbol, pos.symbol);
       const effCorr = getDirectionalCorrelation(
-        { symbol, direction },
-        { symbol: pos.symbol, direction: posDir },
+        { symbol, direction: direction as "long" | "short" },
+        { symbol: pos.symbol, direction: posDir as "long" | "short" },
       );
 
       let matched = false;
@@ -4857,16 +4857,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const mssConfig: DisplacementMSSConfig = {
           ...DEFAULT_DISPLACEMENT_MSS_CONFIG,
           minBodyRatio: pairConfig.ictDisplacementMSSMinBodyRatio,
-          minRangeATR: pairConfig.ictDisplacementMSSMinRangeATR,
-          lookback: pairConfig.ictDisplacementMSSLookback,
+          minRangeATRMult: pairConfig.ictDisplacementMSSMinRangeATR,
+          lookbackCandles: pairConfig.ictDisplacementMSSLookback,
         };
-        ictMSSResult = validateRecentMSS(candles, mssConfig);
+        // Build structure breaks from analysis for MSS validation
+        const mssBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])]
+          .map((b: any) => ({ index: b.index as number, type: b.type as "bullish" | "bearish" }));
+        const mssDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        ictMSSResult = validateRecentMSS(candles, mssBreaks, mssDirection, mssConfig);
         const modeTag = pairConfig.ictDisplacementMSSGateMode.toUpperCase();
-        const statusTag = ictMSSResult.valid ? "VALID" : "INVALID";
+        const statusTag = ictMSSResult.isValid ? "VALID" : "INVALID";
         console.log(`[scan ${scanCycleId}] ${pair} ICT MSS [${modeTag}]: ${statusTag} — ${ictMSSResult.reason}`);
         (detail as any).ictMSS = {
           gateMode: pairConfig.ictDisplacementMSSGateMode,
-          valid: ictMSSResult.valid,
+          valid: ictMSSResult.isValid,
           reason: ictMSSResult.reason,
           displacementStrength: ictMSSResult.displacementStrength,
         };
@@ -4882,21 +4886,27 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const judasConfig: JudasSwingConfig = {
           ...DEFAULT_JUDAS_SWING_CONFIG,
-          lookback: pairConfig.ictJudasSwingLookback,
-          minDepthATR: pairConfig.ictJudasSwingMinDepthATR,
+          sweepLookback: pairConfig.ictJudasSwingLookback,
+          minSweepDepthATR: pairConfig.ictJudasSwingMinDepthATR,
           requireCloseBack: pairConfig.ictJudasSwingRequireCloseBack,
         };
         const judasDirection = analysis.direction === "long" ? "bullish" : "bearish";
-        ictJudasResult = detectICTJudasSwing(candles, judasDirection as "bullish" | "bearish", judasConfig);
+        // Find the most recent structure break index for Judas sweep lookback
+        const allBreaks = [...(analysis.structure?.bos || []), ...(analysis.structure?.choch || [])];
+        const alignedBreaks = allBreaks.filter((b: any) => b.type === judasDirection);
+        const mssIndex = alignedBreaks.length > 0
+          ? Math.max(...alignedBreaks.map((b: any) => b.index as number))
+          : candles.length - 1;
+        ictJudasResult = detectICTJudasSwing(candles, mssIndex, judasDirection, judasConfig);
         const modeTag = pairConfig.ictJudasSwingGateMode.toUpperCase();
-        const statusTag = ictJudasResult.detected ? "DETECTED" : "NOT_FOUND";
+        const statusTag = ictJudasResult.found ? "DETECTED" : "NOT_FOUND";
         console.log(`[scan ${scanCycleId}] ${pair} ICT Judas [${modeTag}]: ${statusTag} — ${ictJudasResult.reason}`);
         (detail as any).ictJudas = {
           gateMode: pairConfig.ictJudasSwingGateMode,
-          detected: ictJudasResult.detected,
+          detected: ictJudasResult.found,
           reason: ictJudasResult.reason,
-          sweepLevel: ictJudasResult.sweepLevel,
-          sweepDepthATR: ictJudasResult.sweepDepthATR,
+          sweepLevel: ictJudasResult.sweep?.sweptLevel ?? null,
+          sweepDepthATR: ictJudasResult.sweep?.wickDepthATR ?? null,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Judas error (non-fatal): ${e?.message}`);
@@ -4905,7 +4915,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // ── ICT FVG Invalidation (log-only in "off" mode) ──
-    let ictFVGResult: BatchFVGValidationResult | null = null;
+    let ictFVGResult: (BatchFVGValidationResult & { validCount: number; invalidatedCount: number; exhaustedCount: number; totalCount: number }) | null = null;
     if (pairConfig.ictFVGInvalidationEnabled && analysis.fvgs && analysis.fvgs.length > 0) {
       try {
         const fvgConfig: FVGInvalidationConfig = {
@@ -4913,7 +4923,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           bodyCloseOnly: pairConfig.ictFVGBodyCloseOnly,
           ruleOfTwo: pairConfig.ictFVGRuleOfTwo,
         };
-        ictFVGResult = validateFVGBatch(analysis.fvgs, candles, fvgConfig);
+        const fvgDirection = analysis.direction === "long" ? "bullish" : "bearish";
+        const fvgsForValidation = analysis.fvgs.map((f: any) => ({
+          index: f.index, high: f.high, low: f.low, type: f.type,
+          midpoint: (f.high + f.low) / 2,
+        }));
+        const rawFVGResult = validateFVGBatch(fvgsForValidation, candles, fvgDirection, fvgConfig);
+        // Derive count fields from results array (not on interface but needed downstream)
+        const totalCount = rawFVGResult.results.length;
+        const validCount = rawFVGResult.results.filter((r: any) => r.status === "fresh" || r.status === "first_touch").length;
+        const invalidatedCount = rawFVGResult.results.filter((r: any) => r.status === "invalidated").length;
+        const exhaustedCount = rawFVGResult.results.filter((r: any) => r.status === "exhausted").length;
+        ictFVGResult = { ...rawFVGResult, validCount, invalidatedCount, exhaustedCount, totalCount };
         const modeTag = pairConfig.ictFVGInvalidationGateMode.toUpperCase();
         console.log(`[scan ${scanCycleId}] ${pair} ICT FVG [${modeTag}]: ${ictFVGResult.validCount}/${ictFVGResult.totalCount} valid, ${ictFVGResult.invalidatedCount} invalidated, ${ictFVGResult.exhaustedCount} exhausted`);
         (detail as any).ictFVG = {
@@ -4935,17 +4956,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const kzConfig: ICTKillZoneConfig = {
           ...DEFAULT_ICT_KILLZONE_CONFIG,
-          silverBullet: pairConfig.ictKillZoneSilverBullet,
-          pmSession: pairConfig.ictKillZonePMSession,
+          enableSilverBullet: pairConfig.ictKillZoneSilverBullet,
+          enablePMSession: pairConfig.ictKillZonePMSession,
         };
         ictKZResult = evaluateICTKillZone(new Date(), kzConfig);
         const modeTag = pairConfig.ictKillZoneGateMode.toUpperCase();
-        const statusTag = ictKZResult.inKillZone ? `IN (${ictKZResult.activeZone})` : `OUT (${ictKZResult.reason})`;
+        const statusTag = ictKZResult.isKillZone ? `IN (${ictKZResult.windowLabel})` : `OUT (${ictKZResult.reason})`;
         console.log(`[scan ${scanCycleId}] ${pair} ICT KZ [${modeTag}]: ${statusTag}`);
         (detail as any).ictKillZone = {
           gateMode: pairConfig.ictKillZoneGateMode,
-          inKillZone: ictKZResult.inKillZone,
-          activeZone: ictKZResult.activeZone,
+          inKillZone: ictKZResult.isKillZone,
+          activeZone: ictKZResult.windowLabel,
           isPrime: ictKZResult.isPrime,
           reason: ictKZResult.reason,
         };
@@ -4963,7 +4984,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           ...DEFAULT_ICT_RISK_CONFIG,
           baseRiskPercent: pairConfig.ictRiskBasePercent,
           drawdownHalving: pairConfig.ictRiskDrawdownHalving,
-          maxConsecutiveLosses: pairConfig.ictRiskMaxConsecLosses,
+          maxConsecutiveLossesBeforeStop: pairConfig.ictRiskMaxConsecLosses,
           dailyLossLimit: pairConfig.ictRiskDailyLimit,
           weeklyLossLimit: pairConfig.ictRiskWeeklyLimit,
           maxTradesPerDay: pairConfig.ictRiskMaxTradesPerDay,
@@ -4972,21 +4993,38 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         const { data: recentTrades } = await supabase
           .from("trade_history")
           .select("pnl_percent, closed_at")
-          .eq("bot_config_id", configId)
+          .eq("user_id", userId)
           .order("closed_at", { ascending: false })
           .limit(20);
-        const accountEquity = 10000; // Placeholder — will be replaced by actual account equity fetch
         const tradePnLs = (recentTrades || []).map((t: any) => t.pnl_percent || 0);
-        ictRiskResult = assessRisk(accountEquity, tradePnLs, riskConfig);
+        // Count consecutive losses from most recent trades
+        let consecutiveLosses = 0;
+        for (const pnl of tradePnLs) {
+          if (pnl < 0) consecutiveLosses++;
+          else break;
+        }
+        // Count trades today and compute daily/weekly PnL
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const weekStart = new Date(); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+        const todayTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= todayStart);
+        const weekTrades = (recentTrades || []).filter((t: any) => new Date(t.closed_at) >= weekStart);
+        const dailyPnLPercent = todayTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        const weeklyPnLPercent = weekTrades.reduce((sum: number, t: any) => sum + (t.pnl_percent || 0), 0);
+        ictRiskResult = assessRisk({
+          consecutiveLosses,
+          tradesToday: todayTrades.length,
+          dailyPnLPercent,
+          weeklyPnLPercent,
+          config: riskConfig,
+        });
         const modeTag = "OFF"; // Risk is always informational for now
-        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.adjustedRiskPercent * 100).toFixed(2)}%, reason=${ictRiskResult.reason}`);
+        console.log(`[scan ${scanCycleId}] ${pair} ICT Risk [${modeTag}]: canTrade=${ictRiskResult.canTrade}, riskPct=${(ictRiskResult.effectiveRiskPercent * 100).toFixed(2)}%, reasons=${ictRiskResult.reasons.join("; ")}`);
         (detail as any).ictRisk = {
           canTrade: ictRiskResult.canTrade,
-          adjustedRiskPercent: ictRiskResult.adjustedRiskPercent,
-          reason: ictRiskResult.reason,
-          consecutiveLosses: ictRiskResult.consecutiveLosses,
-          dailyLossPercent: ictRiskResult.dailyLossPercent,
-          weeklyLossPercent: ictRiskResult.weeklyLossPercent,
+          effectiveRiskPercent: ictRiskResult.effectiveRiskPercent,
+          reasons: ictRiskResult.reasons,
+          riskMultiplier: ictRiskResult.riskMultiplier,
         };
       } catch (e: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} ICT Risk error (non-fatal): ${e?.message}`);
@@ -5556,15 +5594,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
     const verdictScoreAdj = directionVerdict?.scoreAdjustment ?? 0;
     // ICT module score adjustments (only apply in "soft" mode; "off" = 0, "hard" = gate block)
-    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.valid)
+    const ictMSSAdj = (pairConfig.ictDisplacementMSSGateMode === "soft" && ictMSSResult && !ictMSSResult.isValid)
       ? -pairConfig.ictDisplacementMSSPenalty : 0;
-    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.detected)
+    const ictJudasAdj = (pairConfig.ictJudasSwingGateMode === "soft" && ictJudasResult && !ictJudasResult.found)
       ? -pairConfig.ictJudasSwingPenalty : 0;
     const ictFVGAdj = (pairConfig.ictFVGInvalidationGateMode === "soft" && ictFVGResult)
       ? -(ictFVGResult.invalidatedCount * pairConfig.ictFVGInvalidatedPenalty + ictFVGResult.exhaustedCount * pairConfig.ictFVGExhaustedPenalty) / Math.max(ictFVGResult.totalCount, 1)
       : 0;
     const ictKZAdj = (pairConfig.ictKillZoneGateMode === "soft" && ictKZResult)
-      ? (ictKZResult.inKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
+      ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
     const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
@@ -5722,7 +5760,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Displacement MSS hard gate: block trade if MSS lacks displacement
-    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.valid) {
+    if (pairConfig.ictDisplacementMSSGateMode === "hard" && ictMSSResult && !ictMSSResult.isValid) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT MSS BLOCKED: ${ictMSSResult.reason}`];
       detail.reason = ictMSSResult.reason;
@@ -5731,7 +5769,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Judas Swing hard gate: block trade if no liquidity sweep detected before MSS
-    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.detected) {
+    if (pairConfig.ictJudasSwingGateMode === "hard" && ictJudasResult && !ictJudasResult.found) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT JUDAS BLOCKED: ${ictJudasResult.reason}`];
       detail.reason = ictJudasResult.reason;
@@ -5749,7 +5787,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       continue;
     }
     // ICT Kill Zone hard gate: block trade if outside all kill zones
-    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.inKillZone) {
+    if (pairConfig.ictKillZoneGateMode === "hard" && ictKZResult && !ictKZResult.isKillZone) {
       detail.status = "rejected";
       detail.rejectionReasons = [`ICT KZ BLOCKED: ${ictKZResult.reason}`];
       detail.reason = ictKZResult.reason;
@@ -5760,8 +5798,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // ICT Risk hard gate: block trade if risk limits exceeded
     if (pairConfig.ictRiskEnabled && ictRiskResult && !ictRiskResult.canTrade) {
       detail.status = "rejected";
-      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reason}`];
-      detail.reason = ictRiskResult.reason;
+      detail.rejectionReasons = [`ICT RISK BLOCKED: ${ictRiskResult.reasons.join("; ")}`];
+      detail.reason = ictRiskResult.reasons.join("; ");
       rejectedCount++;
       scanDetails.push(detail);
       continue;
@@ -5832,8 +5870,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       let smcEnhResult: SMCEnhancementsResult | null = null;
       if (config.smcEnhancements) {
         try {
-          const zoneHigh = analysis.impulseZone?.high ?? analysis.pd?.premiumStart ?? null;
-          const zoneLow = analysis.impulseZone?.low ?? analysis.pd?.discountEnd ?? null;
+          const zoneHigh = (analysis as any).impulseZone?.high ?? (analysis.pd as any)?.premiumStart ?? null;
+          const zoneLow = (analysis as any).impulseZone?.low ?? (analysis.pd as any)?.discountEnd ?? null;
           smcEnhResult = runSMCEnhancements(
             candles,
             dailyCandles.length >= 10 ? dailyCandles : null,
@@ -5894,7 +5932,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // ── Fib 3-Point Extension TP (SMC Enhancement) ──
           // Measures extensions from the ENTRY point (Point C), not from the swing origin.
           // Uses the first extension level that satisfies minRiskReward.
-          if (config.tpMethod === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
+          if ((config.tpMethod as string) === "fib_extension_3pt" && smcEnhResult?.fibExtension) {
             const ext = smcEnhResult.fibExtension;
             // Try each extension level (ordered from nearest to farthest)
             for (const level of ext.levels) {
@@ -6117,7 +6155,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             detail.correlationAdvisory = {
               concentrationScore: portfolioCheck.concentrationScore,
               sizeMultiplier: correlationSizeMultiplier,
-              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictingSymbol, correlation: c.correlation, detail: c.detail })),
+              conflicts: portfolioCheck.conflicts.map(c => ({ type: c.type, pair: c.conflictsWith?.[0] ?? "unknown", correlation: c.severity, detail: c.detail })),
               currencyExposure: portfolioCheck.currencyExposure,
             };
           }
@@ -6171,7 +6209,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // This reflects the higher confidence when the full story (impulse + liquidity +
         // confirmation) aligns vs just the impulse zone engine alone.
         if ((detail as any).signalSource !== "unified") {
-          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, pairConfig.standaloneMultiplier ?? 0.5));
+          const standaloneMultiplier = Math.max(0.1, Math.min(1.0, (pairConfig as any).standaloneMultiplier ?? 0.5));
           const prevSize = size;
           size = Math.round(size * standaloneMultiplier * 100) / 100;
           if (size < 0.01) size = 0.01; // Floor at minimum lot
@@ -6202,7 +6240,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // Break-even
           breakEvenEnabled: pairConfig.breakEvenEnabled,
           breakEvenPips: pairConfig.breakEvenPips,
-          breakEvenOffsetPips: pairConfig.breakEvenOffsetPips,
+          breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
           breakEvenActivated: false,
           // Partial TP
           partialTPEnabled: pairConfig.partialTPEnabled,
@@ -7021,13 +7059,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                      mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
                      // Circuit breaker: record failure
                      const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
-                     brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
+                     brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
                   mirrorResults.push(`${conn.display_name}: error`);
                   // Circuit breaker: record transient failure
-                  brokerHealthMap[conn.id] = updateHealth(connHealth, {
+                  brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), {
                     connectionId: conn.id, success: false, latencyMs: 0,
                     error: connErr?.message || "unknown", isTransient: true,
                   });
@@ -7088,8 +7126,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
             tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
             entryPrice: analysis.lastPrice,
-            stopLoss: analysis.stopLoss,
-            takeProfit: analysis.takeProfit,
+            stopLoss: analysis.stopLoss ?? undefined,
+            takeProfit: analysis.takeProfit ?? undefined,
             rrRatio: analysis.stopLoss && analysis.takeProfit
               ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
               : undefined,
@@ -7115,12 +7153,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             if (breaker.confidence < 0.5) continue; // Minimum confidence threshold
 
             const breakerDir = breaker.direction === "bullish" ? "long" : "short";
+            const breakerSpec = SPECS[pair] || SPECS["EUR/USD"];
             // Entry at the 50% of the breaker zone (OTE within the zone)
             const breakerEntry = (breaker.entryZone.high + breaker.entryZone.low) / 2;
             // SL beyond the far boundary of the breaker zone
             const breakerSL = breakerDir === "long"
-              ? breaker.entryZone.low - (adjustedSlBuffer * spec.pipSize)
-              : breaker.entryZone.high + (adjustedSlBuffer * spec.pipSize);
+              ? breaker.entryZone.low - (adjustedSlBuffer * breakerSpec.pipSize)
+              : breaker.entryZone.high + (adjustedSlBuffer * breakerSpec.pipSize);
             const breakerRisk = Math.abs(breakerEntry - breakerSL);
             const breakerTP = breakerDir === "long"
               ? breakerEntry + breakerRisk * config.tpRatio
@@ -7136,10 +7175,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const breakerRR = Math.abs(breakerTP - breakerEntry) / breakerRisk;
             if (breakerRR < (config.minRiskReward ?? 1.0)) continue;
 
-            // Size calculation
+            // Size calculation (breaker uses half risk, no vol/prop-firm context)
             const breakerSizing = computePositionSize(
               { balance, riskPercent: pairConfig.riskPerTrade * 0.5, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
-              undefined, volCtx, propFirmCtx,
+              undefined, undefined, undefined,
             );
             let breakerSize = Math.max(breakerSizing.lots, 0.01);
 
@@ -7178,7 +7217,24 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               signal_score: breaker.confidence * 100,
               setup_type: "breaker_retest",
               setup_confidence: breaker.confidence,
-              exit_flags: exitFlags,
+              exit_flags: {
+                trailingStopEnabled: pairConfig.trailingStopEnabled,
+                trailingStopPips: pairConfig.trailingStopPips,
+                trailingStopActivation: pairConfig.trailingStopActivation,
+                trailingStopActivated: false,
+                trailingStopLevel: null,
+                breakEvenEnabled: pairConfig.breakEvenEnabled,
+                breakEvenPips: pairConfig.breakEvenPips,
+                breakEvenOffsetPips: (pairConfig as any).breakEvenOffsetPips ?? 0,
+                breakEvenActivated: false,
+                partialTPEnabled: pairConfig.partialTPEnabled,
+                partialTPPercent: pairConfig.partialTPPercent,
+                partialTPLevel: pairConfig.partialTPLevel,
+                partialTPActivated: false,
+                maxHoldEnabled: pairConfig.maxHoldEnabled,
+                maxHoldHours: pairConfig.maxHoldHours,
+                tpRatio: pairConfig.tpRatio,
+              },
               placed_at: new Date().toISOString(),
             });
 
@@ -7211,8 +7267,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
               tier1Factors: analysis.factors?.filter((f: any) => f.present && f.tier === 1).map((f: any) => f.name) ?? [],
               entryPrice: analysis.lastPrice,
-              stopLoss: analysis.stopLoss,
-              takeProfit: analysis.takeProfit,
+              stopLoss: analysis.stopLoss ?? undefined,
+              takeProfit: analysis.takeProfit ?? undefined,
               rrRatio: analysis.stopLoss && analysis.takeProfit
                 ? parseFloat((Math.abs(analysis.takeProfit - analysis.lastPrice) / Math.abs(analysis.lastPrice - analysis.stopLoss)).toFixed(2))
                 : undefined,
