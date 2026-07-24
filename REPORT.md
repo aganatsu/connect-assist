@@ -1,42 +1,41 @@
-# Task: Config Modal Redesign — 4-Tab Architecture
-## Branch: manus/config-modal-redesign
+# Task: Config Modal Sub-Component Migration
+## Branch: manus/config-modal-subcomponents
 ## Behavior changes
-none — pure refactor. Identical config fields, same API calls, same save behavior. No change to what trades get taken, what positions get sized, or what gates pass.
+none — pure refactor. All ICT2022, SMC Enhancement, Factor Weights, and Pair Overrides functionality is preserved identically; only the file location changed.
 
 ## Files modified
-- `src/components/BotConfigModal.tsx` — Rewritten from 3,257 lines to 716-line slim shell (header, presets, search, tab nav, save/cancel). Delegates all tab content to 4 sub-components.
-- `src/components/config/ConfigShared.tsx` (NEW, 137 lines) — Shared HighlightContext, ConfigTabProps interface, and reusable UI components (CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge).
-- `src/components/config/ScanTab.tsx` (NEW, 300 lines) — Strategy toggles, instruments, sessions, opening range, game plan, ICT 2022, SMC enhancements.
-- `src/components/config/EnterTab.tsx` (NEW, 219 lines) — Factor weights (tier-grouped sliders), per-pair gate overrides, zone entry settings (confirmation method, pending orders, cooldown).
-- `src/components/config/ExitTab.tsx` (NEW, 214 lines) — SL/TP methods, trailing stop, break-even, partial TP, time-based exit, Friday close, adaptive trailing, regime-adaptive TP.
-- `src/components/config/RiskTab.tsx` (NEW, 282 lines) — Position sizing method, risk per trade, drawdown limits, concurrent trade limits, portfolio heat, conflict counter, circuit breakers, protection.
+- `src/components/config/ScanTab.tsx` — Expanded from 300 lines to ~560 lines. Now contains full ICT2022 Mentorship module cards (with gate mode selectors, fine-tuning sliders for HTF bias, displacement ratio, Judas sweep pips, FVG body ratio, KZ buffer) and full SMC Enhancements module cards (with gate modes, phase detection thresholds, zone lifecycle params, breaker block params, fib 3-point TP level selector, trendline liquidity params, Enable All/Disable All buttons).
+- `src/components/config/EnterTab.tsx` — Expanded from 219 lines to ~521 lines. Now contains full Factor Weights editor (tier-grouped sliders with reset-to-default, tier scoring explanation) and full Per-Pair Gate Overrides (instrument type grouping, collapsible per-pair editors, recommended overrides button, clear overrides).
 
 ## Tests added
-No new automated tests — this is a pure UI refactor of a React component. The existing TypeScript compilation serves as the primary correctness check (all type contracts preserved).
+- TypeScript compilation (`npx tsc --noEmit`) — verifies all imports, types, and JSX are valid across the new file structure.
 
 ## Tests run
 ```
-npx tsc --noEmit --project tsconfig.app.json
-EXIT CODE: 0
+$ npx tsc --noEmit --project tsconfig.app.json
+EXIT: 0
 ```
+No runtime test framework is configured in this repo (Lovable frontend project). TypeScript type-checking is the primary verification.
 
 ## Regression check
-- All `ConfigTabProps` interfaces match the original `updateField(section, key, value)` signature
-- `TAB_ID_MAP` ensures `RecommendationsDashboard.tsx` (which passes old tab IDs like `entry_exit`, `strategy`, `factorWeights`) continues to work without modification
-- Search index rebuilt with new tab IDs; all original keywords preserved
-- Presets, export/import, save/cancel, and reset logic untouched (identical code)
-- `botConfigApi` calls unchanged
+- All original sub-component code was extracted verbatim from the original BotConfigModal.tsx (commit before redesign, accessed via `git show`)
+- ICT2022_MODULES constant: identical 6 modules with same keys, labels, descriptions, enabledFields, gateFields
+- SMC_ENHANCEMENT_MODULES constant: identical 6 modules with same keys, labels, descriptions, configFields, gateFields, hasParams
+- FACTOR_WEIGHT_DEFS: identical 16 factors with same tiers, default weights, tier points
+- RECOMMENDED_OVERRIDES and OVERRIDE_FIELDS: identical structure
+- All updateField/setConfig/updateStrategy/updateEnhancement patterns preserved
+- Gate mode selector UI (Off/Soft/Hard) and fine-tuning parameters preserved with same min/max/step/defaults
 
 ## Open questions
-1. **ScanTab content completeness**: The ScanTab currently delegates to placeholder sections for ICT 2022 and SMC Enhancements. The original had inline sub-components (`ICT2022Tab`, `SMCEnhancementsTab`, `FactorWeightsTab`, `PairOverridesTab`) that were ~900 lines total. These need to be either:
-   - Extracted as their own files and imported into ScanTab/EnterTab, OR
-   - Inlined into the respective tab files (would make them larger)
-   
-   Currently the ScanTab and EnterTab reference these as `{/* TODO: ICT 2022 modules */}` style placeholders that need the original sub-component code migrated in.
-
-2. **Visual testing**: The refactored modal should be visually tested in the browser to confirm layout parity. The structure is identical but minor CSS differences could exist.
+None — this completes the sub-component migration. The BotConfigModal is now fully decomposed into 4 focused tab files.
 
 ## Suggested PR title and description
-**Title:** `[config-modal-redesign] Decompose 3257-line BotConfigModal into 4-tab architecture`
+**Title:** feat: migrate ICT2022, SMC Enhancements, FactorWeights, PairOverrides into tab components
 
-**Description:** Decomposes the monolithic BotConfigModal.tsx (3,257 lines) into a slim shell (716 lines) + 4 focused tab components (SCAN/ENTER/EXIT/RISK). Pure refactor — no behavior changes. Backward-compatible tab ID mapping preserves RecommendationsDashboard integration.
+**Description:**
+Completes the config modal decomposition started in PR #83. Migrates all remaining inline sub-components into their proper tab files:
+
+- **ScanTab.tsx**: Full ICT 2022 Mentorship (6 modules with gate modes + fine-tuning) and SMC Enhancements (6 modules with gate modes + fine-tuning + Enable/Disable All)
+- **EnterTab.tsx**: Full Factor Weights editor (16 factors, tier-grouped, with sliders and reset) and Per-Pair Gate Overrides (instrument grouping, collapsible editors, recommended overrides)
+
+No behavior changes. TypeScript compiles clean.
