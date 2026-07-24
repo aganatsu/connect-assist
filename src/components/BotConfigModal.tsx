@@ -481,7 +481,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   // ─── Render ─────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
-      <div className="bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl">
+      <div className="bg-card border border-border w-full max-w-4xl h-full md:h-auto md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 md:px-6 py-3 md:py-4 border-b border-border">
           <div className="min-w-0">
@@ -556,7 +556,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
 
         {/* Presets Bar */}
         {customPresets.length > 0 && (
-          <div className="px-6 py-3 border-b border-border bg-secondary/30">
+          <div className="px-6 py-3 border-b border-border bg-secondary/30 shrink-0 max-h-[30vh] overflow-y-auto">
             <div>
               <button
                 onClick={() => setShowMyPresets(!showMyPresets)}
@@ -567,12 +567,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                 {showMyPresets ? <ChevronUp className="h-3 w-3 ml-auto" /> : <ChevronDown className="h-3 w-3 ml-auto" />}
               </button>
               {showMyPresets && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 max-h-[22vh] overflow-y-auto">
                   {customPresets.map((cp: any) => (
                     <div
                       key={cp.id}
-                      className={`group relative p-2.5 border text-left transition-colors cursor-pointer ${isPresetActive(cp.config) ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
-                      onClick={() => applyPresetConfig(cp.config, cp.name)}
+                      className={`group relative p-2.5 border text-left transition-colors cursor-pointer ${isPresetActive(cp.config_json ?? cp.config) ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
+                      onClick={() => applyPresetConfig(cp.config_json ?? cp.config, cp.name)}
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium truncate">{cp.name}</span>
