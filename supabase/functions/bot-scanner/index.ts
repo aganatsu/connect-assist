@@ -51,6 +51,8 @@ import {
   classifySetupType, manageOpenPositions,
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
+import { resolveSymbol } from "../_shared/brokerSymbols.ts";
+import { metaFetch, metaBaseUrl, META_REGIONS, regionCache } from "../_shared/metaApiClient.ts";
 import {
   reconcileBrokerState, reconcilePartialClose,
   type ReconcilePosition, type BrokerConnection,
@@ -94,6 +96,8 @@ import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import {
   detectSession as sharedDetectSession,
+  detectSilverBullet as sharedDetectSilverBullet,
+  detectMacroWindow as sharedDetectMacroWindow,
   toNYTime as sharedToNYTime,
   normalizeSessionFilter,
   isSessionEnabled,
@@ -306,46 +310,8 @@ const DEFAULTS = {
   thesisConvictionRevokeThreshold: 50, // Below this → impulse credit revoked (in active mode)
   thesisConvictionKillThreshold: 30,   // Below this → thesis killed entirely (in active mode)
 };
-// ─── Resolve symbol name with per-symbol overrides or default suffix ──
-// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
-function resolveSymbol(pair: string, conn: any): string {
-  const overrides = conn.symbol_overrides || {};
-  const norm = normalizeSymKey(pair);
-  for (const [k, v] of Object.entries(overrides)) {
-    if (normalizeSymKey(k) === norm && v) return String(v);
-  }
-  const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
-  return base + (conn.symbol_suffix || "");
-}
-// ─── MetaAPI Region Failover ────────────────────────────────────────
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
-async function metaFetch(
-  accountId: string,
-  authToken: string,
-  pathBuilder: (base: string) => string,
-  init?: RequestInit,
-): Promise<{ res: Response; body: string }> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
-  for (const region of order) {
-    const url = pathBuilder(metaBaseUrl(region, accountId));
-    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const res = await fetch(url, { ...init, headers });
-    const body = await res.text();
-    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-    lastBody = body; lastStatus = res.status;
-    if (!/region|not connected to broker/i.test(body)) {
-      return { res: new Response(body, { status: res.status }), body };
-    }
-    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
-  }
-  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
-}
+// resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
+// metaFetch, metaBaseUrl, META_REGIONS, regionCache are now imported from ../_shared/metaApiClient.ts
 
 // ─── Unified Broker Spread Check ────────────────────────────────────
 // Single function for both OANDA and MetaApi spread checks.
@@ -532,45 +498,9 @@ function getEntryRange(entryTf: string): string {
 function toNYTime(utc: Date) { return sharedToNYTime(utc); }
 function detectSession(_config?: any): SessionResult { return sharedDetectSession(); }
 
-// ─── Silver Bullet Windows (DST-aware, NY local time) ────────────
-function detectSilverBullet(): SilverBulletResult {
-  const ny = toNYTime(new Date());
-  const t = ny.t;
-  const windows: { name: string; start: number; end: number }[] = [
-    { name: "London Open SB", start: 3,  end: 4  },
-    { name: "AM SB",          start: 10, end: 11 },
-    { name: "PM SB",          start: 14, end: 15 },
-  ];
-  for (const w of windows) {
-    if (t >= w.start && t < w.end) {
-      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
-    }
-  }
-  return { active: false, window: null, minutesRemaining: 0 };
-}
-
-// ─── ICT Macro Windows (DST-aware, NY local time, ~20min each) ────
-function detectMacroWindow(): MacroWindowResult {
-  const ny = toNYTime(new Date());
-  const tMin = ny.tMin;
-  const windows: { name: string; start: number; end: number }[] = [
-    { name: "London Macro 1",    start:  2 * 60 + 33, end:  2 * 60 + 50 },
-    { name: "London Macro 2",    start:  4 * 60 +  3, end:  4 * 60 + 20 },
-    { name: "NY Pre-Open Macro", start:  8 * 60 + 50, end:  9 * 60 + 10 },
-    { name: "NY AM Macro",       start:  9 * 60 + 50, end: 10 * 60 + 10 },
-    { name: "London Close Macro",start: 10 * 60 + 50, end: 11 * 60 + 10 },
-    { name: "NY Lunch Macro",    start: 11 * 60 + 50, end: 12 * 60 + 10 },
-    { name: "Last Hour Macro",   start: 13 * 60 + 10, end: 13 * 60 + 40 },
-    { name: "PM Macro",          start: 15 * 60 + 15, end: 15 * 60 + 45 },
-  ];
-  for (const w of windows) {
-    if (tMin >= w.start && tMin < w.end) {
-      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
-    }
-  }
-  return { active: false, window: null, minutesRemaining: 0 };
-}
-
+// Local aliases — delegate to _shared/sessions.ts (single source of truth)
+function detectSilverBullet(): SilverBulletResult { return sharedDetectSilverBullet(); }
+function detectMacroWindow(): MacroWindowResult { return sharedDetectMacroWindow(); }
 // ─── ICT AMD Phase Detection (DST-aware, NY local time) ───────────
 function detectAMDPhase(candles: Candle[]): AMDResult {
   if (candles.length < 5) return { phase: "unknown", bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "Insufficient candles" };

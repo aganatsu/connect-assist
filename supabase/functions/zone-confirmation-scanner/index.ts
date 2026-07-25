@@ -33,49 +33,12 @@ import {
   formatConfirmationSummary,
   DEFAULT_ZONE_CONFIRMATION_CONFIG,
 } from "../_shared/zoneConfirmation.ts";
+import { resolveSymbol } from "../_shared/brokerSymbols.ts";
+import { metaFetch } from "../_shared/metaApiClient.ts";
 
-// ─── Constants ──────────────────────────────────────────────────────────────
+// ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
-
-// MetaAPI regions for broker execution
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
-
-async function metaFetch(
-  accountId: string,
-  authToken: string,
-  pathBuilder: (base: string) => string,
-  init?: RequestInit,
-): Promise<{ res: Response; body: string }> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
-  for (const region of order) {
-    const url = pathBuilder(metaBaseUrl(region, accountId));
-    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const res = await fetch(url, { ...init, headers });
-    const body = await res.text();
-    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-    lastBody = body; lastStatus = res.status;
-    if (!/region|not connected to broker/i.test(body)) {
-      return { res: new Response(body, { status: res.status }), body };
-    }
-  }
-  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
-}
-
-// normalizeSymKey is now imported from ../_shared/smcAnalysis.ts
-function resolveSymbol(pair: string, conn: any): string {
-  const overrides = conn.symbol_overrides || {};
-  const norm = normalizeSymKey(pair);
-  for (const [k, v] of Object.entries(overrides)) {
-    if (normalizeSymKey(k) === norm) return v as string;
-  }
-  return pair.replace("/", "");
-}
+// metaFetch + resolveSymbol are now imported from ../_shared/ (single source of truth)
 
 // ─── Candle Fetching ────────────────────────────────────────────────────────
 

@@ -16,6 +16,8 @@
  */
 
 import { SPECS, normalizeSymKey } from "./smcAnalysis.ts";
+import { resolveSymbol } from "./brokerSymbols.ts";
+import { metaFetch } from "./metaApiClient.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 export interface ReconcilePosition {
@@ -64,46 +66,8 @@ export interface ReconcileOptions {
 const mismatchCycles = new Map<string, number>();
 const alertedPositions = new Set<string>(); // Only alert once per position
 
-// ─── MetaAPI Helpers (duplicated minimally to keep _shared self-contained) ──
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
-
-async function metaFetch(
-  accountId: string,
-  authToken: string,
-  pathBuilder: (base: string) => string,
-  init?: RequestInit,
-): Promise<{ res: Response; body: string }> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
-  for (const region of order) {
-    const url = pathBuilder(metaBaseUrl(region, accountId));
-    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const res = await fetch(url, { ...init, headers });
-    const body = await res.text();
-    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-    lastBody = body; lastStatus = res.status;
-    if (!/region|not connected to broker/i.test(body)) {
-      return { res: new Response(body, { status: res.status }), body };
-    }
-  }
-  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
-}
-
-function resolveSymbol(pair: string, conn: BrokerConnection): string {
-  const overrides = conn.symbol_overrides || {};
-  const norm = normalizeSymKey(pair);
-  for (const [k, v] of Object.entries(overrides)) {
-    if (normalizeSymKey(k) === norm && v) return String(v);
-  }
-  const base = pair.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
-  return base + (conn.symbol_suffix || "");
-}
+// metaFetch is now imported from ./metaApiClient.ts (single source of truth)
+// resolveSymbol is now imported from ./brokerSymbols.ts (single source of truth)
 
 // ─── Core Reconciliation ────────────────────────────────────────────────
 export async function reconcileBrokerState(opts: ReconcileOptions): Promise<ReconcileResult[]> {

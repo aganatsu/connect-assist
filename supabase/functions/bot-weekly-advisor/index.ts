@@ -14,80 +14,21 @@ import {
   type ResolvedRejection,
   type ClosedTrade,
 } from "../_shared/gatePerformanceEngine.ts";
+import { normalizeTradeRecord, sendTelegramNotification as sendTelegramShared, type TradeRecord, type TradeReasoning } from "../_shared/advisorCore.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// ─── Types ───────────────────────────────────────────────────
-
-interface TradeRecord {
-  id: string;
-  user_id: string;
-  symbol: string;
-  direction: string;
-  entry_price: number;
-  exit_price: number;
-  sl: number;
-  tp: number;
-  pnl: number;
-  pnl_percent: number;
-  close_reason: string;
-  opened_at: string;
-  closed_at: string;
-  lot_size: number;
-  bot_id?: string;
-  signal_reason?: any;
-}
-
-// ─── Number coercion helpers ────────────────────────────────
+// Minimal number parser (used for balance/peak_balance fields)
 function toSafeNumber(v: unknown, fallback = 0): number {
   if (v === null || v === undefined || v === "") return fallback;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+// ─── Types ───────────────────────────────────────────────────
 
-function normalizeTradeRecord(raw: any): TradeRecord {
-  return {
-    id: raw.id,
-    user_id: raw.user_id,
-    symbol: raw.symbol,
-    direction: raw.direction,
-    entry_price: toSafeNumber(raw.entry_price),
-    exit_price: toSafeNumber(raw.exit_price),
-    sl: toSafeNumber(raw.sl ?? raw.stop_loss),
-    tp: toSafeNumber(raw.tp ?? raw.take_profit),
-    pnl: toSafeNumber(raw.pnl ?? raw.pnl_amount),
-    pnl_percent: toSafeNumber(raw.pnl_percent ?? raw.pnl_pips),
-    close_reason: raw.close_reason ?? "",
-    opened_at: raw.opened_at ?? raw.open_time ?? raw.created_at ?? "",
-    closed_at: raw.closed_at ?? "",
-    lot_size: toSafeNumber(raw.lot_size ?? raw.size),
-    bot_id: raw.bot_id,
-    signal_reason: raw.signal_reason,
-  };
-}
-
-interface TradeReasoning {
-  id: string;
-  user_id: string;
-  symbol: string;
-  direction: string;
-  confluence_score: number;
-  summary: string;
-  factors_json: Array<{
-    name: string;
-    present: boolean;
-    weight: number;
-    detail: string;
-    group?: string;
-  }>;
-  session?: string;
-  timeframe?: string;
-  created_at: string;
-  bot_id?: string;
-}
 
 interface WeeklyMetrics {
   weekLabel: string;
@@ -1258,49 +1199,10 @@ async function sendTelegramNotification(
   if (diagnosis.past_recommendation_review) {
     message += `📝 *Past Recommendations:* ${diagnosis.past_recommendation_review}\n\n`;
   }
-
   message += `_Open dashboard to review and approve._`;
 
-  // Fetch Telegram chat IDs from user_settings (same source as bot-scanner)
-  const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
-  const prefs = (userSettings?.preferences_json as any) || {};
-  const telegramChatIds: string[] = (() => {
-    const list = Array.isArray(prefs.telegramChatIds) ? prefs.telegramChatIds : [];
-    const ids = list.map((c: any) => typeof c === "string" ? c : String(c?.id ?? "")).filter(Boolean);
-    if (ids.length > 0) return ids;
-    return prefs.telegramChatId ? [String(prefs.telegramChatId)] : [];
-  })();
-
-  if (telegramChatIds.length === 0) {
-    console.log(`[weekly-advisor] No Telegram chat IDs configured for user ${userId}, skipping notification`);
-    return;
-  }
-
-  // Check notification category toggle
-  const notifyCategories: Record<string, boolean> = prefs.telegramNotifyCategories || {};
-  if (notifyCategories["weekly_advisor"] === false) {
-    console.log(`[weekly-advisor] weekly_advisor notifications disabled for user ${userId}, skipping`);
-    return;
-  }
-
-  // Send via telegram-notify Edge Function to each configured chat ID
-  for (const chatId of telegramChatIds) {
-    try {
-      const notifyResp = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-        body: JSON.stringify({ chat_id: chatId, message }),
-      });
-      if (!notifyResp.ok) {
-        const errBody = await notifyResp.text();
-        console.warn(`[weekly-advisor] Telegram notify failed for chat ${chatId}: ${notifyResp.status} ${errBody.slice(0, 200)}`);
-      } else {
-        console.log(`[weekly-advisor] Telegram notify sent OK to chat ${chatId}`);
-      }
-    } catch (e: any) {
-      console.error(`[weekly-advisor] Telegram notify error for chat ${chatId}:`, e?.message);
-    }
-  }
+  // Use shared Telegram delivery from advisorCore (single source of truth)
+  await sendTelegramShared(supabase, userId, "weekly_advisor", message);
 }
 
 // ─── Main Handler ────────────────────────────────────────────
