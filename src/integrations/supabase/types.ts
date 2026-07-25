@@ -247,6 +247,33 @@ export type Database = {
         }
         Relationships: []
       }
+      config_backups: {
+        Row: {
+          backup_id: string
+          config_id: string
+          config_snapshot: Json
+          created_at: string
+          id: string
+          user_id: string
+        }
+        Insert: {
+          backup_id: string
+          config_id: string
+          config_snapshot?: Json
+          created_at?: string
+          id?: string
+          user_id: string
+        }
+        Update: {
+          backup_id?: string
+          config_id?: string
+          config_snapshot?: Json
+          created_at?: string
+          id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       config_presets: {
         Row: {
           config_json: Json
@@ -295,6 +322,57 @@ export type Database = {
           key?: string
           updated_at?: string
           value?: string
+        }
+        Relationships: []
+      }
+      optimizer_runs: {
+        Row: {
+          auto_applied: boolean | null
+          baseline_score: number | null
+          best_score: number | null
+          completed_at: string | null
+          config_snapshot: Json | null
+          error_message: string | null
+          id: string
+          improvement_percent: number | null
+          reject_reason: string | null
+          result_summary: Json | null
+          started_at: string
+          status: string
+          trials_count: number | null
+          user_id: string
+        }
+        Insert: {
+          auto_applied?: boolean | null
+          baseline_score?: number | null
+          best_score?: number | null
+          completed_at?: string | null
+          config_snapshot?: Json | null
+          error_message?: string | null
+          id?: string
+          improvement_percent?: number | null
+          reject_reason?: string | null
+          result_summary?: Json | null
+          started_at?: string
+          status?: string
+          trials_count?: number | null
+          user_id: string
+        }
+        Update: {
+          auto_applied?: boolean | null
+          baseline_score?: number | null
+          best_score?: number | null
+          completed_at?: string | null
+          config_snapshot?: Json | null
+          error_message?: string | null
+          id?: string
+          improvement_percent?: number | null
+          reject_reason?: string | null
+          result_summary?: Json | null
+          started_at?: string
+          status?: string
+          trials_count?: number | null
+          user_id?: string
         }
         Relationships: []
       }
