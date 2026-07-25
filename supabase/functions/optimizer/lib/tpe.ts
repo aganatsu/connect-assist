@@ -91,6 +91,19 @@ class SeededRNG {
     const z = Math.sqrt(-2 * Math.log(u1 || 1e-10)) * Math.cos(2 * Math.PI * u2);
     return mean + z * std;
   }
+
+  /** Serialize RNG state for pause/resume */
+  getState(): number[] {
+    return [this.state[0], this.state[1], this.state[2], this.state[3]];
+  }
+
+  /** Restore RNG state from serialized form */
+  setState(s: number[]): void {
+    this.state[0] = s[0] >>> 0;
+    this.state[1] = s[1] >>> 0;
+    this.state[2] = s[2] >>> 0;
+    this.state[3] = s[3] >>> 0;
+  }
 }
 
 // ─── Kernel Density Estimation ───
@@ -233,6 +246,25 @@ export class TPEOptimizer {
   loadTrials(trials: Trial[]): void {
     this.trials = [...trials];
     this.nextId = Math.max(0, ...trials.map(t => t.id)) + 1;
+  }
+
+  /** Serialize full TPE state for pause/resume (including RNG state) */
+  serialize(): { trials: Trial[]; nextId: number; rngState: number[]; config: TPEConfig } {
+    return {
+      trials: this.trials,
+      nextId: this.nextId,
+      rngState: this.rng.getState(),
+      config: this.config,
+    };
+  }
+
+  /** Restore TPE from serialized state (exact continuation) */
+  static restore(paramSpecs: ParameterSpec[], state: { trials: Trial[]; nextId: number; rngState: number[]; config: TPEConfig }): TPEOptimizer {
+    const tpe = new TPEOptimizer(paramSpecs, state.config);
+    tpe.trials = state.trials;
+    tpe.nextId = state.nextId;
+    tpe.rng.setState(state.rngState);
+    return tpe;
   }
 
   // ─── Private Methods ───
