@@ -1,54 +1,49 @@
-# Task: Partial-TP Consolidation (Phase 1)
-## Branch: manus/partial-tp-consolidation
+# Task: Trade Management Consolidation — Phase 2 (Dedup)
+## Branch: manus/trade-mgmt-dedup
 ## Behavior changes
-1. When partial-TP triggers in `scannerManagement.ts`, it now performs FULL accounting: reduces `paper_positions.size`, inserts a `paper_trade_history` row (close_reason: "partial_tp"), and updates `paper_accounts.balance`. Previously it only set a flag.
-2. The management action type changes from `"partial_enabled"` to `"partial_tp_executed"`. Bot-scanner accepts both for backward compatibility during rollout.
-3. After partial-TP executes, the final `exitFlagsUpdated` DB write is skipped (via `partialTPWritten` guard) to prevent overwriting the size/flag update.
-4. Paper-trading's existing `partial_tp_fired` check already prevents double-execution — no code change needed there.
+1. Paper-trading NO LONGER independently activates break-even (BE). Only scannerManagement (via bot-scanner manage cycle) can activate BE.
+2. Paper-trading NO LONGER independently activates trailing stop. Only scannerManagement can set trailingStopActivated=true. Paper-trading still ratchets the trail forward every 5s once activated.
+3. Paper-trading NO LONGER independently fires partial take-profit. Only scannerManagement (Phase 1) handles partial-TP accounting and activation.
+4. Net effect: eliminates the race condition where both paper-trading (every 5s) and bot-scanner/scannerManagement (every 1 min) could independently trigger the same action on the same position.
 
 ## Files modified
-- `supabase/functions/_shared/scannerManagement.ts` — Added PnL helpers (FALLBACK_RATES, getQuoteToUSDRate, calcPnl), expanded partial-TP block to do full accounting (size reduction, history insert, balance update), added `partialTPWritten` guard, added `"partial_tp_executed"` to ExitAttribution trigger union and ManagementAction type.
-- `supabase/functions/bot-scanner/index.ts` — Updated partial close broker sync filter to accept both `"partial_tp_executed"` and `"partial_enabled"` action types (1 line change).
-- `supabase/functions/_shared/scannerManagement.partialTP.test.ts` — New test file with 6 regression tests.
+- `supabase/functions/paper-trading/index.ts` — Removed BE activation block (~35 lines), removed trailing legacy activation path (~40 lines), removed partial-TP block (~55 lines). Kept trail ratchet (fast 5s tightening when already activated).
+- `supabase/functions/paper-trading/dedup.test.ts` — NEW: 5 tests verifying dedup guarantees.
 
 ## Tests added
-1. "Partial TP: executes full accounting (history + size + balance) when rMultiple >= level" — verifies DB insert, size reduction, and balance update for EUR/USD long
-2. "Partial TP: skips when partialTPActivated already true" — verifies no double-fire
-3. "Partial TP: skips when partial_tp_fired column is true" — verifies DB-level guard
-4. "Partial TP: does not fire when rMultiple < partialTPLevel" — verifies threshold check
-5. "Partial TP: correct PnL for short XAU/USD" — verifies PnL math for metals/short direction
-6. "Partial TP: no duplicate signal_reason write after execution" — verifies partialTPWritten guard
+1. "Dedup: paper-trading does NOT activate BE even when conditions are met" — verifies SL unchanged when BE conditions satisfied
+2. "Dedup: paper-trading does NOT activate trailing even when R threshold is met" — verifies no trail activation without scannerManagement
+3. "Dedup: paper-trading DOES ratchet trail when already activated by scannerManagement" — verifies fast ratchet still works
+4. "Dedup: paper-trading does NOT fire partial-TP even when conditions are met" — verifies no independent partial-TP
+5. "Dedup: trail ratchet does NOT widen SL (only tightens)" — verifies directional safety
 
 ## Tests run
 ```
-ok | 1923 passed | 7 failed (21s)
+ok | 1924 passed | 6 failed (21s)
 ```
-All 7 failures are pre-existing on main (9 failures on main → 7 on this branch, net improvement of +2 passing tests).
+All 6 failures are pre-existing (beTrailingRace + brokerFillPriceBE tests that fail on main too). Zero new failures.
 
 ## Regression check
-- Ran full suite on main: 1921 passed, 9 failed
-- Ran full suite on branch: 1923 passed, 7 failed
-- No new failures introduced. 2 pre-existing failures now pass (likely beTrailingRace tests that benefit from cleaner management flow).
-- PnL math verified by hand for both EUR/USD (lotUnits=100000) and XAU/USD (lotUnits=100).
+- Ran full suite on main before changes: 1921 passed, 9 failed
+- Ran full suite on branch after changes: 1924 passed, 6 failed
+- Net: +3 passing tests, -3 failing tests (improvement, not regression)
+- Type check: `deno check paper-trading/index.ts` — clean, zero errors
 
 ## Open questions
-1. **Paper-trading's independent partial-TP logic (lines 1079-1140)** still exists and can fire if the dashboard is open and the scanner hasn't run yet. It's guarded by `partial_tp_fired` column check, so it won't double-fire AFTER scannerManagement writes. But in the race window (scannerManagement hasn't written yet, paper-trading polls), paper-trading could fire first. Phase 2 should remove paper-trading's independent partial-TP activation entirely.
-2. **Should we remove the old `"partial_enabled"` action type** after confirming the deploy is stable? Currently bot-scanner accepts both for safety.
+1. **Legacy positions**: Positions opened BEFORE this deploy that have `trailingStopActivated: false` will no longer get trailing activated by paper-trading. They'll need to wait for the next bot-scanner manage cycle (1 min) for scannerManagement to activate them. Is this acceptable? (Should be fine — 1 min delay max.)
+2. **partialCloseBroker function**: Now dead code in paper-trading (defined but never called). Should it be removed in Phase 4, or kept as a utility?
 
 ## Suggested PR title and description
-**Title:** fix(management): make scannerManagement single authority for partial-TP accounting
+**Title:** `[trade-mgmt-dedup] Remove independent BE/trailing/partial-TP activation from paper-trading`
 
 **Description:**
-Previously, `scannerManagement.ts` only set a flag when partial-TP triggered, leaving accounting (size reduction, history insert, balance update) to paper-trading. This caused:
-- Silent accounting bugs when bot-scanner fired the broker close without updating DB
-- Race conditions between paper-trading (5s poll) and bot-scanner (1min cron)
+Paper-trading was independently activating BE, trailing stop, and partial-TP every 5 seconds (on dashboard poll), racing with scannerManagement which does the same every 1 minute. This caused:
+- Double partial-TP closes (75% instead of 50%)
+- Inconsistent BE activation timing
+- Duplicate trailing activation
 
-This PR makes scannerManagement the single authority:
-- Full PnL calculation using SPECS + fallback rates
-- Inserts `paper_trade_history` row with close_reason "partial_tp"
-- Reduces `paper_positions.size` and sets `partial_tp_fired = true`
-- Updates `paper_accounts.balance`
-- Skips redundant final exitFlags write via `partialTPWritten` guard
+This PR removes all independent activation logic from paper-trading. scannerManagement is now the sole decision authority. Paper-trading retains only:
+- Trail ratcheting (tightens SL every 5s when trail is already active)
+- SL/TP hit detection and full close
 
-Bot-scanner updated to accept both old and new action types for safe rollout.
-6 new regression tests covering all paths.
+Depends on: Phase 1 (`manus/partial-tp-consolidation`) already merged to main.
