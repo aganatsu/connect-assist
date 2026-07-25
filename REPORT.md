@@ -1,45 +1,54 @@
-# Task: Add crypto/metals/energy correlation groups + min-lot floor budget guard
-## Branch: manus/sizing-correlation-minlot
+# Task: Partial-TP Consolidation (Phase 1)
+## Branch: manus/partial-tp-consolidation
 ## Behavior changes
-1. **New correlation groups recognized:** XAU/USD + XAG/USD (METALS), BTC/USD + ETH/USD (CRYPTO_MAJORS), US30 + NAS100 + SPX500 (RISK_ON_EQUITY), XAU/USD + US Oil (USD_HAVENS). Previously, trades in these pairs had zero correlation coverage — the system would happily open max-size positions in both XAU/USD and XAG/USD simultaneously. Now they are treated as correlated and subject to the `maxCorrelatedExposure` cap.
-2. **Min-lot floor no longer silently exceeds hard budget caps.** Previously, if portfolio heat, correlation, or prop-firm daily loss caps reduced the position to below 0.01 lots, the system would floor it to 0.01 lots regardless — potentially risking more USD than the cap allowed. Now, if 0.01 lots would breach the tightest applicable cap, the trade is **rejected** with a clear reason instead of being taken at over-budget size.
+1. When partial-TP triggers in `scannerManagement.ts`, it now performs FULL accounting: reduces `paper_positions.size`, inserts a `paper_trade_history` row (close_reason: "partial_tp"), and updates `paper_accounts.balance`. Previously it only set a flag.
+2. The management action type changes from `"partial_enabled"` to `"partial_tp_executed"`. Bot-scanner accepts both for backward compatibility during rollout.
+3. After partial-TP executes, the final `exitFlagsUpdated` DB write is skipped (via `partialTPWritten` guard) to prevent overwriting the size/flag update.
+4. Paper-trading's existing `partial_tp_fired` check already prevents double-execution — no code change needed there.
 
 ## Files modified
-- `supabase/functions/_shared/unifiedPositionSizing.ts` — Added 4 new correlation groups (METALS, CRYPTO_MAJORS, RISK_ON_EQUITY, USD_HAVENS). Added `hardCapUSD` tracking through portfolio heat, correlation, and prop-firm cap steps. Modified Step 6 (min-lot floor) to check whether 0.01 lots would exceed the tightest hard cap, and reject if so.
-- `supabase/functions/_shared/unifiedPositionSizing.test.ts` — Added 7 new tests covering new correlation groups and min-lot floor budget guard.
+- `supabase/functions/_shared/scannerManagement.ts` — Added PnL helpers (FALLBACK_RATES, getQuoteToUSDRate, calcPnl), expanded partial-TP block to do full accounting (size reduction, history insert, balance update), added `partialTPWritten` guard, added `"partial_tp_executed"` to ExitAttribution trigger union and ManagementAction type.
+- `supabase/functions/bot-scanner/index.ts` — Updated partial close broker sync filter to accept both `"partial_tp_executed"` and `"partial_enabled"` action types (1 line change).
+- `supabase/functions/_shared/scannerManagement.partialTP.test.ts` — New test file with 6 regression tests.
 
 ## Tests added
-1. `areCorrelated: XAU/USD and XAG/USD are in METALS group` — verifies correlation adjustment triggers for metals pairs
-2. `areCorrelated: BTC/USD and ETH/USD are in CRYPTO_MAJORS group` — verifies rejection when crypto correlated exposure exceeds cap
-3. `areCorrelated: US30 and NAS100 are in RISK_ON_EQUITY group` — verifies rejection for equity index correlation
-4. `areCorrelated: XAU/USD not correlated with BTC/USD (different groups)` — verifies no false positives across unrelated groups
-5. `min-lot floor rejects when 0.01 lots would exceed portfolio heat budget` — XAU/USD with $10 remaining heat, 0.01 lots would risk $100 → rejected
-6. `min-lot floor rejects when 0.01 lots would exceed prop-firm daily loss budget` — XAU/USD with $5 daily loss remaining, 0.01 lots would risk $50 → rejected
-7. `min-lot floor allows when 0.01 lots is within budget (EUR/USD + heat)` — confirms normal heat reduction still works without false rejection
+1. "Partial TP: executes full accounting (history + size + balance) when rMultiple >= level" — verifies DB insert, size reduction, and balance update for EUR/USD long
+2. "Partial TP: skips when partialTPActivated already true" — verifies no double-fire
+3. "Partial TP: skips when partial_tp_fired column is true" — verifies DB-level guard
+4. "Partial TP: does not fire when rMultiple < partialTPLevel" — verifies threshold check
+5. "Partial TP: correct PnL for short XAU/USD" — verifies PnL math for metals/short direction
+6. "Partial TP: no duplicate signal_reason write after execution" — verifies partialTPWritten guard
 
 ## Tests run
 ```
-ok | 28 passed | 0 failed (14ms)  [unifiedPositionSizing.test.ts only]
-ok | 1918 passed | 6 failed (19s) [full suite — 6 failures are pre-existing on main (BE trailing tests)]
+ok | 1923 passed | 7 failed (21s)
 ```
+All 7 failures are pre-existing on main (9 failures on main → 7 on this branch, net improvement of +2 passing tests).
 
 ## Regression check
-- All 21 existing position sizing tests pass unchanged — the new code only adds behavior for previously-uncovered asset classes and for the edge case where min-lot would breach a cap.
-- Existing forex pairs (EUR/USD, GBP/USD, etc.) continue to be correlated exactly as before — the new groups only add coverage for crypto/metals/energy/indices.
-- The `hardCapUSD` variable starts at `Infinity` and is only set when a cap actually reduces the position. If no cap fires, behavior is identical to before (min-lot floor applies unconditionally).
+- Ran full suite on main: 1921 passed, 9 failed
+- Ran full suite on branch: 1923 passed, 7 failed
+- No new failures introduced. 2 pre-existing failures now pass (likely beTrailingRace tests that benefit from cleaner management flow).
+- PnL math verified by hand for both EUR/USD (lotUnits=100000) and XAU/USD (lotUnits=100).
 
 ## Open questions
-- The `USD_HAVENS` group links XAU/USD and US Oil. This is a loose correlation (both react to USD strength/risk sentiment). If you want tighter grouping, we could remove this or make it a separate "soft correlation" tier with a different cap.
-- `SPX500` is in the RISK_ON_EQUITY group but doesn't appear in the SPECS table in smcAnalysis.ts. If the bot ever trades SPX500, it will fall back to EUR/USD specs for sizing. Consider adding it to SPECS if it's a tradeable instrument.
+1. **Paper-trading's independent partial-TP logic (lines 1079-1140)** still exists and can fire if the dashboard is open and the scanner hasn't run yet. It's guarded by `partial_tp_fired` column check, so it won't double-fire AFTER scannerManagement writes. But in the race window (scannerManagement hasn't written yet, paper-trading polls), paper-trading could fire first. Phase 2 should remove paper-trading's independent partial-TP activation entirely.
+2. **Should we remove the old `"partial_enabled"` action type** after confirming the deploy is stable? Currently bot-scanner accepts both for safety.
 
 ## Suggested PR title and description
-**Title:** feat(sizing): add crypto/metals/equity correlation groups + min-lot budget guard
+**Title:** fix(management): make scannerManagement single authority for partial-TP accounting
 
 **Description:**
-Two position sizing improvements:
+Previously, `scannerManagement.ts` only set a flag when partial-TP triggered, leaving accounting (size reduction, history insert, balance update) to paper-trading. This caused:
+- Silent accounting bugs when bot-scanner fired the broker close without updating DB
+- Race conditions between paper-trading (5s poll) and bot-scanner (1min cron)
 
-1. **Correlation coverage for non-forex assets** — adds METALS (XAU/XAG), CRYPTO_MAJORS (BTC/ETH), RISK_ON_EQUITY (US30/NAS100/SPX500), and USD_HAVENS (XAU/Oil) groups. Previously these asset classes had zero correlation tracking.
+This PR makes scannerManagement the single authority:
+- Full PnL calculation using SPECS + fallback rates
+- Inserts `paper_trade_history` row with close_reason "partial_tp"
+- Reduces `paper_positions.size` and sets `partial_tp_fired = true`
+- Updates `paper_accounts.balance`
+- Skips redundant final exitFlags write via `partialTPWritten` guard
 
-2. **Min-lot floor respects hard caps** — when portfolio heat, correlation, or prop-firm daily loss caps reduce a position below 0.01 lots, the system now checks whether 0.01 lots would exceed the tightest cap. If so, the trade is rejected rather than silently taken at over-budget size.
-
-Both changes are additive — existing forex correlation behavior is unchanged.
+Bot-scanner updated to accept both old and new action types for safe rollout.
+6 new regression tests covering all paths.

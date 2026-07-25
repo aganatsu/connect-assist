@@ -2228,7 +2228,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
           // ── Partial TP broker sync ──
-          const partialActions = activeActions.filter(a => a.action === "partial_enabled");
+          const partialActions = activeActions.filter(a => a.action === "partial_tp_executed" || a.action === "partial_enabled");
           if (partialActions.length > 0) {
             const { data: liveConnsP } = await supabase.from("broker_connections")
               .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
