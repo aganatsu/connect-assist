@@ -1,173 +1,225 @@
 /**
- * Weekly Scheduler Integration
+ * Scheduler — Deduplication and timing logic for the optimizer.
  * 
- * This module provides the scheduling logic for running the optimizer
- * on a weekly basis (Sunday nights). It can be triggered by:
+ * The actual cron trigger is set up via Supabase pg_cron migration
+ * (see: migrations/20260724120001_add_optimizer_weekly_cron.sql).
  * 
- * 1. Supabase pg_cron (recommended for production)
+ * This module provides:
+ * - Deduplication helpers (has it run this week?)
+ * - Run lifecycle tracking (start/complete/fail)
+ * - Schedule info for the CLI
+ * 
+ * Trigger options:
+ * 1. Supabase pg_cron (production — migration already applied)
  * 2. External cron service calling the edge function
  * 3. Manual CLI invocation
- * 
- * The scheduler:
- * - Checks if it's the right time to run (Sunday 22:00-23:59 UTC)
- * - Prevents duplicate runs within the same week
- * - Logs run history to Supabase
- * - Handles errors gracefully with retry logic
  */
 
-export interface SchedulerConfig {
-  /** Day of week to run (0=Sunday, 1=Monday, ...) */
-  runDay: number;
-  /** Hour to start (UTC, 0-23) */
-  runHourUTC: number;
-  /** Supabase URL for state tracking */
-  supabaseUrl: string;
-  /** Supabase key for state tracking */
-  supabaseKey: string;
-}
+// ─── Types ───
 
-export interface RunRecord {
+export interface OptimizerRunRecord {
   id: string;
+  user_id: string;
+  status: "running" | "completed" | "failed";
   started_at: string;
   completed_at?: string;
-  status: "running" | "completed" | "failed";
-  result_summary?: string;
-  error?: string;
+  trials_count?: number;
+  baseline_score?: number;
+  best_score?: number;
+  improvement_percent?: number;
+  auto_applied?: boolean;
+  reject_reason?: string;
+  config_snapshot?: Record<string, any>;
+  result_summary?: Record<string, any>;
+  error_message?: string;
 }
 
-/**
- * Check if the optimizer should run now based on schedule.
- */
-export function shouldRunNow(config: SchedulerConfig): boolean {
-  const now = new Date();
-  const dayOfWeek = now.getUTCDay();
-  const hour = now.getUTCHours();
-
-  return dayOfWeek === config.runDay && hour >= config.runHourUTC;
-}
+// ─── Deduplication ───
 
 /**
- * Check if a run has already been completed this week.
+ * Check if the optimizer has already run this week for the given user.
+ * Returns the most recent run if found, null otherwise.
  */
-export async function hasRunThisWeek(config: SchedulerConfig): Promise<boolean> {
-  // Get start of current week (Sunday)
-  const now = new Date();
-  const daysSinceSunday = now.getUTCDay();
-  const weekStart = new Date(now);
-  weekStart.setUTCDate(now.getUTCDate() - daysSinceSunday);
-  weekStart.setUTCHours(0, 0, 0, 0);
+export async function getRecentRun(
+  supabaseUrl: string,
+  supabaseKey: string,
+  userId: string,
+): Promise<OptimizerRunRecord | null> {
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
 
-  const url = `${config.supabaseUrl}/rest/v1/optimizer_runs?started_at=gte.${weekStart.toISOString()}&status=in.(completed,running)&limit=1`;
+  const url = `${supabaseUrl}/rest/v1/optimizer_runs?user_id=eq.${userId}&started_at=gte.${oneWeekAgo}&status=in.(running,completed)&order=started_at.desc&limit=1`;
 
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "apikey": config.supabaseKey,
-        "Authorization": `Bearer ${config.supabaseKey}`,
-      },
-    });
-
-    if (!response.ok) return false;
-    const data = await response.json();
-    return data.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Record the start of an optimization run.
- */
-export async function recordRunStart(config: SchedulerConfig): Promise<string> {
-  const runId = `run_${Date.now()}`;
-  const record: RunRecord = {
-    id: runId,
-    started_at: new Date().toISOString(),
-    status: "running",
-  };
-
-  const url = `${config.supabaseUrl}/rest/v1/optimizer_runs`;
-  await fetch(url, {
-    method: "POST",
+  const response = await fetch(url, {
     headers: {
-      "apikey": config.supabaseKey,
-      "Authorization": `Bearer ${config.supabaseKey}`,
-      "Content-Type": "application/json",
-      "Prefer": "return=minimal",
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
     },
-    body: JSON.stringify(record),
   });
 
-  return runId;
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  return data.length > 0 ? data[0] : null;
 }
 
 /**
- * Record the completion of an optimization run.
+ * Check if it's a valid time to run (Sunday 20:00-23:59 UTC).
+ * Provides a wider window than the exact cron time for manual triggers.
+ */
+export function isValidRunWindow(): boolean {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0 = Sunday
+  const hour = now.getUTCHours();
+  return day === 0 && hour >= 20;
+}
+
+/**
+ * Should the optimizer run now? Combines time check + dedup.
+ * Used by the CLI for manual scheduling decisions.
+ */
+export async function shouldRunNow(
+  supabaseUrl: string,
+  supabaseKey: string,
+  userId: string,
+  ignoreTimeWindow = false,
+): Promise<{ shouldRun: boolean; reason: string }> {
+  // Check time window (skip for manual/forced runs)
+  if (!ignoreTimeWindow && !isValidRunWindow()) {
+    return { shouldRun: false, reason: "Outside valid run window (Sunday 20:00-23:59 UTC)" };
+  }
+
+  // Check deduplication
+  const recentRun = await getRecentRun(supabaseUrl, supabaseKey, userId);
+  if (recentRun) {
+    if (recentRun.status === "running") {
+      return { shouldRun: false, reason: `Run already in progress (${recentRun.id})` };
+    }
+    return { shouldRun: false, reason: `Already completed this week (${recentRun.id} at ${recentRun.started_at})` };
+  }
+
+  return { shouldRun: true, reason: "Ready to run" };
+}
+
+// ─── Run Lifecycle ───
+
+/**
+ * Record the start of an optimizer run.
+ */
+export async function recordRunStart(
+  supabaseUrl: string,
+  supabaseKey: string,
+  userId: string,
+  configSnapshot?: Record<string, any>,
+): Promise<string | null> {
+  const url = `${supabaseUrl}/rest/v1/optimizer_runs`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
+      "Content-Type": "application/json",
+      "Prefer": "return=representation",
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      status: "running",
+      config_snapshot: configSnapshot ?? null,
+    }),
+  });
+
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  return data[0]?.id ?? null;
+}
+
+/**
+ * Record the completion of an optimizer run.
  */
 export async function recordRunComplete(
-  config: SchedulerConfig,
+  supabaseUrl: string,
+  supabaseKey: string,
   runId: string,
-  status: "completed" | "failed",
-  summary?: string,
-  error?: string,
+  summary: {
+    trialsCount: number;
+    baselineScore: number;
+    bestScore: number | null;
+    improvementPercent: number;
+    autoApplied: boolean;
+    rejectReason?: string;
+    resultSummary?: Record<string, any>;
+  },
 ): Promise<void> {
-  const url = `${config.supabaseUrl}/rest/v1/optimizer_runs?id=eq.${runId}`;
+  const url = `${supabaseUrl}/rest/v1/optimizer_runs?id=eq.${runId}`;
   await fetch(url, {
     method: "PATCH",
     headers: {
-      "apikey": config.supabaseKey,
-      "Authorization": `Bearer ${config.supabaseKey}`,
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=minimal",
     },
     body: JSON.stringify({
+      status: "completed",
       completed_at: new Date().toISOString(),
-      status,
-      result_summary: summary,
-      error,
+      trials_count: summary.trialsCount,
+      baseline_score: summary.baselineScore,
+      best_score: summary.bestScore,
+      improvement_percent: summary.improvementPercent,
+      auto_applied: summary.autoApplied,
+      reject_reason: summary.rejectReason ?? null,
+      result_summary: summary.resultSummary ?? null,
     }),
   });
 }
 
 /**
- * Get the cron expression for the weekly schedule.
- * Used when setting up pg_cron in Supabase.
+ * Record a failed optimizer run.
  */
-export function getCronExpression(config: SchedulerConfig): string {
-  // "At HH:00 on day-of-week"
-  // Format: minute hour day-of-month month day-of-week
-  return `0 ${config.runHourUTC} * * ${config.runDay}`;
+export async function recordRunFailed(
+  supabaseUrl: string,
+  supabaseKey: string,
+  runId: string,
+  errorMessage: string,
+): Promise<void> {
+  const url = `${supabaseUrl}/rest/v1/optimizer_runs?id=eq.${runId}`;
+  await fetch(url, {
+    method: "PATCH",
+    headers: {
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
+      "Content-Type": "application/json",
+      "Prefer": "return=minimal",
+    },
+    body: JSON.stringify({
+      status: "failed",
+      completed_at: new Date().toISOString(),
+      error_message: errorMessage,
+    }),
+  });
+}
+
+// ─── Schedule Info ───
+
+/**
+ * Get the cron expression for the optimizer schedule.
+ * Used for display purposes in the CLI.
+ */
+export function getCronExpression(): string {
+  return "0 22 * * 0"; // Every Sunday at 22:00 UTC
 }
 
 /**
- * SQL to set up the pg_cron job in Supabase.
- * Run this once during initial setup.
+ * Get the next scheduled run time.
  */
-export function getSetupSQL(edgeFunctionUrl: string, serviceKey: string): string {
-  return `
--- Enable pg_cron extension (if not already)
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-
--- Schedule weekly optimizer run (Sunday 22:00 UTC)
-SELECT cron.schedule(
-  'weekly-optimizer',
-  '0 22 * * 0',
-  $$
-  SELECT net.http_post(
-    url := '${edgeFunctionUrl}',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ${serviceKey}',
-      'Content-Type', 'application/json'
-    ),
-    body := '{"action": "run_optimizer"}'::jsonb
-  );
-  $$
-);
-
--- View scheduled jobs
--- SELECT * FROM cron.job;
-
--- To unschedule:
--- SELECT cron.unschedule('weekly-optimizer');
-`;
+export function getNextRunTime(): Date {
+  const now = new Date();
+  const daysUntilSunday = (7 - now.getUTCDay()) % 7 || 7;
+  const nextSunday = new Date(now);
+  nextSunday.setUTCDate(now.getUTCDate() + daysUntilSunday);
+  nextSunday.setUTCHours(22, 0, 0, 0);
+  if (nextSunday <= now) {
+    nextSunday.setUTCDate(nextSunday.getUTCDate() + 7);
+  }
+  return nextSunday;
 }
