@@ -120,6 +120,12 @@ const CORRELATION_GROUPS: Record<string, string[]> = {
   "COMMODITY": ["AUD/USD", "NZD/USD", "AUD/NZD", "AUD/CAD"],
   "EUR_CROSS": ["EUR/USD", "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/NZD", "EUR/CAD", "EUR/CHF"],
   "GBP_CROSS": ["GBP/USD", "GBP/JPY", "GBP/AUD", "GBP/NZD", "GBP/CAD", "GBP/CHF", "EUR/GBP"],
+  // Crypto, metals, energy, equities — previously had zero correlation coverage.
+  "METALS": ["XAU/USD", "XAG/USD"],
+  "CRYPTO_MAJORS": ["BTC/USD", "ETH/USD"],
+  "RISK_ON_EQUITY": ["US30", "NAS100", "SPX500"],
+  // Gold/oil often move together on USD-strength/risk days; loose but worth capping.
+  "USD_HAVENS": ["XAU/USD", "US Oil"],
 };
 
 /**
@@ -155,6 +161,10 @@ export function computePositionSize(
 ): SizingResult {
   const adjustments: SizingAdjustment[] = [];
   const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
+
+  // NEW: tightest USD risk budget implied by any hard cap below.
+  // Stays Infinity if no cap tighter than the base size ever applied.
+  let hardCapUSD = Infinity;
 
   // Step 1: Calculate base position size using the shared function
   const baseLots = calculatePositionSize(
@@ -204,6 +214,8 @@ export function computePositionSize(
     if (thisTradeHeatPercent > remainingHeatPercent) {
       const heatMultiplier = remainingHeatPercent / thisTradeHeatPercent;
       lots = Math.round(lots * heatMultiplier * 100) / 100;
+      // This cap represents a real USD ceiling — remember it.
+      hardCapUSD = Math.min(hardCapUSD, (remainingHeatPercent / 100) * input.balance);
       adjustments.push({
         type: "portfolio_heat",
         multiplier: heatMultiplier,
@@ -241,6 +253,7 @@ export function computePositionSize(
     if (input.riskPercent > remainingCorrelated && remainingCorrelated > 0) {
       const corrMultiplier = remainingCorrelated / input.riskPercent;
       lots = Math.round(lots * corrMultiplier * 100) / 100;
+      hardCapUSD = Math.min(hardCapUSD, (remainingCorrelated / 100) * input.balance);
       adjustments.push({
         type: "correlation",
         multiplier: corrMultiplier,
@@ -284,6 +297,8 @@ export function computePositionSize(
         if (lots > maxLotsByDaily) {
           const dailyMult = maxLotsByDaily / lots;
           lots = Math.round(maxLotsByDaily * 100) / 100;
+          // This is a hard USD ceiling by definition — remember it.
+          hardCapUSD = Math.min(hardCapUSD, propFirm.dailyLossRemaining);
           adjustments.push({
             type: "prop_firm",
             multiplier: dailyMult,
@@ -294,8 +309,28 @@ export function computePositionSize(
     }
   }
 
-  // Step 6: Enforce minimum lot
-  if (lots < 0.01 && lots > 0) {
+  // Step 6: Enforce minimum lot — but never past a hard budget cap.
+  // Check both: lots that are positive but below 0.01, AND lots that rounded
+  // to 0.00 due to 2-decimal rounding but had a hard cap applied (meaning the
+  // intent was to size down, not reject outright).
+  if ((lots < 0.01 && lots > 0) || (lots === 0 && hardCapUSD < Infinity)) {
+    const slDistance = Math.abs(input.entryPrice - input.stopLoss);
+    const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
+    const riskAtMinLot = slDistance * spec.lotUnits * 0.01 * quoteToUSD;
+
+    if (riskAtMinLot > hardCapUSD) {
+      // Flooring to 0.01 lots would breach the tightest hard cap that applied
+      // (portfolio heat, correlation, or prop-firm daily loss). Reject instead
+      // of silently taking on more risk than that cap allows.
+      return {
+        lots: 0, riskUSD: 0, riskPercent: 0, baseLots,
+        adjustments: [...adjustments, { type: "min_lot_floor", multiplier: 0,
+          reason: `Min lot (0.01) would risk $${riskAtMinLot.toFixed(2)}, exceeding remaining budget of $${hardCapUSD.toFixed(2)}` }],
+        rejected: true,
+        rejectionReason: `Cannot size down to fit remaining risk budget ($${hardCapUSD.toFixed(2)}) without going below min lot`,
+      };
+    }
+
     lots = 0.01;
     adjustments.push({
       type: "min_lot_floor",
