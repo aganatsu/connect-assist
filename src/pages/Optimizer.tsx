@@ -288,8 +288,8 @@ export default function Optimizer() {
       // Find the backup for this run
       const { data: backups } = await supabase
         .from("config_backups")
-        .select("id,config_id,config_json")
-        .eq("optimizer_run_id", runId)
+        .select("id,config_id,config_snapshot")
+        .eq("backup_id", runId)
         .limit(1);
 
       if (!backups || backups.length === 0) {
@@ -302,7 +302,7 @@ export default function Optimizer() {
       // Write the backup config back
       const { error } = await supabase
         .from("bot_configs")
-        .update({ config_json: backup.config_json })
+        .update({ config_json: backup.config_snapshot as any })
         .eq("id", backup.config_id);
 
       if (error) throw error;
