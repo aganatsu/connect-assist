@@ -609,7 +609,7 @@ async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): 
 
 function getDefaultStartDate(): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - 6);
+  d.setMonth(d.getMonth() - 1); // 1 month — keeps each trial fast (~2 min)
   return d.toISOString().slice(0, 10);
 }
 
@@ -620,9 +620,8 @@ function getDefaultEndDate(): string {
 }
 
 function getDefaultInstruments(): string[] {
+  // Start with 2 pairs for fast iteration; scale up once confirmed working
   return [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-    "NZDUSD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY",
-    "XAUUSD", "BTCUSD",
+    "EURUSD", "GBPUSD",
   ];
 }

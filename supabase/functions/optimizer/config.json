@@ -1,20 +1,18 @@
 {
-  "maxTrials": 50,
-  "walkForwardFolds": 4,
-  "minConsistencyScore": 0.75,
+  "maxTrials": 30,
+  "walkForwardFolds": 3,
+  "minConsistencyScore": 0.70,
   "minImprovementPercent": 0.15,
   "maxDeltaPercent": 0.50,
-  "fullSpace": true,
+  "fullSpace": false,
   "instruments": [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-    "NZDUSD", "USDCHF", "EURGBP", "EURJPY", "GBPJPY",
-    "XAUUSD", "BTCUSD"
+    "EURUSD", "GBPUSD"
   ],
   "userId": "",
   "configId": "",
   "historyPath": "optimizer/results/history.json",
   "tpeConfig": {
     "gamma": 0.25,
-    "nStartupTrials": 15
+    "nStartupTrials": 8
   }
 }
