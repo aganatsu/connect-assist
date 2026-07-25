@@ -95,6 +95,7 @@ function makePosition(opts: {
 const CONFIG_BE_AND_TRAILING = {
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  breakEvenOffsetPips: 3, // Explicit: 3 pips above/below entry for BE SL
   trailingStopEnabled: true,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
@@ -330,9 +331,9 @@ Deno.test("Short position: BE fires at 1R → trailing co-activated with correct
   assertEquals(flags.breakEvenActivated, true);
   assertEquals(flags.trailingStopActivated, true);
 
-  // For short: BE SL = entry - 1 pip = 184.766 - 0.01 = 184.756
-  // trailingStopLevel should be set to BE level (184.756)
-  const expectedBeSL = 184.766 - 0.01;
+  // For short: BE SL = entry - offset (3 pips for EUR/JPY = 0.03) = 184.766 - 0.03 = 184.736
+  // trailingStopLevel should be set to BE level (184.736)
+  const expectedBeSL = 184.766 - 0.03;
   assertAlmostEquals(flags.trailingStopLevel, expectedBeSL, 0.001);
 });
 

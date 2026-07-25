@@ -41,6 +41,7 @@ function makePosition(overrides: Partial<{
 function makeConfig(overrides: Partial<{
   breakEvenEnabled: boolean;
   breakEvenPips: number;
+  breakEvenOffsetPips: number;
   trailingStopEnabled: boolean;
   trailingStopPips: number;
   trailingStopActivation: string;
@@ -51,6 +52,7 @@ function makeConfig(overrides: Partial<{
   return {
     breakEvenEnabled: overrides.breakEvenEnabled ?? true,
     breakEvenPips: overrides.breakEvenPips ?? 10,
+    breakEvenOffsetPips: overrides.breakEvenOffsetPips ?? 3, // Default 3 pips offset (matches production)
     trailingStopEnabled: overrides.trailingStopEnabled ?? false,
     trailingStopPips: overrides.trailingStopPips ?? 15,
     trailingStopActivation: overrides.trailingStopActivation ?? "after_1r",
@@ -123,16 +125,14 @@ Deno.test("BE activation uses brokerEntryPrice instead of paper entry_price", as
   const beAction = actions.find(a => a.action === "be_enabled");
   assert(beAction, "Expected a be_enabled action");
 
-  // The new SL should be based on broker entry (1.08520 + 1 pip = 1.08530), NOT paper entry (1.08510)
-  // Check that the SL is at broker entry + 1 pip
+  // The new SL should be based on broker entry + 3 pips offset (default)
+  // EUR/USD pipSize = 0.0001, offset = 3 pips → BE = 1.08520 + 0.0003 = 1.08550
+  // roundPrice rounds to 5 decimals for EUR/USD
   const newSL = beAction!.newSL!;
-  // EUR/USD pipSize = 0.0001, so BE = 1.08520 + 0.0001 = 1.08521 (rounded)
-  // Actually the code does entryPrice + (spec.pipSize * 1) = 1.08520 + 0.0001 = 1.08521
-  // But roundPrice rounds to pipSize+1 decimals = 5 decimals
-  assert(newSL > 1.08515, `Expected BE SL > 1.08515 (broker-based), got ${newSL}`);
-  assert(newSL < 1.08540, `Expected BE SL < 1.08540, got ${newSL}`);
-  // Specifically, it should NOT be 1.08501 (paper entry + 1 pip)
-  assert(newSL > 1.08510, `BE SL should be above paper-based BE (1.08510), got ${newSL}`);
+  assert(newSL > 1.08540, `Expected BE SL > 1.08540 (broker-based + 3 pip offset), got ${newSL}`);
+  assert(newSL < 1.08560, `Expected BE SL < 1.08560, got ${newSL}`);
+  // Specifically, it should NOT be 1.08530 (paper entry + 3 pips)
+  assert(newSL > 1.08530, `BE SL should be above paper-based BE (1.08530), got ${newSL}`);
 });
 
 Deno.test("BE activation falls back to paper entry_price when brokerEntryPrice is absent", async () => {
@@ -167,9 +167,9 @@ Deno.test("BE activation falls back to paper entry_price when brokerEntryPrice i
   const beAction = actions.find(a => a.action === "be_enabled");
   assert(beAction, "Expected a be_enabled action");
 
-  // Should use paper entry: 1.08500 + 0.0001 = 1.08501
+  // Should use paper entry + 3 pip offset: 1.08500 + 0.0003 = 1.08530
   const newSL = beAction!.newSL!;
-  assert(newSL >= 1.08500 && newSL <= 1.08510, `Expected paper-based BE SL ~1.08501, got ${newSL}`);
+  assert(newSL >= 1.08525 && newSL <= 1.08535, `Expected paper-based BE SL ~1.08530 (entry + 3 pip offset), got ${newSL}`);
 });
 
 Deno.test("Short trade BE uses brokerEntryPrice correctly", async () => {
@@ -207,12 +207,12 @@ Deno.test("Short trade BE uses brokerEntryPrice correctly", async () => {
   const beAction = actions.find(a => a.action === "be_enabled");
   assert(beAction, "Expected a be_enabled action for short");
 
-  // For short: BE SL = brokerEntry - pipSize = 1.08480 - 0.0001 = 1.08479
+  // For short: BE SL = brokerEntry - 3 pips offset = 1.08480 - 0.0003 = 1.08450
   const newSL = beAction!.newSL!;
-  assert(newSL < 1.08490, `Expected short BE SL < 1.08490 (broker-based), got ${newSL}`);
-  assert(newSL > 1.08460, `Expected short BE SL > 1.08460, got ${newSL}`);
-  // Should NOT be 1.08499 (paper entry - 1 pip)
-  assert(newSL < 1.08495, `Short BE SL should be below paper-based BE (1.08499), got ${newSL}`);
+  assert(newSL < 1.08460, `Expected short BE SL < 1.08460 (broker-based - 3 pip offset), got ${newSL}`);
+  assert(newSL > 1.08440, `Expected short BE SL > 1.08440, got ${newSL}`);
+  // Should NOT be 1.08470 (paper entry - 3 pips)
+  assert(newSL < 1.08470, `Short BE SL should be below paper-based BE (1.08470), got ${newSL}`);
 });
 
 Deno.test("R-multiple calculation uses brokerEntryPrice", async () => {
@@ -294,9 +294,9 @@ Deno.test("Invalid brokerEntryPrice (NaN) falls back to paper entry", async () =
   assert(actions.length > 0, "Expected BE action with fallback to paper entry");
   const beAction = actions.find(a => a.action === "be_enabled");
   assert(beAction, "Expected a be_enabled action");
-  // Should use paper entry: 1.08500 + 0.0001 = 1.08501
+  // Should use paper entry + 3 pip offset: 1.08500 + 0.0003 = 1.08530
   const newSL = beAction!.newSL!;
-  assert(newSL >= 1.08500 && newSL <= 1.08510, `Expected paper-based BE SL, got ${newSL}`);
+  assert(newSL >= 1.08525 && newSL <= 1.08535, `Expected paper-based BE SL (entry + 3 pip offset), got ${newSL}`);
 });
 
 Deno.test("brokerEntryPrice=null falls back to paper entry", async () => {
@@ -331,5 +331,5 @@ Deno.test("brokerEntryPrice=null falls back to paper entry", async () => {
   const beAction = actions.find(a => a.action === "be_enabled");
   assert(beAction, "Expected a be_enabled action");
   const newSL = beAction!.newSL!;
-  assert(newSL >= 1.08500 && newSL <= 1.08510, `Expected paper-based BE SL with null broker price, got ${newSL}`);
+  assert(newSL >= 1.08525 && newSL <= 1.08535, `Expected paper-based BE SL with null broker price (entry + 3 pip offset), got ${newSL}`);
 });

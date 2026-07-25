@@ -28,6 +28,17 @@ import {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Seeded PRNG (mulberry32) for deterministic candle generation */
+function seededRandom(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function makeCandle(o: number, h: number, l: number, c: number, idx: number): Candle {
   return {
     datetime: `2025-01-${String(idx + 1).padStart(2, "0")}T00:00:00Z`,
@@ -44,6 +55,7 @@ function makeCandle(o: number, h: number, l: number, c: number, idx: number): Ca
  * Then adds a pullback to create retracement candles.
  */
 function generateBullishImpulseCandles(count = 50): Candle[] {
+  const rand = seededRandom(100);
   const candles: Candle[] = [];
   const startPrice = 1.0000;
   const endPrice = 1.0500;
@@ -51,7 +63,7 @@ function generateBullishImpulseCandles(count = 50): Candle[] {
 
   // Phase 1: Consolidation (candles 0-9) — establishes a range
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rand() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base + 0.0005, i));
   }
 
@@ -86,6 +98,7 @@ function generateBullishImpulseCandles(count = 50): Candle[] {
  * Generate a bearish impulse: price moves from 1.0500 down to 1.0000
  */
 function generateBearishImpulseCandles(count = 50): Candle[] {
+  const rand = seededRandom(200);
   const candles: Candle[] = [];
   const startPrice = 1.0500;
   const endPrice = 1.0000;
@@ -93,7 +106,7 @@ function generateBearishImpulseCandles(count = 50): Candle[] {
 
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rand() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base - 0.0005, i));
   }
 
@@ -300,12 +313,13 @@ Deno.test("overlayFibOnPOIs — filters POIs outside OTE zone", () => {
 
 Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () => {
   // Create candles with a clear S/R level at 1.0200 (many closes there)
+  const rand = seededRandom(300);
   const candles: Candle[] = [];
 
   // First 50 candles: lots of closes near 1.0200 (establishing S/R)
   for (let i = 0; i < 50; i++) {
-    const base = 1.0200 + (Math.random() * 0.002 - 0.001);
-    candles.push(makeCandle(base - 0.001, base + 0.002, base - 0.002, 1.0200 + (Math.random() * 0.001 - 0.0005), i));
+    const base = 1.0200 + (rand() * 0.002 - 0.001);
+    candles.push(makeCandle(base - 0.001, base + 0.002, base - 0.002, 1.0200 + (rand() * 0.001 - 0.0005), i));
   }
 
   // Candles 50-70: impulse away from the level
@@ -850,12 +864,13 @@ Deno.test("mapImpulsePOIs — regression: OBs are not falsely broken by impulse 
 Deno.test("findImpulseLeg — accepts impulse with deep internal pullbacks (wave structure)", () => {
   // Simulate a bearish impulse with a 60%+ internal pullback (wave 2).
   // Old code would reject this; new code should accept it because origin is intact.
+  const rand = seededRandom(400);
   const candles: Candle[] = [];
   const startPrice = 1.0500;
 
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rand() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base - 0.0005, i));
   }
 
@@ -917,12 +932,12 @@ Deno.test("findImpulseLeg — accepts impulse with deep internal pullbacks (wave
 
 Deno.test("findImpulseLeg — rejects impulse when origin is broken", () => {
   // Simulate a bullish impulse where price later closes below the origin.
+  const rand = seededRandom(500);
   const candles: Candle[] = [];
   const startPrice = 1.0000;
-
   // Phase 1: Consolidation (candles 0-9)
   for (let i = 0; i < 10; i++) {
-    const base = startPrice + (Math.random() * 0.002 - 0.001);
+    const base = startPrice + (rand() * 0.002 - 0.001);
     candles.push(makeCandle(base, base + 0.0015, base - 0.0015, base + 0.0005, i));
   }
 
