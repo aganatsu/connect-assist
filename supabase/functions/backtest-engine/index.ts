@@ -1579,8 +1579,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       }
     }
 
-    for (const symbol of chunkSymbols) {
+    for (let _ci = 0; _ci < chunkSymbols.length; _ci++) {
+      const symbol = chunkSymbols[_ci];
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
+      // Heartbeat before fetching candles to prevent stale detection during slow API calls
+      await updateProgress(
+        10 + Math.round((chunkIndex / totalChunks) * 80),
+        `Chunk ${chunkIndex + 1}/${totalChunks}: fetching candles for ${symbol} (${_ci + 1}/${chunkSymbols.length})...`
+      );
       const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
@@ -1588,6 +1594,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         fetchHistoricalCandles(symbol, "1h", range, startDate, endDate),
       ]);
       console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H`);
+      // Heartbeat after candle fetch completes
+      await updateProgress(
+        10 + Math.round((chunkIndex / totalChunks) * 80),
+        `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} candles loaded — fetching SMT...`
+      );
       // Fetch SMT correlated pair
       const smtPair = SMT_PAIRS[symbol];
       let smtCandles: Candle[] | undefined;

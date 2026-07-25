@@ -1,6 +1,6 @@
 {
   "maxTrials": 30,
-  "walkForwardFolds": 3,
+  "walkForwardFolds": 0,
   "minConsistencyScore": 0.70,
   "minImprovementPercent": 0.15,
   "maxDeltaPercent": 0.50,

@@ -321,8 +321,9 @@ async function handlePollBacktest(
     // Still running — increment poll count and self-invoke again
     state.pollCount++;
     
-    // Safety: max 60 polls (10 minutes at 10s intervals)
-    if (state.pollCount > 60) {
+    // Safety: max 120 polls (20 minutes at 10s intervals)
+    // Backtests with time-boxing can legitimately take 15+ min for multi-chunk runs
+    if (state.pollCount > 120) {
       await db.from("optimizer_runs").update({
         status: "failed",
         completed_at: new Date().toISOString(),
@@ -348,7 +349,7 @@ async function handlePollBacktest(
       await db.from("optimizer_runs").update({
         status: "failed",
         completed_at: new Date().toISOString(),
-        error_message: `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error || "unknown"}`,
+        error_message: `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error_message || backtestStatus.error || "unknown"}`,
       }).eq("id", runId);
       return respond({ error: `Baseline backtest ${backtestStatus.status}` }, 500);
     } else {
@@ -807,7 +808,7 @@ async function checkBacktestStatus(
   supabaseUrl: string,
   supabaseKey: string,
   backtestRunId: string,
-): Promise<{ status: string; results?: any; error?: string }> {
+): Promise<{ status: string; results?: any; error?: string; error_message?: string }> {
   const engineUrl = `${supabaseUrl}/functions/v1/backtest-engine`;
 
   const response = await fetch(engineUrl, {

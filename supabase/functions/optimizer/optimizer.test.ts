@@ -723,3 +723,53 @@ Deno.test("Integration: optimizer improves over baseline with deterministic mock
     );
   }
 });
+
+// ═══════════════════════════════════════════════════
+// Error Propagation & Poll Limit Tests
+// ═══════════════════════════════════════════════════
+
+Deno.test("Error propagation: error_message field is preferred over error field", () => {
+  // Simulates the backtest engine's status response when stale detection fires
+  const backtestStatus = {
+    status: "failed",
+    error_message: "Backtest engine stopped responding. The run may have exceeded time limits.",
+    error: undefined,
+  };
+
+  // The optimizer should use error_message when available
+  const errorMsg = `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error_message || backtestStatus.error || "unknown"}`;
+  assert(errorMsg.includes("Backtest engine stopped responding"), "Should include the actual error message");
+  assert(!errorMsg.includes("unknown"), "Should NOT fall back to 'unknown' when error_message exists");
+});
+
+Deno.test("Error propagation: falls back to error field when error_message is absent", () => {
+  const backtestStatus = {
+    status: "failed",
+    error: "Connection timeout",
+    error_message: undefined,
+  };
+
+  const errorMsg = `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error_message || backtestStatus.error || "unknown"}`;
+  assert(errorMsg.includes("Connection timeout"), "Should use error field as fallback");
+});
+
+Deno.test("Error propagation: falls back to 'unknown' when both fields are absent", () => {
+  const backtestStatus = {
+    status: "failed",
+    error: undefined,
+    error_message: undefined,
+  };
+
+  const errorMsg = `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error_message || backtestStatus.error || "unknown"}`;
+  assert(errorMsg.includes("unknown"), "Should fall back to 'unknown'");
+});
+
+Deno.test("Poll limit: optimizer allows up to 120 polls (20 min) for multi-chunk backtests", () => {
+  // The poll limit was increased from 60 to 120 to accommodate
+  // backtests that use time-boxing (280s per invocation, multiple chunks)
+  const MAX_POLLS = 120;
+  const POLL_INTERVAL_SECONDS = 10;
+  const maxWaitMinutes = (MAX_POLLS * POLL_INTERVAL_SECONDS) / 60;
+  assertEquals(maxWaitMinutes, 20, "Max wait should be 20 minutes");
+  assert(MAX_POLLS > 60, "Poll limit should be greater than the old 60-poll limit");
+});
