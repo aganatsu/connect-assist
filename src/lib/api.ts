@@ -11,7 +11,10 @@ function jwtHasSubject(token?: string): boolean {
     if (!payload) return false;
     const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
     const claims = JSON.parse(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")));
-    return typeof claims?.sub === "string" && claims.sub.length > 0;
+    if (typeof claims?.sub !== "string" || claims.sub.length === 0) return false;
+    // Treat tokens within 30s of expiry as invalid so we refresh proactively.
+    if (typeof claims?.exp === "number" && claims.exp * 1000 - Date.now() < 30_000) return false;
+    return true;
   } catch {
     return false;
   }
