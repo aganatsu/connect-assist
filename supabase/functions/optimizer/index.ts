@@ -106,6 +106,8 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = body.action || "start";
+    // Pipe auth header into body so handlers can derive userId from JWT
+    body._authHeader = req.headers.get("authorization") ?? "";
 
     switch (action) {
       case "start":
