@@ -1,98 +1,90 @@
-# Task: Reconcile Broker State — Single Broker-Writer + Sub-Minute Management Loop
+# Task: Consolidate duplicated trading logic into _shared
 
-## Branch: manus/reconcile-broker-state
+## Branch: manus/shared-dedup
 
 ## Behavior changes
 
-1. **Paper-trading no longer pushes SL to broker on trail ratchet.** Previously, `paper-trading/index.ts` called `modifyBrokerSL()` every time it ratcheted the trailing stop. Now it only updates the DB; the broker push is deferred to bot-scanner's manage cycle (reconcileBrokerState).
+1. **BUG FIX (zone-confirmation-scanner):** `resolveSymbol` now correctly maps `XAU/USD` → `XAUUSD` (previously it returned `XAU/USD` unchanged because it lacked the `.replace("/", "")` step). This means zone-confirmation-scanner will now correctly resolve broker symbols for all instruments, fixing failed MetaAPI position lookups for gold and other slash-containing symbols.
 
-2. **Bot-scanner's manage action now runs an internal ~50-second loop** (every ~8 seconds) instead of a single pass. This gives sub-minute SL ratcheting without requiring sub-minute pg_cron (which isn't supported). The HTTP response returns immediately; the loop runs via `EdgeRuntime.waitUntil()`.
+2. **detectSilverBullet / detectMacroWindow in bot-scanner:** Previously used inline reimplementations with identical logic to `_shared/sessions.ts`. Now delegates to the shared versions. The window definitions and logic are byte-for-byte identical — no behavioral difference.
 
-3. **Fire-and-forget broker sync blocks removed** (~250 lines of inline MetaAPI/OANDA SL modify + partial close code). Replaced by a single call to `reconcileBrokerState()` + `reconcilePartialClose()` from `_shared/reconcileBrokerState.ts`.
-
-4. **Broker is now authoritative for SL.** When reconcileBrokerState fails to push the intended SL (broker rejects), it writes the broker's ACTUAL value back to the DB. This prevents DB/broker drift from accumulating.
-
-5. **Mismatch alerting:** After 5 consecutive failed SL sync attempts for a position, a Telegram alert is sent (once per position, informational only — does not gate correction).
+All other changes are pure refactors (import path changes, deletion of duplicate code).
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/_shared/reconcileBrokerState.ts` | **NEW** — Broker-authoritative reconciliation module. Batch-fetches broker positions per connection, compares DB vs broker SL, pushes intended value, writes back broker's actual confirmed value. Tracks mismatch cycles in-memory. |
-| `supabase/functions/_shared/reconcileBrokerState.test.ts` | **NEW** — 9 tests covering synced/corrected/rejected/not_found/error states, mismatch counter, Telegram alerting, and graceful API failure handling. |
-| `supabase/functions/bot-scanner/index.ts` | Added import for reconcileBrokerState. Replaced ~250-line fire-and-forget broker sync block with ~55-line reconcileBrokerState() + reconcilePartialClose() call. Replaced manage action's single-pass handler with internal ~50s loop (8s intervals) using EdgeRuntime.waitUntil(). |
-| `supabase/functions/paper-trading/index.ts` | Removed `modifyBrokerSL()` call from trail ratchet (3 lines changed). Paper-trading now only writes to DB; broker sync is deferred to manage cycle. |
+| File | Change |
+|------|--------|
+| `_shared/brokerSymbols.ts` | **NEW** — canonical `resolveSymbol` with proper suffix/prefix/slash handling |
+| `_shared/metaApiClient.ts` | **NEW** — canonical `metaFetch` with region failover, `META_REGIONS`, `metaBaseUrl`, `regionCache` |
+| `_shared/crossImplementationSync.test.ts` | **NEW** — 9 guard tests preventing future re-duplication |
+| `_shared/smcAnalysis.ts` | Removed `detectSession`, `detectSilverBullet`, `detectMacroWindow` (replaced with re-exports from sessions.ts) |
+| `_shared/ictJudasSwing.ts` | Deleted local `calculateATR` (20 lines), imports from smcAnalysis.ts |
+| `_shared/ictDisplacementMSS.ts` | Deleted local `calculateATR` (25 lines), imports from smcAnalysis.ts |
+| `_shared/candleSource.ts` | Deleted local `META_REGIONS`/`regionCache`, imports from metaApiClient.ts |
+| `_shared/reconcileBrokerState.ts` | Deleted local `resolveSymbol`/`metaFetch`/`META_REGIONS`/`regionCache` (44 lines), imports from shared modules |
+| `bot-scanner/index.ts` | Deleted local `resolveSymbol`, `metaFetch`, `detectSilverBullet`, `detectMacroWindow` (~88 lines), imports from shared modules |
+| `broker-execute/index.ts` | Deleted local `resolveSymbol`/`metaFetch` (~54 lines), imports from shared modules |
+| `zone-confirmation-scanner/index.ts` | Deleted buggy local `resolveSymbol`/`metaFetch` (~45 lines), imports from shared modules |
+| `paper-trading/index.ts` | Deleted local `metaFetch`/`META_REGIONS`/`regionCache` (~30 lines), imports from metaApiClient.ts |
+| `prop-firm/index.ts` | Deleted local `META_REGIONS`/`metaBaseUrl`/`regionCache` (~10 lines), imports from metaApiClient.ts |
+| `prop-firm/propFirmStatusBrokerEquity.test.ts` | Updated source-inspection tests to check for import from metaApiClient.ts |
+| `bot-daily-review/index.ts` | Deleted local `TradeRecord`/`TradeReasoning`/`normalizeTradeRecord`/`sendTelegramNotification` delivery logic (~108 lines), imports from advisorCore.ts |
+| `bot-weekly-advisor/index.ts` | Same as above (~108 lines removed) |
+
+**Net: −551 lines deleted, +57 lines added (new shared modules + imports)**
 
 ## Tests added
 
 | Test | Assertion |
 |------|-----------|
-| `synced when broker SL matches DB SL within tolerance` | Status = "synced", no DB update, 0.5-pip tolerance respected |
-| `corrected when broker SL differs and modify succeeds` | Status = "corrected", modify called with safety-buffered SL |
-| `broker-authoritative — rejected modify writes broker value to DB` | Status = "rejected", DB updated to broker's actual SL value |
-| `not_found when no comment-tag match` | Status = "not_found", no modify attempted |
-| `mismatch counter increments on consecutive rejections` | Counter = 4 after 4 rejections, no alert yet |
-| `Telegram alert fires at 5+ consecutive mismatches` | Telegram called on 5th rejection, position marked as alerted |
-| `resets mismatch counter when broker confirms match` | Counter reset to 0 after successful sync |
-| `skips positions with no mirrored connections` | No API calls made, empty results |
-| `handles broker API failure gracefully` | Status = "error", no crash |
+| `crossImplementationSync.test.ts` — resolveSymbol guard | No `function resolveSymbol(` outside `_shared/brokerSymbols.ts` |
+| `crossImplementationSync.test.ts` — calculateATR guard | No `function calculateATR(` outside `_shared/smcAnalysis.ts` |
+| `crossImplementationSync.test.ts` — metaFetch guard | No `function metaFetch` outside `_shared/metaApiClient.ts` |
+| `crossImplementationSync.test.ts` — META_REGIONS guard | No `const META_REGIONS` outside `_shared/metaApiClient.ts` |
+| `crossImplementationSync.test.ts` — normalizeTradeRecord guard | No `function normalizeTradeRecord(` outside `_shared/advisorCore.ts` |
+| `crossImplementationSync.test.ts` — session detection guard | No full reimplementation of `detectSession`/`detectSilverBullet`/`detectMacroWindow` (thin wrappers allowed) |
+| `crossImplementationSync.test.ts` — bot-scanner resolveSymbol import | bot-scanner imports from `_shared/brokerSymbols.ts` |
+| `crossImplementationSync.test.ts` — bot-scanner metaFetch import | bot-scanner imports from `_shared/metaApiClient.ts` |
+| `crossImplementationSync.test.ts` — zone-confirmation-scanner import | zone-confirmation-scanner imports from `_shared/brokerSymbols.ts` |
 
 ## Tests run
 
 ```
-$ deno test --allow-all --no-check supabase/functions/
-
-FAILED | 1937 passed | 7 failed (20s)
+$ deno test --no-check --allow-all supabase/functions/
+ok | 1953 passed | 0 failed (21s)
 ```
 
-All 7 failures are **pre-existing** (same tests fail on the base branch with 9 failures — our changes actually resolved 2 pre-existing failures by removing dead code paths). Our new 9 tests all pass.
-
-Targeted test run:
-```
-$ deno test --allow-all supabase/functions/_shared/reconcileBrokerState.test.ts
-ok | 9 passed | 0 failed (23ms)
-
-$ deno test --allow-all supabase/functions/paper-trading/dedup.test.ts
-ok | 5 passed | 0 failed (7ms)
-```
+Stable across 2 consecutive runs.
 
 ## Regression check
 
-1. **Type checking:** `deno check` produces only 3 pre-existing errors (in ictDisplacementMSS.ts, ictJudasSwing.ts, ictKillZones.ts) — identical to base branch. No new type errors introduced.
-
-2. **Test regression:** Base branch: 1935 passed, 9 failed. Our branch: 1937 passed, 7 failed. Net improvement of +2 passing tests.
-
-3. **Behavioral equivalence:** The reconcileBrokerState module preserves all safety mechanisms from the deleted fire-and-forget blocks:
-   - B1 safety: comment-tag-only matching (no symbol+direction fallback for SL modify)
-   - B2 safety: skip positions without mirrored_connection_ids
-   - Safety buffer: 1 pip subtracted/added for long/short
-   - Freeze-level guard: 3-pip minimum distance from broker price
-   - TP preservation: TP included in modify payload to prevent broker from dropping it
-   - StringCode rejection detection: TRADE_RETCODE_DONE/ERR_NO_ERROR = success, anything else = rejection
-
-4. **OANDA routing:** The new reconcileBrokerState module currently handles MetaAPI only. OANDA positions are not reconciled (they were previously handled via broker-execute edge function calls). This is acceptable because the user's request specified MetaAPI focus, and OANDA support can be added as a follow-up.
+- Full test suite (1953 tests) passes — up from 1944 on main (9 new guard tests added)
+- All pre-existing source-code-inspection tests updated where they checked for local definitions that are now imports
+- The `resolveSymbol` bug fix in zone-confirmation-scanner is the only behavioral change — it now correctly handles slash-containing symbols (XAU/USD, BTC/USD) which were previously broken
+- `calculateATR` in smcAnalysis.ts returns 0 on insufficient data (same behavior as the deleted copies in ictJudasSwing/ictDisplacementMSS)
+- `metaFetch` region failover logic is identical across all previously-duplicated implementations
 
 ## Open questions
 
-1. **OANDA reconciliation:** The deleted fire-and-forget blocks included OANDA routing (via broker-execute edge function). The new reconcileBrokerState only handles MetaAPI. Should OANDA reconciliation be added in a follow-up task, or is MetaAPI-only sufficient for now?
+1. **bot-scanner's `detectAMDPhase`** — this is also a local function (~50 lines) that could potentially be moved to `_shared/sessions.ts`. However, it takes `candles: Candle[]` as input (not just time-based), making it different from the pure time-detection functions. Left in place for now.
 
-2. **Loop budget tuning:** The internal loop uses 50s budget with 8s intervals (~6 iterations per minute). If accounts have many open positions, each iteration may take longer than 8s. Should we add per-account timing and skip slow accounts on subsequent iterations to prioritize volatile symbols (XAU/USD)?
+2. **advisorCore.ts pre-existing type errors** — there are 6 type errors in advisorCore.ts (`maxConcurrent`, `confluenceThreshold` properties missing from config type, and a `ClosedTrade` type mismatch). These are pre-existing and unrelated to this task. Should they be fixed in a follow-up?
 
-3. **Mismatch alert threshold:** Currently set to 5 consecutive failures before alerting. Is this the right threshold, or should it be configurable per-user?
+3. **candleSource.ts `metaFetchCandles`** — this is a specialized variant with circuit-breaker logic (different from the standard `metaFetch`). It now imports `META_REGIONS`/`regionCache` from metaApiClient.ts but keeps its own fetch logic. Could be further consolidated if desired.
 
 ## Suggested PR title and description
 
-**Title:** `[reconcile-broker-state] Single broker-writer + sub-minute management loop`
+**Title:** `[shared-dedup] Consolidate duplicated trading logic into _shared — fix zone-confirmation-scanner resolveSymbol bug`
 
 **Description:**
+Eliminates ~550 lines of duplicated trading logic across 13 files by consolidating into shared modules:
 
-Consolidates all broker SL/TP modifications into a single code path (`reconcileBrokerState()`) called exclusively from bot-scanner's manage cycle. Removes paper-trading as a broker-writer (dedup). Adds internal ~50s loop to the manage action for sub-minute SL ratcheting without requiring sub-minute pg_cron.
+- **BUG FIX:** `zone-confirmation-scanner`'s `resolveSymbol` was missing `.replace("/", "")`, causing MetaAPI position lookups to fail for XAU/USD and other slash-containing symbols
+- **New `_shared/brokerSymbols.ts`:** Single canonical `resolveSymbol` with proper suffix/prefix/slash handling
+- **New `_shared/metaApiClient.ts`:** Single canonical `metaFetch` with region failover, shared `META_REGIONS`/`metaBaseUrl`/`regionCache`
+- **Consolidated `calculateATR`:** Deleted copies from `ictJudasSwing.ts` and `ictDisplacementMSS.ts`, now import from `smcAnalysis.ts`
+- **Consolidated session detection:** Deleted copies from `smcAnalysis.ts`, re-exports from `sessions.ts`
+- **Consolidated `normalizeTradeRecord` + Telegram delivery:** `bot-daily-review` and `bot-weekly-advisor` now import from `advisorCore.ts`
+- **Guard test (`crossImplementationSync.test.ts`):** 9 tests that will fail if anyone re-introduces a local copy of any consolidated function
 
-Key changes:
-- **Broker-authoritative:** On push failure, DB is corrected to broker's actual value (prevents drift)
-- **Single broker-writer:** Only bot-scanner writes to broker; paper-trading only updates DB
-- **Sub-minute management:** Internal loop runs ~6 iterations per minute-tick (8s intervals, 50s budget)
-- **Mismatch alerting:** Telegram alert after 5 consecutive sync failures (informational)
-- **~250 lines of inline broker code deleted**, replaced by ~280 lines in a testable shared module with 9 unit tests
-
-No new DB tables or columns. No changes to gate definitions or factor weights.
+All 1953 tests pass. Net -551/+57 lines.

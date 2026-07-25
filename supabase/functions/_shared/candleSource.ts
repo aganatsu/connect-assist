@@ -6,6 +6,7 @@
 //
 // Each provider returns the same Candle[] shape so callers stay agnostic.
 import { matchBrokerSymbol } from "./symbolMatcher.ts";
+import { META_REGIONS, regionCache } from "./metaApiClient.ts";
 
 export interface Candle {
   datetime: string;
@@ -201,9 +202,7 @@ function metaapiTimeframe(canon: string): string {
   };
   return m[canon] || "15m";
 }
-
-// ─── MetaAPI region failover (mirrors broker-execute) ────────────────
-const META_REGIONS = ["london", "new-york", "singapore"];
+// META_REGIONS and regionCache are now imported from ./metaApiClient.ts (single source of truth)
 const regionCache = new Map<string, string>();
 // Cache of symbols we've already subscribed to per account (in-memory, per cold start)
 // Key: `${accountId}:${symbol}` → true

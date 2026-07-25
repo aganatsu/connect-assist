@@ -43,16 +43,18 @@ Deno.test("fetchBrokerEquity function exists with region-aware logic", async () 
 // ── Test 3: Region-aware MetaAPI fetch with all 3 regions ──
 Deno.test("fetchBrokerEquity tries all 3 MetaAPI regions", async () => {
   const s = await src();
-  assertStringIncludes(s, 'const META_REGIONS = ["london", "new-york", "singapore"]');
+  // META_REGIONS is now imported from metaApiClient.ts (single source of truth)
+  assertStringIncludes(s, 'from "../_shared/metaApiClient.ts"');
   assertStringIncludes(s, "regionCache");
   assertStringIncludes(s, "for (const region of order)");
 });
 
-// ── Test 4: MetaAPI URL uses region-aware format ──
+// ── Test 4: MetaAPI URL uses region-aware format (via imported metaBaseUrl) ──
 Deno.test("MetaAPI URL uses region-aware format (not the non-region variant)", async () => {
   const s = await src();
-  // The prop-firm function should use the region-aware URL pattern
-  assertStringIncludes(s, "mt-client-api-v1.${region}.agiliumtrade.ai");
+  // metaBaseUrl is now imported from metaApiClient.ts which contains the region-aware URL
+  // Verify the function uses metaBaseUrl (imported) for URL construction
+  assertStringIncludes(s, "metaBaseUrl(region, accountId)");
   // It should NOT use the non-region URL (agiliumtrade.agiliumtrade.ai) which is less reliable
   const fetchSection = s.substring(
     s.indexOf("async function fetchBrokerEquity"),

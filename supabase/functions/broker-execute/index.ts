@@ -1,25 +1,15 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { normalizeSymKey } from "../_shared/smcAnalysis.ts";
-
+import { resolveSymbol } from "../_shared/brokerSymbols.ts";
+import { metaFetch } from "../_shared/metaApiClient.ts";
 
 // Broker execution — routes orders to OANDA or MetaAPI
 
 // normalizeKey is now an alias for normalizeSymKey from shared module
 const normalizeKey = normalizeSymKey;
-
-// Resolve symbol name: check normalized override map first, then apply default suffix.
-// Override value (broker symbol) is returned EXACTLY as the user entered it.
-function resolveSymbol(symbol: string, conn: any): string {
-  const rawOverrides = conn.symbol_overrides || {};
-  const norm = normalizeKey(symbol);
-  // Build a normalized lookup so "EUR/USD", "eurusd", "EURUSD" all hit the same entry
-  for (const [k, v] of Object.entries(rawOverrides)) {
-    if (normalizeKey(k) === norm && v) return String(v);
-  }
-  const base = symbol.trim().replace(/\s+/g, "").replace("/", "").toUpperCase();
-  return base + (conn.symbol_suffix || "");
-}
+// resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
+// metaFetch is now imported from ../_shared/metaApiClient.ts (single source of truth)
 
 // OANDA uses underscore format (EUR_USD). Honor overrides first.
 function resolveOandaSymbol(symbol: string, conn: any): string {
@@ -33,42 +23,6 @@ function resolveOandaSymbol(symbol: string, conn: any): string {
   if (cleaned.includes("/")) return cleaned.replace("/", "_");
   if (cleaned.length === 6 && !cleaned.includes("_")) return `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
   return cleaned;
-}
-
-// MetaAPI regions — try in order until one returns a non-region-mismatch response. Cached per account.
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
-// Try each region until one succeeds (or until the error is clearly not a region mismatch).
-async function metaFetch(accountId: string, authToken: string, pathBuilder: (base: string) => string, init?: RequestInit): Promise<{ res: Response; body: string }> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
-  for (const region of order) {
-    const url = pathBuilder(metaBaseUrl(region, accountId));
-    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 15000);
-    try {
-      const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-      const body = await res.text();
-      if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-      lastBody = body; lastStatus = res.status;
-      if (!/region|not connected to broker/i.test(body)) {
-        return { res: new Response(body, { status: res.status }), body };
-      }
-      console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
-    } catch (err) {
-      lastBody = `network error: ${(err as Error).message}`;
-      lastStatus = 504;
-      console.warn(`MetaAPI ${region} network error, trying next: ${(err as Error).message}`);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
 }
 
 // H10: OANDA price precision — round SL/TP/entry to correct decimal places

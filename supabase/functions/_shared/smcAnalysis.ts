@@ -429,58 +429,15 @@ export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tM
   return toNYTime(new Date(utcMs));
 }
 
-// ─── Session Detection ──────────────────────────────────────────────
-export function detectSession(atMs?: number): { name: string; isKillZone: boolean } {
-  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
-  const t = ny.t;
-  if (t >= 20 || t < 0) return { name: "Asian", isKillZone: false };
-  if (t >= 0 && t < 2) return { name: "Asian", isKillZone: false };
-  if (t >= 2 && t < 5) return { name: "London", isKillZone: true };
-  if (t >= 5 && t < 8.5) return { name: "London", isKillZone: false };
-  if (t >= 8.5 && t < 11) return { name: "New York", isKillZone: true };
-  if (t >= 11 && t < 12) return { name: "New York", isKillZone: true };
-  if (t >= 12 && t < 16) return { name: "New York", isKillZone: false };
-  return { name: "Off-Hours", isKillZone: false };
-}
-
-// ─── Silver Bullet Windows ──────────────────────────────────────────
-export function detectSilverBullet(atMs?: number): SilverBulletResult {
-  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
-  const t = ny.t;
-  const windows = [
-    { name: "London Open SB", start: 3, end: 4 },
-    { name: "AM SB", start: 10, end: 11 },
-    { name: "PM SB", start: 14, end: 15 },
-  ];
-  for (const w of windows) {
-    if (t >= w.start && t < w.end) {
-      return { active: true, window: w.name, minutesRemaining: Math.max(0, Math.round((w.end - t) * 60)) };
-    }
-  }
-  return { active: false, window: null, minutesRemaining: 0 };
-}
-
-// ─── ICT Macro Windows ──────────────────────────────────────────────
-export function detectMacroWindow(atMs?: number): MacroWindowResult {
-  const ny = atMs != null ? toNYTimeAt(atMs) : toNYTime(new Date());
-  const tMin = ny.tMin;
-  const windows = [
-    { name: "London Macro 1",    start: 2*60+33, end: 2*60+50 },
-    { name: "London Macro 2",    start: 4*60+3,  end: 4*60+20 },
-    { name: "NY Pre-Open Macro", start: 8*60+50, end: 9*60+10 },
-    { name: "NY AM Macro",       start: 9*60+50, end: 10*60+10 },
-    { name: "London Close Macro",start: 10*60+50,end: 11*60+10 },
-    { name: "NY Lunch Macro",    start: 11*60+50,end: 12*60+10 },
-    { name: "Last Hour Macro",   start: 13*60+10,end: 13*60+40 },
-    { name: "PM Macro",          start: 15*60+15,end: 15*60+45 },
-  ];
-  for (const w of windows) {
-    if (tMin >= w.start && tMin < w.end) {
-      return { active: true, window: w.name, minutesRemaining: w.end - tMin };
-    }
-  }
-  return { active: false, window: null, minutesRemaining: 0 };
-}
+// ─── Session Detection (re-exported from sessions.ts — single source of truth) ──
+import {
+  detectSession as _detectSession,
+  detectSilverBullet as _detectSilverBullet,
+  detectMacroWindow as _detectMacroWindow,
+} from "./sessions.ts";
+export const detectSession = _detectSession;
+export const detectSilverBullet = _detectSilverBullet;
+export const detectMacroWindow = _detectMacroWindow;
 
 // ─── ICT AMD Phase Detection ────────────────────────────────────────
 export function detectAMDPhase(candles: Candle[], atMs?: number): AMDResult {

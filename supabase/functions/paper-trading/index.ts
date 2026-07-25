@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
 import { extractGlobalExitConfig, parseTradeOverrides, resolveTradeConfig } from "../_shared/resolveTradeConfig.ts";
+import { metaFetch } from "../_shared/metaApiClient.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -217,35 +218,6 @@ function calcPnl(dir: string, entry: number, current: number, size: number, symb
   return { pnl, pnlPips };
 }
 
-// ─── MetaAPI Region Failover ──────────────────────────────────────────────────
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
-async function metaFetch(
-  accountId: string,
-  authToken: string,
-  pathBuilder: (base: string) => string,
-  init?: RequestInit,
-): Promise<{ res: Response; body: string }> {
-  const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
-  let lastBody = ""; let lastStatus = 504;
-  for (const region of order) {
-    const url = pathBuilder(metaBaseUrl(region, accountId));
-    const headers = { ...(init?.headers || {}), "auth-token": authToken } as Record<string, string>;
-    const res = await fetch(url, { ...init, headers });
-    const body = await res.text();
-    if (res.ok) { regionCache.set(accountId, region); return { res, body }; }
-    lastBody = body; lastStatus = res.status;
-    if (!/region|not connected to broker/i.test(body)) {
-      return { res: new Response(body, { status: res.status }), body };
-    }
-    console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
-  }
-  return { res: new Response(lastBody, { status: lastStatus }), body: lastBody };
-}
 
 // ─── MT5 Mirror Helper ──────────────────────────────────────────────────────
 async function mirrorToMT5(supabase: any, userId: string, params: {

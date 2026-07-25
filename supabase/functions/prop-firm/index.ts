@@ -22,15 +22,9 @@ import {
   getCESTTradingDay,
   type PropFirmConfig,
 } from "../_shared/propFirmRisk.ts";
+import { META_REGIONS, metaBaseUrl, regionCache } from "../_shared/metaApiClient.ts";
 
-// ─── MetaAPI Region-Aware Fetch ─────────────────────────────────────────────
-// Mirrors the pattern in bot-scanner and paper-trading for reliable connectivity.
-const META_REGIONS = ["london", "new-york", "singapore"];
-const regionCache = new Map<string, string>();
-
-function metaBaseUrl(region: string, accountId: string) {
-  return `https://mt-client-api-v1.${region}.agiliumtrade.ai/users/current/accounts/${accountId}`;
-}
+// MetaAPI region-aware fetch now uses shared metaApiClient.ts constants
 
 async function fetchBrokerEquity(
   accountId: string,

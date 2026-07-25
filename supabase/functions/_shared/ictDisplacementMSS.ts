@@ -18,7 +18,7 @@
  *   - off: logs only, no impact
  */
 
-import type { Candle } from "./smcAnalysis.ts";
+import { calculateATR, type Candle } from "./smcAnalysis.ts";
 
 // ─── Configuration ────────────────────────────────────────────────────
 export interface DisplacementMSSConfig {
@@ -69,26 +69,9 @@ export interface MSSValidationResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function calculateATR(candles: Candle[], period = 14): number {
-  if (candles.length < period + 1) {
-    // Fallback: use average range of available candles
-    const ranges = candles.map(c => c.high - c.low).filter(r => r > 0);
-    return ranges.length > 0 ? ranges.reduce((a, b) => a + b, 0) / ranges.length : 0;
-  }
-  let atrSum = 0;
-  const start = candles.length - period;
-  for (let i = start; i < candles.length; i++) {
-    const c = candles[i];
-    const prev = candles[i - 1];
-    const tr = Math.max(
-      c.high - c.low,
-      Math.abs(c.high - prev.close),
-      Math.abs(c.low - prev.close)
-    );
-    atrSum += tr;
-  }
-  return atrSum / period;
-}
+// calculateATR is now imported from ./smcAnalysis.ts (single source of truth)
+// Canonical behavior: returns 0 when candles.length < period + 1
+// Consumer (isDisplacementCandle) already guards on atr <= 0.
 
 /**
  * Check if a single candle qualifies as a displacement candle
