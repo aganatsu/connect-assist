@@ -15,15 +15,14 @@
  * The optimizer:
  * 1. Loads config from file
  * 2. Fetches current paper trading config from Supabase
- * 3. Pre-fetches candle data for the date range
- * 4. Runs TPE optimization loop
- * 5. If improvement > 15% and walk-forward = robust → auto-applies
- * 6. Sends Telegram notification with results
- * 7. Saves trial history for warm-starting next run
+ * 3. Runs TPE optimization loop (calling backtest-engine via HTTP)
+ * 4. If improvement > 15% and walk-forward = robust → auto-applies
+ * 5. Sends Telegram notification with results (via project's telegram-notify)
+ * 6. Saves trial history for warm-starting next run
  */
 
 import { OptimizationLoop, OptimizationConfig, OptimizationResult } from "./lib/optimizationLoop.ts";
-import { createBacktestRunner, prefetchCandleData, fetchCurrentConfig } from "./lib/backtestRunner.ts";
+import { createHTTPBacktestRunner, fetchCurrentConfig } from "./lib/backtestRunner.ts";
 import { autoApplyResult } from "./lib/autoApply.ts";
 import { getFullParameterSpace, getCoreParameterSpace } from "./lib/parameterSpace.ts";
 
@@ -90,10 +89,10 @@ Options:
   --help, -h        Show this help message
 
 Environment Variables:
-  SUPABASE_URL      Supabase project URL
-  SUPABASE_KEY      Supabase service role key
-  TELEGRAM_BOT_TOKEN  Telegram bot token for notifications
-  TELEGRAM_CHAT_ID    Telegram chat ID for notifications
+  SUPABASE_URL        Supabase project URL (required)
+  SUPABASE_KEY        Supabase service role key (required)
+  TELEGRAM_BOT_TOKEN  Telegram bot token (optional, fallback for direct API)
+  TELEGRAM_CHAT_ID    Telegram chat ID (optional, overrides user_settings lookup)
 `);
 }
 
@@ -171,27 +170,15 @@ async function main(): Promise<void> {
   }
   console.log(`✓ Config loaded (ID: ${config.configId})`);
 
-  // Pre-fetch candle data
-  console.log("📊 Pre-fetching candle data...");
-  const candleData = await prefetchCandleData(
-    config.supabaseUrl,
-    config.supabaseKey,
-    config.instruments,
-    config.startDate,
-    config.endDate,
-  );
-  const totalCandles = Array.from(candleData.values()).reduce((sum, arr) => sum + arr.length, 0);
-  console.log(`✓ ${totalCandles} candles loaded across ${config.instruments.length} instruments`);
-
-  // Create backtest runner
-  // NOTE: In production, this imports the actual backtest engine.
-  // For now, we use a placeholder that will be wired to the real engine.
-  const runBacktest = createBacktestRunner(
-    async (input) => {
-      // This is the integration point with the backtest engine.
-      // The actual implementation imports from backtest-engine/index.ts
-      // and calls it with the pre-fetched candle data.
-      throw new Error("Backtest engine integration not yet wired — run with actual engine import");
+  // Create the HTTP-based backtest runner (calls backtest-engine edge function)
+  console.log("🔗 Connecting to backtest engine...");
+  const runBacktest = createHTTPBacktestRunner(
+    {
+      supabaseUrl: config.supabaseUrl,
+      supabaseKey: config.supabaseKey,
+      timeoutMs: 600_000, // 10 minutes per trial
+      pollIntervalMs: 5_000, // Poll every 5 seconds
+      verbose: args.verbose,
     },
     {
       userId: config.userId,
@@ -200,9 +187,9 @@ async function main(): Promise<void> {
       startDate: config.startDate,
       endDate: config.endDate,
       walkForwardFolds: config.walkForwardFolds,
-      candleData,
     },
   );
+  console.log("✓ Backtest runner ready (HTTP mode)");
 
   // Load trial history for warm-starting
   let historicalTrials: any[] = [];
@@ -218,7 +205,7 @@ async function main(): Promise<void> {
 
   // Create and run optimization loop
   console.log("\n🚀 Starting optimization...\n");
-  const loop = new OptimizationLoop(config, currentConfig, paramSpace);
+  const loop = new OptimizationLoop(config, currentConfig.config_json || currentConfig, paramSpace);
 
   if (historicalTrials.length > 0) {
     loop.loadHistory(historicalTrials);

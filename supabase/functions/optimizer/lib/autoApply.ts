@@ -9,10 +9,16 @@
  * 4. Config is validated before writing
  * 5. Previous config is backed up before overwrite
  * 6. Telegram notification sent on every apply/reject decision
+ * 
+ * Integration notes:
+ * - Writes to `bot_configs.config_json` (the actual JSONB column)
+ * - Uses the project's `/functions/v1/telegram-notify` edge function
+ * - Reads Telegram chat IDs from `user_settings.preferences_json`
  */
 
 import type { OptimizationResult, TrialResult } from "./optimizationLoop.ts";
 import { paramsToConfig } from "./parameterSpace.ts";
+import { fetchTelegramChatIds } from "./backtestRunner.ts";
 
 // ─── Types ───
 
@@ -21,6 +27,9 @@ export interface ApplyConfig {
   supabaseKey: string;
   userId: string;
   configId: string;
+  /** Override: explicit Telegram chat IDs (skips user_settings lookup) */
+  telegramChatIds?: string[];
+  /** Deprecated: kept for backward compat with CLI args */
   telegramBotToken?: string;
   telegramChatId?: string;
 }
@@ -49,10 +58,13 @@ export async function autoApplyResult(
 ): Promise<ApplyResult> {
   const { bestTrial, autoApplied, improvementPercent, rejectReason } = optimizationResult;
 
+  // Resolve Telegram chat IDs
+  const chatIds = await resolveTelegramChatIds(applyConfig);
+
   // Gate 1: Optimization loop already decided
   if (!autoApplied || !bestTrial) {
     const reason = rejectReason ?? "No best trial found";
-    await sendTelegramNotification(applyConfig, formatRejectMessage(reason, optimizationResult));
+    await sendNotification(applyConfig, chatIds, formatRejectMessage(reason, optimizationResult));
     return { applied: false, reason };
   }
 
@@ -60,19 +72,19 @@ export async function autoApplyResult(
   if (bestTrial.backtest.walkForward?.verdict !== "robust") {
     const verdict = bestTrial.backtest.walkForward?.verdict ?? "unknown";
     const reason = `Walk-forward verdict is "${verdict}", not "robust"`;
-    await sendTelegramNotification(applyConfig, formatRejectMessage(reason, optimizationResult));
+    await sendNotification(applyConfig, chatIds, formatRejectMessage(reason, optimizationResult));
     return { applied: false, reason };
   }
 
-  // Build new config
-  const newConfig = paramsToConfig(bestTrial.trial.params, currentConfig);
+  // Build new config from optimized params
+  const newConfig = paramsToConfig(bestTrial.trial.params, currentConfig.config_json || currentConfig);
 
   // Gate 3: Sanity check — new config must have required fields
   const requiredFields = ["factorWeights", "minConfluence", "riskPerTrade"];
   for (const field of requiredFields) {
     if (newConfig[field] === undefined) {
       const reason = `New config missing required field: ${field}`;
-      await sendTelegramNotification(applyConfig, formatRejectMessage(reason, optimizationResult));
+      await sendNotification(applyConfig, chatIds, formatRejectMessage(reason, optimizationResult));
       return { applied: false, reason };
     }
   }
@@ -80,12 +92,13 @@ export async function autoApplyResult(
   // Step 1: Backup current config
   const backupId = await backupConfig(applyConfig, currentConfig);
 
-  // Step 2: Write new config to Supabase
+  // Step 2: Write new config to Supabase (into config_json column)
   await writeConfig(applyConfig, newConfig);
 
   // Step 3: Send success notification
-  await sendTelegramNotification(
+  await sendNotification(
     applyConfig,
+    chatIds,
     formatApplyMessage(optimizationResult, bestTrial, improvementPercent, backupId),
   );
 
@@ -108,7 +121,7 @@ async function backupConfig(
     backup_id: backupId,
     user_id: config.userId,
     config_id: config.configId,
-    config_snapshot: JSON.stringify(currentConfig),
+    config_snapshot: currentConfig.config_json || currentConfig,
     created_at: new Date().toISOString(),
   };
 
@@ -131,13 +144,16 @@ async function backupConfig(
   return backupId;
 }
 
+/**
+ * Write the optimized config to bot_configs.config_json.
+ * 
+ * IMPORTANT: The bot_configs table stores config in a `config_json` JSONB column.
+ * We PATCH only that column (plus updated_at via trigger).
+ */
 async function writeConfig(
   config: ApplyConfig,
   newConfig: Record<string, any>,
 ): Promise<void> {
-  // Remove non-config fields that shouldn't be written back
-  const { id, user_id, created_at, updated_at, ...configFields } = newConfig;
-
   const url = `${config.supabaseUrl}/rest/v1/bot_configs?id=eq.${config.configId}`;
   const response = await fetch(url, {
     method: "PATCH",
@@ -148,47 +164,108 @@ async function writeConfig(
       "Prefer": "return=minimal",
     },
     body: JSON.stringify({
-      ...configFields,
-      updated_at: new Date().toISOString(),
-      last_optimized_at: new Date().toISOString(),
+      config_json: newConfig,
     }),
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to write config: ${response.status} ${response.statusText}`);
+    const errText = await response.text().catch(() => "");
+    throw new Error(`Failed to write config: ${response.status} ${response.statusText} — ${errText}`);
   }
 }
 
 // ─── Telegram Notifications ───
 
-async function sendTelegramNotification(
+/**
+ * Resolve Telegram chat IDs from config or user_settings.
+ */
+async function resolveTelegramChatIds(config: ApplyConfig): Promise<string[]> {
+  // Explicit override takes priority
+  if (config.telegramChatIds && config.telegramChatIds.length > 0) {
+    return config.telegramChatIds;
+  }
+
+  // Legacy single chat ID from CLI args
+  if (config.telegramChatId) {
+    return [config.telegramChatId];
+  }
+
+  // Look up from user_settings
+  try {
+    return await fetchTelegramChatIds(config.supabaseUrl, config.supabaseKey, config.userId);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Send notification via the project's telegram-notify edge function.
+ * Falls back to direct Telegram Bot API if telegramBotToken is provided.
+ */
+async function sendNotification(
   config: ApplyConfig,
+  chatIds: string[],
   message: string,
 ): Promise<void> {
-  if (!config.telegramBotToken || !config.telegramChatId) {
-    console.log("[Optimizer] No Telegram config — skipping notification");
+  if (chatIds.length === 0) {
+    console.log("[Optimizer] No Telegram chat IDs configured — skipping notification");
     console.log("[Optimizer] Message:", message);
     return;
   }
 
-  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+  // Primary path: use the project's telegram-notify edge function
+  const notifyUrl = `${config.supabaseUrl}/functions/v1/telegram-notify`;
 
+  for (const chatId of chatIds) {
+    try {
+      const response = await fetch(notifyUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${config.supabaseKey}`,
+          "apikey": config.supabaseKey,
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message,
+        }),
+      });
+
+      if (!response.ok) {
+        console.warn(`[Optimizer] telegram-notify failed for chat ${chatId}: ${response.status}`);
+        // Fallback: try direct Telegram Bot API if token is available
+        await fallbackDirectTelegram(config, chatId, message);
+      }
+    } catch (err) {
+      console.warn(`[Optimizer] telegram-notify error for chat ${chatId}: ${(err as Error).message}`);
+      await fallbackDirectTelegram(config, chatId, message);
+    }
+  }
+}
+
+/**
+ * Fallback: send directly via Telegram Bot API (for CLI usage with explicit bot token).
+ */
+async function fallbackDirectTelegram(
+  config: ApplyConfig,
+  chatId: string,
+  message: string,
+): Promise<void> {
+  if (!config.telegramBotToken) return;
+
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
   try {
-    const response = await fetch(url, {
+    await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: config.telegramChatId,
+        chat_id: chatId,
         text: message,
         parse_mode: "Markdown",
       }),
     });
-
-    if (!response.ok) {
-      console.warn(`Telegram notification failed: ${response.status}`);
-    }
   } catch (err) {
-    console.warn(`Telegram notification error: ${(err as Error).message}`);
+    console.warn(`[Optimizer] Direct Telegram fallback failed: ${(err as Error).message}`);
   }
 }
 
@@ -202,12 +279,12 @@ function formatApplyMessage(
 ): string {
   const { backtest } = bestTrial;
   const lines = [
-    "✅ *Optimizer: Config Auto-Applied*",
+    "✅ <b>Optimizer: Config Auto-Applied</b>",
     "",
-    `📈 Improvement: *+${improvementPercent.toFixed(1)}%*`,
-    `🎯 Walk-Forward: *${backtest.walkForward?.verdict}* (${((backtest.walkForward?.consistencyScore ?? 0) * 100).toFixed(0)}%)`,
+    `📈 Improvement: <b>+${improvementPercent.toFixed(1)}%</b>`,
+    `🎯 Walk-Forward: <b>${backtest.walkForward?.verdict}</b> (${((backtest.walkForward?.consistencyScore ?? 0) * 100).toFixed(0)}%)`,
     "",
-    "*New Performance:*",
+    "<b>New Performance:</b>",
     `• Trades: ${backtest.totalTrades}`,
     `• Win Rate: ${(backtest.winRate * 100).toFixed(1)}%`,
     `• Profit Factor: ${backtest.profitFactor.toFixed(2)}`,
@@ -216,9 +293,9 @@ function formatApplyMessage(
     "",
     `📋 Trials run: ${result.trials.length}`,
     `⏱ Duration: ${(result.durationMs / 1000 / 60).toFixed(1)} min`,
-    `💾 Backup: \`${backupId}\``,
+    `💾 Backup: <code>${backupId}</code>`,
     "",
-    "_Target: Paper Trading_",
+    "<i>Target: Paper Trading</i>",
   ];
   return lines.join("\n");
 }
@@ -230,7 +307,7 @@ function formatRejectMessage(
   const bestScore = result.bestTrial?.compositeScore ?? 0;
   const baselineScore = result.baseline.compositeScore;
   const lines = [
-    "⚠️ *Optimizer: Config NOT Applied*",
+    "⚠️ <b>Optimizer: Config NOT Applied</b>",
     "",
     `❌ Reason: ${reason}`,
     "",
@@ -239,7 +316,7 @@ function formatRejectMessage(
     `📋 Trials run: ${result.trials.length}`,
     `⏱ Duration: ${(result.durationMs / 1000 / 60).toFixed(1)} min`,
     "",
-    "_No changes made to paper trading config._",
+    "<i>No changes made to paper trading config.</i>",
   ];
   return lines.join("\n");
 }
@@ -272,14 +349,20 @@ export async function rollbackConfig(
     return false;
   }
 
-  const previousConfig = JSON.parse(data[0].config_snapshot);
+  // config_snapshot is stored as JSONB, so it's already an object
+  const previousConfig = typeof data[0].config_snapshot === "string"
+    ? JSON.parse(data[0].config_snapshot)
+    : data[0].config_snapshot;
+
   await writeConfig(config, previousConfig);
 
-  await sendTelegramNotification(config, [
-    "🔄 *Optimizer: Config Rolled Back*",
+  // Notify
+  const chatIds = await resolveTelegramChatIds(config);
+  await sendNotification(config, chatIds, [
+    "🔄 <b>Optimizer: Config Rolled Back</b>",
     "",
-    `Restored backup: \`${backupId}\``,
-    "_Paper trading config reverted to previous state._",
+    `Restored backup: <code>${backupId}</code>`,
+    "<i>Paper trading config reverted to previous state.</i>",
   ].join("\n"));
 
   return true;
