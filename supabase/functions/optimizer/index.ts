@@ -1,35 +1,31 @@
 /**
- * optimizer — Supabase Edge Function (Chunked Self-Invocation)
+ * optimizer — Supabase Edge Function (Async State Machine)
  * ──────────────────────────────────────────────────────────────────────
- * Runs the TPE optimization loop in chunks of TRIALS_PER_CHUNK trials,
- * persisting state to the optimizer_runs table between invocations.
+ * Runs the TPE optimization loop using a non-blocking state machine.
+ * Each invocation does ONE short task and self-invokes for the next step.
  * 
- * Flow:
- *   1. "start" action → creates run, evaluates baseline, self-invokes chunk 0
- *   2. "chunk" action → runs TRIALS_PER_CHUNK trials, persists state, self-invokes next chunk
- *   3. Final chunk → evaluates results, auto-applies if gates pass, sends notification
+ * This avoids Supabase's 150s idle timeout by never blocking on long polls.
  * 
- * This pattern keeps each invocation under Supabase's 400s wall-clock limit
- * while supporting 50+ total trials across multiple invocations.
+ * State Machine:
+ *   "start"         → create run, start baseline backtest, self-invoke "poll-backtest"
+ *   "poll-backtest" → check if current backtest is done. If not, self-invoke again in 10s.
+ *                     If done: score it, decide next step (start trial or finalize)
+ *   "start-trial"   → sample TPE, start trial backtest, self-invoke "poll-backtest"
+ *   "finalize"      → evaluate results, auto-apply, send notification
+ *   "status"        → return run status
+ *   "cancel"        → cancel run
  * 
  * Endpoint: POST /functions/v1/optimizer
- * Actions:
- *   { action: "start", userId?, dryRun?, trials?, coreOnly?, source? }
- *   { action: "chunk", runId, chunkIndex }
- *   { action: "status", runId }
- *   { action: "cancel", runId }
- * 
- * Auth: Service role key (this function is NOT user-facing directly)
  */
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { TPEOptimizer } from "./lib/tpe.ts";
-import type { ParameterSpec, Trial, TPEConfig } from "./lib/tpe.ts";
+import type { Trial, TPEConfig } from "./lib/tpe.ts";
 import {
   computeCompositeScore,
 } from "./lib/optimizationLoop.ts";
 import type { OptimizationConfig, BacktestResult, TrialResult, OptimizationResult } from "./lib/optimizationLoop.ts";
-import { createHTTPBacktestRunner, fetchCurrentConfig } from "./lib/backtestRunner.ts";
+import { fetchCurrentConfig } from "./lib/backtestRunner.ts";
 import { autoApplyResult } from "./lib/autoApply.ts";
 import {
   getFullParameterSpace,
@@ -41,12 +37,6 @@ import {
 } from "./lib/parameterSpace.ts";
 
 // ─── Constants ───
-
-/** Trials per invocation — keeps each chunk well under 400s */
-const TRIALS_PER_CHUNK = 3;
-
-/** Max wall-clock per invocation before forcing a persist + chain (safety net) */
-const MAX_INVOCATION_MS = 280_000; // 280s — leaves 120s buffer
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -60,33 +50,39 @@ function respond(body: any, status = 200): Response {
   });
 }
 
-// ─── Partial State Shape (persisted between chunks) ───
+// ─── State persisted between invocations ───
 
-interface OptimizerPartialState {
-  /** Serialized TPE state (trials + RNG) */
+interface OptimizerState {
+  /** What phase we're in */
+  phase: "awaiting-baseline" | "awaiting-trial" | "ready-for-trial" | "done";
+  /** Serialized TPE state */
   tpeState: { trials: Trial[]; nextId: number; rngState: number[]; config: TPEConfig };
-  /** Baseline trial result */
-  baseline: TrialResult;
-  /** All completed trial results so far */
+  /** Baseline trial result (set after baseline completes) */
+  baseline: TrialResult | null;
+  /** All completed trial results */
   completedTrials: TrialResult[];
-  /** Best passing trial so far */
+  /** Best passing trial */
   bestPassingTrial: TrialResult | null;
-  /** Baseline params (for enforceMaxDelta) */
+  /** Baseline params */
   baselineParams: Record<string, number | string | boolean>;
   /** Total trials to run */
   maxTrials: number;
-  /** Trials completed so far */
+  /** Trials completed */
   trialsCompleted: number;
-  /** Full optimization config */
+  /** Optimization config */
   config: OptimizationConfig;
   /** Current config row from DB */
   currentConfig: Record<string, any>;
-  /** Whether this is a dry run */
+  /** Dry run flag */
   dryRun: boolean;
   /** Run start timestamp */
   startTime: number;
-  /** Use full or core param space */
+  /** Full or core param space */
   fullSpace: boolean;
+  /** Current backtest run ID being awaited */
+  pendingBacktestRunId: string | null;
+  /** How many times we've polled the current backtest */
+  pollCount: number;
 }
 
 // ─── Main Handler ───
@@ -106,14 +102,17 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = body.action || "start";
-    // Pipe auth header into body so handlers can derive userId from JWT
     body._authHeader = req.headers.get("authorization") ?? "";
 
     switch (action) {
       case "start":
         return await handleStart(db, supabaseUrl, supabaseKey, body);
-      case "chunk":
-        return await handleChunk(db, supabaseUrl, supabaseKey, body);
+      case "poll-backtest":
+        return await handlePollBacktest(db, supabaseUrl, supabaseKey, body);
+      case "start-trial":
+        return await handleStartTrial(db, supabaseUrl, supabaseKey, body);
+      case "finalize":
+        return await handleFinalize(db, supabaseUrl, supabaseKey, body);
       case "status":
         return await handleStatus(db, body);
       case "cancel":
@@ -143,19 +142,18 @@ async function handleStart(
     source = "unknown",
   } = body;
 
-  // Fallback: derive userId from JWT `sub` claim in Authorization header
+  // Derive userId from JWT if not provided
   let jwtUserId: string | undefined;
   try {
     const auth = (body._authHeader as string | undefined) ?? "";
-    const headerAuth = auth || "";
-    const token = headerAuth.replace(/^Bearer\s+/i, "");
+    const token = auth.replace(/^Bearer\s+/i, "");
     if (token && token.split(".").length === 3) {
       const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
       if (payload?.sub) jwtUserId = payload.sub;
     }
   } catch { /* ignore */ }
 
-  // Load optimizer config from file
+  // Load file config
   let fileConfig: Partial<OptimizationConfig> = {};
   try {
     const configText = await Deno.readTextFile(new URL("./config.json", import.meta.url).pathname);
@@ -167,7 +165,7 @@ async function handleStart(
     return respond({ error: "userId is required (in body or config.json)" }, 400);
   }
 
-  // Deduplication: check if already ran this week (only for cron triggers)
+  // Deduplication for cron triggers
   if (source === "cron") {
     const oneWeekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
     const { data: recentRuns } = await db
@@ -179,17 +177,16 @@ async function handleStart(
       .limit(1);
 
     if (recentRuns && recentRuns.length > 0) {
-      console.log(`[optimizer] Skipping — already ran this week (run: ${recentRuns[0].id})`);
       return respond({ status: "skipped", reason: "Already ran this week", lastRunId: recentRuns[0].id });
     }
   }
 
   // Build config
-  const maxTrials = trials ?? fileConfig.maxTrials ?? 50;
+  const maxTrials = trials ?? fileConfig.maxTrials ?? 30;
   const fullSpace = !coreOnly && (fileConfig.fullSpace ?? true);
   const config: OptimizationConfig = {
     maxTrials,
-    walkForwardFolds: fileConfig.walkForwardFolds ?? 4,
+    walkForwardFolds: fileConfig.walkForwardFolds ?? 3,
     minConsistencyScore: fileConfig.minConsistencyScore ?? 0.75,
     minImprovementPercent: fileConfig.minImprovementPercent ?? 0.15,
     maxDeltaPercent: fileConfig.maxDeltaPercent ?? 0.50,
@@ -225,30 +222,28 @@ async function handleStart(
   }
 
   const runId = runRow.id;
-  console.log(`[optimizer:${runId}] Starting (source: ${source}, trials: ${maxTrials}, chunks of ${TRIALS_PER_CHUNK})`);
+  console.log(`[optimizer:${runId}] Starting (source: ${source}, trials: ${maxTrials})`);
 
-  // Initialize TPE and evaluate baseline
+  // Initialize TPE
   const paramSpace = fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
   const baselineParams = configToParams(currentConfig.config_json || currentConfig);
 
   const tpe = new TPEOptimizer(paramSpace, {
     ...config.tpeConfig,
     seed: config.seed,
-    nStartupTrials: Math.min(10, Math.floor(maxTrials * 0.3)),
+    nStartupTrials: Math.min(8, Math.floor(maxTrials * 0.3)),
   });
 
-  // Run baseline backtest
-  const runBacktest = createHTTPBacktestRunner(
-    { supabaseUrl, supabaseKey, timeoutMs: 600_000, pollIntervalMs: 5_000, verbose: false },
-    { userId: config.userId, configId: config.configId, instruments: config.instruments, startDate: config.startDate, endDate: config.endDate, walkForwardFolds: config.walkForwardFolds },
-  );
-
+  // Start baseline backtest (non-blocking)
   const baselineConfig = paramsToConfig(baselineParams, {});
   baselineConfig.walkForwardFolds = config.walkForwardFolds;
+  baselineConfig.startDate = config.startDate;
+  baselineConfig.endDate = config.endDate;
+  baselineConfig.instruments = config.instruments;
 
-  let baselineBacktest: BacktestResult;
+  let backtestRunId: string;
   try {
-    baselineBacktest = await runBacktest(baselineConfig);
+    backtestRunId = await startBacktest(supabaseUrl, supabaseKey, config, baselineConfig);
   } catch (err) {
     await db.from("optimizer_runs").update({
       status: "failed",
@@ -258,22 +253,11 @@ async function handleStart(
     return respond({ error: `Baseline backtest failed: ${(err as Error).message}` }, 500);
   }
 
-  const baselineScore = computeCompositeScore(baselineBacktest);
-  const baselineTrial: TrialResult = {
-    trial: { id: -1, params: baselineParams, score: baselineScore, timestamp: Date.now() },
-    backtest: baselineBacktest,
-    compositeScore: baselineScore,
-    violations: [],
-    walkForwardPassed: (baselineBacktest.walkForward?.consistencyScore ?? 0) >= config.minConsistencyScore,
-  };
-
-  // Warm-start TPE with baseline
-  tpe.tell(baselineParams, baselineScore);
-
-  // Build partial state
-  const partialState: OptimizerPartialState = {
+  // Build initial state
+  const state: OptimizerState = {
+    phase: "awaiting-baseline",
     tpeState: tpe.serialize(),
-    baseline: baselineTrial,
+    baseline: null,
     completedTrials: [],
     bestPassingTrial: null,
     baselineParams,
@@ -284,36 +268,37 @@ async function handleStart(
     dryRun,
     startTime: Date.now(),
     fullSpace,
+    pendingBacktestRunId: backtestRunId,
+    pollCount: 0,
   };
 
-  // Persist state and chain to chunk 0
+  // Persist state
   await db.from("optimizer_runs").update({
-    progress: 5,
-    progress_message: `Baseline evaluated (score: ${baselineScore.toFixed(2)}). Starting trials...`,
-    result_summary: { partial_state: partialState },
-    baseline_score: baselineScore,
+    progress: 2,
+    progress_message: `Baseline backtest started (run: ${backtestRunId})...`,
+    result_summary: { state },
   }).eq("id", runId);
 
-  // Self-invoke chunk 0
-  await selfInvoke(supabaseUrl, supabaseKey, { action: "chunk", runId, chunkIndex: 0 });
+  // Self-invoke poll-backtest after a short delay (give backtest engine time to start)
+  await selfInvokeDelayed(supabaseUrl, supabaseKey, { action: "poll-backtest", runId }, 10_000);
 
-  return respond({ runId, status: "running", message: "Optimization started, processing in chunks" });
+  return respond({ runId, status: "running", message: "Optimization started" });
 }
 
-// ─── Action: CHUNK ───
+// ─── Action: POLL-BACKTEST ───
+// Checks if the pending backtest is done. If not, self-invokes again.
+// If done, either scores baseline and starts first trial, or scores trial and starts next.
 
-async function handleChunk(
+async function handlePollBacktest(
   db: SupabaseClient,
   supabaseUrl: string,
   supabaseKey: string,
   body: any,
 ): Promise<Response> {
-  const { runId, chunkIndex } = body;
+  const { runId } = body;
   if (!runId) return respond({ error: "runId required" }, 400);
 
-  const INVOCATION_START = Date.now();
-
-  // Load run state
+  // Load run
   const { data: run } = await db.from("optimizer_runs")
     .select("status, result_summary, user_id")
     .eq("id", runId)
@@ -321,159 +306,335 @@ async function handleChunk(
 
   if (!run) return respond({ error: "Run not found" }, 404);
   if (run.status === "cancelled") return respond({ status: "cancelled" });
-  if (run.status !== "running") return respond({ error: `Run is ${run.status}, not running` }, 400);
+  if (run.status !== "running") return respond({ error: `Run is ${run.status}` }, 400);
 
-  // Restore partial state
-  const partialState: OptimizerPartialState = run.result_summary?.partial_state;
-  if (!partialState) {
-    return respond({ error: "No partial state found — run may be corrupted" }, 500);
+  const state: OptimizerState = run.result_summary?.state;
+  if (!state) return respond({ error: "No state found" }, 500);
+
+  const { pendingBacktestRunId, config } = state;
+  if (!pendingBacktestRunId) return respond({ error: "No pending backtest" }, 500);
+
+  // Check backtest status
+  const backtestStatus = await checkBacktestStatus(supabaseUrl, supabaseKey, pendingBacktestRunId);
+
+  if (backtestStatus.status === "running" || backtestStatus.status === "pending") {
+    // Still running — increment poll count and self-invoke again
+    state.pollCount++;
+    
+    // Safety: max 60 polls (10 minutes at 10s intervals)
+    if (state.pollCount > 60) {
+      await db.from("optimizer_runs").update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        error_message: `Backtest ${pendingBacktestRunId} timed out after ${state.pollCount} polls`,
+      }).eq("id", runId);
+      return respond({ error: "Backtest timed out" }, 500);
+    }
+
+    await db.from("optimizer_runs").update({
+      progress_message: state.phase === "awaiting-baseline" 
+        ? `Waiting for baseline backtest... (poll ${state.pollCount})`
+        : `Trial ${state.trialsCompleted + 1}/${state.maxTrials} — waiting for backtest... (poll ${state.pollCount})`,
+      result_summary: { state },
+    }).eq("id", runId);
+
+    // Self-invoke again in 10 seconds
+    await selfInvokeDelayed(supabaseUrl, supabaseKey, { action: "poll-backtest", runId }, 10_000);
+    return respond({ status: "polling", pollCount: state.pollCount });
   }
 
-  const { config, baselineParams, maxTrials, dryRun, fullSpace, currentConfig, startTime } = partialState;
-  let { trialsCompleted, completedTrials, bestPassingTrial } = partialState;
-
-  // Restore TPE from serialized state
-  const paramSpace = fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
-  const tpe = TPEOptimizer.restore(paramSpace, partialState.tpeState);
-
-  // Create backtest runner
-  const runBacktest = createHTTPBacktestRunner(
-    { supabaseUrl, supabaseKey, timeoutMs: 600_000, pollIntervalMs: 5_000, verbose: false },
-    { userId: config.userId, configId: config.configId, instruments: config.instruments, startDate: config.startDate, endDate: config.endDate, walkForwardFolds: config.walkForwardFolds },
-  );
-
-  // Run trials for this chunk
-  const trialsThisChunk = Math.min(TRIALS_PER_CHUNK, maxTrials - trialsCompleted);
-  console.log(`[optimizer:${runId}] Chunk ${chunkIndex}: running ${trialsThisChunk} trials (${trialsCompleted}/${maxTrials} done)`);
-
-  for (let i = 0; i < trialsThisChunk; i++) {
-    // Time-box safety: if approaching limit, persist and chain
-    if (Date.now() - INVOCATION_START > MAX_INVOCATION_MS) {
-      console.log(`[optimizer:${runId}] Time-box hit at trial ${trialsCompleted}. Persisting and chaining.`);
-      break;
-    }
-
-    // Check cancellation
-    const { data: statusCheck } = await db.from("optimizer_runs").select("status").eq("id", runId).single();
-    if (statusCheck?.status === "cancelled") {
-      console.log(`[optimizer:${runId}] Cancelled by user.`);
-      return respond({ status: "cancelled" });
-    }
-
-    // Sample candidate from TPE
-    let candidateParams = tpe.ask();
-
-    // Enforce max delta from baseline
-    candidateParams = enforceMaxDelta(candidateParams, baselineParams, config.maxDeltaPercent) as Record<string, number | string | boolean>;
-
-    // Validate constraints
-    const violations = validateParams(candidateParams);
-    if (violations.length > 0) {
-      const trial = tpe.tell(candidateParams, 0);
-      completedTrials.push({
-        trial,
-        backtest: { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 },
-        compositeScore: 0,
-        violations,
-        walkForwardPassed: false,
-      });
-      trialsCompleted++;
-      continue;
-    }
-
-    // Build config and run backtest
-    const candidateConfig = paramsToConfig(candidateParams, {});
-    candidateConfig.walkForwardFolds = config.walkForwardFolds;
-    candidateConfig.startDate = config.startDate;
-    candidateConfig.endDate = config.endDate;
-    candidateConfig.instruments = config.instruments;
-
-    let backtestResult: BacktestResult;
-    try {
-      backtestResult = await runBacktest(candidateConfig);
-    } catch (err) {
-      const trial = tpe.tell(candidateParams, 0);
-      completedTrials.push({
-        trial,
-        backtest: { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 },
-        compositeScore: 0,
-        violations: [`Backtest error: ${(err as Error).message}`],
-        walkForwardPassed: false,
-      });
-      trialsCompleted++;
-      continue;
-    }
-
-    // Score and record
-    const score = computeCompositeScore(backtestResult);
-    const trial = tpe.tell(candidateParams, score);
-    const wfPassed = (backtestResult.walkForward?.consistencyScore ?? 0) >= config.minConsistencyScore;
-
-    const trialResult: TrialResult = {
-      trial,
-      backtest: backtestResult,
-      compositeScore: score,
-      violations: [],
-      walkForwardPassed: wfPassed,
-    };
-    completedTrials.push(trialResult);
-    trialsCompleted++;
-
-    // Track best passing trial
-    if (wfPassed && score > (bestPassingTrial?.compositeScore ?? 0)) {
-      bestPassingTrial = trialResult;
+  if (backtestStatus.status === "failed" || backtestStatus.status === "cancelled") {
+    if (state.phase === "awaiting-baseline") {
+      await db.from("optimizer_runs").update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        error_message: `Baseline backtest ${backtestStatus.status}: ${backtestStatus.error || "unknown"}`,
+      }).eq("id", runId);
+      return respond({ error: `Baseline backtest ${backtestStatus.status}` }, 500);
+    } else {
+      // Trial backtest failed — score as 0, move to next trial
+      return await handleTrialBacktestResult(db, supabaseUrl, supabaseKey, runId, state, null);
     }
   }
 
-  // Calculate progress
-  const progress = Math.round(10 + (trialsCompleted / maxTrials) * 85);
-  const bestScore = bestPassingTrial?.compositeScore ?? partialState.baseline.compositeScore;
+  // Backtest completed!
+  const backtestResult = extractBacktestResult(backtestStatus.results);
 
-  // Check if we're done
-  if (trialsCompleted >= maxTrials) {
-    // ── FINAL: evaluate and auto-apply ──
-    return await handleFinalize(db, supabaseUrl, supabaseKey, runId, {
-      ...partialState,
-      trialsCompleted,
-      completedTrials,
-      bestPassingTrial,
-    });
+  if (state.phase === "awaiting-baseline") {
+    return await handleBaselineComplete(db, supabaseUrl, supabaseKey, runId, state, backtestResult);
+  } else {
+    return await handleTrialBacktestResult(db, supabaseUrl, supabaseKey, runId, state, backtestResult);
   }
+}
 
-  // ── NOT DONE: persist state and chain to next chunk ──
-  const updatedState: OptimizerPartialState = {
-    ...partialState,
-    tpeState: tpe.serialize(),
-    completedTrials,
-    bestPassingTrial,
-    trialsCompleted,
+// ─── Handle baseline backtest completion ───
+
+async function handleBaselineComplete(
+  db: SupabaseClient,
+  supabaseUrl: string,
+  supabaseKey: string,
+  runId: string,
+  state: OptimizerState,
+  backtestResult: BacktestResult,
+): Promise<Response> {
+  const { config } = state;
+  const baselineScore = computeCompositeScore(backtestResult);
+
+  const baselineTrial: TrialResult = {
+    trial: { id: -1, params: state.baselineParams, score: baselineScore, timestamp: Date.now() },
+    backtest: backtestResult,
+    compositeScore: baselineScore,
+    violations: [],
+    walkForwardPassed: (backtestResult.walkForward?.consistencyScore ?? 0) >= config.minConsistencyScore,
   };
+
+  // Warm-start TPE with baseline
+  const paramSpace = state.fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
+  const tpe = TPEOptimizer.restore(paramSpace, state.tpeState);
+  tpe.tell(state.baselineParams, baselineScore);
+
+  // Update state
+  state.baseline = baselineTrial;
+  state.tpeState = tpe.serialize();
+  state.phase = "ready-for-trial";
+  state.pendingBacktestRunId = null;
+  state.pollCount = 0;
+
+  await db.from("optimizer_runs").update({
+    progress: 5,
+    progress_message: `Baseline: ${baselineScore.toFixed(2)}. Starting trials...`,
+    baseline_score: baselineScore,
+    result_summary: { state },
+  }).eq("id", runId);
+
+  console.log(`[optimizer:${runId}] Baseline score: ${baselineScore.toFixed(2)}. Starting trials.`);
+
+  // Immediately start first trial
+  await selfInvoke(supabaseUrl, supabaseKey, { action: "start-trial", runId });
+  return respond({ status: "baseline-complete", baselineScore });
+}
+
+// ─── Handle trial backtest result ───
+
+async function handleTrialBacktestResult(
+  db: SupabaseClient,
+  supabaseUrl: string,
+  supabaseKey: string,
+  runId: string,
+  state: OptimizerState,
+  backtestResult: BacktestResult | null,
+): Promise<Response> {
+  const { config } = state;
+  const paramSpace = state.fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
+  const tpe = TPEOptimizer.restore(paramSpace, state.tpeState);
+
+  // Get the candidate params from the last trial in TPE (the one we're awaiting)
+  // We stored them in state before starting the backtest
+  const candidateParams = (state as any)._pendingTrialParams;
+
+  let score = 0;
+  let wfPassed = false;
+  let violations: string[] = [];
+
+  if (backtestResult) {
+    score = computeCompositeScore(backtestResult);
+    wfPassed = (backtestResult.walkForward?.consistencyScore ?? 0) >= config.minConsistencyScore;
+  } else {
+    violations = ["Backtest failed or was cancelled"];
+  }
+
+  const trial = tpe.tell(candidateParams, score);
+  const trialResult: TrialResult = {
+    trial,
+    backtest: backtestResult ?? { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 },
+    compositeScore: score,
+    violations,
+    walkForwardPassed: wfPassed,
+  };
+
+  state.completedTrials.push(trialResult);
+  state.trialsCompleted++;
+
+  // Track best passing trial
+  if (wfPassed && score > (state.bestPassingTrial?.compositeScore ?? 0)) {
+    state.bestPassingTrial = trialResult;
+  }
+
+  // Update TPE state
+  state.tpeState = tpe.serialize();
+  state.pendingBacktestRunId = null;
+  state.pollCount = 0;
+  state.phase = "ready-for-trial";
+  delete (state as any)._pendingTrialParams;
+
+  const progress = Math.round(10 + (state.trialsCompleted / state.maxTrials) * 85);
+  const bestScore = state.bestPassingTrial?.compositeScore ?? state.baseline?.compositeScore ?? 0;
 
   await db.from("optimizer_runs").update({
     progress,
-    progress_message: `Trial ${trialsCompleted}/${maxTrials} — best: ${bestScore.toFixed(2)}`,
-    trials_count: trialsCompleted,
-    best_score: bestPassingTrial?.compositeScore ?? null,
-    result_summary: { partial_state: updatedState },
+    progress_message: `Trial ${state.trialsCompleted}/${state.maxTrials} — best: ${bestScore.toFixed(2)}`,
+    trials_count: state.trialsCompleted,
+    best_score: state.bestPassingTrial?.compositeScore ?? null,
+    result_summary: { state },
   }).eq("id", runId);
 
-  // Self-invoke next chunk
-  await selfInvoke(supabaseUrl, supabaseKey, { action: "chunk", runId, chunkIndex: chunkIndex + 1 });
+  // Check if done
+  if (state.trialsCompleted >= state.maxTrials) {
+    await selfInvoke(supabaseUrl, supabaseKey, { action: "finalize", runId });
+    return respond({ status: "trials-complete", trialsCompleted: state.trialsCompleted });
+  }
 
-  return respond({ status: "running", trialsCompleted, maxTrials, chunkIndex });
+  // Start next trial
+  await selfInvoke(supabaseUrl, supabaseKey, { action: "start-trial", runId });
+  return respond({ status: "trial-scored", trial: state.trialsCompleted, score });
 }
 
-// ─── Finalize (called after last chunk) ───
+// ─── Action: START-TRIAL ───
+
+async function handleStartTrial(
+  db: SupabaseClient,
+  supabaseUrl: string,
+  supabaseKey: string,
+  body: any,
+): Promise<Response> {
+  const { runId } = body;
+  if (!runId) return respond({ error: "runId required" }, 400);
+
+  // Load run
+  const { data: run } = await db.from("optimizer_runs")
+    .select("status, result_summary")
+    .eq("id", runId)
+    .single();
+
+  if (!run) return respond({ error: "Run not found" }, 404);
+  if (run.status === "cancelled") return respond({ status: "cancelled" });
+  if (run.status !== "running") return respond({ error: `Run is ${run.status}` }, 400);
+
+  const state: OptimizerState = run.result_summary?.state;
+  if (!state) return respond({ error: "No state found" }, 500);
+
+  const { config } = state;
+  const paramSpace = state.fullSpace ? getFullParameterSpace() : getCoreParameterSpace();
+  const tpe = TPEOptimizer.restore(paramSpace, state.tpeState);
+
+  // Sample candidate from TPE
+  let candidateParams = tpe.ask();
+
+  // Enforce max delta from baseline
+  candidateParams = enforceMaxDelta(candidateParams, state.baselineParams, config.maxDeltaPercent) as Record<string, number | string | boolean>;
+
+  // Validate constraints
+  const violations = validateParams(candidateParams);
+  if (violations.length > 0) {
+    // Skip this trial — score as 0
+    const trial = tpe.tell(candidateParams, 0);
+    state.completedTrials.push({
+      trial,
+      backtest: { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 },
+      compositeScore: 0,
+      violations,
+      walkForwardPassed: false,
+    });
+    state.trialsCompleted++;
+    state.tpeState = tpe.serialize();
+
+    const progress = Math.round(10 + (state.trialsCompleted / state.maxTrials) * 85);
+    await db.from("optimizer_runs").update({
+      progress,
+      progress_message: `Trial ${state.trialsCompleted}/${state.maxTrials} — skipped (constraint violation)`,
+      trials_count: state.trialsCompleted,
+      result_summary: { state },
+    }).eq("id", runId);
+
+    // Check if done
+    if (state.trialsCompleted >= state.maxTrials) {
+      await selfInvoke(supabaseUrl, supabaseKey, { action: "finalize", runId });
+    } else {
+      await selfInvoke(supabaseUrl, supabaseKey, { action: "start-trial", runId });
+    }
+    return respond({ status: "trial-skipped", trial: state.trialsCompleted });
+  }
+
+  // Build config for this trial
+  const candidateConfig = paramsToConfig(candidateParams, {});
+  candidateConfig.walkForwardFolds = config.walkForwardFolds;
+  candidateConfig.startDate = config.startDate;
+  candidateConfig.endDate = config.endDate;
+  candidateConfig.instruments = config.instruments;
+
+  // Start backtest (non-blocking)
+  let backtestRunId: string;
+  try {
+    backtestRunId = await startBacktest(supabaseUrl, supabaseKey, config, candidateConfig);
+  } catch (err) {
+    // Backtest start failed — score as 0 and move on
+    const trial = tpe.tell(candidateParams, 0);
+    state.completedTrials.push({
+      trial,
+      backtest: { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 },
+      compositeScore: 0,
+      violations: [`Backtest start error: ${(err as Error).message}`],
+      walkForwardPassed: false,
+    });
+    state.trialsCompleted++;
+    state.tpeState = tpe.serialize();
+
+    await db.from("optimizer_runs").update({
+      progress: Math.round(10 + (state.trialsCompleted / state.maxTrials) * 85),
+      progress_message: `Trial ${state.trialsCompleted}/${state.maxTrials} — backtest start failed`,
+      trials_count: state.trialsCompleted,
+      result_summary: { state },
+    }).eq("id", runId);
+
+    if (state.trialsCompleted >= state.maxTrials) {
+      await selfInvoke(supabaseUrl, supabaseKey, { action: "finalize", runId });
+    } else {
+      await selfInvoke(supabaseUrl, supabaseKey, { action: "start-trial", runId });
+    }
+    return respond({ status: "trial-backtest-failed", trial: state.trialsCompleted });
+  }
+
+  // Save candidate params so we can score them when backtest completes
+  (state as any)._pendingTrialParams = candidateParams;
+  state.phase = "awaiting-trial";
+  state.pendingBacktestRunId = backtestRunId;
+  state.pollCount = 0;
+  // Update TPE state (ask was called, need to persist)
+  state.tpeState = tpe.serialize();
+
+  await db.from("optimizer_runs").update({
+    progress_message: `Trial ${state.trialsCompleted + 1}/${state.maxTrials} — backtest running...`,
+    result_summary: { state },
+  }).eq("id", runId);
+
+  // Poll after 15 seconds (give backtest time to start)
+  await selfInvokeDelayed(supabaseUrl, supabaseKey, { action: "poll-backtest", runId }, 15_000);
+  return respond({ status: "trial-started", backtestRunId });
+}
+
+// ─── Action: FINALIZE ───
 
 async function handleFinalize(
   db: SupabaseClient,
   supabaseUrl: string,
   supabaseKey: string,
-  runId: string,
-  state: OptimizerPartialState,
+  body: any,
 ): Promise<Response> {
+  const { runId } = body;
+  if (!runId) return respond({ error: "runId required" }, 400);
+
+  const { data: run } = await db.from("optimizer_runs")
+    .select("status, result_summary")
+    .eq("id", runId)
+    .single();
+
+  if (!run) return respond({ error: "Run not found" }, 404);
+
+  const state: OptimizerState = run.result_summary?.state;
+  if (!state) return respond({ error: "No state found" }, 500);
+
   const { baseline, completedTrials, bestPassingTrial, config, currentConfig, dryRun, startTime } = state;
-  const baselineScore = baseline.compositeScore;
+  const baselineScore = baseline?.compositeScore ?? 0;
 
   // Determine auto-apply
   let autoApplied = false;
@@ -495,11 +656,10 @@ async function handleFinalize(
 
   const durationMs = Date.now() - startTime;
 
-  // Build result
   const result: OptimizationResult = {
     trials: completedTrials,
     bestTrial: bestPassingTrial,
-    baseline,
+    baseline: baseline!,
     autoApplied,
     improvementPercent,
     durationMs,
@@ -509,18 +669,22 @@ async function handleFinalize(
   // Auto-apply
   let applyOutcome = "skipped";
   if (!dryRun && autoApplied) {
-    const applyResult = await autoApplyResult(result, currentConfig, {
-      supabaseUrl,
-      supabaseKey,
-      userId: config.userId,
-      configId: config.configId,
-    });
-    applyOutcome = applyResult.applied ? "applied" : "rejected";
+    try {
+      const applyResult = await autoApplyResult(result, currentConfig, {
+        supabaseUrl,
+        supabaseKey,
+        userId: config.userId,
+        configId: config.configId,
+      });
+      applyOutcome = applyResult.applied ? "applied" : "rejected";
+    } catch (err) {
+      applyOutcome = `error: ${(err as Error).message}`;
+    }
   } else if (dryRun && autoApplied) {
     applyOutcome = "dry_run_would_apply";
   }
 
-  // Record completion (clear partial_state from result_summary)
+  // Record completion (clear state from result_summary)
   await db.from("optimizer_runs").update({
     status: "completed",
     completed_at: new Date().toISOString(),
@@ -539,7 +703,6 @@ async function handleFinalize(
       bestTrialPF: bestPassingTrial?.backtest.profitFactor ?? null,
       bestTrialExpectancy: bestPassingTrial?.backtest.expectancy ?? null,
       walkForwardVerdict: bestPassingTrial?.backtest.walkForward?.verdict ?? null,
-      totalChunks: Math.ceil(state.maxTrials / TRIALS_PER_CHUNK),
     },
   }).eq("id", runId);
 
@@ -587,6 +750,83 @@ async function handleCancel(db: SupabaseClient, body: any): Promise<Response> {
   return respond({ status: "cancelled", runId });
 }
 
+// ─── Backtest Helpers (non-blocking) ───
+
+/** Start a backtest and return the runId immediately (does NOT wait for completion) */
+async function startBacktest(
+  supabaseUrl: string,
+  supabaseKey: string,
+  config: OptimizationConfig,
+  backtestConfig: Record<string, any>,
+): Promise<string> {
+  const engineUrl = `${supabaseUrl}/functions/v1/backtest-engine`;
+
+  // Normalize instrument codes
+  const normalizeSymbol = (s: string): string => {
+    if (s.includes("/")) return s;
+    if (s.length === 6) return `${s.slice(0, 3)}/${s.slice(3)}`;
+    return s;
+  };
+
+  const payload = {
+    action: "start",
+    userId: config.userId,
+    instruments: (config.instruments ?? []).map(normalizeSymbol),
+    startDate: config.startDate,
+    endDate: config.endDate,
+    startingBalance: 10000,
+    config: backtestConfig,
+    walkForwardFolds: backtestConfig.walkForwardFolds ?? config.walkForwardFolds ?? 0,
+  };
+
+  const response = await fetch(engineUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    throw new Error(`Backtest start failed (${response.status}): ${errText}`);
+  }
+
+  const data = await response.json();
+  if (!data.runId) {
+    throw new Error(`Backtest start returned no runId: ${JSON.stringify(data)}`);
+  }
+
+  return data.runId;
+}
+
+/** Check backtest status without blocking */
+async function checkBacktestStatus(
+  supabaseUrl: string,
+  supabaseKey: string,
+  backtestRunId: string,
+): Promise<{ status: string; results?: any; error?: string }> {
+  const engineUrl = `${supabaseUrl}/functions/v1/backtest-engine`;
+
+  const response = await fetch(engineUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": supabaseKey,
+      "Authorization": `Bearer ${supabaseKey}`,
+    },
+    body: JSON.stringify({ action: "status", runId: backtestRunId }),
+  });
+
+  if (!response.ok) {
+    return { status: "error", error: `Status check failed (${response.status})` };
+  }
+
+  return await response.json();
+}
+
 // ─── Self-Invoke ───
 
 async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): Promise<void> {
@@ -597,6 +837,7 @@ async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): 
       headers: {
         "Content-Type": "application/json",
         "apikey": supabaseKey,
+        "Authorization": `Bearer ${supabaseKey}`,
       },
       body: JSON.stringify(body),
     }).catch(e => console.error(`[optimizer] self-invoke fetch error:`, e));
@@ -605,11 +846,19 @@ async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): 
   }
 }
 
+/** Self-invoke with a delay (uses setTimeout pattern via sleep + self-invoke) */
+async function selfInvokeDelayed(supabaseUrl: string, supabaseKey: string, body: any, delayMs: number): Promise<void> {
+  // Sleep within this invocation, then self-invoke
+  // This keeps the function "active" (not idle) during the delay
+  await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, 5_000)));
+  await selfInvoke(supabaseUrl, supabaseKey, body);
+}
+
 // ─── Helpers ───
 
 function getDefaultStartDate(): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - 1); // 1 month — keeps each trial fast (~2 min)
+  d.setMonth(d.getMonth() - 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -620,8 +869,34 @@ function getDefaultEndDate(): string {
 }
 
 function getDefaultInstruments(): string[] {
-  // Start with 2 pairs for fast iteration; scale up once confirmed working
-  return [
-    "EURUSD", "GBPUSD",
-  ];
+  return ["EURUSD", "GBPUSD"];
+}
+
+function extractBacktestResult(results: any): BacktestResult {
+  if (!results) {
+    return { totalTrades: 0, winRate: 0, profitFactor: 0, expectancy: 0, maxDrawdownPercent: 0, netPnlPips: 0 };
+  }
+
+  // Handle both array results (multi-instrument) and single result
+  const summary = Array.isArray(results)
+    ? results.reduce((acc: any, r: any) => ({
+        totalTrades: (acc.totalTrades || 0) + (r.totalTrades || 0),
+        winRate: r.winRate ?? acc.winRate ?? 0,
+        profitFactor: r.profitFactor ?? acc.profitFactor ?? 0,
+        expectancy: r.expectancy ?? acc.expectancy ?? 0,
+        maxDrawdownPercent: Math.max(acc.maxDrawdownPercent || 0, r.maxDrawdownPercent || 0),
+        netPnlPips: (acc.netPnlPips || 0) + (r.netPnlPips || 0),
+        walkForward: r.walkForward ?? acc.walkForward,
+      }), {})
+    : results;
+
+  return {
+    totalTrades: summary.totalTrades ?? 0,
+    winRate: summary.winRate ?? 0,
+    profitFactor: summary.profitFactor ?? 0,
+    expectancy: summary.expectancy ?? 0,
+    maxDrawdownPercent: summary.maxDrawdownPercent ?? 0,
+    netPnlPips: summary.netPnlPips ?? 0,
+    walkForward: summary.walkForward,
+  };
 }
