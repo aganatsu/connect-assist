@@ -91,6 +91,7 @@ export function createHTTPBacktestRunner(
     // Step 1: Start the backtest run
     const startPayload = {
       action: "start",
+      userId: baseInput.userId,  // Required for service-role-key auth (server-to-server)
       instruments: baseInput.instruments,
       startDate: baseInput.startDate,
       endDate: baseInput.endDate,
