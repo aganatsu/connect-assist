@@ -106,6 +106,8 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = body.action || "start";
+    // Pipe auth header into body so handlers can derive userId from JWT
+    body._authHeader = req.headers.get("authorization") ?? "";
 
     switch (action) {
       case "start":
@@ -141,6 +143,18 @@ async function handleStart(
     source = "unknown",
   } = body;
 
+  // Fallback: derive userId from JWT `sub` claim in Authorization header
+  let jwtUserId: string | undefined;
+  try {
+    const auth = (body._authHeader as string | undefined) ?? "";
+    const headerAuth = auth || "";
+    const token = headerAuth.replace(/^Bearer\s+/i, "");
+    if (token && token.split(".").length === 3) {
+      const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+      if (payload?.sub) jwtUserId = payload.sub;
+    }
+  } catch { /* ignore */ }
+
   // Load optimizer config from file
   let fileConfig: Partial<OptimizationConfig> = {};
   try {
@@ -148,7 +162,7 @@ async function handleStart(
     fileConfig = JSON.parse(configText);
   } catch { /* use defaults */ }
 
-  const targetUserId = userId || fileConfig.userId;
+  const targetUserId = userId || jwtUserId || fileConfig.userId;
   if (!targetUserId) {
     return respond({ error: "userId is required (in body or config.json)" }, 400);
   }
