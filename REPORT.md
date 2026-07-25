@@ -1,73 +1,65 @@
-# Task: Optimizer Wiring — Full Autonomy
+# Task: Local Optimizer Runner + Backtest Heartbeat Fix
 
-## Branch: manus/optimizer-wiring
+## Branch: manus/optimizer-backtest-heartbeat
 
 ## Behavior changes
 
-1. **Backtest engine is now called via HTTP** — The optimizer POSTs to `/functions/v1/backtest-engine` (action=start), polls for completion, and extracts results. Previously it threw "not yet wired."
-2. **Config writes target `config_json` column** — The auto-apply now correctly PATCHes `bot_configs.config_json` (the actual JSONB column) instead of spreading fields at the top level. Previously it would have written non-existent columns.
-3. **Removed `last_optimized_at`** — This column doesn't exist in the schema. The `updated_at` trigger fires automatically on PATCH.
-4. **Telegram notifications route through `telegram-notify` edge function** — Instead of calling the Telegram Bot API directly, notifications now go through the project's existing `/functions/v1/telegram-notify` function. Falls back to direct API if the edge function fails and a bot token is provided.
-5. **Chat IDs auto-resolved from user_settings** — No longer requires explicit TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env vars. Reads from `user_settings.preferences_json.telegramChatIds` automatically.
-6. **New edge function `/functions/v1/optimizer`** — HTTP entry point that pg_cron calls weekly. Handles deduplication, run lifecycle tracking, and the full optimization pipeline.
-7. **Weekly pg_cron trigger active** — Runs every Sunday at 22:00 UTC via `cron.schedule('optimizer-weekly-run', ...)`.
+1. **Backtest engine heartbeat during candle fetch** — The backtest engine now sends heartbeat updates before and after fetching candles for each instrument. Previously, if the candle API was slow (>5 min), the stale detection would kill the run.
+2. **Optimizer error propagation** — The optimizer now reads `error_message` (from backtest engine's stale detection) in addition to the `error` field. Previously, failures showed "unknown" instead of the actual reason.
+3. **Optimizer poll limit increased** — From 60 polls (10 min) to 120 polls (20 min). Accommodates multi-chunk backtests that legitimately take 15+ minutes.
+4. **Optimizer config.json** — `walkForwardFolds` set to 0 (was 3), `userId` set to the user's ID.
+5. **New local runner script** — `local-runner/optimizer-local.ts` runs the full optimization loop locally with a 30-minute timeout per backtest. This is the reliable path that bypasses all edge function time limits.
 
 ## Files modified
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/optimizer/lib/backtestRunner.ts` | Replaced placeholder with HTTP-based runner (POST start → poll status → extract results). Added `createHTTPBacktestRunner`, `fetchTelegramChatIds`. Kept `createBacktestRunner` for test mocking. |
-| `supabase/functions/optimizer/lib/autoApply.ts` | Fixed `writeConfig` to PATCH `config_json` column. Switched notifications to telegram-notify edge function. Added chat ID auto-resolution from user_settings. Changed message format from Markdown to HTML (telegram-notify uses HTML). |
-| `supabase/functions/optimizer/cli.ts` | Replaced placeholder `throw` with `createHTTPBacktestRunner`. Passes `config_json` to OptimizationLoop. Updated help text. |
-| `supabase/functions/optimizer/lib/scheduler.ts` | Rewritten to align with actual `optimizer_runs` table schema. Removed `getSetupSQL` (replaced by migration). Added `getRecentRun`, `shouldRunNow`, `recordRunStart`, `recordRunComplete`, `recordRunFailed`, `getNextRunTime`. |
-| `supabase/functions/optimizer/index.ts` | **NEW** — Supabase Edge Function HTTP handler. Deduplication, run lifecycle, full optimization pipeline. This is what pg_cron calls. |
-| `supabase/migrations/20260724120000_create_optimizer_tables.sql` | **NEW** — Creates `config_backups` and `optimizer_runs` tables with indexes and RLS policies. |
-| `supabase/migrations/20260724120001_add_optimizer_weekly_cron.sql` | **NEW** — Schedules `optimizer-weekly-run` cron job (Sunday 22:00 UTC). Uses vault secrets for URL/key. |
+- `supabase/functions/backtest-engine/index.ts` — Added heartbeat updates during candle fetching phase
+- `supabase/functions/optimizer/index.ts` — Fixed error_message propagation, increased poll limit to 120
+- `supabase/functions/optimizer/config.json` — Set walkForwardFolds=0, added userId
+- `supabase/functions/optimizer/optimizer.test.ts` — Added 4 tests for error propagation and poll limit
+- `local-runner/optimizer-local.ts` — NEW: Full local optimizer runner script
+- `local-runner/.env.local.example` — Updated with correct Supabase URL and instructions
 
 ## Tests added
 
-No new test files added in this commit (the existing 33 tests already cover the updated interfaces). The `extractBacktestResult` tests exercise the new flexible result parsing that handles both `output.summary` and direct `output` shapes.
+1. `Error propagation: error_message field is preferred over error field`
+2. `Error propagation: falls back to error field when error_message is absent`
+3. `Error propagation: falls back to 'unknown' when both fields are absent`
+4. `Poll limit: optimizer allows up to 120 polls (20 min) for multi-chunk backtests`
 
 ## Tests run
 
 ```
-Optimizer:       33 passed | 0 failed (26ms)
-Backtest-engine: 209 passed | 0 failed (816ms)
-Bot-scanner:     131 passed | 0 failed (914ms)
-TypeScript:      0 errors across all optimizer modules (index.ts, cli.ts, backtestRunner.ts, autoApply.ts, scheduler.ts)
+ok | 37 passed | 0 failed (26ms)
 ```
 
 ## Regression check
 
-- All 209 backtest-engine tests pass — the optimizer's HTTP integration is additive and doesn't touch engine internals.
-- All 131 bot-scanner tests pass — no scanner code was modified.
-- The `extractBacktestResult` function was made more flexible (handles both `output.summary` and direct `output` shapes) but the existing test still passes with the original shape.
-- `autoApply.ts` now writes to `config_json` column instead of spreading fields — this is a **correctness fix** (the old code would have failed against the real schema).
+- Heartbeat additions are purely additive (new `updateProgress` calls). No logic changes.
+- Error propagation uses `||` fallback chain — identical behavior when `error_message` is undefined.
+- Poll limit increase only affects wait duration, not scoring or trade decisions.
+- Local runner uses the exact same `OptimizationLoop` and `createHTTPBacktestRunner` as the edge function.
 
 ## Open questions
 
-1. **Edge function timeout** — Each backtest trial takes 3-10 minutes via HTTP. With 50 trials, the optimizer could run 2.5-8 hours. Supabase Edge Functions have a 400s wall-clock limit. **The edge function will time out for full runs.** Recommended: use the CLI from a VPS for production runs, or reduce trials to 5-10 for the edge function path. A chunked execution approach (save state between invocations) could be added later.
-
-2. **Migration application** — The two new SQL migrations need to be applied to production Supabase. Run them in order via the Supabase dashboard SQL editor or `supabase db push`.
-
-3. **Vault secrets** — The cron migration references `vault.decrypted_secrets` with names `supabase_url` and `service_role_key`. Confirm these are already set in your Supabase vault (they should be, since the prop-firm cron uses the same pattern).
-
-4. **Edge function deployment** — The new `optimizer/index.ts` needs to be deployed as a Supabase Edge Function. Run `supabase functions deploy optimizer` from the project root.
+1. The edge function approach remains unreliable when the candle API is slow. The local runner is the recommended path.
+2. Walk-forward folds are set to 0. Re-enable (2-3) for production optimization once baseline completes.
+3. The userId is hardcoded in config.json.
 
 ## Suggested PR title and description
 
-**Title:** `feat: wire optimizer for full autonomy — HTTP backtest integration, DB tables, weekly cron`
+**Title:** feat: local optimizer runner + backtest heartbeat fix
 
 **Description:**
-Completes the autonomous optimizer wiring:
-- Backtest engine called via HTTP (POST start → poll → extract results)
-- Fixed config persistence to write `config_json` column correctly
-- Telegram notifications route through project's `telegram-notify` function
-- Chat IDs auto-resolved from `user_settings.preferences_json`
-- New `optimizer` edge function as HTTP entry point for automated runs
-- Database tables: `config_backups` + `optimizer_runs` (with RLS)
-- Weekly pg_cron trigger (Sunday 22:00 UTC)
+Adds `local-runner/optimizer-local.ts` — a standalone Deno script that runs the full optimization loop locally with 30-minute backtest timeouts (no edge function limits).
 
-All 373 tests passing, 0 TypeScript errors.
+Also fixes the root cause of optimizer failures:
+- Backtest engine now sends heartbeats during candle fetching
+- Optimizer properly reads `error_message` from failed backtests
+- Poll limit increased from 60→120
 
-**Note:** The edge function path will hit Supabase's 400s timeout for 50-trial runs. Recommend using the CLI from a VPS for production runs until we implement chunked execution.
+Usage:
+```bash
+cd local-runner
+cp .env.local.example .env.local  # add your service_role_key
+deno run --allow-all optimizer-local.ts --trials=10 --verbose
+```
