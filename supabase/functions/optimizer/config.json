@@ -6,7 +6,7 @@
   "maxDeltaPercent": 0.50,
   "fullSpace": false,
   "instruments": [
-    "EURUSD", "GBPUSD"
+    "EURUSD"
   ],
   "userId": "57c79dee-db6b-4fae-b34a-4b64ce33ca34",
   "configId": "",
