@@ -76,7 +76,7 @@ export const EXECUTION_PROFILES: Record<string, SetupClassification["executionPr
 export interface ExitAttribution {
   trigger: "trailing_stop" | "break_even" | "partial_tp" | "structure_invalidated"
          | "session_close" | "max_hold_exceeded" | "tp_hit" | "sl_hit"
-         | "trailing_enabled" | "partial_enabled" | "be_enabled" | "no_action";
+         | "trailing_enabled" | "partial_enabled" | "partial_tp_executed" | "be_enabled" | "no_action";
   detail: string;           // human-readable explanation
   rMultiple: number;        // R-multiple at time of action
   timestamp: string;        // ISO-8601
@@ -272,11 +272,51 @@ export function classifySetupType(analysis: {
 export interface ManagementAction {
   positionId: string;
   symbol: string;
-  action: "sl_tightened" | "tp_extended" | "early_exit" | "trailing_enabled" | "partial_enabled" | "be_enabled" | "no_change";
+  action: "sl_tightened" | "tp_extended" | "early_exit" | "trailing_enabled" | "partial_enabled" | "partial_tp_executed" | "be_enabled" | "no_change";
   reason: string;
   newSL?: number;
   newTP?: number;
   attribution: ExitAttribution;
+}
+
+// ─── PnL Helpers for Partial-TP Accounting ────────────────────────────
+// Uses fallback rates (no live API calls) — accuracy is ±2% which is
+// acceptable for partial-TP PnL since the position is still open and
+// the final PnL will be recalculated at full close.
+const FALLBACK_RATES: Record<string, number> = {
+  "USD/JPY": 142.0, "GBP/USD": 1.27, "AUD/USD": 0.66,
+  "NZD/USD": 0.61, "USD/CAD": 1.36, "USD/CHF": 0.88,
+};
+
+function getQuoteToUSDRate(symbol: string): number {
+  if (!symbol.includes("/")) return 1.0;
+  const quote = symbol.split("/")[1];
+  if (quote === "USD") return 1.0;
+  const QUOTE_CONVERSION: Record<string, { pair: string; invert: boolean }> = {
+    "JPY": { pair: "USD/JPY", invert: true },
+    "GBP": { pair: "GBP/USD", invert: false },
+    "AUD": { pair: "AUD/USD", invert: false },
+    "NZD": { pair: "NZD/USD", invert: false },
+    "CAD": { pair: "USD/CAD", invert: true },
+    "CHF": { pair: "USD/CHF", invert: true },
+  };
+  const conv = QUOTE_CONVERSION[quote];
+  if (!conv) return 1.0;
+  const rate = FALLBACK_RATES[conv.pair];
+  if (!rate || rate <= 0) return 1.0;
+  return conv.invert ? (1 / rate) : rate;
+}
+
+function calcPartialPnl(dir: string, entry: number, current: number, size: number, symbol: string): { pnl: number; pnlPips: number } {
+  if (!Number.isFinite(entry) || !Number.isFinite(current) || !Number.isFinite(size) || entry <= 0 || current <= 0 || size <= 0) {
+    return { pnl: 0, pnlPips: 0 };
+  }
+  const spec = SPECS[symbol] || SPECS["EUR/USD"];
+  const diff = dir === "long" ? current - entry : entry - current;
+  const quoteToUSD = getQuoteToUSDRate(symbol);
+  const pnl = diff * spec.lotUnits * size * quoteToUSD;
+  const pnlPips = diff / spec.pipSize;
+  return { pnl, pnlPips };
 }
 
 // ─── Active Trade Management Engine (v2 — config-driven) ──────────────
@@ -402,6 +442,7 @@ export async function manageOpenPositions(
 
       // Track whether exitFlags were modified this cycle
       let exitFlagsUpdated = false;
+      let partialTPWritten = false; // When true, skip the final signal_reason write (partial-TP already wrote it)
       const updatedFlags = { ...exitFlags };
 
       // Helper to build attribution
@@ -651,26 +692,86 @@ export async function manageOpenPositions(
         }
       }
 
-      // ── 4. PARTIAL TP ACTIVATION ──
-      // If partial TP is enabled in config and hasn't been activated yet
-      // Use partialTPActivated (new format). Old positions stored partialTP
-      // as config intent — check the dedicated Activated field.
-      const partialAlreadyActivated = exitFlags.partialTPActivated === true;
+      // ── 4. PARTIAL TP EXECUTION (full accounting) ──
+      // When partial TP triggers, this block is the SINGLE AUTHORITY:
+      //   1. Calculates PnL on the closed portion
+      //   2. Inserts paper_trade_history row (partial close record)
+      //   3. Reduces paper_positions.size
+      //   4. Updates paper_accounts.balance
+      //   5. Sets partialTPActivated flag + partial_tp_fired column
+      // Downstream: bot-scanner fires the broker partial close based on the
+      // "partial_tp_executed" action. paper-trading skips (sees partial_tp_fired).
+      const partialAlreadyActivated = exitFlags.partialTPActivated === true || pos.partial_tp_fired === true;
       if (posPartialTPEnabled && !partialAlreadyActivated && rMultiple >= posPartialTPLevel) {
+        const size = parseFloat(pos.size);
+        const closeSize = Math.round(size * (posPartialTPPercent / 100) * 100) / 100; // round to 0.01
+        const remainSize = Math.round((size - closeSize) * 100) / 100;
+
+        // Calculate PnL on the closed portion
+        const { pnl: partialPnl, pnlPips: partialPnlPips } = calcPartialPnl(
+          pos.direction, entryPrice, currentPrice, closeSize, symbol,
+        );
+
+        // 1. Insert partial close into trade history
+        await supabase.from("paper_trade_history").insert({
+          user_id: pos.user_id,
+          position_id: `${pos.position_id}_partial`,
+          symbol,
+          direction: pos.direction,
+          size: closeSize.toString(),
+          entry_price: pos.entry_price,
+          exit_price: currentPrice.toString(),
+          pnl: partialPnl.toFixed(2),
+          pnl_pips: partialPnlPips.toFixed(1),
+          open_time: pos.open_time,
+          closed_at: new Date().toISOString(),
+          close_reason: "partial_tp",
+          signal_reason: pos.signal_reason || "",
+          signal_score: pos.signal_score,
+          order_id: pos.order_id,
+          stop_loss: pos.stop_loss || null,
+          take_profit: pos.take_profit || null,
+        });
+
+        // 2. Update position: reduce size, set fired flag, update exitFlags
         updatedFlags.partialTPActivated = true;
         updatedFlags.partialTPPercent = posPartialTPPercent;
         updatedFlags.partialTPLevel = posPartialTPLevel;
         exitFlagsUpdated = true;
+        const updatedSignalData = { ...signalData, exitFlags: { ...exitFlags, ...updatedFlags } };
+        await supabase.from("paper_positions").update({
+          size: remainSize.toString(),
+          partial_tp_fired: true,
+          signal_reason: JSON.stringify(updatedSignalData),
+        }).eq("id", pos.id);
+
+        // 3. Update account balance
+        const posBotId = pos.bot_id || "smc";
+        const { data: acct } = await supabase.from("paper_accounts")
+          .select("balance, peak_balance")
+          .eq("user_id", pos.user_id)
+          .eq("bot_id", posBotId)
+          .maybeSingle();
+        if (acct) {
+          const curBal = parseFloat(acct.balance || "10000");
+          const newBal = curBal + partialPnl;
+          const newPeak = Math.max(parseFloat(acct.peak_balance || "10000"), newBal);
+          await supabase.from("paper_accounts").update({
+            balance: newBal.toFixed(2),
+            peak_balance: newPeak.toFixed(2),
+          }).eq("user_id", pos.user_id).eq("bot_id", posBotId);
+        }
 
         const attribution = makeAttribution(
-          "partial_enabled",
-          `Partial TP enabled at ${rMultiple.toFixed(2)}R — ${posPartialTPPercent}% at ${posPartialTPLevel}R`,
+          "partial_tp_executed",
+          `Partial TP executed at ${rMultiple.toFixed(2)}R — closed ${posPartialTPPercent}% (${closeSize} lots) for $${partialPnl.toFixed(2)} | remain ${remainSize} lots`,
         );
         actions.push({
-          positionId: pos.position_id, symbol, action: "partial_enabled",
+          positionId: pos.position_id, symbol, action: "partial_tp_executed",
           reason: attribution.detail, attribution,
         });
-        console.log(`[mgmt ${scanCycleId}] PARTIAL TP ${symbol} | ${rMultiple.toFixed(2)}R | ${posPartialTPPercent}% at ${posPartialTPLevel}R`);
+        console.log(`[mgmt ${scanCycleId}] PARTIAL TP EXECUTED ${symbol} | ${rMultiple.toFixed(2)}R | closed ${closeSize} lots ($${partialPnl.toFixed(2)}) | remain ${remainSize}`);
+        partialTPWritten = true; // Signal that we already wrote signal_reason + size + partial_tp_fired
       }
 
       // ── 5. STRUCTURE INVALIDATION CHECK ──
@@ -821,7 +922,8 @@ export async function manageOpenPositions(
       }
 
       // ── Write any exitFlags updates that were accumulated ──
-      if (exitFlagsUpdated) {
+      if (exitFlagsUpdated && !partialTPWritten) {
+        // Skip if partial-TP already wrote the full update (size + flags + partial_tp_fired)
         const updatedSignalData = { ...signalData, exitFlags: updatedFlags };
         await supabase.from("paper_positions").update({
           signal_reason: JSON.stringify(updatedSignalData),
