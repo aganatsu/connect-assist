@@ -335,6 +335,8 @@ export type Database = {
           error_message: string | null
           id: string
           improvement_percent: number | null
+          progress: number | null
+          progress_message: string | null
           reject_reason: string | null
           result_summary: Json | null
           started_at: string
@@ -351,6 +353,8 @@ export type Database = {
           error_message?: string | null
           id?: string
           improvement_percent?: number | null
+          progress?: number | null
+          progress_message?: string | null
           reject_reason?: string | null
           result_summary?: Json | null
           started_at?: string
@@ -367,6 +371,8 @@ export type Database = {
           error_message?: string | null
           id?: string
           improvement_percent?: number | null
+          progress?: number | null
+          progress_message?: string | null
           reject_reason?: string | null
           result_summary?: Json | null
           started_at?: string
