@@ -52,6 +52,10 @@ import {
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
 import {
+  reconcileBrokerState, reconcilePartialClose,
+  type ReconcilePosition, type BrokerConnection,
+} from "../_shared/reconcileBrokerState.ts";
+import {
   analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
   type NewsEvent, type NewsImpactResult,
 } from "../_shared/newsImpact.ts";
@@ -1762,24 +1766,60 @@ Deno.serve(async (req) => {
       return respond(data || []);
     }
 
-    // ── Management-Only Cron (1-minute cycle) ──
+    // ── Management-Only Cron (1-minute cycle with internal sub-minute loop) ──
     // Refreshes prices, runs trailing/BE/partial TP, checks pending order fills/expiry.
     // Does NOT run the full scan or place new trades. Designed for pg_cron every 1 min.
+    //
+    // INTERNAL LOOP: Runs management repeatedly every ~8 seconds for ~50 seconds of
+    // the execution window, then exits cleanly before the next cron invocation.
+    // This gives sub-minute SL ratcheting without needing sub-minute cron (not supported by pg_cron).
+    // Single decision authority, single broker-writer — same code path invoked multiple times.
     if (action === "manage") {
       const { data: allAccounts } = await adminClient.from("paper_accounts").select("*")
         .eq("is_running", true).eq("kill_switch_active", false);
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", managed: 0 });
-      const results = [];
-      for (const account of accounts) {
-        try {
-          const result = await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
-          results.push({ userId: account.user_id, ...result });
-        } catch (e: any) {
-          results.push({ userId: account.user_id, error: e.message });
+
+      // Return HTTP response immediately, run the loop in the background via waitUntil
+      // to avoid pg_cron's request timeout (~150s) killing us mid-loop.
+      EdgeRuntime.waitUntil((async () => {
+        const LOOP_BUDGET_MS = 50_000; // 50 seconds — exit before next cron at 60s
+        const LOOP_INTERVAL_MS = 8_000; // 8 seconds between iterations
+        const loopStart = Date.now();
+        let iteration = 0;
+
+        while (Date.now() - loopStart < LOOP_BUDGET_MS) {
+          iteration++;
+          const iterStart = Date.now();
+          console.log(`[manage-loop] iteration ${iteration} starting (elapsed ${Math.round((iterStart - loopStart) / 1000)}s)`);
+
+          for (const account of accounts) {
+            try {
+              await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
+            } catch (e: any) {
+              console.error(`[manage-loop] error for ${account.user_id} iter ${iteration}:`, e?.message || e);
+            }
+          }
+
+          // Check if we have budget for another iteration
+          const elapsed = Date.now() - loopStart;
+          const remaining = LOOP_BUDGET_MS - elapsed;
+          if (remaining < LOOP_INTERVAL_MS) {
+            console.log(`[manage-loop] exiting after ${iteration} iterations (${Math.round(elapsed / 1000)}s elapsed, ${Math.round(remaining / 1000)}s remaining < ${LOOP_INTERVAL_MS / 1000}s interval)`);
+            break;
+          }
+
+          // Sleep until next iteration
+          const iterDuration = Date.now() - iterStart;
+          const sleepMs = Math.max(0, LOOP_INTERVAL_MS - iterDuration);
+          if (sleepMs > 0) {
+            await new Promise(r => setTimeout(r, sleepMs));
+          }
         }
-      }
-      return respond({ managed: results.length, results });
+        console.log(`[manage-loop] complete: ${iteration} iterations in ${Math.round((Date.now() - loopStart) / 1000)}s`);
+      })());
+
+      return respond({ started: true, accounts: accounts.length, message: "Management loop started in background (~50s, ~8s intervals)" });
     }
 
      if (action === "scan" || action === "cron") {
@@ -2076,256 +2116,57 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         for (const a of activeActions) {
           console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
         }
-        // ── BROKER SYNC: Mirror SL changes to MetaAPI immediately ──
-        // Without this, the Telegram fires but the broker SL stays stale until paper-trading cron picks it up.
+        // ── BROKER RECONCILIATION: Single broker-writer via reconcileBrokerState() ──
+        // Replaces fire-and-forget SL modify + partial close blocks.
+        // reconcileBrokerState is broker-authoritative: on push failure, DB is corrected to broker's actual value.
         if (account.execution_mode === "live") {
-          const slActions = activeActions.filter(a => a.newSL != null);
-          if (slActions.length > 0) {
-            const { data: liveConns } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
-            if (liveConns && liveConns.length > 0) {
-              for (const a of slActions) {
-                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
-                if (!pos) continue;
-                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
-                // B2 Fix: Skip SL modify when no mirrored_connection_ids instead of trying all connections.
-                // Legacy positions without mirrored IDs should be managed conservatively to avoid
-                // modifying SL on broker positions that were not opened by this scanner.
-                if (mirroredIds.length === 0) {
-                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping SL modify (B2 safety)`);
-                  continue;
-                }
-                const connsToModify = liveConns.filter((c: any) => mirroredIds.includes(c.id));
-                const tp = parseFloat(pos.take_profit || "0") || undefined;
-                // Apply safety buffer (1 pip) to avoid premature stops from spread
-                const spec = SPECS[a.symbol] || SPECS["EUR/USD"];
-                const safetyBuffer = spec.pipSize;
-                const adjustedSL = pos.direction === "long" ? a.newSL! - safetyBuffer : a.newSL! + safetyBuffer;
-                for (const conn of connsToModify) {
-                  try {
-                    // ── OANDA: route through broker-execute modify_trade ──
-                    if (conn.broker_type === "oanda") {
-                      // First fetch open trades to find the matching OANDA trade ID
-                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
-                      });
-                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
-                      const oandaTrades: any[] = await tradesRes.json();
-                      // Match by instrument (EUR_USD format) + direction
-                      const oandaInstrument = a.symbol.replace("/", "_");
-                      const oandaTrade = oandaTrades.find((t: any) => {
-                        const instMatch = t.instrument === oandaInstrument ||
-                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
-                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
-                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
-                        return instMatch && dirMatch;
-                      });
-                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} SL modify`); continue; }
-                      // Route SL modification through broker-execute
-                      const modRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                        body: JSON.stringify({
-                          action: "modify_trade",
-                          connectionId: conn.id,
-                          tradeId: oandaTrade.id,
-                          stopLoss: adjustedSL,
-                          ...(tp && tp > 0 ? { takeProfit: tp } : {}),
-                          symbol: a.symbol,
-                        }),
-                      });
-                      const modBody = await modRes.text();
-                      if (modRes.ok && !modBody.includes('"error"')) {
-                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA SL modified to ${adjustedSL} for ${a.symbol} (${a.action})`);
-                      } else {
-                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA SL modify failed: ${modBody.slice(0, 300)}`);
-                      }
-                      continue;
-                    }
-                    // ── MetaAPI: direct API call ──
-                    let authToken = conn.api_key;
-                    let metaAccountId = conn.account_id;
-                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                      authToken = conn.account_id;
-                      metaAccountId = conn.api_key;
-                    }
-                    // Find broker position by comment tag
-                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-                    if (!posRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: positions fetch failed ${posRes.status}`); continue; }
-                    const brokerPositions: any[] = JSON.parse(posBody);
-                    const commentTag = `paper:${a.positionId}`;
-                    const shortTag = commentTag.slice(0, 28);
-                    let brokerPos = brokerPositions.find((p: any) =>
-                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-                    );
-                    // B1 Fix: Removed symbol+direction fallback — it could match the wrong position
-                    // when multiple positions exist for the same symbol+direction.
-                    // Now only matches by comment tag. If comment was truncated by broker, skip.
-                    if (!brokerPos) {
-                      console.warn(`[mgmt-broker] ${conn.display_name}: No comment-tag match for paper:${a.positionId} on ${a.symbol} — skipping SL modify (B1 safety)`);
-                      continue;
-                    }
-                    // ── Freeze-level guard: query broker's current price and validate SL distance ──
-                    const brokerSymbol = resolveSymbol(a.symbol, conn);
-                    let brokerBid = 0, brokerAsk = 0;
-                    try {
-                      const { res: prRes, body: prBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/symbols/${encodeURIComponent(brokerSymbol)}/current-price`);
-                      if (prRes.ok) {
-                        const prData: any = JSON.parse(prBody);
-                        brokerBid = prData.bid ?? 0;
-                        brokerAsk = prData.ask ?? 0;
-                      }
-                    } catch {}
-                    // Determine minimum SL distance (freeze level). MT5 default freeze = 0-3 pips.
-                    // Use 3× pipSize as conservative minimum distance when we can't get the spec.
-                    const slSpec = SPECS[a.symbol] || SPECS["EUR/USD"];
-                    const minSLDistance = slSpec.pipSize * 3; // 3 pips minimum distance from price
-                    let finalSL = adjustedSL;
-                    if (brokerBid > 0 && brokerAsk > 0) {
-                      const relevantPrice = pos.direction === "long" ? brokerBid : brokerAsk;
-                      const slDistance = pos.direction === "long"
-                        ? relevantPrice - adjustedSL
-                        : adjustedSL - relevantPrice;
-                      if (slDistance < minSLDistance) {
-                        // SL is too close to broker price — widen it to minimum safe distance
-                        finalSL = pos.direction === "long"
-                          ? relevantPrice - minSLDistance
-                          : relevantPrice + minSLDistance;
-                        // Round to instrument precision
-                        const precision = slSpec.pipSize < 0.01 ? 5 : slSpec.pipSize < 1 ? 3 : 1;
-                        finalSL = parseFloat(finalSL.toFixed(precision));
-                        console.log(`[mgmt-broker] ${conn.display_name}: SL ${adjustedSL} too close to broker price ${relevantPrice} (dist=${slDistance.toFixed(5)}, min=${minSLDistance.toFixed(5)}) — widened to ${finalSL}`);
-                      }
-                    }
-                    const modifyBody: any = {
-                      actionType: "POSITION_MODIFY",
-                      positionId: brokerPos.id,
-                      stopLoss: finalSL,
-                    };
-                    if (tp && tp > 0) modifyBody.takeProfit = tp;
-                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-                      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modifyBody),
-                    });
-                    if (res.ok) {
-                      // MetaAPI returns 200 even on broker rejection — must check stringCode
-                      let modParsed: any = null;
-                      try { modParsed = JSON.parse(resBody); } catch {}
-                      if (modParsed?.stringCode && modParsed.stringCode !== "TRADE_RETCODE_DONE" && modParsed.stringCode !== "ERR_NO_ERROR") {
-                        console.warn(`[mgmt-broker] ${conn.display_name}: SL modify REJECTED by broker — ${modParsed.stringCode}: ${modParsed.message || ""} | ${a.symbol} SL→${finalSL} (${a.action})`);
-                      } else {
-                        console.log(`[mgmt-broker] ${conn.display_name}: SL modified to ${finalSL} for ${a.symbol} (${a.action})`);
-                      }
-                    } else {
-                      console.warn(`[mgmt-broker] ${conn.display_name}: SL modify failed [${res.status}]: ${resBody.slice(0, 300)}`);
-                    }
-                  } catch (e: any) {
-                    console.warn(`[mgmt-broker] ${conn.display_name}: error modifying SL for ${a.symbol}: ${e?.message}`);
-                  }
-                }
-              }
+          const { data: liveConns } = await supabase.from("broker_connections")
+            .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
+          if (liveConns && liveConns.length > 0) {
+            // Build reconcile positions from open positions that have mirrored connections
+            const reconcilePositions: ReconcilePosition[] = openPosArr
+              .filter((p: any) => Array.isArray(p.mirrored_connection_ids) && p.mirrored_connection_ids.length > 0)
+              .map((p: any) => ({
+                id: p.id,
+                position_id: p.position_id,
+                symbol: p.symbol,
+                direction: p.direction as "long" | "short",
+                stop_loss: p.stop_loss != null ? parseFloat(String(p.stop_loss)) : null,
+                take_profit: p.take_profit != null ? parseFloat(String(p.take_profit)) : null,
+                mirrored_connection_ids: p.mirrored_connection_ids,
+              }));
+            // Run SL reconciliation
+            if (reconcilePositions.length > 0) {
+              await reconcileBrokerState({
+                supabase,
+                userId,
+                positions: reconcilePositions,
+                connections: liveConns as BrokerConnection[],
+                telegramChatIds,
+                shouldNotify,
+                scanCycleId,
+              });
             }
-          }
-          // ── Partial TP broker sync ──
-          const partialActions = activeActions.filter(a => a.action === "partial_tp_executed" || a.action === "partial_enabled");
-          if (partialActions.length > 0) {
-            const { data: liveConnsP } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
-            if (liveConnsP && liveConnsP.length > 0) {
-              for (const a of partialActions) {
-                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
-                if (!pos) continue;
-                const mirroredIds: string[] = Array.isArray(pos.mirrored_connection_ids) ? pos.mirrored_connection_ids : [];
-                // B2 Fix: Skip partial TP when no mirrored_connection_ids (same safety as SL modify)
-                if (mirroredIds.length === 0) {
-                  console.warn(`[mgmt-broker] ${a.symbol} (${a.positionId}): no mirrored_connection_ids — skipping partial TP (B2 safety)`);
-                  continue;
-                }
-                const connsToClose = liveConnsP.filter((c: any) => mirroredIds.includes(c.id));
-                // Parse partial TP percent from the action's attribution
+            // Run partial close for any partial_tp_executed actions
+            const partialActions = activeActions.filter(a => a.action === "partial_tp_executed" || a.action === "partial_enabled");
+            if (partialActions.length > 0) {
+              const partialCloseActions = partialActions.map(a => {
                 const partialPercent = a.attribution?.detail?.match(/(\d+)%/)?.[1];
                 const closeFraction = partialPercent ? parseInt(partialPercent) / 100 : 0.5;
-                for (const conn of connsToClose) {
-                  try {
-                    // ── OANDA: route partial close through broker-execute ──
-                    if (conn.broker_type === "oanda") {
-                      // Fetch open trades to find the matching OANDA trade ID + current units
-                      const tradesRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                        body: JSON.stringify({ action: "open_trades", connectionId: conn.id }),
-                      });
-                      if (!tradesRes.ok) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA open_trades fetch failed ${tradesRes.status}`); continue; }
-                      const oandaTrades: any[] = await tradesRes.json();
-                      const oandaInstrument = a.symbol.replace("/", "_");
-                      const oandaTrade = oandaTrades.find((t: any) => {
-                        const instMatch = t.instrument === oandaInstrument ||
-                          t.instrument?.replace("_", "").toUpperCase() === a.symbol.replace("/", "").toUpperCase();
-                        const dirMatch = (parseFloat(t.currentUnits || t.initialUnits || "0") > 0 && pos.direction === "long") ||
-                          (parseFloat(t.currentUnits || t.initialUnits || "0") < 0 && pos.direction === "short");
-                        return instMatch && dirMatch;
-                      });
-                      if (!oandaTrade) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA trade not found for ${a.symbol} partial close`); continue; }
-                      // Calculate partial close units (OANDA uses units, not lots)
-                      const currentUnits = Math.abs(parseFloat(oandaTrade.currentUnits || oandaTrade.initialUnits || "0"));
-                      const closeUnits = Math.round(currentUnits * closeFraction);
-                      if (closeUnits <= 0) { console.warn(`[mgmt-broker] ${conn.display_name}: OANDA closeUnits=0 for ${a.symbol}`); continue; }
-                      // Route partial close through broker-execute close_trade with units param
-                      const closeRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                        body: JSON.stringify({ action: "close_trade", connectionId: conn.id, tradeId: oandaTrade.id, units: closeUnits }),
-                      });
-                      const closeBody = await closeRes.text();
-                      if (closeRes.ok && !closeBody.includes('"error"')) {
-                        console.log(`[mgmt-broker] ${conn.display_name}: OANDA partial close ${closeUnits} units for ${a.symbol}`);
-                      } else {
-                        console.warn(`[mgmt-broker] ${conn.display_name}: OANDA partial close failed: ${closeBody.slice(0, 300)}`);
-                      }
-                      continue;
-                    }
-                    // ── MetaAPI: direct API call ──
-                    let authToken = conn.api_key;
-                    let metaAccountId = conn.account_id;
-                    if (metaAccountId.startsWith("eyJ") && /^[0-9a-f-]{36}$/.test(authToken)) {
-                      authToken = conn.account_id;
-                      metaAccountId = conn.api_key;
-                    }
-                    const { res: posRes, body: posBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/positions`);
-                    if (!posRes.ok) continue;
-                    const brokerPositions: any[] = JSON.parse(posBody);
-                    const commentTag = `paper:${a.positionId}`;
-                    const shortTag = commentTag.slice(0, 28);
-                    let brokerPos = brokerPositions.find((p: any) =>
-                      p.comment && (p.comment.includes(commentTag) || p.comment.startsWith(shortTag))
-                    );
-                    if (!brokerPos) {
-                      const brokerSymbol = resolveSymbol(a.symbol, conn);
-                      brokerPos = brokerPositions.find((p: any) =>
-                        (p.symbol === brokerSymbol || p.symbol === a.symbol.replace("/", "") ||
-                         p.symbol?.replace(/[._\-]/g, "").toUpperCase() === a.symbol.replace("/", "").toUpperCase()) &&
-                        ((p.type === "POSITION_TYPE_BUY" && pos.direction === "long") ||
-                         (p.type === "POSITION_TYPE_SELL" && pos.direction === "short"))
-                      );
-                    }
-                    if (!brokerPos) { console.warn(`[mgmt-broker] ${conn.display_name}: position not found for ${a.symbol} partial close`); continue; }
-                    const brokerVolume = brokerPos.volume || brokerPos.currentVolume || 0;
-                    const closeVolume = Math.max(0.01, Math.round(brokerVolume * closeFraction * 100) / 100);
-                    const { res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, {
-                      method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ actionType: "POSITION_CLOSE_ID", positionId: brokerPos.id, volume: closeVolume }),
-                    });
-                    if (res.ok) {
-                      console.log(`[mgmt-broker] ${conn.display_name}: partial close ${closeVolume} lots for ${a.symbol}`);
-                    } else {
-                      console.warn(`[mgmt-broker] ${conn.display_name}: partial close failed [${res.status}]: ${resBody.slice(0, 300)}`);
-                    }
-                  } catch (e: any) {
-                    console.warn(`[mgmt-broker] ${conn.display_name}: error partial closing ${a.symbol}: ${e?.message}`);
-                  }
-                }
-              }
+                const pos = openPosArr.find((p: any) => p.position_id === a.positionId);
+                return {
+                  positionId: a.positionId,
+                  symbol: a.symbol,
+                  closeFraction,
+                  direction: (pos?.direction || "long") as "long" | "short",
+                };
+              });
+              await reconcilePartialClose({
+                supabase,
+                positions: reconcilePositions,
+                connections: liveConns as BrokerConnection[],
+                partialActions: partialCloseActions,
+              });
             }
           }
         }

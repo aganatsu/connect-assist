@@ -988,8 +988,9 @@ Deno.serve(async (req) => {
               await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
               sl = newSL;
               pos.close_reason = "trail";
-              const trailModifyResults = await modifyBrokerSL(supabase, user.id, pos.position_id, pos.symbol, pos.direction, newSL, pos.mirrored_connection_ids, tp);
-              console.log(`Trail ratchet [${pos.position_id}]: SL→${newSL.toFixed(5)} (${effectiveTrailPips.toFixed(1)}p behind) | broker: ${trailModifyResults.join("; ")}`);
+              // Broker push removed: reconcileBrokerState() in bot-scanner's manage cycle
+              // is the single broker-writer. It detects DB/broker SL mismatch and pushes.
+              console.log(`Trail ratchet [${pos.position_id}]: SL→${newSL.toFixed(5)} (${effectiveTrailPips.toFixed(1)}p behind) | broker sync deferred to manage cycle`);
             }
           }
 
