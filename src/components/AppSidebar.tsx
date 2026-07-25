@@ -1,4 +1,4 @@
-import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX } from "lucide-react";
+import { LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical, Settings, Calendar, Sun, Moon, Monitor, Crosshair, ShieldX, Zap } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -16,6 +16,7 @@ const navItems = [
   { title: "Journal", url: "/journal", icon: BookOpen },
   { title: "Backtest", url: "/backtest", icon: FlaskConical },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
+  { title: "Optimizer", url: "/optimizer", icon: Zap },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 

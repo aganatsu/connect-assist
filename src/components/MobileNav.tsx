@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Bot, Search, MoreHorizontal,
-  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX,
+  Brain, BookOpen, FlaskConical, Settings, Server, Calendar, X, Play, Shield, ShieldX, Zap,
 } from "lucide-react";
 
 const PRIMARY_ITEMS = [
@@ -20,6 +20,7 @@ const MORE_ITEMS = [
   { title: "Trade Replay", url: "/trade-replay", icon: Play },
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
+  { title: "Optimizer", url: "/optimizer", icon: Zap },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
 
