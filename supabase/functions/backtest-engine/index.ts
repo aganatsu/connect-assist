@@ -2796,10 +2796,17 @@ Deno.serve(async (req: Request) => {
     const db = getAdminClient();
 
     // Resolve user from JWT for ownership on start/list
+    // Also supports service-role-key calls (server-to-server) with userId in body
     async function getUserId(): Promise<string | null> {
       const auth = req.headers.get("Authorization");
       if (!auth?.startsWith("Bearer ")) return null;
       const token = auth.replace("Bearer ", "");
+      // If the token IS the service role key, trust the userId from the request body
+      // This enables internal edge-function-to-edge-function calls (optimizer → backtest)
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (serviceRoleKey && token === serviceRoleKey) {
+        return body?.userId || null;
+      }
       const { data } = await db.auth.getUser(token);
       return data?.user?.id || null;
     }
