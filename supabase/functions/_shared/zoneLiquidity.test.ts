@@ -25,16 +25,28 @@ function makeCandle(o: number, h: number, l: number, c: number, idx: number): Ca
   };
 }
 
-/** Generate 50 candles ranging from 1.1000 to 1.1500 with ~50 pip ATR */
+/** Seeded PRNG (mulberry32) for deterministic candle generation */
+function seededRandom(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Generate 50 candles ranging from 1.1000 to 1.1500 with ~50 pip ATR (deterministic) */
 function generateBaseCandles(count = 50): Candle[] {
+  const rand = seededRandom(42); // Fixed seed for reproducibility
   const candles: Candle[] = [];
   let price = 1.1000;
   for (let i = 0; i < count; i++) {
-    const move = (Math.random() - 0.5) * 0.0050;
+    const move = (rand() - 0.5) * 0.0050;
     const open = price;
     const close = price + move;
-    const high = Math.max(open, close) + Math.random() * 0.0020;
-    const low = Math.min(open, close) - Math.random() * 0.0020;
+    const high = Math.max(open, close) + rand() * 0.0020;
+    const low = Math.min(open, close) - rand() * 0.0020;
     candles.push(makeCandle(open, high, low, close, i));
     price = close;
   }
