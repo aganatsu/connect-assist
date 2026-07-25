@@ -2837,16 +2837,17 @@ Deno.serve(async (req: Request) => {
         .maybeSingle();
       if (error) return respond({ error: error.message }, 500);
       if (!data) return respond({ error: "Run not found" }, 404);
-      // Detect stale runs: if running but heartbeat is >300s old, mark as failed.
-      // Edge functions have a 400s wall-clock limit on paid plans; 90s was too aggressive
-      // and caused false timeouts during heavy computation phases (FOTSI build, scan loop).
+      // Detect stale runs: if running but heartbeat is >900s old, mark as failed.
+      // The candle API (MetaApi/TwelveData) can take 5-10 minutes per fetch call when
+      // under load. 15 min threshold prevents false kills during legitimate processing.
+      // The edge function's self-invocation chain handles actual execution (280s chunks).
       if (data.status === "running" && data.heartbeat_at) {
         const heartbeatAge = Date.now() - new Date(data.heartbeat_at).getTime();
-        if (heartbeatAge > 300_000) {
+        if (heartbeatAge > 900_000) {
           await db.from("backtest_runs").update({
             status: "failed",
             completed_at: new Date().toISOString(),
-            progress_message: "Engine timed out (no heartbeat for 5 min)",
+            progress_message: "Engine timed out (no heartbeat for 15 min)",
             error_message: "Backtest engine stopped responding. The run may have exceeded time limits.",
           }).eq("id", runId);
           data.status = "failed";
