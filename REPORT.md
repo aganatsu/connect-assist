@@ -1,65 +1,45 @@
-# Task: Local Optimizer Runner + Backtest Heartbeat Fix
-
-## Branch: manus/optimizer-backtest-heartbeat
-
+# Task: Add crypto/metals/energy correlation groups + min-lot floor budget guard
+## Branch: manus/sizing-correlation-minlot
 ## Behavior changes
-
-1. **Backtest engine heartbeat during candle fetch** — The backtest engine now sends heartbeat updates before and after fetching candles for each instrument. Previously, if the candle API was slow (>5 min), the stale detection would kill the run.
-2. **Optimizer error propagation** — The optimizer now reads `error_message` (from backtest engine's stale detection) in addition to the `error` field. Previously, failures showed "unknown" instead of the actual reason.
-3. **Optimizer poll limit increased** — From 60 polls (10 min) to 120 polls (20 min). Accommodates multi-chunk backtests that legitimately take 15+ minutes.
-4. **Optimizer config.json** — `walkForwardFolds` set to 0 (was 3), `userId` set to the user's ID.
-5. **New local runner script** — `local-runner/optimizer-local.ts` runs the full optimization loop locally with a 30-minute timeout per backtest. This is the reliable path that bypasses all edge function time limits.
+1. **New correlation groups recognized:** XAU/USD + XAG/USD (METALS), BTC/USD + ETH/USD (CRYPTO_MAJORS), US30 + NAS100 + SPX500 (RISK_ON_EQUITY), XAU/USD + US Oil (USD_HAVENS). Previously, trades in these pairs had zero correlation coverage — the system would happily open max-size positions in both XAU/USD and XAG/USD simultaneously. Now they are treated as correlated and subject to the `maxCorrelatedExposure` cap.
+2. **Min-lot floor no longer silently exceeds hard budget caps.** Previously, if portfolio heat, correlation, or prop-firm daily loss caps reduced the position to below 0.01 lots, the system would floor it to 0.01 lots regardless — potentially risking more USD than the cap allowed. Now, if 0.01 lots would breach the tightest applicable cap, the trade is **rejected** with a clear reason instead of being taken at over-budget size.
 
 ## Files modified
-
-- `supabase/functions/backtest-engine/index.ts` — Added heartbeat updates during candle fetching phase
-- `supabase/functions/optimizer/index.ts` — Fixed error_message propagation, increased poll limit to 120
-- `supabase/functions/optimizer/config.json` — Set walkForwardFolds=0, added userId
-- `supabase/functions/optimizer/optimizer.test.ts` — Added 4 tests for error propagation and poll limit
-- `local-runner/optimizer-local.ts` — NEW: Full local optimizer runner script
-- `local-runner/.env.local.example` — Updated with correct Supabase URL and instructions
+- `supabase/functions/_shared/unifiedPositionSizing.ts` — Added 4 new correlation groups (METALS, CRYPTO_MAJORS, RISK_ON_EQUITY, USD_HAVENS). Added `hardCapUSD` tracking through portfolio heat, correlation, and prop-firm cap steps. Modified Step 6 (min-lot floor) to check whether 0.01 lots would exceed the tightest hard cap, and reject if so.
+- `supabase/functions/_shared/unifiedPositionSizing.test.ts` — Added 7 new tests covering new correlation groups and min-lot floor budget guard.
 
 ## Tests added
-
-1. `Error propagation: error_message field is preferred over error field`
-2. `Error propagation: falls back to error field when error_message is absent`
-3. `Error propagation: falls back to 'unknown' when both fields are absent`
-4. `Poll limit: optimizer allows up to 120 polls (20 min) for multi-chunk backtests`
+1. `areCorrelated: XAU/USD and XAG/USD are in METALS group` — verifies correlation adjustment triggers for metals pairs
+2. `areCorrelated: BTC/USD and ETH/USD are in CRYPTO_MAJORS group` — verifies rejection when crypto correlated exposure exceeds cap
+3. `areCorrelated: US30 and NAS100 are in RISK_ON_EQUITY group` — verifies rejection for equity index correlation
+4. `areCorrelated: XAU/USD not correlated with BTC/USD (different groups)` — verifies no false positives across unrelated groups
+5. `min-lot floor rejects when 0.01 lots would exceed portfolio heat budget` — XAU/USD with $10 remaining heat, 0.01 lots would risk $100 → rejected
+6. `min-lot floor rejects when 0.01 lots would exceed prop-firm daily loss budget` — XAU/USD with $5 daily loss remaining, 0.01 lots would risk $50 → rejected
+7. `min-lot floor allows when 0.01 lots is within budget (EUR/USD + heat)` — confirms normal heat reduction still works without false rejection
 
 ## Tests run
-
 ```
-ok | 37 passed | 0 failed (26ms)
+ok | 28 passed | 0 failed (14ms)  [unifiedPositionSizing.test.ts only]
+ok | 1918 passed | 6 failed (19s) [full suite — 6 failures are pre-existing on main (BE trailing tests)]
 ```
 
 ## Regression check
-
-- Heartbeat additions are purely additive (new `updateProgress` calls). No logic changes.
-- Error propagation uses `||` fallback chain — identical behavior when `error_message` is undefined.
-- Poll limit increase only affects wait duration, not scoring or trade decisions.
-- Local runner uses the exact same `OptimizationLoop` and `createHTTPBacktestRunner` as the edge function.
+- All 21 existing position sizing tests pass unchanged — the new code only adds behavior for previously-uncovered asset classes and for the edge case where min-lot would breach a cap.
+- Existing forex pairs (EUR/USD, GBP/USD, etc.) continue to be correlated exactly as before — the new groups only add coverage for crypto/metals/energy/indices.
+- The `hardCapUSD` variable starts at `Infinity` and is only set when a cap actually reduces the position. If no cap fires, behavior is identical to before (min-lot floor applies unconditionally).
 
 ## Open questions
-
-1. The edge function approach remains unreliable when the candle API is slow. The local runner is the recommended path.
-2. Walk-forward folds are set to 0. Re-enable (2-3) for production optimization once baseline completes.
-3. The userId is hardcoded in config.json.
+- The `USD_HAVENS` group links XAU/USD and US Oil. This is a loose correlation (both react to USD strength/risk sentiment). If you want tighter grouping, we could remove this or make it a separate "soft correlation" tier with a different cap.
+- `SPX500` is in the RISK_ON_EQUITY group but doesn't appear in the SPECS table in smcAnalysis.ts. If the bot ever trades SPX500, it will fall back to EUR/USD specs for sizing. Consider adding it to SPECS if it's a tradeable instrument.
 
 ## Suggested PR title and description
-
-**Title:** feat: local optimizer runner + backtest heartbeat fix
+**Title:** feat(sizing): add crypto/metals/equity correlation groups + min-lot budget guard
 
 **Description:**
-Adds `local-runner/optimizer-local.ts` — a standalone Deno script that runs the full optimization loop locally with 30-minute backtest timeouts (no edge function limits).
+Two position sizing improvements:
 
-Also fixes the root cause of optimizer failures:
-- Backtest engine now sends heartbeats during candle fetching
-- Optimizer properly reads `error_message` from failed backtests
-- Poll limit increased from 60→120
+1. **Correlation coverage for non-forex assets** — adds METALS (XAU/XAG), CRYPTO_MAJORS (BTC/ETH), RISK_ON_EQUITY (US30/NAS100/SPX500), and USD_HAVENS (XAU/Oil) groups. Previously these asset classes had zero correlation tracking.
 
-Usage:
-```bash
-cd local-runner
-cp .env.local.example .env.local  # add your service_role_key
-deno run --allow-all optimizer-local.ts --trials=10 --verbose
-```
+2. **Min-lot floor respects hard caps** — when portfolio heat, correlation, or prop-firm daily loss caps reduce a position below 0.01 lots, the system now checks whether 0.01 lots would exceed the tightest cap. If so, the trade is rejected rather than silently taken at over-budget size.
+
+Both changes are additive — existing forex correlation behavior is unchanged.
