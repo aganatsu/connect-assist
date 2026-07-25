@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, LineChart, Brain, Bot, BookOpen, FlaskConical,
-  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock,
+  Settings, Activity, Search, Calendar, Sun, Moon, Monitor, Server, Play, Shield, ShieldX, Clock, Zap,
   PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,6 +21,7 @@ const NAV_ITEMS = [
   { title: "Prop Firm", url: "/prop-firm", icon: Shield },
   { title: "Rejected Setups", url: "/rejected-setups", icon: ShieldX },
   { title: "Scheduled Tasks", url: "/scheduled-tasks", icon: Clock },
+  { title: "Optimizer", url: "/optimizer", icon: Zap },
   { title: "Settings", url: "/settings", icon: Settings, shortcut: "9" },
 ];
 
