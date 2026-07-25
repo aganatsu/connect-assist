@@ -52,7 +52,6 @@ export async function getRecentRun(
   const response = await fetch(url, {
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
     },
   });
 
@@ -116,7 +115,6 @@ export async function recordRunStart(
     method: "POST",
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=representation",
     },
@@ -155,7 +153,6 @@ export async function recordRunComplete(
     method: "PATCH",
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=minimal",
     },
@@ -187,7 +184,6 @@ export async function recordRunFailed(
     method: "PATCH",
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=minimal",
     },

@@ -130,7 +130,6 @@ async function backupConfig(
     method: "POST",
     headers: {
       "apikey": config.supabaseKey,
-      "Authorization": `Bearer ${config.supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=minimal",
     },
@@ -159,7 +158,6 @@ async function writeConfig(
     method: "PATCH",
     headers: {
       "apikey": config.supabaseKey,
-      "Authorization": `Bearer ${config.supabaseKey}`,
       "Content-Type": "application/json",
       "Prefer": "return=minimal",
     },
@@ -222,7 +220,6 @@ async function sendNotification(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${config.supabaseKey}`,
           "apikey": config.supabaseKey,
         },
         body: JSON.stringify({
@@ -334,7 +331,6 @@ export async function rollbackConfig(
   const response = await fetch(url, {
     headers: {
       "apikey": config.supabaseKey,
-      "Authorization": `Bearer ${config.supabaseKey}`,
     },
   });
 
