@@ -89,10 +89,19 @@ export function createHTTPBacktestRunner(
 
   return async (config: Record<string, any>): Promise<BacktestResult> => {
     // Step 1: Start the backtest run
+    // Normalize instrument codes to slashed format expected by backtest-engine
+    // (e.g., "EURUSD" → "EUR/USD", "XAUUSD" → "XAU/USD", "BTCUSD" → "BTC/USD")
+    const normalizeSymbol = (s: string): string => {
+      if (s.includes("/")) return s;
+      if (s.length === 6) return `${s.slice(0, 3)}/${s.slice(3)}`;
+      return s;
+    };
+    const normalizedInstruments = (baseInput.instruments ?? []).map(normalizeSymbol);
+
     const startPayload = {
       action: "start",
       userId: baseInput.userId,  // Required for service-role-key auth (server-to-server)
-      instruments: baseInput.instruments,
+      instruments: normalizedInstruments,
       startDate: baseInput.startDate,
       endDate: baseInput.endDate,
       startingBalance: 10000,
