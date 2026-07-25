@@ -104,7 +104,6 @@ export function createHTTPBacktestRunner(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${supabaseKey}`,
         "apikey": supabaseKey,
       },
       body: JSON.stringify(startPayload),
@@ -136,7 +135,6 @@ export function createHTTPBacktestRunner(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseKey}`,
           "apikey": supabaseKey,
         },
         body: JSON.stringify({ action: "status", runId }),
@@ -250,7 +248,6 @@ export async function fetchCurrentConfig(
   const response = await fetch(url, {
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
     },
   });
 
@@ -280,7 +277,6 @@ export async function fetchTelegramChatIds(
   const response = await fetch(url, {
     headers: {
       "apikey": supabaseKey,
-      "Authorization": `Bearer ${supabaseKey}`,
     },
   });
 

@@ -1431,7 +1431,6 @@ async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number)
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${key}`,
         "apikey": key,
       },
       body: JSON.stringify({ ...body, action: "chunk", runId, chunkIndex }),
@@ -2798,12 +2797,17 @@ Deno.serve(async (req: Request) => {
     // Resolve user from JWT for ownership on start/list
     // Also supports service-role-key calls (server-to-server) with userId in body
     async function getUserId(): Promise<string | null> {
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      const apiKey = req.headers.get("apikey");
+      // Opaque backend keys authenticate through `apikey`; they are not JWTs
+      // and must never be sent as an Authorization Bearer token.
+      if (serviceRoleKey && apiKey === serviceRoleKey) {
+        return body?.userId || null;
+      }
       const auth = req.headers.get("Authorization");
       if (!auth?.startsWith("Bearer ")) return null;
       const token = auth.replace("Bearer ", "");
-      // If the token IS the service role key, trust the userId from the request body
-      // This enables internal edge-function-to-edge-function calls (optimizer → backtest)
-      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      // Preserve compatibility with legacy JWT-shaped backend keys.
       if (serviceRoleKey && token === serviceRoleKey) {
         return body?.userId || null;
       }
@@ -3038,7 +3042,6 @@ Deno.serve(async (req: Request) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${warmupKey}`,
         "apikey": warmupKey,
       },
       body: JSON.stringify({ ...body, action: "warmup", runId }),

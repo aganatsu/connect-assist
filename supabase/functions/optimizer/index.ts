@@ -596,7 +596,6 @@ async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): 
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${supabaseKey}`,
         "apikey": supabaseKey,
       },
       body: JSON.stringify(body),
