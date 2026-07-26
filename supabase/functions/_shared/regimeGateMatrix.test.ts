@@ -10,8 +10,10 @@
  *   | ranging      | external   | FIRES (major structural shift) |
  *   | ranging      | internal   | SUPPRESSED (noise in chop)     |
  *
- * A gate bug that accidentally suppresses trending-regime invalidations
- * or external-break invalidations would be caught by cells 1-3.
+ * The regime is derived from CURRENT daily candles via classifyInstrumentRegime(),
+ * NOT from the entry-time snapshot in signalData.regimeInfo.
+ * fetchCandlesFn is interval-aware: returns structure candles for entry-TF,
+ * daily candles for regime classification.
  */
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { manageOpenPositions } from "./scannerManagement.ts";
@@ -22,7 +24,7 @@ const ENTRY_PRICE = 1.08500;
 const ORIGINAL_SL = 1.08300; // 20 pips below entry (long)
 const CURRENT_PRICE = 1.08400; // -10 pips (rMultiple ~ -0.5)
 
-function makePosition(regimeOverride: string) {
+function makePosition() {
   return {
     id: "test-regime-gate",
     position_id: "P-REGIME",
@@ -38,7 +40,7 @@ function makePosition(regimeOverride: string) {
       exitFlags: {},
       exitAttribution: [],
       invalidationHistory: [],
-      regimeInfo: { regime: regimeOverride, confidence: 0.8, atrTrend: "neutral", bias: "neutral" },
+      // No regimeInfo — regime is now derived from current daily candles
     }),
     opened_at: new Date(Date.now() - 3600000).toISOString(),
   };
@@ -147,6 +149,55 @@ function makeInternalBearishCandles(): any[] {
   return candles;
 }
 
+/**
+ * Daily candles that produce "strong_trend" regime classification.
+ * Clear uptrend: each candle higher than the last, 20 pips/day.
+ */
+function makeTrendingDailyCandles(): any[] {
+  const candles: any[] = [];
+  for (let i = 0; i < 30; i++) {
+    const base = 1.08000 + i * 0.0020;
+    candles.push({
+      time: Date.now() - (30 - i) * 86400000,
+      open: base, high: base + 0.0015, low: base - 0.0005, close: base + 0.0012, volume: 1000,
+    });
+  }
+  return candles;
+}
+
+/**
+ * Daily candles that produce "mild_range" regime classification.
+ * Gentle oscillation around a mean with small bodies.
+ */
+function makeRangingDailyCandles(): any[] {
+  const candles: any[] = [];
+  const mean = 1.08500;
+  for (let i = 0; i < 30; i++) {
+    const offset = Math.sin(i * 1.2) * 0.0025;
+    const base = mean + offset;
+    candles.push({
+      time: Date.now() - (30 - i) * 86400000,
+      open: base, high: base + 0.0015, low: base - 0.0015,
+      close: base + (i % 2 === 0 ? 0.0003 : -0.0003), volume: 1000,
+    });
+  }
+  return candles;
+}
+
+/**
+ * Creates an interval-aware fetchCandlesFn mock.
+ * Returns structure candles for entry-TF ("15m"/"15min") and daily candles for "1day".
+ */
+function makeFetchCandlesFn(structureCandles: any[], dailyCandles: any[]) {
+  return (_symbol: string, interval: string, _range: string) => {
+    if (interval === "1day" || interval === "1d" || interval === "daily") {
+      return Promise.resolve(dailyCandles);
+    }
+    // Entry-TF candles (15m, 15min, 5m, 1h, etc.)
+    return Promise.resolve(structureCandles);
+  };
+}
+
 function mockSupabase() {
   return {
     from: (_table: string) => ({
@@ -169,13 +220,14 @@ const enabledConfig = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// CELL 1: Trending regime + Internal trendBasis → FIRES
+// CELL 1: Trending regime (from current daily) + Internal trendBasis → FIRES
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("regime gate [trending + internal]: structure invalidation FIRES", async () => {
-  const pos = makePosition("trending");
+  const pos = makePosition();
+  const fetchFn = makeFetchCandlesFn(makeInternalBearishCandles(), makeTrendingDailyCandles());
   const actions = await manageOpenPositions(
     mockSupabase(), [pos], enabledConfig, "cell-1",
-    () => Promise.resolve(makeInternalBearishCandles()),
+    fetchFn,
     mockDetectSession,
   );
   const slTightened = actions.filter(a => a.action === "sl_tightened");
@@ -184,13 +236,14 @@ Deno.test("regime gate [trending + internal]: structure invalidation FIRES", asy
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// CELL 2: Trending regime + External trendBasis → FIRES
+// CELL 2: Trending regime (from current daily) + External trendBasis → FIRES
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("regime gate [trending + external]: structure invalidation FIRES", async () => {
-  const pos = makePosition("trending");
+  const pos = makePosition();
+  const fetchFn = makeFetchCandlesFn(makeExternalBearishCandles(), makeTrendingDailyCandles());
   const actions = await manageOpenPositions(
     mockSupabase(), [pos], enabledConfig, "cell-2",
-    () => Promise.resolve(makeExternalBearishCandles()),
+    fetchFn,
     mockDetectSession,
   );
   const slTightened = actions.filter(a => a.action === "sl_tightened");
@@ -199,13 +252,14 @@ Deno.test("regime gate [trending + external]: structure invalidation FIRES", asy
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// CELL 3: Ranging regime + External trendBasis → FIRES
+// CELL 3: Ranging regime (from current daily) + External trendBasis → FIRES
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("regime gate [ranging + external]: structure invalidation FIRES", async () => {
-  const pos = makePosition("ranging");
+  const pos = makePosition();
+  const fetchFn = makeFetchCandlesFn(makeExternalBearishCandles(), makeRangingDailyCandles());
   const actions = await manageOpenPositions(
     mockSupabase(), [pos], enabledConfig, "cell-3",
-    () => Promise.resolve(makeExternalBearishCandles()),
+    fetchFn,
     mockDetectSession,
   );
   const slTightened = actions.filter(a => a.action === "sl_tightened");
@@ -214,13 +268,14 @@ Deno.test("regime gate [ranging + external]: structure invalidation FIRES", asyn
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// CELL 4: Ranging regime + Internal trendBasis → SUPPRESSED
+// CELL 4: Ranging regime (from current daily) + Internal trendBasis → SUPPRESSED
 // ═══════════════════════════════════════════════════════════════════════
 Deno.test("regime gate [ranging + internal]: structure invalidation SUPPRESSED", async () => {
-  const pos = makePosition("ranging");
+  const pos = makePosition();
+  const fetchFn = makeFetchCandlesFn(makeInternalBearishCandles(), makeRangingDailyCandles());
   const actions = await manageOpenPositions(
     mockSupabase(), [pos], enabledConfig, "cell-4",
-    () => Promise.resolve(makeInternalBearishCandles()),
+    fetchFn,
     mockDetectSession,
   );
   const slTightened = actions.filter(a => a.action === "sl_tightened");
@@ -229,71 +284,41 @@ Deno.test("regime gate [ranging + internal]: structure invalidation SUPPRESSED",
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// ADVERSARIAL: Additional regime variants
+// ADVERSARIAL: Daily fetch fails → FIRES (fail-open)
 // ═══════════════════════════════════════════════════════════════════════
-Deno.test("regime gate: 'quiet' + internal → SUPPRESSED", async () => {
-  const pos = makePosition("quiet");
-  const actions = await manageOpenPositions(
-    mockSupabase(), [pos], enabledConfig, "adv-quiet",
-    () => Promise.resolve(makeInternalBearishCandles()),
-    mockDetectSession,
-  );
-  assertEquals(actions.filter(a => a.action === "sl_tightened").length, 0,
-    "Quiet regime + internal break should be SUPPRESSED");
-});
-
-Deno.test("regime gate: 'choppy' + internal → SUPPRESSED", async () => {
-  const pos = makePosition("choppy");
-  const actions = await manageOpenPositions(
-    mockSupabase(), [pos], enabledConfig, "adv-choppy",
-    () => Promise.resolve(makeInternalBearishCandles()),
-    mockDetectSession,
-  );
-  assertEquals(actions.filter(a => a.action === "sl_tightened").length, 0,
-    "Choppy regime + internal break should be SUPPRESSED");
-});
-
-Deno.test("regime gate: 'strong_trend' + internal → FIRES", async () => {
-  const pos = makePosition("strong_trend");
-  const actions = await manageOpenPositions(
-    mockSupabase(), [pos], enabledConfig, "adv-strong",
-    () => Promise.resolve(makeInternalBearishCandles()),
-    mockDetectSession,
-  );
-  assertEquals(actions.filter(a => a.action === "sl_tightened").length, 1,
-    "strong_trend regime + internal break should FIRE (not in ranging family)");
-});
-
-Deno.test("regime gate: unknown/missing regime + internal → FIRES (fail-open)", async () => {
-  // Legacy position with no regimeInfo stored
-  const pos = {
-    ...makePosition("ranging"),
-    signal_reason: JSON.stringify({
-      originalSL: ORIGINAL_SL,
-      entryTimeframe: "15m",
-      exitFlags: {},
-      exitAttribution: [],
-      invalidationHistory: [],
-      // NO regimeInfo — simulates legacy position
-    }),
+Deno.test("regime gate: daily fetch fails → FIRES (fail-open)", async () => {
+  const pos = makePosition();
+  // fetchCandlesFn returns structure candles for entry-TF but FAILS for daily
+  const fetchFn = (_symbol: string, interval: string, _range: string) => {
+    if (interval === "1day" || interval === "1d" || interval === "daily") {
+      return Promise.reject(new Error("API timeout"));
+    }
+    return Promise.resolve(makeInternalBearishCandles());
   };
   const actions = await manageOpenPositions(
-    mockSupabase(), [pos], enabledConfig, "adv-unknown",
-    () => Promise.resolve(makeInternalBearishCandles()),
+    mockSupabase(), [pos], enabledConfig, "adv-fail-open",
+    fetchFn,
     mockDetectSession,
   );
-  assertEquals(actions.filter(a => a.action === "sl_tightened").length, 1,
-    "Unknown/missing regime defaults to FIRE (fail-open, not fail-closed)");
+  const slTightened = actions.filter(a => a.action === "sl_tightened");
+  assertEquals(slTightened.length, 1,
+    "When daily candle fetch fails, regime is unknown → gate fires (fail-open)");
 });
 
-Deno.test("regime gate: ranging + external → FIRES (not suppressed by ranging)", async () => {
-  // Explicit re-test of cell 3 with 'quiet' variant to ensure external always fires
-  const pos = makePosition("quiet");
+// ═══════════════════════════════════════════════════════════════════════
+// ADVERSARIAL: Insufficient daily candles (<20) → FIRES (fail-open)
+// ═══════════════════════════════════════════════════════════════════════
+Deno.test("regime gate: insufficient daily candles → FIRES (fail-open)", async () => {
+  const pos = makePosition();
+  // Only 5 daily candles — not enough for regime classification
+  const fewDailyCandles = makeTrendingDailyCandles().slice(0, 5);
+  const fetchFn = makeFetchCandlesFn(makeInternalBearishCandles(), fewDailyCandles);
   const actions = await manageOpenPositions(
-    mockSupabase(), [pos], enabledConfig, "adv-quiet-ext",
-    () => Promise.resolve(makeExternalBearishCandles()),
+    mockSupabase(), [pos], enabledConfig, "adv-insufficient",
+    fetchFn,
     mockDetectSession,
   );
-  assertEquals(actions.filter(a => a.action === "sl_tightened").length, 1,
-    "Quiet regime + external break should FIRE (external overrides ranging suppression)");
+  const slTightened = actions.filter(a => a.action === "sl_tightened");
+  assertEquals(slTightened.length, 1,
+    "With insufficient daily candles, regime is unknown → gate fires (fail-open)");
 });
