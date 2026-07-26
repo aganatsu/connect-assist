@@ -813,7 +813,7 @@ export async function manageOpenPositions(
             // since started trending gets the invalidation it needs.
             let currentRegime = "unknown";
             try {
-              const dailyForRegime = await fetchCandlesFn(symbol, "1day", "30d").catch(() => [] as Candle[]);
+              const dailyForRegime = await fetchCandlesFn(symbol, "1d", "1y").catch(() => [] as Candle[]);
               if (dailyForRegime.length >= 20) {
                 const regimeResult = classifyInstrumentRegime(dailyForRegime);
                 currentRegime = regimeResult.regime;
