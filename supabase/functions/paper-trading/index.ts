@@ -3,6 +3,7 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { MIN_SL_PIPS, ATR_SL_FLOOR_MULTIPLIER, calculateATR, type Candle } from "../_shared/smcAnalysis.ts";
 import { extractGlobalExitConfig, parseTradeOverrides, resolveTradeConfig } from "../_shared/resolveTradeConfig.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
+import { computeTrailRatchet } from "../_shared/exitEngine.ts";
 
 // ─── TwelveData Symbol Mapping (for live prices) ────────────────────
 const TWELVE_DATA_SYMBOLS: Record<string, string> = {
@@ -941,6 +942,7 @@ Deno.serve(async (req) => {
           // Trailing stop: FAST RATCHET only.
           // Activation is handled exclusively by scannerManagement. Paper-trading only ratchets
           // the SL forward every 5s once trailingStopActivated is already true.
+          // Uses computeTrailRatchet() from exitEngine.ts — single source of truth for trail formula.
           const trailEnabled = exitFlags.trailingStopEnabled ?? exitFlags.trailingStop ?? false;
           const trailAlreadyActivated = exitFlags.trailingStopActivated === true;
           if (!closeReason && trailEnabled && trailAlreadyActivated && sl !== null) {
@@ -951,18 +953,24 @@ Deno.serve(async (req) => {
             const effectiveTrailPips = exitFlags.trailingStopPips
               ? Math.max(exitFlags.trailingStopPips, riskPips * 0.5)
               : riskPips * 0.5;
-            const trailDistance = effectiveTrailPips * spec.pipSize;
-            const newSL = pos.direction === "long"
-              ? currentPrice - trailDistance
-              : currentPrice + trailDistance;
-            // Only ratchet forward (never widen)
-            if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-              await supabase.from("paper_positions").update({ stop_loss: newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
-              sl = newSL;
+            const ratchet = computeTrailRatchet({
+              entryPrice,
+              currentPrice,
+              currentSL: sl,
+              direction: pos.direction as "long" | "short",
+              pipSize: spec.pipSize,
+              effectiveTrailPips,
+              prevTrailLevel: exitFlags.trailingStopLevel ?? sl,
+              // Paper-trading doesn't fetch candles — adaptive trail only runs in scannerManagement
+              adaptiveTrailingEnabled: false,
+            });
+            if (ratchet.shouldTighten) {
+              await supabase.from("paper_positions").update({ stop_loss: ratchet.newSL.toString(), close_reason: "trail" }).eq("id", pos.id);
+              sl = ratchet.newSL;
               pos.close_reason = "trail";
               // Broker push removed: reconcileBrokerState() in bot-scanner's manage cycle
               // is the single broker-writer. It detects DB/broker SL mismatch and pushes.
-              console.log(`Trail ratchet [${pos.position_id}]: SL→${newSL.toFixed(5)} (${effectiveTrailPips.toFixed(1)}p behind) | broker sync deferred to manage cycle`);
+              console.log(`Trail ratchet [${pos.position_id}]: SL→${ratchet.newSL.toFixed(5)} (${ratchet.trailDistancePips.toFixed(1)}p behind) | broker sync deferred to manage cycle`);
             }
           }
 

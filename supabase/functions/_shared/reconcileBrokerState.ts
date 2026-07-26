@@ -19,6 +19,77 @@ import { SPECS, normalizeSymKey } from "./smcAnalysis.ts";
 import { resolveSymbol } from "./brokerSymbols.ts";
 import { metaFetch } from "./metaApiClient.ts";
 
+// ─── OANDA Helpers ─────────────────────────────────────────────────────
+function resolveOandaSymbol(symbol: string, conn: BrokerConnection): string {
+  const rawOverrides = conn.symbol_overrides || {};
+  const norm = normalizeSymKey(symbol);
+  for (const [k, v] of Object.entries(rawOverrides)) {
+    if (normalizeSymKey(k) === norm && v) return String(v);
+  }
+  const cleaned = symbol.trim().replace(/\s+/g, "").toUpperCase();
+  if (cleaned.includes("/")) return cleaned.replace("/", "_");
+  if (cleaned.length === 6 && !cleaned.includes("_")) return `${cleaned.slice(0, 3)}_${cleaned.slice(3)}`;
+  return cleaned;
+}
+
+function getOandaPrecision(symbol: string): number {
+  const s = (symbol || "").toUpperCase().replace(/[\s/_-]/g, "");
+  if (s.includes("JPY")) return 3;
+  if (s.includes("XAU") || s.includes("GOLD")) return 2;
+  if (s.includes("XAG") || s.includes("SILVER")) return 4;
+  if (/^(US30|US500|NAS100|SPX500|UK100|DE30|JP225|AU200|HK50|USTEC)/i.test(s)) return 1;
+  if (s.includes("BTC") || s.includes("ETH")) return 1;
+  return 5;
+}
+
+function roundOandaPrice(symbol: string, price: number): string {
+  return price.toFixed(getOandaPrecision(symbol));
+}
+
+function getOandaBaseUrl(conn: BrokerConnection): string {
+  return (conn as any).is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
+}
+
+async function oandaFetchPositions(conn: BrokerConnection): Promise<{ ok: boolean; positions: any[]; error?: string }> {
+  const baseUrl = getOandaBaseUrl(conn);
+  try {
+    const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/openTrades`, {
+      headers: { Authorization: `Bearer ${conn.api_key}` },
+    });
+    if (!res.ok) {
+      return { ok: false, positions: [], error: `OANDA fetch failed ${res.status}` };
+    }
+    const data = await res.json();
+    return { ok: true, positions: data.trades || [] };
+  } catch (e: any) {
+    return { ok: false, positions: [], error: e?.message };
+  }
+}
+
+async function oandaModifySL(conn: BrokerConnection, tradeId: string, symbol: string, sl: number, tp: number | null): Promise<{ ok: boolean; error?: string }> {
+  const baseUrl = getOandaBaseUrl(conn);
+  const updates: any = {
+    stopLoss: { price: roundOandaPrice(symbol, sl), timeInForce: "GTC" },
+  };
+  if (tp != null && tp > 0) {
+    updates.takeProfit = { price: roundOandaPrice(symbol, tp) };
+  }
+  try {
+    const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/trades/${tradeId}/orders`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      return { ok: false, error: `OANDA modify failed ${res.status}: ${errText.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message };
+  }
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────
 export interface ReconcilePosition {
   id: string;             // paper_positions.id (UUID)
@@ -88,8 +159,137 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
 
   for (const [connId, positionsForConn] of connPositionMap) {
     const conn = connections.find(c => c.id === connId);
-    if (!conn || conn.broker_type !== "metaapi") continue;
+    if (!conn || (conn.broker_type !== "metaapi" && conn.broker_type !== "oanda")) continue;
 
+    // ── Route to broker-specific reconciliation ──
+    if (conn.broker_type === "oanda") {
+      // ── OANDA Reconciliation Path ──
+      const fetchResult = await oandaFetchPositions(conn);
+      if (!fetchResult.ok) {
+        console.warn(`[reconcile] ${conn.display_name}: ${fetchResult.error}`);
+        for (const pos of positionsForConn) {
+          results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "error", detail: fetchResult.error });
+        }
+        continue;
+      }
+      const oandaPositions = fetchResult.positions;
+
+      for (const pos of positionsForConn) {
+        try {
+          // OANDA matching: by instrument + direction (OANDA doesn't support comment tags)
+          const oandaInstrument = resolveOandaSymbol(pos.symbol, conn);
+          const brokerPos = oandaPositions.find((t: any) => {
+            const instrMatch = t.instrument === oandaInstrument;
+            const units = parseFloat(t.currentUnits || t.initialUnits || "0");
+            const dirMatch = pos.direction === "long" ? units > 0 : units < 0;
+            return instrMatch && dirMatch;
+          });
+
+          if (!brokerPos) {
+            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "not_found", detail: `no OANDA trade for ${oandaInstrument} ${pos.direction}` });
+            continue;
+          }
+
+          // Read broker's actual SL (OANDA stores SL in stopLossOrder.price as string)
+          const brokerSL = brokerPos.stopLossOrder?.price ? parseFloat(brokerPos.stopLossOrder.price) : null;
+          const intendedSL = pos.stop_loss;
+
+          const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+          const tolerance = spec.pipSize * 0.5;
+          const slMatches = intendedSL === null && brokerSL === null ||
+            (intendedSL !== null && brokerSL !== null && Math.abs(intendedSL - brokerSL) <= tolerance);
+
+          if (slMatches) {
+            mismatchCycles.set(pos.position_id, 0);
+            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "synced", intendedSL: intendedSL ?? undefined, brokerSL: brokerSL ?? undefined });
+            continue;
+          }
+
+          // ── Mismatch: push intended SL to OANDA ──
+          const safetyBuffer = spec.pipSize;
+          const adjustedSL = intendedSL !== null
+            ? (pos.direction === "long" ? intendedSL - safetyBuffer : intendedSL + safetyBuffer)
+            : null;
+
+          // Freeze-level guard
+          let finalSL = adjustedSL;
+          if (finalSL !== null && brokerPos.price) {
+            const currentPrice = parseFloat(brokerPos.price);
+            const minSLDistance = spec.pipSize * 3;
+            const slDistance = pos.direction === "long"
+              ? currentPrice - finalSL
+              : finalSL - currentPrice;
+            if (slDistance < minSLDistance && slDistance >= 0) {
+              finalSL = pos.direction === "long"
+                ? currentPrice - minSLDistance
+                : currentPrice + minSLDistance;
+            }
+          }
+
+          let pushSuccess = false;
+          let confirmedBrokerSL = brokerSL;
+
+          if (finalSL !== null) {
+            const modResult = await oandaModifySL(conn, brokerPos.id, pos.symbol, finalSL, pos.take_profit);
+            if (modResult.ok) {
+              pushSuccess = true;
+              confirmedBrokerSL = finalSL;
+              console.log(`[reconcile] ${conn.display_name}: OANDA SL synced to ${roundOandaPrice(pos.symbol, finalSL)} for ${pos.symbol} (${pos.position_id})`);
+            } else {
+              console.warn(`[reconcile] ${conn.display_name}: OANDA SL modify failed — ${modResult.error}`);
+              pushSuccess = false;
+              confirmedBrokerSL = brokerSL;
+            }
+          }
+
+          // Broker-authoritative: write back to DB
+          if (confirmedBrokerSL !== null && confirmedBrokerSL !== intendedSL) {
+            await supabase.from("paper_positions")
+              .update({ stop_loss: confirmedBrokerSL.toString() })
+              .eq("id", pos.id);
+            console.log(`[reconcile] DB corrected: ${pos.symbol} (${pos.position_id}) SL → ${confirmedBrokerSL} (OANDA-authoritative)`);
+          }
+
+          // Track mismatch cycles (shared logic)
+          if (!pushSuccess) {
+            const count = (mismatchCycles.get(pos.position_id) || 0) + 1;
+            mismatchCycles.set(pos.position_id, count);
+            if (count >= 5 && !alertedPositions.has(pos.position_id)) {
+              alertedPositions.add(pos.position_id);
+              if (telegramChatIds.length > 0 && shouldNotify("trade_management")) {
+                const alertMsg = `⚠️ <b>Broker Sync Alert (OANDA)</b>\n\n` +
+                  `<b>Symbol:</b> ${pos.symbol}\n` +
+                  `<b>Position:</b> ${pos.position_id}\n` +
+                  `<b>Issue:</b> ${count} consecutive SL sync failures\n` +
+                  `<b>DB SL:</b> ${intendedSL?.toFixed(5) ?? "null"}\n` +
+                  `<b>Broker SL:</b> ${brokerSL?.toFixed(5) ?? "null"}`;
+                const supabaseUrl = Deno.env.get("SUPABASE_URL");
+                const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+                for (const chatId of telegramChatIds) {
+                  try {
+                    await fetch(`${supabaseUrl}/functions/v1/telegram-notify`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}` },
+                      body: JSON.stringify({ chat_id: chatId, message: alertMsg }),
+                    });
+                  } catch {}
+                }
+              }
+              console.warn(`[reconcile] ALERT: ${pos.symbol} (${pos.position_id}) — ${count} consecutive OANDA SL mismatches`);
+            }
+            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "rejected", intendedSL: intendedSL ?? undefined, brokerSL: confirmedBrokerSL ?? undefined, detail: `mismatch cycle ${count}` });
+          } else {
+            mismatchCycles.set(pos.position_id, 0);
+            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "corrected", intendedSL: intendedSL ?? undefined, brokerSL: confirmedBrokerSL ?? undefined });
+          }
+        } catch (e: any) {
+          results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "error", detail: e?.message });
+        }
+      }
+      continue; // Done with this OANDA connection
+    }
+
+    // ── MetaAPI Reconciliation Path (existing logic) ──
     // Resolve auth credentials (handle swapped fields)
     let authToken = conn.api_key;
     let metaAccountId = conn.account_id;
@@ -307,7 +507,7 @@ export async function reconcilePartialClose(opts: {
       continue;
     }
 
-    const connsToClose = connections.filter(c => pos.mirrored_connection_ids.includes(c.id) && c.broker_type === "metaapi");
+    const connsToClose = connections.filter(c => pos.mirrored_connection_ids.includes(c.id) && (c.broker_type === "metaapi" || c.broker_type === "oanda"));
 
     for (const conn of connsToClose) {
       try {
