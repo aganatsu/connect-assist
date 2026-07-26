@@ -1,0 +1,6 @@
+{
+  "tasks": {
+    "test": "deno test --no-check --allow-read --allow-net --allow-env supabase/functions/_shared/"
+  },
+  "exclude": ["node_modules/"]
+}
