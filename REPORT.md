@@ -8,68 +8,72 @@
    - Fallback: if no external break exists, the most recent break of any significance decides.
    - If no BOS/CHoCH is detected at all, the legacy 2-swing comparison is used (backward compat).
 
-2. **Ranging fixture snapshot updated.** The synthetic "ranging" candle series used in the confluenceScoring snapshot test now correctly produces `direction: null, bias: neutral, score: 18.8` instead of the old `direction: long, bias: bullish, score: 23.1`. This is because:
-   - Old code: trend = "ranging" (2-swing comparison on oscillating candles) → direction logic fell through to P/D zone → discount → long.
-   - New code: trend = "bearish" (last internal CHoCH at idx 194 is bearish) → direction logic takes bearish path → but no daily confirmation → direction = null.
-   - **Net effect on live trading:** In ranging markets with alternating internal breaks, the engine will now correctly identify the last structural event rather than defaulting to "ranging." This makes the direction engine more responsive to recent structure changes and less likely to take counter-trend trades in oscillating markets.
+2. **New field: `trendBasis: "external" | "internal" | "none"`** — reports which kind of break decided `trend`. Consumers (e.g., `gamePlan.ts`'s `determineBias()`) can use this to weight HTF trend inputs differently: full weight when external, reduced weight when internal-only.
 
-3. **No change to any gate definitions, factor weights, or the SPECS table.** The fix is purely in the trend derivation logic within `analyzeMarketStructure()`.
+3. **Ranging fixture snapshot updated.** The synthetic "ranging" candle series now correctly produces `direction: null, bias: neutral, score: 18.8` instead of the old `direction: long, bias: bullish, score: 23.1`.
+
+4. **No change to any gate definitions, factor weights, or the SPECS table.**
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/_shared/smcAnalysis.ts` | Replaced 2-swing trend derivation (lines 1065-1084) with BOS/CHoCH-based derivation using external-first priority, with legacy fallback when no breaks exist |
-| `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | New regression test file (5 tests) proving the fix works correctly |
-| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot to reflect new behavior (direction: null instead of long) |
+| `supabase/functions/_shared/smcAnalysis.ts` | Replaced 2-swing trend derivation with BOS/CHoCH-based derivation; added `trendBasis` field to return object |
+| `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | 5 regression tests including the adversarial conflicting-signal test + trendBasis assertions |
+| `supabase/functions/_shared/structureInvalidationOneShot.test.ts` | 5 tests proving structure-invalidation one-shot guard prevents over-triggering in choppy markets |
+| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot to reflect new behavior |
 
 ## Tests added
 
 | Test | What it asserts |
 |------|-----------------|
-| `external bearish CHoCH overrides internal HH/HL pattern` | Constructs candles where old logic says "bullish" (HH+HL) but last external break is bearish CHoCH → trend = "bearish" |
-| `pure bullish BOS chain → trend = bullish` | Continuous uptrend with bullish BOS → trend correctly = "bullish" |
-| `no BOS/CHoCH detected → trend = ranging` | Flat candles with no structure → legacy fallback → "ranging" |
+| `external bearish CHoCH overrides internal HH/HL pattern` | **THE ADVERSARIAL TEST**: constructs candles where old logic says "bullish" (HH+HL verified in-test with explicit assertion), new logic says "bearish" (external-first priority). Also verifies `trendBasis === "external"`. |
+| `pure bullish BOS chain → trend = bullish` | Continuous uptrend → trend = "bullish" |
+| `no BOS/CHoCH detected → trend = ranging` | Flat candles → trend = "ranging", trendBasis = "none" |
 | `always returns valid trend type` | Output is always one of bullish/bearish/ranging |
-| `bearish BOS chain → trend = bearish` | Continuous downtrend with bearish BOS → trend correctly = "bearish" |
+| `bearish BOS chain → trend = bearish` | Continuous downtrend → trend = "bearish" |
+| `one-shot guard prevents second trigger` | Position with `structureInvalidationFired=true` → no re-trigger |
+| `fires exactly once when CHoCH against trade` | Fresh position with bearish CHoCH → fires at most once |
+| `does NOT fire when rMultiple > 0` | Position in profit → no trigger |
+| `does NOT fire when structure is neutral/bullish` | No CHoCH against trade → no trigger |
+| `3 consecutive scan cycles — fires at most once total` | Simulates repeated manage cycles → one-shot holds |
 
 ## Tests run
 
 ```
 $ deno test --no-check --allow-all supabase/functions/_shared/
-ok | 1592 passed | 0 failed (17s)
+ok | 1597 passed | 0 failed (18s)
 ```
-
-All 1592 tests pass, including:
-- 5 new trend derivation tests
-- 74 downstream direction engine / structure authority tests
-- 47 daily POI / chart overlay tests
-- 61 SMC enhancements / config mapper tests
-- 1 updated ranging snapshot test
 
 ## Regression check
 
-1. **Downstream direction engine tests (74 tests):** All pass unchanged. The `structureAuthority.test.ts` "Ranging market with daily bearish BOS → direction short" test passes because the daily candles in that fixture produce no BOS/CHoCH (too smooth), so the legacy fallback activates and produces "ranging" — same as before.
+1. **Structure-invalidation one-shot guard:** Claude's concern was that trend flipping more in ranging conditions might cause `computeManagementDecision`'s structure-invalidation branch to over-trigger. **Confirmed safe.** The branch has a `structureInvalidationFired` one-shot flag (line 783) — once it fires for a position, it NEVER fires again regardless of how many times trend flips. Five new tests prove this explicitly.
 
-2. **Confluence scoring snapshot:** The ranging fixture's snapshot changed intentionally. Old: `direction=long, score=23.1`. New: `direction=null, score=18.8`. This is correct — the fixture has a bearish CHoCH at the end (idx 194), so the new code correctly identifies bearish structure, which causes the direction engine to NOT produce a long signal in a bearish-trending market. This is the exact bug the fix addresses: the old code was saying "ranging" when the last structural event was bearish, causing false long entries.
+2. **Adversarial conflicting-signal test:** Claude asked to confirm this specific test exists. **Confirmed.** Test "external bearish CHoCH overrides internal HH/HL pattern" explicitly:
+   - Asserts `oldWouldSayBullish === true` (verifies the old code would have gotten it wrong)
+   - Asserts `result.trend === "bearish"` (verifies the new code gets it right)
+   - Asserts `result.trendBasis === "external"` (verifies the priority rule)
+   - Asserts external bearish break exists AND internal bullish break exists (the conflict)
 
-3. **No changes to gate definitions or factor weights.** The fix only changes how `trend` is derived; all downstream consumers that read `trend` continue to work correctly.
+3. **All 1597 tests pass** (5 more than before from the new one-shot tests).
 
 ## Open questions
 
-1. **Internal-only markets:** In markets with ONLY internal breaks (no external), the last internal break now determines trend. In the ranging fixture, this produces "bearish" from the last internal CHoCH. Is this the desired behavior, or should internal-only markets always produce "ranging"? Current implementation: internal breaks DO determine trend when no external breaks exist. This matches the task spec ("use lastExternalBreak ?? lastAnyBreak").
-
-2. **Cascade effects on live trading:** The change means that in oscillating markets, the trend will flip more frequently (following each internal CHoCH). This is more responsive but potentially noisier. The direction engine's `hasDailyBOS` guard (line 572 of confluenceScoring.ts) already protects against this for the HTF tiebreaker path — it requires actual BOS evidence before trusting the daily trend. However, the entry-TF trend is now more volatile in ranging conditions.
+1. **gamePlan.ts `determineBias()` weighting:** Claude suggested using `trendBasis` to reduce weight of internal-only trends in the game plan's HTF bias voting. The `trendBasis` field is now available for this. Should I implement the weighting change in `gamePlan.ts` as part of this branch, or as a separate follow-up? (It would modify game plan behavior.)
 
 ## Suggested PR title and description
 
-**Title:** fix(smcAnalysis): derive trend from confirmed BOS/CHoCH breaks, not 2-swing comparison
+**Title:** fix(smcAnalysis): derive trend from confirmed BOS/CHoCH breaks, add trendBasis field
 
 **Description:**
-The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects. This caused the direction engine to take counter-trend trades when the last confirmed break was bearish but the 2-swing comparison still showed HH+HL.
+The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects.
 
-**Fix:** Derive `trend` from the most recent confirmed BOS/CHoCH, with external (major) breaks taking priority over internal (minor) ones. Falls back to the legacy 2-swing comparison only when no breaks are detected at all.
+**Changes:**
+- Derive `trend` from the most recent confirmed BOS/CHoCH, with external breaks taking priority over internal ones
+- Add `trendBasis: "external" | "internal" | "none"` field so consumers can weight trend differently based on break significance (e.g., game plan can discount internal-only trends for HTF bias)
+- Falls back to legacy 2-swing comparison only when no breaks are detected at all
 
-**Impact:** In ranging markets with alternating internal breaks, the engine now correctly identifies the last structural event. This makes direction determination more responsive and prevents false signals from the lagging 2-swing heuristic. The ranging fixture snapshot was updated to reflect the corrected behavior (direction=null instead of false long).
-
-**Tests:** 5 new regression tests + all 1592 existing tests pass.
+**Safety verification:**
+- Structure-invalidation one-shot guard confirmed safe against trend-flipping in ranging (5 dedicated tests)
+- Adversarial conflicting-signal test proves the exact bug is fixed (old logic → bullish, new logic → bearish)
+- 1597 tests pass, 0 failures
