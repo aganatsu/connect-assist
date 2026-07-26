@@ -104,6 +104,10 @@ Deno.test("trend derivation: external bearish CHoCH overrides internal HH/HL pat
   assertEquals(result.trend, "bearish",
     `Expected trend="bearish" from external-first break priority, got "${result.trend}"`);
 
+  // Verify trendBasis reflects the external break
+  assertEquals(result.trendBasis, "external",
+    `Expected trendBasis="external" since an external break decided the trend, got "${result.trendBasis}"`);
+
   // Verify there IS a bearish external CHoCH
   const allBreaks = [...result.bos, ...result.choch];
   const externalBearish = allBreaks.filter(b => b.significance === "external" && b.type === "bearish");
@@ -154,6 +158,7 @@ Deno.test("trend derivation: no BOS/CHoCH detected → trend = ranging", () => {
   const result = analyzeMarketStructure(candles);
   if (result.bos.length === 0 && result.choch.length === 0) {
     assertEquals(result.trend, "ranging", "With no BOS or CHoCH, trend should be ranging");
+    assertEquals(result.trendBasis, "none", "With no breaks, trendBasis should be 'none'");
   }
 });
 
