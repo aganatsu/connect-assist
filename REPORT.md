@@ -1,74 +1,75 @@
-# Task: Backtest Engine Full Parity — Remaining Gaps (Weekly, Game Plan, Conviction)
-## Branch: manus/backtest-remaining-parity
+# Task: Derive trend from BOS/CHoCH breaks instead of 2-swing comparison
+## Branch: manus/trend-from-structure-breaks
+
 ## Behavior changes
 
-1. **Swing Trader backtest now uses weekly candles** — the unified/cascade zone engines receive weekly data for TF bonus scoring (+2 for weekly zone), and the direction engine uses `determineDirectionStyleAware` with Weekly→Daily→4H top-down analysis. Previously swing_trader used the same Daily→4H→1H direction as day_trader.
+1. **`analyzeMarketStructure().trend` now reflects the most recent confirmed structural break** rather than a standalone comparison of the last 2 swing highs/lows.
+   - Priority: external (major) breaks override internal (minor) ones.
+   - Fallback: if no external break exists, the most recent break of any significance decides.
+   - If no BOS/CHoCH is detected at all, the legacy 2-swing comparison is used (backward compat).
 
-2. **All styles now use style-aware direction** — scalper uses 1H→15m→5m, day_trader uses Daily→4H→1H, swing_trader uses Weekly→Daily→4H (previously all used the same Daily→4H→1H).
+2. **Ranging fixture snapshot updated.** The synthetic "ranging" candle series used in the confluenceScoring snapshot test now correctly produces `direction: null, bias: neutral, score: 18.8` instead of the old `direction: long, bias: bullish, score: 23.1`. This is because:
+   - Old code: trend = "ranging" (2-swing comparison on oscillating candles) → direction logic fell through to P/D zone → discount → long.
+   - New code: trend = "bearish" (last internal CHoCH at idx 194 is bearish) → direction logic takes bearish path → but no daily confirmation → direction = null.
+   - **Net effect on live trading:** In ranging markets with alternating internal breaks, the engine will now correctly identify the last structural event rather than defaulting to "ranging." This makes the direction engine more responsive to recent structure changes and less likely to take counter-trend trades in oscillating markets.
 
-3. **Game plan now filters trades in backtest** — `filterTradeByGamePlan` soft gate is applied after safety gates. Trades opposing the game plan bias with high confidence are blocked. DOL TP extension is applied when game plan provides draw-on-liquidity targets.
-
-4. **Weekly bias integrated into direction verdict** — `analyzeWeeklyBiasAndDOL` computes weekly bias from weekly candles and feeds it into the direction verdict and ICT HTF analysis, matching bot-scanner behavior.
-
-5. **Thesis conviction now tracks and optionally adjusts scores** — conviction builds/decays per-direction per-symbol across bars. In `active` mode (config: `thesisConvictionMode: "active"`), it applies a score adjustment. In `shadow` mode (default, matching current bot-scanner), it logs only. TF-aware decay scaling ensures conviction decays at real-time rate regardless of bar timeframe.
-
-6. **Trade output now includes `conviction` field** — each trade reports conviction score, adjustment, cycle count, and degrading flag at entry time.
+3. **No change to any gate definitions, factor weights, or the SPECS table.** The fix is purely in the trend derivation logic within `analyzeMarketStructure()`.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/backtest-engine/index.ts` | Added weekly candle fetching, style-aware direction, game plan generation/filtering, weekly bias, DOL TP extension, thesis conviction with TF-aware decay |
-| `supabase/functions/_shared/backtestWeeklyIntegration.test.ts` | Tests for weekly candle integration and style-aware direction |
-| `supabase/functions/_shared/backtestGamePlan.test.ts` | Tests for game plan generation, filtering, and DOL TP extension |
-| `supabase/functions/_shared/backtestConviction.test.ts` | Tests for thesis conviction accumulation, decay scaling, session reset, trade-open reset, and dual mode |
+| `supabase/functions/_shared/smcAnalysis.ts` | Replaced 2-swing trend derivation (lines 1065-1084) with BOS/CHoCH-based derivation using external-first priority, with legacy fallback when no breaks exist |
+| `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | New regression test file (5 tests) proving the fix works correctly |
+| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot to reflect new behavior (direction: null instead of long) |
 
 ## Tests added
 
-| Test file | Assertions |
-|-----------|-----------|
-| `backtestWeeklyIntegration.test.ts` | Weekly candle lookback buffer (2y), style-aware TF slot mapping, weekly bias computation |
-| `backtestGamePlan.test.ts` | Game plan generation per-session, filterTradeByGamePlan blocking/passing, DOL TP extension config injection |
-| `backtestConviction.test.ts` | Conviction accumulation across bars, TF-aware decay scaling, opposing evidence degradation, session reset, active vs shadow mode, trade-open direction reset |
+| Test | What it asserts |
+|------|-----------------|
+| `external bearish CHoCH overrides internal HH/HL pattern` | Constructs candles where old logic says "bullish" (HH+HL) but last external break is bearish CHoCH → trend = "bearish" |
+| `pure bullish BOS chain → trend = bullish` | Continuous uptrend with bullish BOS → trend correctly = "bullish" |
+| `no BOS/CHoCH detected → trend = ranging` | Flat candles with no structure → legacy fallback → "ranging" |
+| `always returns valid trend type` | Output is always one of bullish/bearish/ranging |
+| `bearish BOS chain → trend = bearish` | Continuous downtrend with bearish BOS → trend correctly = "bearish" |
 
 ## Tests run
 
 ```
-$ deno test --no-lock --no-check supabase/functions/_shared/
-ok | 1538 passed | 29 failed (13s)
-
-Breakdown:
-- 1532 pre-existing passing tests: still pass
-- 6 new conviction tests: all pass
-- 29 pre-existing failures: unchanged (same before and after)
+$ deno test --no-check --allow-all supabase/functions/_shared/
+ok | 1592 passed | 0 failed (17s)
 ```
+
+All 1592 tests pass, including:
+- 5 new trend derivation tests
+- 74 downstream direction engine / structure authority tests
+- 47 daily POI / chart overlay tests
+- 61 SMC enhancements / config mapper tests
+- 1 updated ranging snapshot test
 
 ## Regression check
 
-1. **Type check**: `deno check` reports exactly 17 errors — same 17 pre-existing errors (TS2339 on diagnostics properties, TS2367 comparisons, TS2448/2454 block-scoped variables). Zero new type errors.
-2. **Existing tests**: All 1532 previously-passing tests still pass.
-3. **Gate logic**: The unified zone engine and cascade zone engine integration (from previous PR) is unchanged — this PR only adds data inputs (weekly candles, game plan, conviction) that feed INTO those engines.
-4. **Default behavior**: Thesis conviction defaults to `shadow` mode (matching bot-scanner's current production state), so effectiveScore is NOT modified unless user explicitly sets `thesisConvictionMode: "active"` in config.
+1. **Downstream direction engine tests (74 tests):** All pass unchanged. The `structureAuthority.test.ts` "Ranging market with daily bearish BOS → direction short" test passes because the daily candles in that fixture produce no BOS/CHoCH (too smooth), so the legacy fallback activates and produces "ranging" — same as before.
+
+2. **Confluence scoring snapshot:** The ranging fixture's snapshot changed intentionally. Old: `direction=long, score=23.1`. New: `direction=null, score=18.8`. This is correct — the fixture has a bearish CHoCH at the end (idx 194), so the new code correctly identifies bearish structure, which causes the direction engine to NOT produce a long signal in a bearish-trending market. This is the exact bug the fix addresses: the old code was saying "ranging" when the last structural event was bearish, causing false long entries.
+
+3. **No changes to gate definitions or factor weights.** The fix only changes how `trend` is derived; all downstream consumers that read `trend` continue to work correctly.
 
 ## Open questions
 
-1. **Thesis conviction default mode**: Bot-scanner currently runs conviction in SHADOW mode (log only, no trade impact). Should the backtest default to `active` mode so users can test conviction's impact? Currently defaulting to enabled but shadow (same as live).
+1. **Internal-only markets:** In markets with ONLY internal breaks (no external), the last internal break now determines trend. In the ranging fixture, this produces "bearish" from the last internal CHoCH. Is this the desired behavior, or should internal-only markets always produce "ranging"? Current implementation: internal breaks DO determine trend when no external breaks exist. This matches the task spec ("use lastExternalBreak ?? lastAnyBreak").
 
-2. **Weekly candle data availability**: TwelveData and Polygon both support `1w` interval, but for older date ranges (>2 years), weekly data may be sparse. Should we add a fallback to aggregate daily candles into weekly if the API returns insufficient data?
-
-3. **Game plan regeneration frequency**: Currently regenerates at session boundaries (London→NY→Asian transitions). Bot-scanner regenerates every scan cycle (~5 min). For backtest, per-session is more efficient but less granular. Is this acceptable?
+2. **Cascade effects on live trading:** The change means that in oscillating markets, the trend will flip more frequently (following each internal CHoCH). This is more responsive but potentially noisier. The direction engine's `hasDailyBOS` guard (line 572 of confluenceScoring.ts) already protects against this for the HTF tiebreaker path — it requires actual BOS evidence before trusting the daily trend. However, the entry-TF trend is now more volatile in ranging conditions.
 
 ## Suggested PR title and description
 
-**Title:** `[backtest-full-parity] Port weekly candles, game plan, weekly bias, and thesis conviction to backtest-engine`
+**Title:** fix(smcAnalysis): derive trend from confirmed BOS/CHoCH breaks, not 2-swing comparison
 
 **Description:**
-Closes the remaining parity gaps between bot-scanner and backtest-engine:
+The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects. This caused the direction engine to take counter-trend trades when the last confirmed break was bearish but the 2-swing comparison still showed HH+HL.
 
-- **Phase 1**: Weekly candle fetching + style-aware direction (W→D→4H for swing)
-- **Phase 2**: Game plan generation at session boundaries, filterTradeByGamePlan soft gate, DOL TP extension, weekly bias in direction verdict + ICT HTF
-- **Phase 3**: Thesis conviction with TF-aware decay scaling, session reset, trade-open reset, dual mode (shadow/active)
+**Fix:** Derive `trend` from the most recent confirmed BOS/CHoCH, with external (major) breaks taking priority over internal (minor) ones. Falls back to the legacy 2-swing comparison only when no breaks are detected at all.
 
-After this PR + the previous unified/cascade zone PR, the backtest engine reaches ~95% parity with bot-scanner. The only remaining gap is the real-time multi-scan conviction buildup pattern (which is approximated here via TF-scaled per-bar evaluation).
+**Impact:** In ranging markets with alternating internal breaks, the engine now correctly identifies the last structural event. This makes direction determination more responsive and prevents false signals from the lagging 2-swing heuristic. The ranging fixture snapshot was updated to reflect the corrected behavior (direction=null instead of false long).
 
-All 1538 tests pass. Zero new type errors. Zero behavior change in default config (conviction defaults to shadow mode).
+**Tests:** 5 new regression tests + all 1592 existing tests pass.
