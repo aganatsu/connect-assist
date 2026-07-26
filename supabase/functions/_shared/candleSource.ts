@@ -203,7 +203,6 @@ function metaapiTimeframe(canon: string): string {
   return m[canon] || "15m";
 }
 // META_REGIONS and regionCache are now imported from ./metaApiClient.ts (single source of truth)
-const regionCache = new Map<string, string>();
 // Cache of symbols we've already subscribed to per account (in-memory, per cold start)
 // Key: `${accountId}:${symbol}` → true
 const subscribedSymbols = new Set<string>();
