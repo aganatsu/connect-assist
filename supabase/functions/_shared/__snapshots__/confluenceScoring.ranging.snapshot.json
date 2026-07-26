@@ -1,32 +1,32 @@
 {
-  "score": 23.1,
-  "rawScore": 5.55,
-  "direction": "long",
-  "bias": "bullish",
+  "score": 18.8,
+  "rawScore": 4.5,
+  "direction": null,
+  "bias": "neutral",
   "strongFactorCount": 3,
   "enabledMax": 24,
   "tieredScoring": {
-    "tier1Count": 2,
+    "tier1Count": 1,
     "tier1Max": 4,
-    "tier2Count": 1,
+    "tier2Count": 2,
     "tier2Max": 10,
-    "tier3Count": 3,
+    "tier3Count": 1,
     "tier3Max": 10,
-    "tieredScore": 5.55,
+    "tieredScore": 4.5,
     "tieredMax": 24,
     "tier1GatePassed": false,
-    "tier1GateReason": "Tier 1 gate FAILED: only 2 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
+    "tier1GateReason": "Tier 1 gate FAILED: only 1 core factors — need at least 3 of: Market Structure, Order Block, Fair Value Gap, Premium/Discount & Fib, HTF FVG/OB/Fib",
     "regimeGatePassed": true,
     "regimeGateReason": "",
     "spreadGatePassed": true,
     "spreadGateReason": "Spread OK: 10.1% of ATR",
-    "opposingFactorCount": 2
+    "opposingFactorCount": 0
   },
   "factorSummary": [
     {
       "name": "Market Structure",
       "present": true,
-      "weight": 1,
+      "weight": 2.5,
       "tier": 1
     },
     {
@@ -43,7 +43,7 @@
     },
     {
       "name": "Premium/Discount & Fib",
-      "present": true,
+      "present": false,
       "weight": 2,
       "tier": 1
     },
@@ -103,14 +103,14 @@
     },
     {
       "name": "Volume Profile",
-      "present": true,
+      "present": false,
       "weight": 0.75,
       "tier": 3
     },
     {
       "name": "AMD Phase",
-      "present": true,
-      "weight": -1.5,
+      "present": false,
+      "weight": 1.5,
       "tier": 3
     },
     {
@@ -128,7 +128,7 @@
     {
       "name": "Confluence Stack",
       "present": true,
-      "weight": -1.5,
+      "weight": 1.5,
       "tier": 2
     },
     {
@@ -163,8 +163,8 @@
     },
     {
       "name": "Power of 3 Combo",
-      "present": true,
-      "weight": 1,
+      "present": false,
+      "weight": 0,
       "tier": 3
     },
     {
