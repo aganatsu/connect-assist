@@ -109,6 +109,7 @@ import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type Ju
 import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -807,75 +808,92 @@ function processExits(
     const tp = pos.takeProfit;
     const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
 
-    // ── Step 1: Move SL up via Break Even (before checking SL hit) ──
-    if (pos.exitFlags.breakEven && pos.exitFlags.breakEvenPips > 0) {
-      const bestPips = pos.direction === "long"
-        ? (candle.high - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.low) / spec.pipSize;
-      if (bestPips >= pos.exitFlags.breakEvenPips) {
-        const newSL = pos.direction === "long"
-          ? pos.entryPrice + 1 * spec.pipSize
-          : pos.entryPrice - 1 * spec.pipSize;
-        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-          sl = newSL;
-        }
-      }
-    }
-
-    // ── Step 2: Move SL up via Trailing Stop (before checking SL hit) ──
-    if (pos.exitFlags.trailingStop && pos.exitFlags.trailingStopPips > 0) {
-      const bestPips = pos.direction === "long"
-        ? (candle.high - pos.entryPrice) / spec.pipSize
-        : (pos.entryPrice - candle.low) / spec.pipSize;
-      const activationPips = pos.exitFlags.trailingStopActivation === "after_1r" && pos.exitFlags.tpRatio
-        ? Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize
-        : pos.exitFlags.trailingStopPips * 2;
-      if (bestPips >= activationPips) {
-        const trailDist = pos.exitFlags.trailingStopPips * spec.pipSize;
-        const bestPrice = pos.direction === "long" ? candle.high : candle.low;
-        const newSL = pos.direction === "long"
-          ? bestPrice - trailDist
-          : bestPrice + trailDist;
-        if ((pos.direction === "long" && newSL > sl) || (pos.direction === "short" && newSL < sl)) {
-          sl = newSL;
-        }
-      }
-    }
-
-    // ── Step 2b: Structure Invalidation (mirrors live scannerManagement) ──
+    // ── Steps 1-2b: SL Management via computeManagementDecision (shared with live) ──
+    // Compute structure check if enabled and we have enough candles
+    let structureCheck: StructureCheckResult | null = null;
     if (config.structureInvalidationEnabled !== false && !pos.structureInvalidationFired && allCandles && barIndex >= 20) {
-      const riskDist = Math.abs(pos.entryPrice - pos.stopLoss);
-      const priceDiff = pos.direction === "long"
-        ? candle.close - pos.entryPrice
-        : pos.entryPrice - candle.close;
-      const rMultiple = riskDist > 0 ? priceDiff / riskDist : 0;
-
-      if (rMultiple < 0 && rMultiple > -0.8) {
-        const lookbackStart = Math.max(0, barIndex - 50);
-        const recentCandles = allCandles.slice(lookbackStart, barIndex + 1);
-        if (recentCandles.length >= 20) {
-          const currentStructure = analyzeMarketStructure(recentCandles);
-          const structureAgainst =
-            (pos.direction === "long" && currentStructure.trend === "bearish") ||
-            (pos.direction === "short" && currentStructure.trend === "bullish");
-          const chochAgainst = currentStructure.choch.filter((c: any) =>
-            (pos.direction === "long" && c.type === "bearish") ||
-            (pos.direction === "short" && c.type === "bullish")
-          );
-          if (structureAgainst && chochAgainst.length > 0) {
-            const currentSLDistance = Math.abs(candle.close - sl);
-            const tightenedDistance = currentSLDistance * 0.5;
-            const newSL = pos.direction === "long"
-              ? candle.close - tightenedDistance
-              : candle.close + tightenedDistance;
-            const shouldTighten = pos.direction === "long" ? newSL > sl : newSL < sl;
-            if (shouldTighten) {
-              sl = newSL;
-              pos.structureInvalidationFired = true;
-            }
-          }
-        }
+      const lookbackStart = Math.max(0, barIndex - 50);
+      const recentCandles = allCandles.slice(lookbackStart, barIndex + 1);
+      if (recentCandles.length >= 20) {
+        const currentStructure = analyzeMarketStructure(recentCandles);
+        const chochAgainst = currentStructure.choch.filter((c: any) =>
+          (pos.direction === "long" && c.type === "bearish") ||
+          (pos.direction === "short" && c.type === "bullish")
+        );
+        structureCheck = {
+          trend: currentStructure.trend,
+          chochAgainstCount: chochAgainst.length,
+        };
       }
+    }
+
+    // Compute ATR for adaptive trailing (use entry candles up to current bar)
+    const atrCandles = allCandles ? allCandles.slice(Math.max(0, barIndex - 14), barIndex + 1) : [];
+    const atrValue = atrCandles.length >= 14 ? calculateATR(atrCandles, 14) : 0;
+
+    // Adaptive trail candles (last 10 bars)
+    const adaptiveTrailCandles = (config.adaptiveTrailingEnabled && allCandles)
+      ? allCandles.slice(Math.max(0, barIndex - 9), barIndex + 1).map((c: Candle) => ({ open: c.open, high: c.high, low: c.low, close: c.close }))
+      : null;
+
+    // Compute hold hours from entry time to candle time
+    const entryMs = new Date(pos.entryTime).getTime();
+    const candleMs = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z").getTime();
+    const holdHours = (candleMs - entryMs) / 3600000;
+
+    // Detect session for session-close BE (scalper feature)
+    const candleHourUTC = new Date(candleMs).getUTCHours();
+    let currentSession = "offhours";
+    if (candleHourUTC >= 7 && candleHourUTC < 12) currentSession = "london";
+    else if (candleHourUTC >= 12 && candleHourUTC < 17) currentSession = "newyork";
+    else if (candleHourUTC >= 0 && candleHourUTC < 7) currentSession = "asian";
+
+    const decision = computeManagementDecision(
+      {
+        symbol: pos.symbol,
+        direction: pos.direction,
+        entryPrice: pos.entryPrice,
+        currentPrice: candle.close,
+        bestPrice: pos.direction === "long" ? candle.high : candle.low,
+        currentSL: sl,
+        originalSL: pos.stopLoss,
+        takeProfit: pos.takeProfit,
+        holdHours,
+        exitFlags: pos.exitFlags,
+        structureCheck,
+        adaptiveTrailCandles,
+        atrValue,
+        regimeInfo: null,  // backtest doesn't have live regime info per-bar (acceptable simplification)
+        currentSession,
+      },
+      {
+        breakEvenEnabled: pos.exitFlags.breakEven ?? config.breakEvenEnabled ?? true,
+        breakEvenPips: pos.exitFlags.breakEvenPips ?? config.breakEvenPips ?? 20,
+        breakEvenOffsetPips: config.breakEvenOffsetPips ?? 3,
+        trailingStopEnabled: pos.exitFlags.trailingStop ?? config.trailingStopEnabled ?? false,
+        trailingStopPips: pos.exitFlags.trailingStopPips ?? config.trailingStopPips ?? 15,
+        trailingStopActivation: pos.exitFlags.trailingStopActivation ?? config.trailingStopActivation ?? "after_1r",
+        partialTPEnabled: pos.exitFlags.partialTP ?? config.partialTPEnabled ?? false,
+        maxHoldEnabled: config.maxHoldEnabled ?? false,
+        maxHoldHours: pos.exitFlags.maxHoldHours ?? config.maxHoldHours ?? 0,
+        structureInvalidationEnabled: config.structureInvalidationEnabled ?? false,
+        adaptiveTrailingEnabled: config.adaptiveTrailingEnabled ?? false,
+        baseTrailATRMultiple: config.baseTrailATRMultiple,
+        momentumFadeThreshold: config.momentumFadeThreshold,
+        trailTightenFactor: config.trailTightenFactor,
+        trailWidenFactor: config.trailWidenFactor,
+        tradingStyle: config.tradingStyle?.mode ?? "day_trader",
+      },
+    );
+
+    // Apply the decision
+    if (decision.newSL !== null) {
+      sl = decision.newSL;
+    }
+    // Persist updated exitFlags and structureInvalidationFired
+    pos.exitFlags = decision.updatedExitFlags;
+    if (decision.action === "structure_invalidated") {
+      pos.structureInvalidationFired = true;
     }
 
     // ── Step 3: Check SL and TP hits (with same-candle disambiguation) ──
@@ -907,14 +925,9 @@ function processExits(
     }
 
     // ── Step 4: Max Hold Hours ──
-    if (!closeReason && pos.exitFlags.maxHoldHours > 0) {
-      const entryMs = new Date(pos.entryTime).getTime();
-      const candleMs = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z").getTime();
-      const elapsedHours = (candleMs - entryMs) / 3600000;
-      if (elapsedHours >= pos.exitFlags.maxHoldHours) {
-        closeReason = "time_exit";
-      }
-    }
+    // NOTE: Max hold is now handled by computeManagementDecision (moves to BE when in profit).
+    // Live behavior does NOT force-close at max hold — it tightens SL to BE and lets the
+    // market decide. Removing the old "time_exit" force-close to match live parity.
 
     // ── Step 5: Partial TP (exit at trigger price, not candle close) ──
     if (!closeReason && pos.exitFlags.partialTP && !pos.partialTPFired && pos.exitFlags.partialTPPercent > 0) {
