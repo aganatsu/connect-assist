@@ -804,7 +804,19 @@ export async function manageOpenPositions(
             );
             const hasFreshCHoCH = chochAgainst.length > 0;
 
-            if (structureAgainst && hasFreshCHoCH) {
+            // ── Regime gate: suppress noise-driven invalidation in ranging markets ──
+            // When regime is ranging/quiet/choppy AND the trend flip comes from an
+            // internal break only (not a major structural shift), skip — the trend
+            // flip is noise. This prevents the more-responsive BOS/CHoCH-based trend
+            // derivation from over-tightening stops on positions in choppy conditions.
+            const entryRegime = signalData.regimeInfo?.regime ?? "unknown";
+            const isRangingRegime = entryRegime === "ranging" || entryRegime === "quiet" || entryRegime === "choppy";
+            const trendFromInternalOnly = currentStructure.trendBasis === "internal" || currentStructure.trendBasis === "none";
+            const regimeSuppressed = isRangingRegime && trendFromInternalOnly;
+
+            if (regimeSuppressed && structureAgainst && hasFreshCHoCH) {
+              console.log(`[mgmt ${scanCycleId}] Structure invalidation SUPPRESSED ${symbol} | regime=${entryRegime} trendBasis=${currentStructure.trendBasis} — noise in ranging market`);
+            } else if (structureAgainst && hasFreshCHoCH) {
               // Tighten SL to reduce loss — move SL 50% closer to current price
               const currentSLDistance = Math.abs(currentPrice - sl);
               const tightenedDistance = currentSLDistance * 0.5;
