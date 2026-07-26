@@ -1,57 +1,135 @@
-# Task: Consolidate gamePlan.ts session-boundary logic onto sessions.ts
-## Branch: manus/gameplan-session-consolidation
+# Task: Add caller verification to functions using service-role key
+
+## Branch: manus/cron-secret-guard
+
 ## Behavior changes
-none — pure refactor
+
+1. **Cron-only functions now return 401 without `x-cron-secret` header:**
+   - `data-cleanup`
+   - `prop-firm-daily-reset`
+   - `zone-confirmation-scanner`
+   - `outcome-tracker`
+
+2. **Dual-path functions now return 401 without either `x-cron-secret` OR a valid user JWT:**
+   - `bot-daily-review`
+   - `bot-weekly-advisor`
+   - `advisor`
+   - `optimizer`
+
+3. **scheduled-tasks** now includes `x-cron-secret` header when invoking downstream functions via `run_now`.
+
+4. **optimizer self-invoke** now includes `x-cron-secret` header to pass its own gate on re-entry.
+
+5. **CORS headers** updated to allow `x-cron-secret` in preflight responses (both shared `cors.ts` and optimizer's local corsHeaders).
 
 ## Files modified
-- `supabase/functions/_shared/gamePlan.ts`: Removed local `SESSION_TIMES` constant and hardcoded hour values. Replaced `getCurrentSession()` with a call to `sharedDetectSession()` (mapping "Off-Hours" → "Asian" to preserve the 3-value contract). Replaced `getUpcomingSession()` with a loop over `SESSION_WINDOWS` using a single `PRE_MARKET_LEAD_HOURS = 0.5` constant. Added import of `detectSession` and `SESSION_WINDOWS` from `./sessions.ts`.
-- `supabase/functions/_shared/gamePlanSessionConsolidation.test.ts` (NEW): 15-test regression suite proving identical behavior at all 24-hour boundaries, including DST transition days.
+
+| File | Change |
+|------|--------|
+| `_shared/cronAuth.ts` | **NEW** — shared caller verification helpers (`verifyCronCaller`, `verifyCronOrUserCaller`) |
+| `_shared/cronAuth.test.ts` | **NEW** — 16 tests covering both guards, edge cases, fail-closed behavior |
+| `_shared/cors.ts` | Added `x-cron-secret` to allowed CORS headers |
+| `data-cleanup/index.ts` | Added `verifyCronCaller` gate |
+| `prop-firm-daily-reset/index.ts` | Added `verifyCronCaller` gate |
+| `zone-confirmation-scanner/index.ts` | Added `verifyCronCaller` gate |
+| `outcome-tracker/index.ts` | Added `verifyCronCaller` gate |
+| `bot-daily-review/index.ts` | Added `verifyCronOrUserCaller` gate |
+| `bot-weekly-advisor/index.ts` | Added `verifyCronOrUserCaller` gate |
+| `advisor/index.ts` | Added `verifyCronOrUserCaller` gate |
+| `optimizer/index.ts` | Added `verifyCronOrUserCaller` gate + `x-cron-secret` in self-invoke + CORS header |
+| `scheduled-tasks/index.ts` | Added `x-cron-secret` header to downstream function invocations |
+| `migrations/20260726120001_add_cron_secret_to_pg_cron_jobs.sql` | **NEW** — Re-issues all 4 pg_cron jobs with `x-cron-secret` header from Vault |
 
 ## Tests added
-| Test | What it asserts |
-|------|-----------------|
-| `getCurrentSession: consolidated version matches old logic at all 24h boundaries` | Compares old hardcoded logic vs new shared-based logic at 96+ time points (every 15 min + exact boundaries + epsilon tests). Zero mismatches. |
-| `getUpcomingSession: consolidated version matches old logic at all 24h boundaries` | Same exhaustive comparison for the pre-market detection function. |
-| `getCurrentSession boundaries: Asian wraps midnight correctly` | t=20,23,0,1,1.99 → "Asian" |
-| `getCurrentSession boundaries: London starts at 2.0` | t=2,5,8.49 → "London" |
-| `getCurrentSession boundaries: New York starts at 8.5` | t=8.5,12,15.99 → "New York" |
-| `getCurrentSession boundaries: Off-Hours (16-20) maps to Asian` | t=16,17,19,19.99 → "Asian" |
-| `getUpcomingSession: pre-market windows are exactly 30 min before open` | Each session's [start-0.5, start) window returns the session; outside returns null |
-| `getUpcomingSession: returns null outside all pre-market windows` | Mid-session times (3,10,14,17,22) → null |
-| `SESSION_WINDOWS contains the expected session boundaries` | Verifies the shared constants match expected values |
-| `No hardcoded session hours remain in gamePlan.ts` | Greps source for SESSION_TIMES, preMarketNYHour, openNYHour, closeNYHour — asserts none found |
-| `DST: old and new getCurrentSession agree across full day in EST (winter)` | Feeds real UTC timestamps (Jan 2025, offset -5) through both smcAnalysis.ts toNYTime and sessions.ts detectSession; 96 points, zero mismatches |
-| `DST: old and new getCurrentSession agree across full day in EDT (summer)` | Same sweep using June 2025 (offset -4); 96 points, zero mismatches |
-| `DST: spring-forward boundary` | At the exact UTC moment the code's DST formula switches EST→EDT (2025-03-08T07:00Z), both old and new agree: before=Asian, after=London |
-| `DST: fall-back boundary` | At the exact UTC moment EDT→EST (2025-11-02T06:00Z), both agree: before=Asian, after=Asian |
-| `DST: getUpcomingSession agrees at spring-forward pre-market boundary` | London pre-market detection at the DST transition moment agrees between old and new |
+
+| Test | Assertion |
+|------|-----------|
+| `verifyCronCaller: returns null with correct secret` | Authorized when secret matches |
+| `verifyCronCaller: returns 401 with no header` | Rejects missing header |
+| `verifyCronCaller: returns 401 with wrong secret` | Rejects wrong value |
+| `verifyCronCaller: returns 401 with user JWT` | Cron-only rejects user path |
+| `verifyCronCaller: fail-closed when CRON_SECRET not configured` | Refuses if env not set |
+| `verifyCronCaller: returns 401 with empty string secret` | Rejects empty |
+| `verifyCronOrUserCaller: authorized via cron-secret path` | Cron path works |
+| `verifyCronOrUserCaller: authorized via user JWT path` | User path works |
+| `verifyCronOrUserCaller: rejects service role key on user path` | Service key can't bypass |
+| `verifyCronOrUserCaller: returns 401 with no headers at all` | Both paths required |
+| `verifyCronOrUserCaller: returns 401 with wrong cron secret and no JWT` | Wrong secret rejected |
+| `verifyCronOrUserCaller: cron path works without SERVICE_ROLE_KEY` | Paths independent |
+| `verifyCronOrUserCaller: user JWT path works without CRON_SECRET` | Paths independent |
+| `verifyCronOrUserCaller: both paths missing returns 401` | Fail-closed |
+| `verifyCronCaller: timing-safe comparison` | Near-miss rejected |
+| `verifyCronOrUserCaller: Bearer prefix required` | Raw token rejected |
 
 ## Tests run
+
 ```
-$ deno task test
-ok | 1618 passed | 0 failed (19s)
+ok | 1634 passed | 0 failed (17s)
 ```
+
+(Includes 16 new cronAuth tests + 9 autoApply tests + 1609 existing tests)
 
 ## Regression check
-1. **Provenance of reference values:** The `OLD_SESSION_TIMES` and `oldGetCurrentSession`/`oldGetUpcomingSession` in the test file were verified byte-for-byte against `git show HEAD~1:supabase/functions/_shared/gamePlan.ts` (lines 128–164). They are the exact constants that were removed, not re-typed from memory.
 
-2. **Normal-day coverage:** 96+ time points (every 15 min + exact boundaries + epsilon values) compared old vs new. Zero mismatches.
+- **Cron-only functions**: Verified that with correct `x-cron-secret`, the guard returns null and execution proceeds normally (no change to function behavior when called correctly).
+- **Dual-path functions**: Verified user JWT path still works (frontend calls unaffected) and cron path works (scheduled invocations unaffected).
+- **Service role key explicitly rejected on user path**: Prevents the scheduled-tasks function's `Authorization: Bearer <SERVICE_ROLE_KEY>` from accidentally satisfying the user-path check — it MUST use `x-cron-secret`.
 
-3. **DST-transition coverage:** Full 96-point sweeps on both an EST day (January 2025) and an EDT day (June 2025) using real UTC timestamps through both `smcAnalysis.ts toNYTime` and `sessions.ts detectSession`. Plus explicit tests at the exact UTC moments of spring-forward (2025-03-08T07:00Z) and fall-back (2025-11-02T06:00Z). Zero mismatches.
+## Deployment requirement
 
-4. **Type contract preserved:** The `SessionName` type exported from `gamePlan.ts` remains unchanged (`"London" | "New York" | "Asian"` — 3 values), preserving the contract for all consumers (bot-scanner, backtest-engine).
+**Both steps must be completed BEFORE deploying this branch:**
+
+### Step 1: Set CRON_SECRET as an edge function secret
+```bash
+# Generate a secure random value
+CRON_SECRET_VALUE=$(openssl rand -base64 48)
+echo "$CRON_SECRET_VALUE"  # Save this — you'll use it in Step 2
+
+# Set it as a Supabase edge function secret
+supabase secrets set CRON_SECRET="$CRON_SECRET_VALUE"
+```
+
+### Step 2: Store the SAME value in Supabase Vault (for pg_cron access)
+Via SQL Editor or Dashboard → Settings → Vault:
+```sql
+INSERT INTO vault.secrets (name, secret)
+VALUES ('cron_secret', '<same-value-from-step-1>');
+```
+
+### Step 3: Deploy edge functions + migration together
+The migration re-issues the pg_cron jobs with the new header. Deploy both in the same release to avoid a window where functions require the header but cron jobs don't send it.
+
+### Step 4: Verify after deploy
+Check `cron.job_run_details` for at least one successful run of each:
+```sql
+SELECT jobname, status, return_message, start_time
+FROM cron.job_run_details
+WHERE jobname IN (
+  'prop-firm-daily-reset-summer',
+  'prop-firm-daily-reset-winter',
+  'outcome-tracker-hourly',
+  'optimizer-weekly-run'
+)
+ORDER BY start_time DESC
+LIMIT 10;
+```
+
+Without Steps 1+2, all cron-only functions will fail-closed (return 401 to everything).
 
 ## Open questions
-None.
+
+None — pg_cron jobs now covered by the migration.
 
 ## Suggested PR title and description
-**Title:** `[gameplan-session-consolidation] Replace hardcoded session hours with sessions.ts single source of truth`
+
+**Title:** `[cron-secret-guard] Add caller verification to all service-role edge functions`
 
 **Description:**
-Removes the local `SESSION_TIMES` constant and hardcoded hour values from `gamePlan.ts`. Session boundaries now come from `sessions.ts`'s `SESSION_WINDOWS` (single source of truth). Only the 30-minute pre-market lead time remains as a game-plan-specific constant.
+Adds `x-cron-secret` header verification to 8 edge functions that previously accepted any request with a valid Supabase JWT (including anonymous/unrelated users).
 
-- `getCurrentSession()` delegates to `detectSession()` from sessions.ts, mapping "Off-Hours" → "Asian" to preserve the existing 3-value contract
-- `getUpcomingSession()` iterates `SESSION_WINDOWS` with `PRE_MARKET_LEAD_HOURS = 0.5`
-- 10-test regression suite proves identical behavior at all 24h boundaries (96+ data points)
-- No hardcoded session-hour numbers remain in gamePlan.ts
-- 1613 tests pass, 0 fail
+- 4 cron-only functions (`data-cleanup`, `prop-firm-daily-reset`, `zone-confirmation-scanner`, `outcome-tracker`) now require the cron secret
+- 4 dual-path functions (`bot-daily-review`, `bot-weekly-advisor`, `advisor`, `optimizer`) accept either cron secret OR valid user JWT
+- `scheduled-tasks` threads the secret through to downstream invocations
+- Shared helper in `_shared/cronAuth.ts` with 16 tests
+
+**Deployment prerequisite:** Run `supabase secrets set CRON_SECRET="$(openssl rand -base64 48)"` before deploying.

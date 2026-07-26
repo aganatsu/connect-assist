@@ -8,9 +8,14 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { verifyCronCaller } from "../_shared/cronAuth.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // Gate 0: Only the cron scheduler may invoke this function.
+  const authError = verifyCronCaller(req);
+  if (authError) return authError;
 
   try {
     const supabase = createClient(

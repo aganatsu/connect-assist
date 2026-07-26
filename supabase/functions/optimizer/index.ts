@@ -19,6 +19,7 @@
  */
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
+import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { TPEOptimizer } from "./lib/tpe.ts";
 import type { Trial, TPEConfig } from "./lib/tpe.ts";
 import {
@@ -40,7 +41,7 @@ import {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
 function respond(body: any, status = 200): Response {
@@ -86,9 +87,12 @@ interface OptimizerState {
 }
 
 // ─── Main Handler ───
-
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
+  const authError = verifyCronOrUserCaller(req);
+  if (authError) return authError;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -839,6 +843,7 @@ async function selfInvoke(supabaseUrl: string, supabaseKey: string, body: any): 
         "Content-Type": "application/json",
         "apikey": supabaseKey,
         "Authorization": `Bearer ${supabaseKey}`,
+        "x-cron-secret": Deno.env.get("CRON_SECRET") || "",
       },
       body: JSON.stringify(body),
     }).catch(e => console.error(`[optimizer] self-invoke fetch error:`, e));
