@@ -3,6 +3,7 @@
  * with safety rails and Telegram notification.
  * 
  * Safety rails:
+ * 0. HARD BLOCK: Refuses to auto-apply if ANY account for the user is live
  * 1. Walk-forward verdict must be "robust" (≥75% folds profitable)
  * 2. Improvement must exceed 15% over baseline
  * 3. Max delta ±50% enforced (already done in optimization loop)
@@ -16,6 +17,7 @@
  * - Reads Telegram chat IDs from `user_settings.preferences_json`
  */
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import type { OptimizationResult, TrialResult } from "./optimizationLoop.ts";
 import { paramsToConfig } from "./parameterSpace.ts";
 import { fetchTelegramChatIds } from "./backtestRunner.ts";
@@ -60,6 +62,31 @@ export async function autoApplyResult(
 
   // Resolve Telegram chat IDs
   const chatIds = await resolveTelegramChatIds(applyConfig);
+
+  // Gate 0: Refuse to auto-apply if ANY account for this user is live.
+  // This must run before every other gate — a good backtest result is
+  // never sufficient justification to auto-write a live account's config.
+  // Uses the SDK client (service-role key) to bypass RLS on paper_accounts.
+  const gate0Client = createClient(applyConfig.supabaseUrl, applyConfig.supabaseKey);
+  const { data: accountsForUser, error: gate0Error } = await gate0Client
+    .from("paper_accounts")
+    .select("execution_mode")
+    .eq("user_id", applyConfig.userId);
+
+  if (gate0Error) {
+    // If we can't verify account status, fail closed — refuse to apply.
+    const reason = `Auto-apply blocked: unable to verify account execution mode (fail-closed). Error: ${gate0Error.message}`;
+    await sendNotification(applyConfig, chatIds, formatRejectMessage(reason, optimizationResult));
+    return { applied: false, reason };
+  }
+
+  const hasLiveAccount = (accountsForUser ?? []).some(a => a.execution_mode === "live");
+  if (hasLiveAccount) {
+    const reason = "Auto-apply blocked: user has a live-mode account. " +
+      "Config changes for live accounts require manual review.";
+    await sendNotification(applyConfig, chatIds, formatRejectMessage(reason, optimizationResult));
+    return { applied: false, reason };
+  }
 
   // Gate 1: Optimization loop already decided
   if (!autoApplied || !bestTrial) {
