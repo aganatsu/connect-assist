@@ -35,6 +35,7 @@ import {
 } from "../_shared/zoneConfirmation.ts";
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
+import { verifyCronCaller } from "../_shared/cronAuth.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -106,6 +107,10 @@ async function fetchBrokerSpread(
 // ─── Main Handler ───────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
+  // Gate 0: Only the cron scheduler may invoke this function.
+  const authError = verifyCronCaller(req);
+  if (authError) return authError;
+
   const startTime = Date.now();
 
   try {

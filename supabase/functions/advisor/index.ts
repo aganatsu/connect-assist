@@ -5,6 +5,7 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { mapNestedToFlat } from "../_shared/configMapper.ts";
 import {
   type AdvisorMode,
@@ -246,6 +247,10 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
+  // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
+  const authError = verifyCronOrUserCaller(req);
+  if (authError) return authError;
 
   try {
     const supabase = createClient(
