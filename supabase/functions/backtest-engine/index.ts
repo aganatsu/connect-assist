@@ -39,6 +39,7 @@ import {
   type Candle,
   type SwingPoint,
   type ReasoningFactor,
+  type LiquidityPool,
   SPECS,
   MIN_SL_PIPS,
   ATR_SL_FLOOR_MULTIPLIER,
@@ -101,7 +102,9 @@ import {
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
 import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
-import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData } from "../_shared/impulseZoneEngine.ts";
+import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
+import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
+import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { runICTHTFAnalysis, type ICTHTFResult } from "../_shared/ictHTFIntegration.ts";
 import { validateRecentMSS, type MSSValidationResult, type DisplacementMSSConfig, DEFAULT_DISPLACEMENT_MSS_CONFIG } from "../_shared/ictDisplacementMSS.ts";
@@ -134,11 +137,11 @@ interface BacktestTrade {
   confluenceScore: number;
   effectiveScore: number;
   factors: { name: string; present: boolean; weight: number }[];
-  gatesBlocked: string[];
+    gatesBlocked: string[];
   regime?: string;
   session?: string;
+  signalSource?: "cascade" | "unified" | "standalone";
 }
-
 interface BlockedTrade {
   symbol: string;
   direction: "long" | "short";
@@ -227,6 +230,7 @@ interface OpenPosition {
   structureInvalidationFired: boolean;
   regime?: string;
   session?: string;
+  signalSource?: "cascade" | "unified" | "standalone";
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -964,6 +968,7 @@ function processExits(
           gatesBlocked: [],
           regime: pos.regime,
           session: pos.session,
+          signalSource: pos.signalSource,
         });
         pos.size = remainSize;
         pos.partialTPFired = true;
@@ -993,6 +998,7 @@ function processExits(
         gatesBlocked: [],
         regime: pos.regime,
         session: pos.session,
+        signalSource: pos.signalSource,
       });
     } else {
       pos.currentSL = sl;
@@ -2041,8 +2047,13 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           continue;
         }
 
-        // ── Impulse Zone Engine ──
+        // ── Unified Zone Engine + Cascade Zone Engine (bot-scanner parity) ──
         let izData: any = null;
+        let unifiedResult: UnifiedZoneResult | null = null;
+        let cascadeResult: CascadeResult | null = null;
+        let signalSource: "cascade" | "unified" | "standalone" = "standalone";
+        const pipSize = (SPECS[symbol] || SPECS["EUR/USD"]).pipSize;
+
         if (analysis.direction && relevantH1.length >= 20) {
           try {
             const zoneDirection = analysis.direction === "long" ? "bullish" : "bearish";
@@ -2054,43 +2065,172 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               htfPD: htfPD4H ?? null,
               direction: zoneDirection as "bullish" | "bearish",
             };
-            const zoneResult: MultiTFZoneResult = findBestEntryZoneMultiTF(
-              relevantH1.slice(-120), relevantH4.slice(-60), analysisCandles, zoneDirection as "bullish" | "bearish", analysis.lastPrice, htfConfluenceData,
-            );
-            izData = {
-              hasZone: !!zoneResult.bestZone,
-              selectedTF: zoneResult.selectedTF,
-              reason: zoneResult.reason,
-              impulse: zoneResult.bestZone?.impulse ? {
-                high: zoneResult.bestZone.impulse.high,
-                low: zoneResult.bestZone.impulse.low,
-                direction: zoneResult.bestZone.impulse.direction,
-              } : null,
-              bestZone: zoneResult.bestZone ? {
-                type: zoneResult.bestZone.zone.poi.type,
-                high: zoneResult.bestZone.zone.poi.high,
-                low: zoneResult.bestZone.zone.poi.low,
-                fibLevel: zoneResult.bestZone.zone.fibLevel,
-                fibDepth: zoneResult.bestZone.zone.fibDepth,
-                totalScore: zoneResult.bestZone.zone.totalScore,
-                srConfirmed: zoneResult.bestZone.zone.srConfirmed,
-                ltfRefined: zoneResult.bestZone.zone.ltfRefined,
-                htfConfluenceScore: zoneResult.bestZone.zone.htfConfluenceScore,
-                htfLayers: zoneResult.bestZone.zone.htfLayers,
-                priceAtZone: zoneResult.bestZone.priceAtZone,
-                distanceToZone: zoneResult.bestZone.distanceToZone,
-                refinedEntry: zoneResult.bestZone.zone.refinedEntry || null,
-              } : null,
-              allZonesCount: zoneResult.allZones.length,
+
+            // ── Liquidity Pool Detection (D/4H/1H) ──
+            const liqSens = config.equalHighsLowsSensitivity ?? 3;
+            const liqTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][Math.min(Math.max(liqSens, 1), 5) - 1];
+            const liqMinTouches = config.liquidityPoolMinTouches ?? 2;
+            const htfLiqPoolsD = relevantDaily.length >= 10
+              ? detectLiquidityPools(relevantDaily.slice(-60), Math.min(liqTolBase + 0.10, 0.40), liqMinTouches)
+              : [];
+            const htfLiqPools4H = relevantH4.length >= 20
+              ? detectLiquidityPools(relevantH4.slice(-60), Math.min(liqTolBase + 0.05, 0.35), liqMinTouches)
+              : [];
+            const htfLiqPools1H = relevantH1.length >= 20
+              ? detectLiquidityPools(relevantH1.slice(-120), liqTolBase, liqMinTouches)
+              : [];
+            const combinedLiqPools: LiquidityPool[] = [...htfLiqPoolsD, ...htfLiqPools4H, ...htfLiqPools1H];
+
+            // ── Style-aware candle slot mapping (mirrors bot-scanner exactly) ──
+            let zoneH1Candles: Candle[];
+            let zoneH4Candles: Candle[];
+            let zoneEntryCandles: Candle[];
+            let zoneDailyCandles: Candle[] | undefined;
+            let zoneConfirmCandles: Candle[];
+            let zoneLtfConfirmCandles: Candle[];
+            let zoneTFLabels: TFSlotLabels;
+
+            if (tradingStyle === "scalper") {
+              zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
+              // Scalper: h1=entry(5m), h4=h1(proxy for 15m), entry=entry(5m), daily=h4(proxy for 1H)
+              zoneH1Candles = analysisCandles;
+              zoneH4Candles = relevantH1.slice(-120); // 1H as mid-TF proxy
+              zoneEntryCandles = analysisCandles;
+              zoneDailyCandles = relevantH4.length >= 20 ? relevantH4.slice(-60) : undefined;
+              zoneConfirmCandles = relevantH1.length >= 15 ? relevantH1.slice(-60) : analysisCandles;
+              zoneLtfConfirmCandles = analysisCandles;
+            } else if (tradingStyle === "swing_trader") {
+              zoneTFLabels = { top: "W", mid: "D", low: "4H" };
+              // Swing: h1=4H, h4=Daily, entry=1H, daily=undefined (no weekly in backtest)
+              zoneH1Candles = relevantH4.slice(-60);
+              zoneH4Candles = relevantDaily.slice(-60);
+              zoneEntryCandles = relevantH1.slice(-120);
+              zoneDailyCandles = undefined; // Weekly not available in backtest
+              zoneConfirmCandles = relevantDaily.length >= 15 ? relevantDaily.slice(-30) : relevantH4.slice(-60);
+              zoneLtfConfirmCandles = relevantH4.slice(-60);
+            } else {
+              zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
+              // Day trader (default): h1=1H, h4=4H, entry=analysisCandles(15m), daily=Daily
+              zoneH1Candles = relevantH1.slice(-120);
+              zoneH4Candles = relevantH4.slice(-60);
+              zoneEntryCandles = analysisCandles;
+              zoneDailyCandles = relevantDaily.length >= 30 ? relevantDaily.slice(-60) : undefined;
+              zoneConfirmCandles = relevantDaily.length >= 30 ? relevantH4.slice(-60) : relevantH1.slice(-60);
+              zoneLtfConfirmCandles = relevantDaily.length >= 30 ? relevantH1.slice(-60) : analysisCandles;
+            }
+
+            // ── Zone Engine Options ──
+            const zoneOpts: ZoneEngineOptions = {
+              strictATRMult: config.marketFillStrictATRMult,
+              pipSize,
+              fibMaxRetracement: config.fibMaxRetracement,
+              originOBRetest: config.originOBRetest,
             };
-          } catch { /* non-fatal */ }
+
+            // ── Call Unified Zone Engine ──
+            unifiedResult = findUnifiedZone(
+              zoneH1Candles,
+              zoneH4Candles,
+              zoneEntryCandles,
+              zoneDirection as "bullish" | "bearish",
+              analysis.lastPrice,
+              combinedLiqPools,
+              htfConfluenceData,
+              zoneOpts,
+              zoneDailyCandles,
+              zoneConfirmCandles,
+              zoneLtfConfirmCandles,
+              { requireLiquiditySweep: config.requireLiquiditySweep, sweptAbsorbedPenalty: config.sweptAbsorbedPenalty ?? 2.0 },
+              zoneTFLabels,
+            );
+
+            // ── Derive izData from unified result (backward compat with downstream code) ──
+            const multiTF = unifiedResult.multiTFResult;
+            izData = {
+              hasZone: !!multiTF.bestZone,
+              selectedTF: multiTF.selectedTF,
+              reason: multiTF.reason,
+              impulse: multiTF.bestZone?.impulse ? {
+                high: multiTF.bestZone.impulse.high,
+                low: multiTF.bestZone.impulse.low,
+                direction: multiTF.bestZone.impulse.direction,
+              } : null,
+              bestZone: multiTF.bestZone ? {
+                type: multiTF.bestZone.zone.poi.type,
+                high: multiTF.bestZone.zone.poi.high,
+                low: multiTF.bestZone.zone.poi.low,
+                fibLevel: multiTF.bestZone.zone.fibLevel,
+                fibDepth: multiTF.bestZone.zone.fibDepth,
+                totalScore: multiTF.bestZone.zone.totalScore,
+                srConfirmed: multiTF.bestZone.zone.srConfirmed,
+                ltfRefined: multiTF.bestZone.zone.ltfRefined,
+                ltfType: multiTF.bestZone.zone.ltfType || null,
+                refinedEntry: multiTF.bestZone.zone.refinedEntry || null,
+                refinedSL: multiTF.bestZone.zone.refinedSL || null,
+                htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
+                htfLayers: multiTF.bestZone.zone.htfLayers,
+                priceAtZone: multiTF.bestZone.priceAtZone,
+                priceInsideZone: multiTF.bestZone.priceInsideZone,
+                priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
+                sideOk: multiTF.bestZone.sideOk,
+                distanceToZone: multiTF.bestZone.distanceToZone,
+                distancePips: multiTF.bestZone.distancePips,
+              } : null,
+              allZonesCount: multiTF.allZones.length,
+              h1HasZone: !!multiTF.h1Result.bestZone,
+              h4HasZone: !!multiTF.h4Result?.bestZone,
+              dailyHasZone: !!multiTF.dailyResult?.bestZone,
+            };
+
+            // ── Cascade Zone Engine (swing_trader only — priority entry path) ──
+            if (tradingStyle === "swing_trader" && relevantDaily.length >= 30 && relevantH4.length >= 20) {
+              try {
+                cascadeResult = findCascadeZone(
+                  relevantDaily.slice(-60),
+                  relevantH4.slice(-60),
+                  relevantH1.slice(-120),
+                  analysisCandles,
+                  zoneDirection as "bullish" | "bearish",
+                  analysis.lastPrice,
+                  {
+                    htfData: htfConfluenceData,
+                    zoneEngineOpts: zoneOpts,
+                  },
+                );
+              } catch { /* cascade non-fatal */ }
+            }
+          } catch { /* zone engine non-fatal */ }
         }
 
-        // ── Impulse Zone Gate + Credits (mirrors bot-scanner exactly) ──
+        // ── Three-Tier Gate Logic (cascade → unified → standalone) ──
+        // Mirrors bot-scanner: cascade has priority for swing, then unified story,
+        // then falls back to standalone impulse zone gate.
         const izGateMode = config.impulseZoneGateMode || "hard";
         let impulseZonePenaltyVal = 0;
+        let unifiedGatePassed = false;
 
-        if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
+        // Tier 1: Cascade (swing_trader only)
+        if (tradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry) {
+          unifiedGatePassed = true;
+          signalSource = "cascade";
+        }
+        // Tier 2: Unified zone (confirmed/triggered + entryReady)
+        else if (unifiedResult?.hasZone &&
+            (unifiedResult.state === "triggered" || unifiedResult.state === "confirmed") &&
+            unifiedResult.confirmation?.entryReady === true) {
+          unifiedGatePassed = true;
+          signalSource = "unified";
+        }
+
+        // Apply gate decision
+        if (unifiedGatePassed) {
+          // Unified/cascade story is complete — bypass impulse zone hard gate, apply bonus
+          impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
+        } else if (config.requireUnifiedZone) {
+          // requireUnifiedZone = true means ONLY unified/cascade entries allowed
+          diagnostics.skippedImpulseNoZone++;
+          continue;
+        } else if (config.impulseZoneEnabled !== false && izGateMode === "hard") {
           if (!izData || !izData.hasZone) {
             // No valid impulse zone — skip (hard gate)
             diagnostics.skippedImpulseNoZone++;
@@ -2101,7 +2241,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             diagnostics.skippedImpulseNotAtZone++;
             continue;
           }
-          // Price IS at zone — apply bonus
+          // Price IS at zone — apply bonus (standalone path)
           impulseZonePenaltyVal = +(config.impulseZoneBonus ?? 1.0);
 
           // ── Impulse Zone → Tier 1 Credit ──
@@ -2645,6 +2785,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           structureInvalidationFired: false,
           regime: analysis.regimeInfo?.regime || "unknown",
           session: session.name,
+          signalSource,
         };
         openPositions.push(newPos);
         diagnostics.tradesOpened++;
@@ -2722,6 +2863,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           gatesBlocked: [],
           regime: pos.regime,
           session: pos.session,
+          signalSource: pos.signalSource,
         });
         balance += rawPnl - comm;
       }
