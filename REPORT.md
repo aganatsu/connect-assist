@@ -1,125 +1,55 @@
-# Task: Fix trend derivation in analyzeMarketStructure + regime gate for structure-invalidation
-
-## Branch: manus/trend-from-structure-breaks
-
+# Task: fix-source-guards
+## Branch: manus/fix-source-guards
 ## Behavior changes
-
-1. **`analyzeMarketStructure().trend` now derived from BOS/CHoCH breaks** instead of comparing the last 2 swing highs/lows. Priority: most recent external break → most recent break of any significance → legacy 2-swing fallback (only when zero breaks detected).
-
-2. **New field `trendBasis: "external" | "internal" | "none"`** added to the return object. Indicates what significance level the trend was derived from. Consumers (e.g., `gamePlan.ts`'s `determineBias()`) can use this to weight HTF inputs differently.
-
-3. **Structure-invalidation regime gate** (scannerManagement.ts): When the CURRENT market regime (from live daily candles) is ranging/choppy AND the trend flip comes from an internal-only break, structure-invalidation is suppressed (logged but no SL tightening). Fail-open for unknown/missing regimes and external breaks.
-
-4. **Regime gate uses LIVE daily candles** — not entry-time snapshot. Critical fix discovered during review: `signalData.regimeInfo` was ALWAYS `undefined` because `signal_reason` stores key `"regimeData"` (not `"regimeInfo"`). The gate was effectively always fail-open. Now fetches fresh daily candles via `fetchCandlesFn(symbol, "1day", "30d")` and calls `classifyInstrumentRegime()` for current regime classification.
-
-5. **Fixed regime value comparison**: Uses actual `classifyInstrumentRegime()` return values (`"choppy_range"`, `"mild_range"`, `"transitional"`) instead of non-existent values (`"ranging"`, `"quiet"`, `"choppy"`).
-
-6. **Snapshot delta**: The ranging fixture now produces `direction: null, score: 18.8` instead of the previous `direction: long, score: 23.1`. The old code was incorrectly producing a bullish direction signal from a ranging market with recent bearish internal structure.
-
-7. **No change to any gate definitions, factor weights, or the SPECS table.**
+none — pure infrastructure fix (test runner configuration)
 
 ## Files modified
+- `deno.json` (NEW): Defines `deno task test` with correct `--allow-read --allow-net --allow-env` flags, fixing all 29 permission-gated test failures. Also adds `"exclude": ["node_modules/"]` to prevent Deno from scanning irrelevant directories.
 
-| File | Description |
-|------|-------------|
-| `supabase/functions/_shared/smcAnalysis.ts` | Replaced 5-line 2-swing trend derivation with 13-line BOS/CHoCH-based derivation + trendBasis field |
-| `supabase/functions/_shared/scannerManagement.ts` | Added regime gate to structure-invalidation: fetches current daily candles, classifies regime, suppresses noise-driven invalidation. Added `classifyInstrumentRegime` import. |
-| `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | New: adversarial conflicting-signal regression test + trendBasis assertions |
-| `supabase/functions/_shared/structureInvalidationOneShot.test.ts` | New: one-shot guard regression test (5 tests) |
-| `supabase/functions/_shared/regimeGateMatrix.test.ts` | New: 6-test adversarial matrix (4 cells + 2 fail-open) with interval-aware fetchCandlesFn |
-| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot reflecting new trend derivation |
+## Root cause analysis
+All 29 test failures were caused by a **missing permissions issue**, not stale grep patterns or outdated guards. The guard tests in `crossImplementationSync.test.ts` use `Deno.readTextFileSync()` to read source files and verify that shared functions are not re-duplicated. Without `--allow-read`, every `readTextFileSync` call throws a `PermissionDenied` error, causing the test to fail.
+
+The repo had no `deno.json` defining a canonical test command, so developers had to remember the exact flags. This fix makes `deno task test` the single correct way to run the suite.
 
 ## Tests added
+No new test files — the fix is to the test runner configuration itself. The existing 1603 tests (including all 29 guard tests) now pass correctly.
 
-| Test file | What it asserts |
-|-----------|----------------|
-| `trendFromStructureBreaks.test.ts` — "external bearish CHoCH overrides internal HH/HL pattern" | Old logic would say bullish (HH+HL verified); new logic correctly says bearish from external CHoCH. Also verifies trendBasis=external. |
-| `trendFromStructureBreaks.test.ts` — "trendBasis reflects source of trend" | trendBasis=external when external break used, internal when internal-only |
-| `structureInvalidationOneShot.test.ts` (5 tests) | One-shot guard: fires once, never re-fires on subsequent cycles even with continued adverse structure |
-| `regimeGateMatrix.test.ts` — Cell 1: trending + internal | FIRES (trending regime overrides internal-only suppression) |
-| `regimeGateMatrix.test.ts` — Cell 2: trending + external | FIRES (strongest signal, always fires) |
-| `regimeGateMatrix.test.ts` — Cell 3: ranging + external | FIRES (major structural shift overrides ranging suppression) |
-| `regimeGateMatrix.test.ts` — Cell 4: ranging + internal | SUPPRESSED (noise in choppy market) |
-| `regimeGateMatrix.test.ts` — daily fetch fails | FIRES (fail-open: API timeout doesn't suppress) |
-| `regimeGateMatrix.test.ts` — insufficient daily candles | FIRES (fail-open: <20 candles doesn't suppress) |
+## Guard load-bearing proof
+To verify the guards are not decorative assertions, a deliberate re-duplication was introduced and then removed:
+
+1. **Injected** a local `function resolveSymbol(s: string): string { return s; }` into `bot-scanner/index.ts` (simulating the exact re-duplication the guards are designed to catch)
+2. **Ran** `deno test --filter "GUARD: resolveSymbol is only defined"` → **FAILED** with:
+   ```
+   AssertionError: resolveSymbol re-defined outside canonical location:
+     bot-scanner/index.ts:109
+   ```
+3. **Removed** the local function
+4. **Ran** the same test → **PASSED**
+
+This proves the guard catches real regressions when given proper file-read permissions.
 
 ## Tests run
-
 ```
-$ deno test --no-check supabase/functions/_shared/
-ok | 1554 passed | 29 failed (14s)
-
-All 29 failures are PRE-EXISTING on main branch (verified: main has 1538 passed | 29 failed).
-Our branch adds 16 net new passing tests.
-
-Targeted test run (our files only):
-$ deno test --no-check regimeGateMatrix.test.ts trendFromStructureBreaks.test.ts structureInvalidationOneShot.test.ts structureInvalidationToggle.test.ts structureAuthority.test.ts
-ok | 38 passed | 0 failed (528ms)
+$ deno task test
+ok | 1603 passed | 0 failed (18s)
 ```
 
 ## Regression check
-
-### Trigger rate comparison (the specific before/after rate Claude asked about)
-
-The regime gate uses CURRENT daily candles (not entry-time snapshot). Tested with interval-aware mock:
-
-| Scenario | Without gate | With gate |
-|----------|-------------|-----------|
-| Trending daily + internal CHoCH | FIRES | FIRES |
-| Trending daily + external CHoCH | FIRES | FIRES |
-| Ranging daily + external CHoCH | FIRES | FIRES |
-| Ranging daily + internal CHoCH | FIRES | **SUPPRESSED** |
-| Daily fetch fails + internal CHoCH | FIRES | FIRES (fail-open) |
-| Insufficient daily + internal CHoCH | FIRES | FIRES (fail-open) |
-
-### Random choppy candle test (100 scenarios)
-
-Random oscillating candles with bearish bias at end:
-- 83/100 produce `trend=bearish` (from legacy fallback or BOS, not CHoCH)
-- 0/100 produce bearish CHoCH (oscillations don't create trend reversals)
-- 0/100 would fire structure-invalidation (requires BOTH trend AND CHoCH)
-
-**Key insight**: The real-world trigger rate increase from the trend fix is lower than initially feared because structure-invalidation requires CHoCH (not just trend=bearish). Random chop produces bearish BOS/trend but rarely CHoCH. The regime gate is the correct safety net for the minority of cases that DO produce internal CHoCH in ranging conditions.
-
-### Stale-snapshot bug found and fixed
-
-- `signalData.regimeInfo` was ALWAYS `undefined` (signal_reason stores `"regimeData"`, not `"regimeInfo"`)
-- Gate was effectively always fail-open before this fix
-- Now uses fresh daily candles via `classifyInstrumentRegime()` — addresses both failure modes Claude identified:
-  - Position opened trending, market now ranging → gate correctly suppresses
-  - Position opened ranging, market now trending → gate correctly fires
-
-### Snapshot regression
-
-The ranging fixture snapshot changed:
-- Old: `direction: "long"`, `score: 23.1` (false signal from P/D zone fallback)
-- New: `direction: null`, `score: 18.8` (correctly neutral — no strong directional signal in ranging market)
+- No code logic was changed — only a `deno.json` configuration file was added
+- The test suite output is identical to running with manual flags: `deno test --no-check --allow-read --allow-net --allow-env supabase/functions/_shared/`
+- `bot-scanner/index.ts` has zero diff (verified via `git diff`)
 
 ## Open questions
-
-1. **smcAnalysis.ts is in the protected file list.** The change is minimal (trend derivation block only, no SPECS/detection/calculation changes) and was explicitly requested in the task. Confirming this is acceptable.
-
-2. **determineBias() weighting with trendBasis** — Agreed to defer to separate follow-up branch. `trendBasis` is now exposed and ready for that work.
-
-3. **Daily candle fetch adds one API call per manage cycle** — but only when ALL of these conditions are met: `structureInvalidationEnabled && checkCandles.length >= 20 && structureAgainst && hasFreshCHoCH`. In practice this fires rarely (requires both adverse trend AND CHoCH present).
+None.
 
 ## Suggested PR title and description
-
-**Title:** fix(smcAnalysis): derive trend from BOS/CHoCH breaks + live-regime gate for structure-invalidation
+**Title:** `[fix-source-guards] Add deno.json with canonical test task`
 
 **Description:**
-The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects.
+All 29 guard-test failures were caused by missing `--allow-read` permission — the tests use `Deno.readTextFileSync()` to grep source files for re-duplicated functions, and without read permission they throw `PermissionDenied`.
 
-**Changes:**
-- Derive `trend` from the most recent confirmed BOS/CHoCH, with external breaks taking priority over internal ones
-- Add `trendBasis: "external" | "internal" | "none"` field so consumers can weight trend differently based on break significance
-- Add regime gate to structure-invalidation: suppress noise-driven SL tightening when CURRENT regime (from live daily candles) is ranging AND trendBasis is internal-only
-- Fix stale-snapshot bug: `signalData.regimeInfo` was always undefined (wrong key); now uses fresh `classifyInstrumentRegime()` on current daily candles
-- Falls back to legacy 2-swing comparison only when no breaks are detected at all
+This PR adds a `deno.json` at repo root defining `deno task test` with the correct flags (`--allow-read --allow-net --allow-env`). No code logic changes.
 
-**Safety verification:**
-- 6-test adversarial matrix for regime gate (all 4 regime×significance cells + 2 fail-open edge cases)
-- Interval-aware fetchCandlesFn mock proves daily candles are fetched separately from structure candles
-- Structure-invalidation one-shot guard confirmed safe (5 dedicated tests)
-- Adversarial conflicting-signal test proves the exact trend bug is fixed
-- 1554 tests pass (all 29 failures are pre-existing on main)
+**Verification:**
+- Full suite: 1603 passed, 0 failed
+- Guards proven load-bearing: deliberately re-introducing a local `resolveSymbol` in bot-scanner causes the guard to fail; removing it restores the pass
