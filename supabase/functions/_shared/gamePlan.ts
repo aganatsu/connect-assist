@@ -30,6 +30,10 @@ import {
 } from "./smcAnalysis.ts";
 import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
 import { detectWeeklyProfile } from "./weeklyProfile.ts";
+import {
+  detectSession as sharedDetectSession,
+  SESSION_WINDOWS,
+} from "./sessions.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -127,12 +131,15 @@ export interface NewsEvent {
 
 // ─── Session Timing (NY time) ───────────────────────────────────────────────
 
-/** Session open times in NY hours — game plan runs 30 min before */
-const SESSION_TIMES: Record<SessionName, { preMarketNYHour: number; openNYHour: number; closeNYHour: number }> = {
-  "Asian":    { preMarketNYHour: 19.5, openNYHour: 20, closeNYHour: 2 },
-  "London":   { preMarketNYHour: 1.5,  openNYHour: 2,  closeNYHour: 8.5 },
-  "New York": { preMarketNYHour: 8,    openNYHour: 8.5, closeNYHour: 16 },
-};
+// Only the pre-market lead time is game-plan-specific; the boundaries
+// themselves come from sessions.ts's SESSION_WINDOWS (single source of truth).
+const PRE_MARKET_LEAD_HOURS = 0.5;
+
+function getSessionWindow(name: SessionName): { startNY: number; endNY: number } {
+  const w = SESSION_WINDOWS.find(w => w.name === name);
+  if (!w) throw new Error(`No session window found for ${name}`);
+  return { startNY: w.startNY, endNY: w.endNY };
+}
 
 /**
  * Determine which session is upcoming (within 30 min of open).
@@ -141,10 +148,9 @@ const SESSION_TIMES: Record<SessionName, { preMarketNYHour: number; openNYHour: 
 export function getUpcomingSession(): SessionName | null {
   const ny = toNYTime(new Date());
   const t = ny.t;
-  for (const [name, times] of Object.entries(SESSION_TIMES)) {
-    if (t >= times.preMarketNYHour && t < times.openNYHour) {
-      return name as SessionName;
-    }
+  for (const name of ["Asian", "London", "New York"] as SessionName[]) {
+    const { startNY } = getSessionWindow(name);
+    if (t >= startNY - PRE_MARKET_LEAD_HOURS && t < startNY) return name;
   }
   return null;
 }
@@ -153,14 +159,13 @@ export function getUpcomingSession(): SessionName | null {
  * Determine the current active session.
  */
 export function getCurrentSession(): SessionName {
-  const ny = toNYTime(new Date());
-  const t = ny.t;
-  if (t >= 20 || t < 2) return "Asian";
-  if (t >= 2 && t < 8.5) return "London";
-  if (t >= 8.5 && t < 16) return "New York";
-  // Off-hours — return the next upcoming session
-  if (t >= 16 && t < 20) return "Asian";
-  return "Asian";
+  const shared = sharedDetectSession();
+  // sessions.ts has a 4th state ("Off-Hours") that gamePlan.ts's own
+  // SessionName type doesn't include. Off-Hours (16:00-20:00 NY) is always
+  // immediately followed by Asian (20:00), so this preserves the exact
+  // existing behavior rather than changing it.
+  if (shared.name === "Off-Hours") return "Asian";
+  return shared.name as SessionName;
 }
 
 // ─── DOL Identification ─────────────────────────────────────────────────────
