@@ -35,6 +35,7 @@ function unauthorizedResponse(reason: string): Response {
  * Returns a 401 Response if unauthorized, or null if authorized.
  */
 export function verifyCronCaller(req: Request): Response | null {
+  console.log(`[cronAuth debug] header names received: ${[...req.headers.keys()].join(", ")}`);
   const cronSecret = req.headers.get("x-cron-secret");
   const expected = Deno.env.get("CRON_SECRET");
 
@@ -63,6 +64,7 @@ export function verifyCronCaller(req: Request): Response | null {
  * with a Bearer token, Supabase has already validated it).
  */
 export function verifyCronOrUserCaller(req: Request): Response | null {
+  console.log(`[cronAuth debug] header names received: ${[...req.headers.keys()].join(", ")}`);
   // Path 1: Cron secret
   const cronSecret = req.headers.get("x-cron-secret");
   const expectedCronSecret = Deno.env.get("CRON_SECRET");
