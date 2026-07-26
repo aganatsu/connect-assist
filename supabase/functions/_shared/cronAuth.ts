@@ -44,6 +44,7 @@ export function verifyCronCaller(req: Request): Response | null {
     return unauthorizedResponse("CRON_SECRET not configured on server");
   }
 
+  console.log(`[cronAuth debug] received length=${cronSecret?.length ?? "null"}, expected length=${expected?.length ?? "null"}`);
   if (cronSecret !== expected) {
     return unauthorizedResponse("Invalid or missing x-cron-secret header");
   }
