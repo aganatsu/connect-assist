@@ -735,8 +735,8 @@ export function buildPromptPayload(ctx: AdvisorContext, perf: PerformanceMetrics
       slATRMultiple: ctx.config.slATRMultiple,
       tpRatio: ctx.config.tpRatio,
       riskPerTrade: ctx.config.riskPerTrade,
-      maxConcurrent: ctx.config.maxConcurrent,
-      confluenceThreshold: ctx.config.confluenceThreshold,
+      maxConcurrent: ctx.config.maxOpenPositions,
+      confluenceThreshold: ctx.config.minConfluence,
       trailingStopEnabled: ctx.config.trailingStopEnabled,
       breakEvenEnabled: ctx.config.breakEvenEnabled,
     },
@@ -878,7 +878,7 @@ export async function sendTelegramNotification(
     .eq("user_id", userId)
     .maybeSingle();
 
-  const prefs = (userSettings?.preferences_json as Record<string, unknown>) || {};
+  const prefs = ((userSettings as any)?.preferences_json as Record<string, unknown>) || {};
 
   // Extract chat IDs
   const telegramChatIds: string[] = (() => {
@@ -949,13 +949,14 @@ export async function runAdvisorPipeline(ctx: AdvisorContext): Promise<AdvisorRe
   let gateReport = "";
   if (ctx.rejections.length > 0) {
     const closedTrades: ClosedTrade[] = ctx.trades.map(t => ({
+      id: t.id,
       symbol: t.symbol,
-      direction: t.direction as "buy" | "sell",
+      direction: t.direction,
       pnl: t.pnl,
-      opened_at: t.opened_at,
-      closed_at: t.closed_at,
+      rr_achieved: t.pnl > 0 ? (t.exit_price - t.entry_price) / (t.entry_price - t.sl) : null,
+      close_time: t.closed_at,
     }));
-    const gatePerf = computeGatePerformance(ctx.rejections, closedTrades, { minSamples: 5 });
+    const gatePerf = computeGatePerformance(ctx.rejections, closedTrades);
     gateReport = formatGatePerformancePrompt(gatePerf);
   }
 
