@@ -114,6 +114,14 @@ import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DE
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
+import {
+  generateInstrumentGamePlan,
+  buildSessionGamePlan,
+  filterTradeByGamePlan,
+  type InstrumentGamePlan,
+  type SessionGamePlan,
+  type SessionName as GPSessionName,
+} from "../_shared/gamePlan.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -1801,6 +1809,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
+      // ── Game Plan: session-aware cache per symbol ──
+      // Regenerate when session changes (same as bot-scanner's per-session approach)
+      let activeGamePlan: SessionGamePlan | null = null;
+      let lastGPSession: string = "";
+      const mapSessionToGP = (sName: string): GPSessionName | null => {
+        if (sName === "London") return "London";
+        if (sName === "New York") return "New York";
+        if (sName === "Asian") return "Asian";
+        return null; // Off-Hours — no game plan
+      };
 
       // Find the start index (first candle >= startDate)
       const startIdx = entryCandles.findIndex(c => {
@@ -1884,6 +1902,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           if (!isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
         }
 
+        // ── Game Plan: regenerate when session changes ──
+        const gpSession = mapSessionToGP(session.name);
+        if (gpSession && gpSession !== lastGPSession) {
+          lastGPSession = gpSession;
+          try {
+            const gpDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < new Date(candleMs).toISOString().slice(0, 10));
+            const gpH4 = h4Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            const gpEntry = entryCandles.slice(Math.max(0, i - 200), i);
+            const gpH1 = h1Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            if (gpDaily.length >= 10 && gpEntry.length >= 10) {
+              const plan = generateInstrumentGamePlan(symbol, gpDaily, gpH4, gpEntry, gpH1, gpSession);
+              activeGamePlan = buildSessionGamePlan(gpSession, [plan]);
+            }
+          } catch { /* game plan generation is best-effort */ }
+        }
         // ── Get relevant daily + weekly candles up to this date (no lookahead) ──
         const candleDateStr = new Date(candleMs).toISOString().slice(0, 10);
         const relevantDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
@@ -2075,6 +2108,25 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
 
+        // ── Game Plan Context Injection (same as bot-scanner) ──
+        if (activeGamePlan) {
+          const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol) || null;
+          (pairConfig as any)._gamePlanContext = pairPlan ? {
+            bias: pairPlan.bias,
+            biasConfidence: pairPlan.biasConfidence,
+            dol: pairPlan.dol,
+            keyLevels: pairPlan.keyLevels,
+            regime: pairPlan.regime,
+            htfTrend: pairPlan.htfTrend,
+            h4Trend: pairPlan.h4Trend,
+            tradeable: pairPlan.tradeable,
+            atr: pairPlan.atr,
+            isFocusPair: activeGamePlan.focusPairs.includes(symbol),
+          } : null;
+        } else {
+          (pairConfig as any)._gamePlanContext = null;
+        }
+        (pairConfig as any).dolTPExtensionEnabled = config.dolTPExtensionEnabled !== false;
         // ── Run Confluence Analysis ──
         let analysis: any;
         try {
@@ -2473,7 +2525,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               directionalBias: analysis.regimeInfo.bias,
             } : null,
             weeklyBias: weeklyBiasResult ? { bias: weeklyBiasResult.bias, confidence: weeklyBiasResult.confidence } : null,
-            gamePlanBias: null,   // No game plan in backtest
+            gamePlanBias: (() => {
+              if (!activeGamePlan) return null;
+              const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
+              return pairPlan ? { bias: pairPlan.bias, confidence: pairPlan.biasConfidence } : null;
+            })(),
           });
         } catch { directionVerdict = null; }
 
@@ -2689,6 +2745,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
 
+        // ── Game Plan Soft Gate (Phase 5 confidence factor) ──
+        // Same as bot-scanner: always passes, but logs alignment info
+        if (activeGamePlan && analysis.direction) {
+          const gpFilter = filterTradeByGamePlan(activeGamePlan, symbol, analysis.direction);
+          if (!gpFilter.allowed) {
+            const pairPlan = activeGamePlan.plans?.find(p => p.symbol === symbol);
+            const biasConf = pairPlan?.biasConfidence ?? 0;
+            gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+          } else {
+            gates.push({ passed: true, reason: gpFilter.reason });
+          }
+        }
         const failedGates = gates.filter(g => !g.passed);
         const allPassed = failedGates.length === 0;
 
