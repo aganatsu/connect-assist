@@ -101,7 +101,7 @@ import {
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
-import { determineDirection, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
@@ -112,7 +112,25 @@ import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type Ju
 import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
+import {
+  generateInstrumentGamePlan,
+  buildSessionGamePlan,
+  filterTradeByGamePlan,
+  type InstrumentGamePlan,
+  type SessionGamePlan,
+  type SessionName as GPSessionName,
+} from "../_shared/gamePlan.ts";
+import {
+  updateConviction,
+  evaluateEvidence,
+  type ConvictionInput,
+  type ThesisConvictionState,
+  type ConvictionResult,
+  type ConvictionConfig,
+  DEFAULT_CONVICTION_CONFIG,
+} from "../_shared/thesisConviction.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -141,6 +159,7 @@ interface BacktestTrade {
   regime?: string;
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
+  conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
 }
 interface BlockedTrade {
   symbol: string;
@@ -231,6 +250,7 @@ interface OpenPosition {
   regime?: string;
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
+  conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -354,7 +374,8 @@ async function fetchHistoricalCandles(
 ): Promise<Candle[]> {
   const computeBufferedStart = (start: string) => {
     const startMs = new Date(start).getTime();
-    const lookbackMs = interval === "1d" ? 60 * 24 * 3600 * 1000 :
+    const lookbackMs = interval === "1w" ? 365 * 24 * 3600 * 1000 :
+                       interval === "1d" ? 60 * 24 * 3600 * 1000 :
                        interval === "4h" ? 30 * 24 * 3600 * 1000 :
                        interval === "1h" ? 14 * 24 * 3600 * 1000 :
                        7 * 24 * 3600 * 1000;
@@ -969,6 +990,7 @@ function processExits(
           regime: pos.regime,
           session: pos.session,
           signalSource: pos.signalSource,
+          conviction: pos.conviction || null,
         });
         pos.size = remainSize;
         pos.partialTPFired = true;
@@ -999,6 +1021,7 @@ function processExits(
         regime: pos.regime,
         session: pos.session,
         signalSource: pos.signalSource,
+        conviction: pos.conviction || null,
       });
     } else {
       pos.currentSL = sl;
@@ -1536,7 +1559,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       "30m": "30m", "30min": "30m", "1h": "1h", "4h": "4h",
     };
     const entryInterval = tfMap[config.entryTimeframe] || "15m";
-    const candleData: Record<string, { entry: Candle[]; daily: Candle[]; h4: Candle[]; h1: Candle[]; smt?: Candle[] }> = {};
+    const candleData: Record<string, { entry: Candle[]; daily: Candle[]; h4: Candle[]; h1: Candle[]; weekly: Candle[]; smt?: Candle[] }> = {};
 
     // Diagnostic counters
     const diagnostics = {
@@ -1606,13 +1629,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         10 + Math.round((chunkIndex / totalChunks) * 80),
         `Chunk ${chunkIndex + 1}/${totalChunks}: fetching candles for ${symbol} (${_ci + 1}/${chunkSymbols.length})...`
       );
-      const [entryCandles, dailyCandles, h4Candles, h1Candles] = await Promise.all([
+      const [entryCandles, dailyCandles, h4Candles, h1Candles, weeklyCandles] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
         fetchHistoricalCandles(symbol, "4h", range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1h", range, startDate, endDate),
+        fetchHistoricalCandles(symbol, "1w", "2y", startDate, endDate),
       ]);
-      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H`);
+      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H, ${weeklyCandles.length} W`);
       // Heartbeat after candle fetch completes
       await updateProgress(
         10 + Math.round((chunkIndex / totalChunks) * 80),
@@ -1624,8 +1648,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       if (smtPair && SUPPORTED_SYMBOLS[smtPair] && config.useSMT) {
         smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, startDate, endDate);
       }
-      candleData[symbol] = { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, smt: smtCandles };
-      diagnostics.totalCandlesFetched += entryCandles.length + dailyCandles.length + h4Candles.length + h1Candles.length;
+      candleData[symbol] = { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, weekly: weeklyCandles, smt: smtCandles };
+      diagnostics.totalCandlesFetched += entryCandles.length + dailyCandles.length + h4Candles.length + h1Candles.length + weeklyCandles.length;
       await new Promise(r => setTimeout(r, 300));
     }
 
@@ -1793,11 +1817,26 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       }
 
       try { // Per-symbol error isolation
-      const { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, smt: smtCandles } = candleData[symbol];
+      const { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, weekly: weeklyCandles, smt: smtCandles } = candleData[symbol];
       if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; completedSymbols++; continue; }
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
+      // ── Thesis Conviction: in-memory state per (direction) ──
+      // Tracks conviction across bars — resets on session change or trade open
+      const convictionStates = new Map<string, ThesisConvictionState>();
+      let lastConvictionSession: string = "";
+
+      // ── Game Plan: session-aware cache per symbol ──
+      // Regenerate when session changes (same as bot-scanner's per-session approach)
+      let activeGamePlan: SessionGamePlan | null = null;
+      let lastGPSession: string = "";
+      const mapSessionToGP = (sName: string): GPSessionName | null => {
+        if (sName === "London") return "London";
+        if (sName === "New York") return "New York";
+        if (sName === "Asian") return "Asian";
+        return null; // Off-Hours — no game plan
+      };
 
       // Find the start index (first candle >= startDate)
       const startIdx = entryCandles.findIndex(c => {
@@ -1881,10 +1920,32 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           if (!isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
         }
 
-        // ── Get relevant daily candles up to this date (no lookahead) ──
+        // ── Thesis Conviction: reset on session change (mimics 8h TTL) ──
+        if (session.name !== lastConvictionSession) {
+          lastConvictionSession = session.name;
+          convictionStates.clear();
+        }
+
+        // ── Game Plan: regenerate when session changes ──
+        const gpSession = mapSessionToGP(session.name);
+        if (gpSession && gpSession !== lastGPSession) {
+          lastGPSession = gpSession;
+          try {
+            const gpDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < new Date(candleMs).toISOString().slice(0, 10));
+            const gpH4 = h4Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            const gpEntry = entryCandles.slice(Math.max(0, i - 200), i);
+            const gpH1 = h1Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            if (gpDaily.length >= 10 && gpEntry.length >= 10) {
+              const plan = generateInstrumentGamePlan(symbol, gpDaily, gpH4, gpEntry, gpH1, gpSession);
+              activeGamePlan = buildSessionGamePlan(gpSession, [plan]);
+            }
+          } catch { /* game plan generation is best-effort */ }
+        }
+        // ── Get relevant daily + weekly candles up to this date (no lookahead) ──
         const candleDateStr = new Date(candleMs).toISOString().slice(0, 10);
         const relevantDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
         if (relevantDaily.length < 10) continue;
+        const relevantWeekly = weeklyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
 
                 // ── Portfolio Pre-Gates (cheap checks before expensive analysis) ──
         // These gates only need portfolio state, not analysis results
@@ -1939,19 +2000,60 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
           return cMs < candleMs;
         });
-        // ── Direction Engine (top-down: Daily → 4H → 1H) ──
+        // ── Direction Engine (style-aware: swing=W→D→4H, day=D→4H→1H, scalp=1H→15m→5m) ──
         let directionResult: DirectionResult | null = null;
         if (config.useSimpleDirection) {
           try {
-            directionResult = determineDirection(
-              relevantDaily.length >= 20 ? relevantDaily : null,
-              relevantH4.length >= 20 ? relevantH4 : null,
-              relevantH1.length >= 20 ? relevantH1 : null,
-              {
-                h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
-                h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
-              },
-            );
+            const dirConfig = {
+              h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
+              h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
+            };
+            if (tradingStyle === "swing_trader") {
+              // Swing: bias=Weekly, structure=Daily, confirm=4H
+              const tfLabels = STYLE_TF_LABELS.swing_trader;
+              const styleResult = determineDirectionStyleAware(
+                relevantWeekly.length >= 20 ? relevantWeekly : null,
+                relevantDaily.length >= 20 ? relevantDaily : null,
+                relevantH4.length >= 20 ? relevantH4 : null,
+                { ...dirConfig, ...tfLabels },
+              );
+              directionResult = {
+                direction: styleResult.direction,
+                bias: styleResult.bias,
+                biasSource: styleResult.biasSource as "daily" | "4h" | null,
+                h4Retrace: styleResult.structureRetrace,
+                h4ChochAgainst: styleResult.structureChochAgainst,
+                h1Confirmed: styleResult.confirmBOS,
+                reason: `[swing] ${styleResult.reason}`,
+              };
+            } else if (tradingStyle === "scalper") {
+              // Scalper: bias=1H, structure=15m(entry candles window proxy), confirm=entry
+              const tfLabels = STYLE_TF_LABELS.scalper;
+              const scalperWindow = entryCandles.slice(Math.max(0, i - lookback), i + 1);
+              const styleResult = determineDirectionStyleAware(
+                relevantH1.length >= 20 ? relevantH1 : null,
+                scalperWindow.length >= 20 ? scalperWindow : null,
+                scalperWindow.length >= 20 ? scalperWindow.slice(-20) : null,
+                { ...dirConfig, ...tfLabels },
+              );
+              directionResult = {
+                direction: styleResult.direction,
+                bias: styleResult.bias,
+                biasSource: styleResult.biasSource as "daily" | "4h" | null,
+                h4Retrace: styleResult.structureRetrace,
+                h4ChochAgainst: styleResult.structureChochAgainst,
+                h1Confirmed: styleResult.confirmBOS,
+                reason: `[scalper] ${styleResult.reason}`,
+              };
+            } else {
+              // Day trader (default): Daily → 4H → 1H
+              directionResult = determineDirection(
+                relevantDaily.length >= 20 ? relevantDaily : null,
+                relevantH4.length >= 20 ? relevantH4 : null,
+                relevantH1.length >= 20 ? relevantH1 : null,
+                dirConfig,
+              );
+            }
           } catch { directionResult = null; }
         }
 
@@ -2030,6 +2132,25 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
 
+        // ── Game Plan Context Injection (same as bot-scanner) ──
+        if (activeGamePlan) {
+          const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol) || null;
+          (pairConfig as any)._gamePlanContext = pairPlan ? {
+            bias: pairPlan.bias,
+            biasConfidence: pairPlan.biasConfidence,
+            dol: pairPlan.dol,
+            keyLevels: pairPlan.keyLevels,
+            regime: pairPlan.regime,
+            htfTrend: pairPlan.htfTrend,
+            h4Trend: pairPlan.h4Trend,
+            tradeable: pairPlan.tradeable,
+            atr: pairPlan.atr,
+            isFocusPair: activeGamePlan.focusPairs.includes(symbol),
+          } : null;
+        } else {
+          (pairConfig as any)._gamePlanContext = null;
+        }
+        (pairConfig as any).dolTPExtensionEnabled = config.dolTPExtensionEnabled !== false;
         // ── Run Confluence Analysis ──
         let analysis: any;
         try {
@@ -2101,11 +2222,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               zoneLtfConfirmCandles = analysisCandles;
             } else if (tradingStyle === "swing_trader") {
               zoneTFLabels = { top: "W", mid: "D", low: "4H" };
-              // Swing: h1=4H, h4=Daily, entry=1H, daily=undefined (no weekly in backtest)
-              zoneH1Candles = relevantH4.slice(-60);
-              zoneH4Candles = relevantDaily.slice(-60);
-              zoneEntryCandles = relevantH1.slice(-120);
-              zoneDailyCandles = undefined; // Weekly not available in backtest
+              // Swing waterfall: Weekly → Daily → 4H (entry=1H)
+              zoneH1Candles = relevantH4.slice(-60);            // 4H = lowest structural TF slot
+              zoneH4Candles = relevantDaily.slice(-60);         // Daily = mid structural TF slot
+              zoneEntryCandles = relevantH1.slice(-120);        // 1H entry
+              zoneDailyCandles = relevantWeekly.length >= 20 ? relevantWeekly.slice(-52) : undefined; // Weekly = highest TF slot
               zoneConfirmCandles = relevantDaily.length >= 15 ? relevantDaily.slice(-30) : relevantH4.slice(-60);
               zoneLtfConfirmCandles = relevantH4.slice(-60);
             } else {
@@ -2400,6 +2521,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           }
         }
 
+        // ── Weekly Bias (ICT weekly structure + DOL analysis) ──
+        const weeklyBiasResult: WeeklyBiasResult | null = relevantWeekly.length >= 12
+          ? analyzeWeeklyBiasAndDOL(relevantWeekly, candle.close)
+          : null;
+
         // ── Direction Verdict (mirrors bot-scanner pre-zone direction consensus) ──
         let directionVerdict: DirectionVerdictResult | null = null;
         try {
@@ -2422,8 +2548,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               confidence: analysis.regimeInfo.confidence,
               directionalBias: analysis.regimeInfo.bias,
             } : null,
-            weeklyBias: null,     // No weekly candles in backtest currently
-            gamePlanBias: null,   // No game plan in backtest
+            weeklyBias: weeklyBiasResult ? { bias: weeklyBiasResult.bias, confidence: weeklyBiasResult.confidence } : null,
+            gamePlanBias: (() => {
+              if (!activeGamePlan) return null;
+              const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
+              return pairPlan ? { bias: pairPlan.bias, confidence: pairPlan.biasConfidence } : null;
+            })(),
           });
         } catch { directionVerdict = null; }
 
@@ -2433,7 +2563,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           try {
             const ltfZone = izData?.bestZone ? { high: izData.bestZone.high, low: izData.bestZone.low } : null;
             ictHTFResult = runICTHTFAnalysis(
-              null, // No weekly candles in backtest
+              relevantWeekly.length >= 12 ? relevantWeekly : null,
               relevantDaily,
               candle.close,
               analysis.direction as "long" | "short",
@@ -2544,7 +2674,51 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
 
         // ── Effective Score (now matches live scanner formula) ──
-        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+        let effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+
+        // ── Thesis Conviction: evaluate evidence and update state ──
+        let convictionResult: ConvictionResult | null = null;
+        if (config.thesisConvictionEnabled !== false && analysis.direction) {
+          const convKey = `${analysis.direction}`; // per-direction state within this symbol
+          // Build conviction input from available data
+          const convInput: ConvictionInput = {
+            symbol,
+            direction: analysis.direction as "long" | "short",
+            directionVerdict: directionVerdict || null,
+            regime4H: analysis.regime4HInfo ? {
+              regime: analysis.regime4HInfo.regime,
+              bias: analysis.regime4HInfo.bias,
+              confidence: analysis.regime4HInfo.confidence,
+            } : null,
+            opposingFactorCount: analysis.tieredScoring?.opposingFactorCount ?? 0,
+            fotsiAlignment: analysis.fotsiAlignment ? {
+              label: analysis.fotsiAlignment.label,
+              score: analysis.fotsiAlignment.score,
+            } : null,
+            gamePlanBias: (() => {
+              if (!activeGamePlan) return null;
+              const pp = activeGamePlan.plans.find(p => p.symbol === symbol);
+              return pp ? { bias: pp.bias as "bullish" | "bearish" | "neutral", confidence: pp.biasConfidence ?? 50 } : null;
+            })(),
+          };
+          // TF-aware decay scaling: scale decay/recovery so conviction decays at real-time rate
+          // 5min = 1.0 (baseline), 15min = 0.33, 1h = 0.083, 4h = 0.021
+          const tfScaleMap: Record<string, number> = { "scalper": 1.0, "day_trader": 0.33, "swing_trader": 0.021 };
+          const tfScale = tfScaleMap[tradingStyle || "day_trader"] ?? 0.33;
+          const scaledConfig: ConvictionConfig = {
+            ...DEFAULT_CONVICTION_CONFIG,
+            decayPerOpposingSource: DEFAULT_CONVICTION_CONFIG.decayPerOpposingSource * tfScale,
+            recoveryPerAlignedSource: DEFAULT_CONVICTION_CONFIG.recoveryPerAlignedSource * tfScale,
+          };
+          const prevState = convictionStates.get(convKey) || null;
+          const { state: newState, result } = updateConviction(prevState, convInput, scaledConfig);
+          convictionStates.set(convKey, newState);
+          convictionResult = result;
+          // Apply score adjustment in active mode (shadow mode = log only)
+          if (config.thesisConvictionMode !== "shadow") {
+            effectiveScore += result.scoreAdjustment;
+          }
+        }
 
         // ── Bidirectional Conflict Counter ──
         const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -2639,6 +2813,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
 
+        // ── Game Plan Soft Gate (Phase 5 confidence factor) ──
+        // Same as bot-scanner: always passes, but logs alignment info
+        if (activeGamePlan && analysis.direction) {
+          const gpFilter = filterTradeByGamePlan(activeGamePlan, symbol, analysis.direction);
+          if (!gpFilter.allowed) {
+            const pairPlan = activeGamePlan.plans?.find(p => p.symbol === symbol);
+            const biasConf = pairPlan?.biasConfidence ?? 0;
+            gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+          } else {
+            gates.push({ passed: true, reason: gpFilter.reason });
+          }
+        }
         const failedGates = gates.filter(g => !g.passed);
         const allPassed = failedGates.length === 0;
 
@@ -2786,9 +2972,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           regime: analysis.regimeInfo?.regime || "unknown",
           session: session.name,
           signalSource,
+          conviction: convictionResult ? {
+            score: convictionResult.conviction,
+            adjustment: convictionResult.scoreAdjustment,
+            cycleCount: convictionResult.cycleCount,
+            degrading: convictionResult.thesisDegrading,
+          } : null,
         };
         openPositions.push(newPos);
         diagnostics.tradesOpened++;
+        // Reset conviction for this direction after trade opens (same as bot-scanner)
+        if (analysis.direction) {
+          convictionStates.delete(`${analysis.direction}`);
+        }
       }
 
       completedSymbols++;
@@ -2864,6 +3060,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           regime: pos.regime,
           session: pos.session,
           signalSource: pos.signalSource,
+          conviction: pos.conviction || null,
         });
         balance += rawPnl - comm;
       }
