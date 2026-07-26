@@ -1,4 +1,5 @@
 # Task: Fix trend derivation in analyzeMarketStructure + regime gate for structure-invalidation
+
 ## Branch: manus/trend-from-structure-breaks
 
 ## Behavior changes
@@ -7,21 +8,25 @@
 
 2. **New field `trendBasis: "external" | "internal" | "none"`** added to the return object. Indicates what significance level the trend was derived from. Consumers (e.g., `gamePlan.ts`'s `determineBias()`) can use this to weight HTF inputs differently.
 
-3. **Structure-invalidation regime gate** (scannerManagement.ts): When a position was entered in a ranging/quiet/choppy regime AND the trend flip comes from an internal-only break, structure-invalidation is suppressed (logged but no SL tightening). Fail-open for unknown/missing regimes and external breaks.
+3. **Structure-invalidation regime gate** (scannerManagement.ts): When the CURRENT market regime (from live daily candles) is ranging/choppy AND the trend flip comes from an internal-only break, structure-invalidation is suppressed (logged but no SL tightening). Fail-open for unknown/missing regimes and external breaks.
 
-4. **Snapshot delta**: The ranging fixture now produces `direction: null, score: 18.8` instead of the previous `direction: long, score: 23.1`. The old code was incorrectly producing a bullish direction signal from a ranging market with recent bearish internal structure.
+4. **Regime gate uses LIVE daily candles** — not entry-time snapshot. Critical fix discovered during review: `signalData.regimeInfo` was ALWAYS `undefined` because `signal_reason` stores key `"regimeData"` (not `"regimeInfo"`). The gate was effectively always fail-open. Now fetches fresh daily candles via `fetchCandlesFn(symbol, "1day", "30d")` and calls `classifyInstrumentRegime()` for current regime classification.
 
-5. **No change to any gate definitions, factor weights, or the SPECS table.**
+5. **Fixed regime value comparison**: Uses actual `classifyInstrumentRegime()` return values (`"choppy_range"`, `"mild_range"`, `"transitional"`) instead of non-existent values (`"ranging"`, `"quiet"`, `"choppy"`).
+
+6. **Snapshot delta**: The ranging fixture now produces `direction: null, score: 18.8` instead of the previous `direction: long, score: 23.1`. The old code was incorrectly producing a bullish direction signal from a ranging market with recent bearish internal structure.
+
+7. **No change to any gate definitions, factor weights, or the SPECS table.**
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
 | `supabase/functions/_shared/smcAnalysis.ts` | Replaced 5-line 2-swing trend derivation with 13-line BOS/CHoCH-based derivation + trendBasis field |
-| `supabase/functions/_shared/scannerManagement.ts` | Added 8-line regime gate to structure-invalidation branch (lines 810-817) |
+| `supabase/functions/_shared/scannerManagement.ts` | Added regime gate to structure-invalidation: fetches current daily candles, classifies regime, suppresses noise-driven invalidation. Added `classifyInstrumentRegime` import. |
 | `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | New: adversarial conflicting-signal regression test + trendBasis assertions |
 | `supabase/functions/_shared/structureInvalidationOneShot.test.ts` | New: one-shot guard regression test (5 tests) |
-| `supabase/functions/_shared/regimeGateMatrix.test.ts` | New: 9-cell adversarial test matrix for regime gate |
+| `supabase/functions/_shared/regimeGateMatrix.test.ts` | New: 6-test adversarial matrix (4 cells + 2 fail-open) with interval-aware fetchCandlesFn |
 | `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot reflecting new trend derivation |
 
 ## Tests added
@@ -35,31 +40,37 @@
 | `regimeGateMatrix.test.ts` — Cell 2: trending + external | FIRES (strongest signal, always fires) |
 | `regimeGateMatrix.test.ts` — Cell 3: ranging + external | FIRES (major structural shift overrides ranging suppression) |
 | `regimeGateMatrix.test.ts` — Cell 4: ranging + internal | SUPPRESSED (noise in choppy market) |
-| `regimeGateMatrix.test.ts` — quiet + internal | SUPPRESSED |
-| `regimeGateMatrix.test.ts` — choppy + internal | SUPPRESSED |
-| `regimeGateMatrix.test.ts` — strong_trend + internal | FIRES |
-| `regimeGateMatrix.test.ts` — unknown/missing regime + internal | FIRES (fail-open) |
-| `regimeGateMatrix.test.ts` — quiet + external | FIRES |
+| `regimeGateMatrix.test.ts` — daily fetch fails | FIRES (fail-open: API timeout doesn't suppress) |
+| `regimeGateMatrix.test.ts` — insufficient daily candles | FIRES (fail-open: <20 candles doesn't suppress) |
 
 ## Tests run
 
 ```
-$ deno test --no-check --allow-all supabase/functions/_shared/
-ok | 1606 passed | 0 failed (18s)
+$ deno test --no-check supabase/functions/_shared/
+ok | 1554 passed | 29 failed (14s)
+
+All 29 failures are PRE-EXISTING on main branch (verified: main has 1538 passed | 29 failed).
+Our branch adds 16 net new passing tests.
+
+Targeted test run (our files only):
+$ deno test --no-check regimeGateMatrix.test.ts trendFromStructureBreaks.test.ts structureInvalidationOneShot.test.ts structureInvalidationToggle.test.ts structureAuthority.test.ts
+ok | 38 passed | 0 failed (528ms)
 ```
 
 ## Regression check
 
 ### Trigger rate comparison (the specific before/after rate Claude asked about)
 
-50 synthetic candle variants that produce internal bearish CHoCH, tested with regime="ranging":
+The regime gate uses CURRENT daily candles (not entry-time snapshot). Tested with interval-aware mock:
 
-| Metric | Without gate | With gate (ranging) | With gate (trending) |
-|--------|-------------|--------------------|--------------------|
-| Would fire | 50/50 | **0/50** | 50/50 |
-| Suppressed | — | 50 (100%) | 0 (0%) |
-
-**Interpretation**: Every internal-only CHoCH in a ranging market is suppressed. Every internal-only CHoCH in a trending market still fires. External breaks always fire regardless of regime.
+| Scenario | Without gate | With gate |
+|----------|-------------|-----------|
+| Trending daily + internal CHoCH | FIRES | FIRES |
+| Trending daily + external CHoCH | FIRES | FIRES |
+| Ranging daily + external CHoCH | FIRES | FIRES |
+| Ranging daily + internal CHoCH | FIRES | **SUPPRESSED** |
+| Daily fetch fails + internal CHoCH | FIRES | FIRES (fail-open) |
+| Insufficient daily + internal CHoCH | FIRES | FIRES (fail-open) |
 
 ### Random choppy candle test (100 scenarios)
 
@@ -68,7 +79,15 @@ Random oscillating candles with bearish bias at end:
 - 0/100 produce bearish CHoCH (oscillations don't create trend reversals)
 - 0/100 would fire structure-invalidation (requires BOTH trend AND CHoCH)
 
-**Key insight**: The real-world trigger rate increase from the trend fix is lower than initially feared because structure-invalidation requires CHoCH (not just trend=bearish). Random chop produces bearish BOS/trend but rarely CHoCH. The regime gate is the correct safety net for the cases that DO produce internal CHoCH in ranging conditions.
+**Key insight**: The real-world trigger rate increase from the trend fix is lower than initially feared because structure-invalidation requires CHoCH (not just trend=bearish). Random chop produces bearish BOS/trend but rarely CHoCH. The regime gate is the correct safety net for the minority of cases that DO produce internal CHoCH in ranging conditions.
+
+### Stale-snapshot bug found and fixed
+
+- `signalData.regimeInfo` was ALWAYS `undefined` (signal_reason stores `"regimeData"`, not `"regimeInfo"`)
+- Gate was effectively always fail-open before this fix
+- Now uses fresh daily candles via `classifyInstrumentRegime()` — addresses both failure modes Claude identified:
+  - Position opened trending, market now ranging → gate correctly suppresses
+  - Position opened ranging, market now trending → gate correctly fires
 
 ### Snapshot regression
 
@@ -76,17 +95,17 @@ The ranging fixture snapshot changed:
 - Old: `direction: "long"`, `score: 23.1` (false signal from P/D zone fallback)
 - New: `direction: null`, `score: 18.8` (correctly neutral — no strong directional signal in ranging market)
 
-This is an improvement: the old code was generating a false long signal in a market with recent bearish internal structure.
-
 ## Open questions
 
-1. **determineBias() weighting with trendBasis** — Agreed to defer to separate follow-up branch. `trendBasis` is now exposed and ready for that work.
+1. **smcAnalysis.ts is in the protected file list.** The change is minimal (trend derivation block only, no SPECS/detection/calculation changes) and was explicitly requested in the task. Confirming this is acceptable.
 
-2. **Entry-time regime vs current regime** — The gate uses `signalData.regimeInfo.regime` (stored at trade entry time). If a position was entered during trending but the market has since become ranging, the gate won't suppress. This is conservative (fail-open) but could be revisited if we want to re-classify regime during management.
+2. **determineBias() weighting with trendBasis** — Agreed to defer to separate follow-up branch. `trendBasis` is now exposed and ready for that work.
+
+3. **Daily candle fetch adds one API call per manage cycle** — but only when ALL of these conditions are met: `structureInvalidationEnabled && checkCandles.length >= 20 && structureAgainst && hasFreshCHoCH`. In practice this fires rarely (requires both adverse trend AND CHoCH present).
 
 ## Suggested PR title and description
 
-**Title:** fix(smcAnalysis): derive trend from BOS/CHoCH breaks + regime gate for structure-invalidation
+**Title:** fix(smcAnalysis): derive trend from BOS/CHoCH breaks + live-regime gate for structure-invalidation
 
 **Description:**
 The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects.
@@ -94,12 +113,13 @@ The `trend` field in `analyzeMarketStructure()` was derived by comparing the las
 **Changes:**
 - Derive `trend` from the most recent confirmed BOS/CHoCH, with external breaks taking priority over internal ones
 - Add `trendBasis: "external" | "internal" | "none"` field so consumers can weight trend differently based on break significance
-- Add regime gate to structure-invalidation: suppress noise-driven SL tightening when regime is ranging/quiet/choppy AND trendBasis is internal-only
+- Add regime gate to structure-invalidation: suppress noise-driven SL tightening when CURRENT regime (from live daily candles) is ranging AND trendBasis is internal-only
+- Fix stale-snapshot bug: `signalData.regimeInfo` was always undefined (wrong key); now uses fresh `classifyInstrumentRegime()` on current daily candles
 - Falls back to legacy 2-swing comparison only when no breaks are detected at all
 
 **Safety verification:**
-- 9-cell adversarial test matrix for regime gate (all 4 combinations + 5 edge cases)
-- 50-variant trigger rate comparison: 100% suppression in ranging, 0% suppression in trending
+- 6-test adversarial matrix for regime gate (all 4 regime×significance cells + 2 fail-open edge cases)
+- Interval-aware fetchCandlesFn mock proves daily candles are fetched separately from structure candles
 - Structure-invalidation one-shot guard confirmed safe (5 dedicated tests)
-- Adversarial conflicting-signal test proves the exact bug is fixed
-- 1606 tests pass, 0 failures
+- Adversarial conflicting-signal test proves the exact trend bug is fixed
+- 1554 tests pass (all 29 failures are pre-existing on main)
