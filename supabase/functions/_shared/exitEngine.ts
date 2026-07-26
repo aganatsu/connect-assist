@@ -292,3 +292,116 @@ export function computeAdaptiveTrail(input: TrailInput): TrailResult {
     reason,
   };
 }
+
+// ─── Unified Trail Ratchet ──────────────────────────────────────────
+/**
+ * computeTrailRatchet — single source of truth for trailing-stop ratchet logic.
+ * Called by:
+ *   - paper-trading/index.ts (fast 5s ratchet, no candles available)
+ *   - scannerManagement.ts Phase B (full manage cycle, candles available)
+ *
+ * When adaptiveTrailingEnabled=true AND recentCandles are provided,
+ * delegates to computeAdaptiveTrail(). Otherwise uses the fixed-pip formula.
+ *
+ * Returns the new SL and whether it should tighten (ratchet forward).
+ */
+export interface TrailRatchetInput {
+  entryPrice: number;
+  currentPrice: number;
+  currentSL: number;
+  direction: "long" | "short";
+  pipSize: number;
+  /** effectiveTrailPips stored in exitFlags by scannerManagement at activation time */
+  effectiveTrailPips: number;
+  /** Previous trail level (from exitFlags.trailingStopLevel) — used for monotonic check */
+  prevTrailLevel?: number;
+  /** If true AND recentCandles provided, use adaptive trail */
+  adaptiveTrailingEnabled?: boolean;
+  /** Optional candles for adaptive trail (paper-trading won't have these) */
+  recentCandles?: Array<{ open: number; high: number; low: number; close: number }>;
+  /** Optional: current R-multiple (for adaptive trail R-scaling) */
+  rMultiple?: number;
+  /** Optional: ATR value (for adaptive trail) */
+  atrValue?: number;
+  /** Optional: regime info (for adaptive trail) */
+  regimeInfo?: RegimeInfo | null;
+  /** Config overrides for adaptive trail */
+  baseTrailATRMultiple?: number;
+  momentumFadeThreshold?: number;
+  tightenFactor?: number;
+  widenFactor?: number;
+}
+
+export interface TrailRatchetResult {
+  newSL: number;
+  shouldTighten: boolean;
+  trailDistancePips: number;
+  reason: string;
+}
+
+export function computeTrailRatchet(input: TrailRatchetInput): TrailRatchetResult {
+  const {
+    entryPrice, currentPrice, currentSL, direction, pipSize,
+    effectiveTrailPips, prevTrailLevel,
+    adaptiveTrailingEnabled, recentCandles,
+    rMultiple, atrValue, regimeInfo,
+    baseTrailATRMultiple, momentumFadeThreshold, tightenFactor, widenFactor,
+  } = input;
+
+  // ── Adaptive path: delegate to computeAdaptiveTrail when enabled + candles available ──
+  if (adaptiveTrailingEnabled && recentCandles && recentCandles.length > 0 && atrValue && atrValue > 0) {
+    const adaptiveResult = computeAdaptiveTrail({
+      entryPrice,
+      currentPrice,
+      currentSL,
+      direction,
+      rMultiple: rMultiple ?? 0,
+      regimeInfo: regimeInfo ?? null,
+      atrValue,
+      pipSize,
+      recentCandles,
+      baseTrailATRMultiple,
+      momentumFadeThreshold,
+      tightenFactor,
+      widenFactor,
+    });
+    // Monotonic check: only tighten if also better than prevTrailLevel
+    let shouldTighten = adaptiveResult.shouldTighten;
+    if (shouldTighten && prevTrailLevel != null) {
+      shouldTighten = direction === "long"
+        ? adaptiveResult.newSL > prevTrailLevel
+        : adaptiveResult.newSL < prevTrailLevel;
+    }
+    return {
+      newSL: adaptiveResult.newSL,
+      shouldTighten,
+      trailDistancePips: adaptiveResult.trailDistancePips,
+      reason: `Adaptive: ${adaptiveResult.reason}`,
+    };
+  }
+
+  // ── Fixed-pip path (default) ──
+  const trailDistance = effectiveTrailPips * pipSize;
+  const newSL = direction === "long"
+    ? currentPrice - trailDistance
+    : currentPrice + trailDistance;
+
+  // Only ratchet forward (tighten), never widen
+  let shouldTighten = direction === "long"
+    ? newSL > currentSL
+    : newSL < currentSL;
+
+  // Also check against prevTrailLevel for monotonic guarantee
+  if (shouldTighten && prevTrailLevel != null) {
+    shouldTighten = direction === "long"
+      ? newSL > prevTrailLevel
+      : newSL < prevTrailLevel;
+  }
+
+  return {
+    newSL,
+    shouldTighten,
+    trailDistancePips: effectiveTrailPips,
+    reason: `Fixed trail: ${effectiveTrailPips.toFixed(1)} pips behind price`,
+  };
+}

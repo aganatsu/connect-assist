@@ -2041,43 +2041,40 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     try {
       managementActions = await manageOpenPositions(supabase, positionsToManage, config, scanCycleId, cachedFetch, detectSession);
       const activeActions = managementActions.filter(a => a.action !== "no_change");
-      if (activeActions.length > 0) {
-        console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
-        for (const a of activeActions) {
-          console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
-        }
-        // ── BROKER RECONCILIATION: Single broker-writer via reconcileBrokerState() ──
-        // Replaces fire-and-forget SL modify + partial close blocks.
-        // reconcileBrokerState is broker-authoritative: on push failure, DB is corrected to broker's actual value.
-        if (account.execution_mode === "live") {
-          const { data: liveConns } = await supabase.from("broker_connections")
-            .select("*").eq("user_id", userId).eq("broker_type", "metaapi").eq("is_active", true);
-          if (liveConns && liveConns.length > 0) {
-            // Build reconcile positions from open positions that have mirrored connections
-            const reconcilePositions: ReconcilePosition[] = openPosArr
-              .filter((p: any) => Array.isArray(p.mirrored_connection_ids) && p.mirrored_connection_ids.length > 0)
-              .map((p: any) => ({
-                id: p.id,
-                position_id: p.position_id,
-                symbol: p.symbol,
-                direction: p.direction as "long" | "short",
-                stop_loss: p.stop_loss != null ? parseFloat(String(p.stop_loss)) : null,
-                take_profit: p.take_profit != null ? parseFloat(String(p.take_profit)) : null,
-                mirrored_connection_ids: p.mirrored_connection_ids,
-              }));
-            // Run SL reconciliation
-            if (reconcilePositions.length > 0) {
-              await reconcileBrokerState({
-                supabase,
-                userId,
-                positions: reconcilePositions,
-                connections: liveConns as BrokerConnection[],
-                telegramChatIds,
-                shouldNotify,
-                scanCycleId,
-              });
-            }
-            // Run partial close for any partial_tp_executed actions
+      // ── BROKER RECONCILIATION: runs UNCONDITIONALLY every manage cycle ──
+      // Must check all live, broker-mirrored positions regardless of whether
+      // a management action fired this cycle — that unconditional check is the
+      // entire point of the reconciliation design.
+      if (account.execution_mode === "live") {
+        const { data: liveConns } = await supabase.from("broker_connections")
+          .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
+        if (liveConns && liveConns.length > 0) {
+          // Build reconcile positions from open positions that have mirrored connections
+          const reconcilePositions: ReconcilePosition[] = openPosArr
+            .filter((p: any) => Array.isArray(p.mirrored_connection_ids) && p.mirrored_connection_ids.length > 0)
+            .map((p: any) => ({
+              id: p.id,
+              position_id: p.position_id,
+              symbol: p.symbol,
+              direction: p.direction as "long" | "short",
+              stop_loss: p.stop_loss != null ? parseFloat(String(p.stop_loss)) : null,
+              take_profit: p.take_profit != null ? parseFloat(String(p.take_profit)) : null,
+              mirrored_connection_ids: p.mirrored_connection_ids,
+            }));
+          // Run SL reconciliation
+          if (reconcilePositions.length > 0) {
+            await reconcileBrokerState({
+              supabase,
+              userId,
+              positions: reconcilePositions,
+              connections: liveConns as BrokerConnection[],
+              telegramChatIds,
+              shouldNotify,
+              scanCycleId,
+            });
+          }
+          // Run partial close for any partial_tp_executed actions (depends on activeActions)
+          if (activeActions.length > 0) {
             const partialActions = activeActions.filter(a => a.action === "partial_tp_executed" || a.action === "partial_enabled");
             if (partialActions.length > 0) {
               const partialCloseActions = partialActions.map(a => {
@@ -2100,7 +2097,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
         }
-
+      }
+      // ── Management action logging + Telegram alerts (only when actions fired) ──
+      if (activeActions.length > 0) {
+        console.log(`[scan ${scanCycleId}] Trade management: ${activeActions.length} actions taken on ${openPosArr.length} positions`);
+        for (const a of activeActions) {
+          console.log(`  [mgmt] ${a.symbol}: ${a.action} — ${a.reason}`);
+        }
         // Send Telegram alerts for significant management actions
         if (telegramChatIds.length > 0 && shouldNotify("trade_management")) {
           for (const a of activeActions) {
