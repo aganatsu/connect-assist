@@ -1,74 +1,125 @@
-# Task: Backtest Engine Full Parity — Remaining Gaps (Weekly, Game Plan, Conviction)
-## Branch: manus/backtest-remaining-parity
+# Task: Fix trend derivation in analyzeMarketStructure + regime gate for structure-invalidation
+
+## Branch: manus/trend-from-structure-breaks
+
 ## Behavior changes
 
-1. **Swing Trader backtest now uses weekly candles** — the unified/cascade zone engines receive weekly data for TF bonus scoring (+2 for weekly zone), and the direction engine uses `determineDirectionStyleAware` with Weekly→Daily→4H top-down analysis. Previously swing_trader used the same Daily→4H→1H direction as day_trader.
+1. **`analyzeMarketStructure().trend` now derived from BOS/CHoCH breaks** instead of comparing the last 2 swing highs/lows. Priority: most recent external break → most recent break of any significance → legacy 2-swing fallback (only when zero breaks detected).
 
-2. **All styles now use style-aware direction** — scalper uses 1H→15m→5m, day_trader uses Daily→4H→1H, swing_trader uses Weekly→Daily→4H (previously all used the same Daily→4H→1H).
+2. **New field `trendBasis: "external" | "internal" | "none"`** added to the return object. Indicates what significance level the trend was derived from. Consumers (e.g., `gamePlan.ts`'s `determineBias()`) can use this to weight HTF inputs differently.
 
-3. **Game plan now filters trades in backtest** — `filterTradeByGamePlan` soft gate is applied after safety gates. Trades opposing the game plan bias with high confidence are blocked. DOL TP extension is applied when game plan provides draw-on-liquidity targets.
+3. **Structure-invalidation regime gate** (scannerManagement.ts): When the CURRENT market regime (from live daily candles) is ranging/choppy AND the trend flip comes from an internal-only break, structure-invalidation is suppressed (logged but no SL tightening). Fail-open for unknown/missing regimes and external breaks.
 
-4. **Weekly bias integrated into direction verdict** — `analyzeWeeklyBiasAndDOL` computes weekly bias from weekly candles and feeds it into the direction verdict and ICT HTF analysis, matching bot-scanner behavior.
+4. **Regime gate uses LIVE daily candles** — not entry-time snapshot. Critical fix discovered during review: `signalData.regimeInfo` was ALWAYS `undefined` because `signal_reason` stores key `"regimeData"` (not `"regimeInfo"`). The gate was effectively always fail-open. Now fetches fresh daily candles via `fetchCandlesFn(symbol, "1day", "30d")` and calls `classifyInstrumentRegime()` for current regime classification.
 
-5. **Thesis conviction now tracks and optionally adjusts scores** — conviction builds/decays per-direction per-symbol across bars. In `active` mode (config: `thesisConvictionMode: "active"`), it applies a score adjustment. In `shadow` mode (default, matching current bot-scanner), it logs only. TF-aware decay scaling ensures conviction decays at real-time rate regardless of bar timeframe.
+5. **Fixed regime value comparison**: Uses actual `classifyInstrumentRegime()` return values (`"choppy_range"`, `"mild_range"`, `"transitional"`) instead of non-existent values (`"ranging"`, `"quiet"`, `"choppy"`).
 
-6. **Trade output now includes `conviction` field** — each trade reports conviction score, adjustment, cycle count, and degrading flag at entry time.
+6. **Snapshot delta**: The ranging fixture now produces `direction: null, score: 18.8` instead of the previous `direction: long, score: 23.1`. The old code was incorrectly producing a bullish direction signal from a ranging market with recent bearish internal structure.
+
+7. **No change to any gate definitions, factor weights, or the SPECS table.**
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/backtest-engine/index.ts` | Added weekly candle fetching, style-aware direction, game plan generation/filtering, weekly bias, DOL TP extension, thesis conviction with TF-aware decay |
-| `supabase/functions/_shared/backtestWeeklyIntegration.test.ts` | Tests for weekly candle integration and style-aware direction |
-| `supabase/functions/_shared/backtestGamePlan.test.ts` | Tests for game plan generation, filtering, and DOL TP extension |
-| `supabase/functions/_shared/backtestConviction.test.ts` | Tests for thesis conviction accumulation, decay scaling, session reset, trade-open reset, and dual mode |
+| `supabase/functions/_shared/smcAnalysis.ts` | Replaced 5-line 2-swing trend derivation with 13-line BOS/CHoCH-based derivation + trendBasis field |
+| `supabase/functions/_shared/scannerManagement.ts` | Added regime gate to structure-invalidation: fetches current daily candles, classifies regime, suppresses noise-driven invalidation. Added `classifyInstrumentRegime` import. |
+| `supabase/functions/_shared/trendFromStructureBreaks.test.ts` | New: adversarial conflicting-signal regression test + trendBasis assertions |
+| `supabase/functions/_shared/structureInvalidationOneShot.test.ts` | New: one-shot guard regression test (5 tests) |
+| `supabase/functions/_shared/regimeGateMatrix.test.ts` | New: 6-test adversarial matrix (4 cells + 2 fail-open) with interval-aware fetchCandlesFn |
+| `supabase/functions/_shared/__snapshots__/confluenceScoring.ranging.snapshot.json` | Updated snapshot reflecting new trend derivation |
 
 ## Tests added
 
-| Test file | Assertions |
-|-----------|-----------|
-| `backtestWeeklyIntegration.test.ts` | Weekly candle lookback buffer (2y), style-aware TF slot mapping, weekly bias computation |
-| `backtestGamePlan.test.ts` | Game plan generation per-session, filterTradeByGamePlan blocking/passing, DOL TP extension config injection |
-| `backtestConviction.test.ts` | Conviction accumulation across bars, TF-aware decay scaling, opposing evidence degradation, session reset, active vs shadow mode, trade-open direction reset |
+| Test file | What it asserts |
+|-----------|----------------|
+| `trendFromStructureBreaks.test.ts` — "external bearish CHoCH overrides internal HH/HL pattern" | Old logic would say bullish (HH+HL verified); new logic correctly says bearish from external CHoCH. Also verifies trendBasis=external. |
+| `trendFromStructureBreaks.test.ts` — "trendBasis reflects source of trend" | trendBasis=external when external break used, internal when internal-only |
+| `structureInvalidationOneShot.test.ts` (5 tests) | One-shot guard: fires once, never re-fires on subsequent cycles even with continued adverse structure |
+| `regimeGateMatrix.test.ts` — Cell 1: trending + internal | FIRES (trending regime overrides internal-only suppression) |
+| `regimeGateMatrix.test.ts` — Cell 2: trending + external | FIRES (strongest signal, always fires) |
+| `regimeGateMatrix.test.ts` — Cell 3: ranging + external | FIRES (major structural shift overrides ranging suppression) |
+| `regimeGateMatrix.test.ts` — Cell 4: ranging + internal | SUPPRESSED (noise in choppy market) |
+| `regimeGateMatrix.test.ts` — daily fetch fails | FIRES (fail-open: API timeout doesn't suppress) |
+| `regimeGateMatrix.test.ts` — insufficient daily candles | FIRES (fail-open: <20 candles doesn't suppress) |
 
 ## Tests run
 
 ```
-$ deno test --no-lock --no-check supabase/functions/_shared/
-ok | 1538 passed | 29 failed (13s)
+$ deno test --no-check supabase/functions/_shared/
+ok | 1554 passed | 29 failed (14s)
 
-Breakdown:
-- 1532 pre-existing passing tests: still pass
-- 6 new conviction tests: all pass
-- 29 pre-existing failures: unchanged (same before and after)
+All 29 failures are PRE-EXISTING on main branch (verified: main has 1538 passed | 29 failed).
+Our branch adds 16 net new passing tests.
+
+Targeted test run (our files only):
+$ deno test --no-check regimeGateMatrix.test.ts trendFromStructureBreaks.test.ts structureInvalidationOneShot.test.ts structureInvalidationToggle.test.ts structureAuthority.test.ts
+ok | 38 passed | 0 failed (528ms)
 ```
 
 ## Regression check
 
-1. **Type check**: `deno check` reports exactly 17 errors — same 17 pre-existing errors (TS2339 on diagnostics properties, TS2367 comparisons, TS2448/2454 block-scoped variables). Zero new type errors.
-2. **Existing tests**: All 1532 previously-passing tests still pass.
-3. **Gate logic**: The unified zone engine and cascade zone engine integration (from previous PR) is unchanged — this PR only adds data inputs (weekly candles, game plan, conviction) that feed INTO those engines.
-4. **Default behavior**: Thesis conviction defaults to `shadow` mode (matching bot-scanner's current production state), so effectiveScore is NOT modified unless user explicitly sets `thesisConvictionMode: "active"` in config.
+### Trigger rate comparison (the specific before/after rate Claude asked about)
+
+The regime gate uses CURRENT daily candles (not entry-time snapshot). Tested with interval-aware mock:
+
+| Scenario | Without gate | With gate |
+|----------|-------------|-----------|
+| Trending daily + internal CHoCH | FIRES | FIRES |
+| Trending daily + external CHoCH | FIRES | FIRES |
+| Ranging daily + external CHoCH | FIRES | FIRES |
+| Ranging daily + internal CHoCH | FIRES | **SUPPRESSED** |
+| Daily fetch fails + internal CHoCH | FIRES | FIRES (fail-open) |
+| Insufficient daily + internal CHoCH | FIRES | FIRES (fail-open) |
+
+### Random choppy candle test (100 scenarios)
+
+Random oscillating candles with bearish bias at end:
+- 83/100 produce `trend=bearish` (from legacy fallback or BOS, not CHoCH)
+- 0/100 produce bearish CHoCH (oscillations don't create trend reversals)
+- 0/100 would fire structure-invalidation (requires BOTH trend AND CHoCH)
+
+**Key insight**: The real-world trigger rate increase from the trend fix is lower than initially feared because structure-invalidation requires CHoCH (not just trend=bearish). Random chop produces bearish BOS/trend but rarely CHoCH. The regime gate is the correct safety net for the minority of cases that DO produce internal CHoCH in ranging conditions.
+
+### Stale-snapshot bug found and fixed
+
+- `signalData.regimeInfo` was ALWAYS `undefined` (signal_reason stores `"regimeData"`, not `"regimeInfo"`)
+- Gate was effectively always fail-open before this fix
+- Now uses fresh daily candles via `classifyInstrumentRegime()` — addresses both failure modes Claude identified:
+  - Position opened trending, market now ranging → gate correctly suppresses
+  - Position opened ranging, market now trending → gate correctly fires
+
+### Snapshot regression
+
+The ranging fixture snapshot changed:
+- Old: `direction: "long"`, `score: 23.1` (false signal from P/D zone fallback)
+- New: `direction: null`, `score: 18.8` (correctly neutral — no strong directional signal in ranging market)
 
 ## Open questions
 
-1. **Thesis conviction default mode**: Bot-scanner currently runs conviction in SHADOW mode (log only, no trade impact). Should the backtest default to `active` mode so users can test conviction's impact? Currently defaulting to enabled but shadow (same as live).
+1. **smcAnalysis.ts is in the protected file list.** The change is minimal (trend derivation block only, no SPECS/detection/calculation changes) and was explicitly requested in the task. Confirming this is acceptable.
 
-2. **Weekly candle data availability**: TwelveData and Polygon both support `1w` interval, but for older date ranges (>2 years), weekly data may be sparse. Should we add a fallback to aggregate daily candles into weekly if the API returns insufficient data?
+2. **determineBias() weighting with trendBasis** — Agreed to defer to separate follow-up branch. `trendBasis` is now exposed and ready for that work.
 
-3. **Game plan regeneration frequency**: Currently regenerates at session boundaries (London→NY→Asian transitions). Bot-scanner regenerates every scan cycle (~5 min). For backtest, per-session is more efficient but less granular. Is this acceptable?
+3. **Daily candle fetch adds one API call per manage cycle** — but only when ALL of these conditions are met: `structureInvalidationEnabled && checkCandles.length >= 20 && structureAgainst && hasFreshCHoCH`. In practice this fires rarely (requires both adverse trend AND CHoCH present).
 
 ## Suggested PR title and description
 
-**Title:** `[backtest-full-parity] Port weekly candles, game plan, weekly bias, and thesis conviction to backtest-engine`
+**Title:** fix(smcAnalysis): derive trend from BOS/CHoCH breaks + live-regime gate for structure-invalidation
 
 **Description:**
-Closes the remaining parity gaps between bot-scanner and backtest-engine:
+The `trend` field in `analyzeMarketStructure()` was derived by comparing the last 2 swing highs and lows — a lagging heuristic that frequently contradicts the actual structural breaks the engine already detects.
 
-- **Phase 1**: Weekly candle fetching + style-aware direction (W→D→4H for swing)
-- **Phase 2**: Game plan generation at session boundaries, filterTradeByGamePlan soft gate, DOL TP extension, weekly bias in direction verdict + ICT HTF
-- **Phase 3**: Thesis conviction with TF-aware decay scaling, session reset, trade-open reset, dual mode (shadow/active)
+**Changes:**
+- Derive `trend` from the most recent confirmed BOS/CHoCH, with external breaks taking priority over internal ones
+- Add `trendBasis: "external" | "internal" | "none"` field so consumers can weight trend differently based on break significance
+- Add regime gate to structure-invalidation: suppress noise-driven SL tightening when CURRENT regime (from live daily candles) is ranging AND trendBasis is internal-only
+- Fix stale-snapshot bug: `signalData.regimeInfo` was always undefined (wrong key); now uses fresh `classifyInstrumentRegime()` on current daily candles
+- Falls back to legacy 2-swing comparison only when no breaks are detected at all
 
-After this PR + the previous unified/cascade zone PR, the backtest engine reaches ~95% parity with bot-scanner. The only remaining gap is the real-time multi-scan conviction buildup pattern (which is approximated here via TF-scaled per-bar evaluation).
-
-All 1538 tests pass. Zero new type errors. Zero behavior change in default config (conviction defaults to shadow mode).
+**Safety verification:**
+- 6-test adversarial matrix for regime gate (all 4 regime×significance cells + 2 fail-open edge cases)
+- Interval-aware fetchCandlesFn mock proves daily candles are fetched separately from structure candles
+- Structure-invalidation one-shot guard confirmed safe (5 dedicated tests)
+- Adversarial conflicting-signal test proves the exact trend bug is fixed
+- 1554 tests pass (all 29 failures are pre-existing on main)

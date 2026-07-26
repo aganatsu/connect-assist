@@ -1062,9 +1062,24 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
     }
   }
 
-  // ── Determine overall trend from the last 2 swing highs + lows ──
+  // ── Determine overall trend from the most recent confirmed BOS/CHoCH ──
+  // Priority: external (major structural) breaks over internal (minor) ones.
+  // Fallback: if no external break exists, use the most recent break of any significance.
+  // If no breaks at all, fall back to the legacy 2-swing comparison for backward compat.
   let trend: "bullish" | "bearish" | "ranging" = "ranging";
-  if (highs.length >= 2 && lows.length >= 2) {
+  let trendBasis: "external" | "internal" | "none" = "none";
+  const allBreaksForTrend = [...bos, ...choch];
+  if (allBreaksForTrend.length > 0) {
+    const externalBreaks = allBreaksForTrend.filter(b => b.significance === "external");
+    const lastExternalBreak = externalBreaks.length > 0
+      ? externalBreaks.reduce((latest, b) => b.index > latest.index ? b : latest)
+      : null;
+    const lastAnyBreak = allBreaksForTrend.reduce((latest, b) => b.index > latest.index ? b : latest);
+    const decisiveBreak = lastExternalBreak ?? lastAnyBreak;
+    trend = decisiveBreak.type as "bullish" | "bearish";
+    trendBasis = lastExternalBreak ? "external" : "internal";
+  } else if (highs.length >= 2 && lows.length >= 2) {
+    // Legacy fallback: no BOS/CHoCH detected at all — use 2-swing comparison
     const rH = highs.slice(-2), rL = lows.slice(-2);
     if (rH[1].price > rH[0].price && rL[1].price > rL[0].price) trend = "bullish";
     else if (rH[1].price < rH[0].price && rL[1].price < rL[0].price) trend = "bearish";
@@ -1157,7 +1172,7 @@ export function analyzeMarketStructure(candles: Candle[], structureLookback?: nu
   }
 
   return {
-    trend, swingPoints: swings, bos, choch, sweeps,
+    trend, trendBasis, swingPoints: swings, bos, choch, sweeps,
     // New fields — all backward compatible (optional consumption)
     structureToFractal,
     structureCounts: { internalBOS, externalBOS, internalCHoCH, externalCHoCH },

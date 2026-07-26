@@ -30,6 +30,7 @@ import type {
 import {
   SPECS,
   analyzeMarketStructure,
+  classifyInstrumentRegime,
 } from "./smcAnalysis.ts";
 import { computeAdaptiveTrail } from "./exitEngine.ts";
 
@@ -804,7 +805,27 @@ export async function manageOpenPositions(
             );
             const hasFreshCHoCH = chochAgainst.length > 0;
 
-            if (structureAgainst && hasFreshCHoCH) {
+            // ── Regime gate: suppress noise-driven invalidation in ranging markets ──
+            // Derive CURRENT regime from fresh daily candles (not the stale entry-time
+            // snapshot in signalData). This ensures the gate reflects live market
+            // conditions: a position opened during trending that has since become
+            // ranging gets suppression; a position opened during ranging that has
+            // since started trending gets the invalidation it needs.
+            let currentRegime = "unknown";
+            try {
+              const dailyForRegime = await fetchCandlesFn(symbol, "1d", "1y").catch(() => [] as Candle[]);
+              if (dailyForRegime.length >= 20) {
+                const regimeResult = classifyInstrumentRegime(dailyForRegime);
+                currentRegime = regimeResult.regime;
+              }
+            } catch { /* fail-open: unknown regime → gate doesn't suppress */ }
+            const isRangingRegime = currentRegime === "choppy_range" || currentRegime === "mild_range" || currentRegime === "transitional";
+            const trendFromInternalOnly = currentStructure.trendBasis === "internal" || currentStructure.trendBasis === "none";
+            const regimeSuppressed = isRangingRegime && trendFromInternalOnly;
+
+            if (regimeSuppressed && structureAgainst && hasFreshCHoCH) {
+              console.log(`[mgmt ${scanCycleId}] Structure invalidation SUPPRESSED ${symbol} | regime=${currentRegime} trendBasis=${currentStructure.trendBasis} — noise in ranging market`);
+            } else if (structureAgainst && hasFreshCHoCH) {
               // Tighten SL to reduce loss — move SL 50% closer to current price
               const currentSLDistance = Math.abs(currentPrice - sl);
               const tightenedDistance = currentSLDistance * 0.5;
