@@ -122,6 +122,15 @@ import {
   type SessionGamePlan,
   type SessionName as GPSessionName,
 } from "../_shared/gamePlan.ts";
+import {
+  updateConviction,
+  evaluateEvidence,
+  type ConvictionInput,
+  type ThesisConvictionState,
+  type ConvictionResult,
+  type ConvictionConfig,
+  DEFAULT_CONVICTION_CONFIG,
+} from "../_shared/thesisConviction.ts";
 
 // ─── CORS ──────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -150,6 +159,7 @@ interface BacktestTrade {
   regime?: string;
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
+  conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
 }
 interface BlockedTrade {
   symbol: string;
@@ -240,6 +250,7 @@ interface OpenPosition {
   regime?: string;
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
+  conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -979,6 +990,7 @@ function processExits(
           regime: pos.regime,
           session: pos.session,
           signalSource: pos.signalSource,
+          conviction: pos.conviction || null,
         });
         pos.size = remainSize;
         pos.partialTPFired = true;
@@ -1009,6 +1021,7 @@ function processExits(
         regime: pos.regime,
         session: pos.session,
         signalSource: pos.signalSource,
+        conviction: pos.conviction || null,
       });
     } else {
       pos.currentSL = sl;
@@ -1809,6 +1822,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
+      // ── Thesis Conviction: in-memory state per (direction) ──
+      // Tracks conviction across bars — resets on session change or trade open
+      const convictionStates = new Map<string, ThesisConvictionState>();
+      let lastConvictionSession: string = "";
+
       // ── Game Plan: session-aware cache per symbol ──
       // Regenerate when session changes (same as bot-scanner's per-session approach)
       let activeGamePlan: SessionGamePlan | null = null;
@@ -1900,6 +1918,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const session: SessionResult = detectSession(candleMs);
         if (config.enabledSessions && config.enabledSessions.length > 0) {
           if (!isSessionEnabled(session, config.enabledSessions)) { diagnostics.skippedSession++; continue; }
+        }
+
+        // ── Thesis Conviction: reset on session change (mimics 8h TTL) ──
+        if (session.name !== lastConvictionSession) {
+          lastConvictionSession = session.name;
+          convictionStates.clear();
         }
 
         // ── Game Plan: regenerate when session changes ──
@@ -2650,7 +2674,51 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
 
         // ── Effective Score (now matches live scanner formula) ──
-        const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+        let effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+
+        // ── Thesis Conviction: evaluate evidence and update state ──
+        let convictionResult: ConvictionResult | null = null;
+        if (config.thesisConvictionEnabled !== false && analysis.direction) {
+          const convKey = `${analysis.direction}`; // per-direction state within this symbol
+          // Build conviction input from available data
+          const convInput: ConvictionInput = {
+            symbol,
+            direction: analysis.direction as "long" | "short",
+            directionVerdict: directionVerdict || null,
+            regime4H: analysis.regime4HInfo ? {
+              regime: analysis.regime4HInfo.regime,
+              bias: analysis.regime4HInfo.bias,
+              confidence: analysis.regime4HInfo.confidence,
+            } : null,
+            opposingFactorCount: analysis.tieredScoring?.opposingFactorCount ?? 0,
+            fotsiAlignment: analysis.fotsiAlignment ? {
+              label: analysis.fotsiAlignment.label,
+              score: analysis.fotsiAlignment.score,
+            } : null,
+            gamePlanBias: (() => {
+              if (!activeGamePlan) return null;
+              const pp = activeGamePlan.plans.find(p => p.symbol === symbol);
+              return pp ? { bias: pp.bias as "bullish" | "bearish" | "neutral", confidence: pp.biasConfidence ?? 50 } : null;
+            })(),
+          };
+          // TF-aware decay scaling: scale decay/recovery so conviction decays at real-time rate
+          // 5min = 1.0 (baseline), 15min = 0.33, 1h = 0.083, 4h = 0.021
+          const tfScaleMap: Record<string, number> = { "scalper": 1.0, "day_trader": 0.33, "swing_trader": 0.021 };
+          const tfScale = tfScaleMap[tradingStyle || "day_trader"] ?? 0.33;
+          const scaledConfig: ConvictionConfig = {
+            ...DEFAULT_CONVICTION_CONFIG,
+            decayPerOpposingSource: DEFAULT_CONVICTION_CONFIG.decayPerOpposingSource * tfScale,
+            recoveryPerAlignedSource: DEFAULT_CONVICTION_CONFIG.recoveryPerAlignedSource * tfScale,
+          };
+          const prevState = convictionStates.get(convKey) || null;
+          const { state: newState, result } = updateConviction(prevState, convInput, scaledConfig);
+          convictionStates.set(convKey, newState);
+          convictionResult = result;
+          // Apply score adjustment in active mode (shadow mode = log only)
+          if (config.thesisConvictionMode !== "shadow") {
+            effectiveScore += result.scoreAdjustment;
+          }
+        }
 
         // ── Bidirectional Conflict Counter ──
         const opposingCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
@@ -2904,9 +2972,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           regime: analysis.regimeInfo?.regime || "unknown",
           session: session.name,
           signalSource,
+          conviction: convictionResult ? {
+            score: convictionResult.conviction,
+            adjustment: convictionResult.scoreAdjustment,
+            cycleCount: convictionResult.cycleCount,
+            degrading: convictionResult.thesisDegrading,
+          } : null,
         };
         openPositions.push(newPos);
         diagnostics.tradesOpened++;
+        // Reset conviction for this direction after trade opens (same as bot-scanner)
+        if (analysis.direction) {
+          convictionStates.delete(`${analysis.direction}`);
+        }
       }
 
       completedSymbols++;
@@ -2982,6 +3060,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           regime: pos.regime,
           session: pos.session,
           signalSource: pos.signalSource,
+          conviction: pos.conviction || null,
         });
         balance += rawPnl - comm;
       }
