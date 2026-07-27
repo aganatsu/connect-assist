@@ -114,6 +114,7 @@ import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DE
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
+import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -473,11 +474,10 @@ function runBacktestSafetyGates(
   gates.push(checkMaxPerSymbol({ symbolPositionCount: symbolCount, maxPerSymbol: config.maxPerSymbol, symbol }));
 
   // Gate 3: Duplicate direction (no same-direction trade on same symbol)
+  // NOTE: allowSameDirectionStacking hardcoded false — optimizer does not tune this parameter.
+  // If added to optimizer parameter space in future, pass config.allowSameDirectionStacking instead.
   const hasSameDir = openPositions.some(p => p.symbol === symbol && p.direction === direction);
-  gates.push({
-    passed: !hasSameDir,
-    reason: hasSameDir ? `Already ${direction} on ${symbol}` : "No duplicate direction",
-  });
+  gates.push(checkDuplicateDirection({ sameDirectionExists: hasSameDir, allowSameDirectionStacking: false, direction, symbol }));
 
   // Gate 3b: Bidirectional lock (no opposite-direction trade on same symbol unless closeOnReverse)
   if (!config.closeOnReverse) {
