@@ -119,6 +119,7 @@ import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
+import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -556,12 +557,11 @@ function runBacktestSafetyGates(
   if (config.atrFilterEnabled && dailyCandles && dailyCandles.length >= 14) {
     const atr14 = calculateATR(dailyCandles, 14);
     const atrPips = atr14 / spec.pipSize;
-    const minOk = config.atrFilterMin <= 0 || atrPips >= config.atrFilterMin;
-    const maxOk = config.atrFilterMax <= 0 || atrPips <= config.atrFilterMax;
-    gates.push({
-      passed: minOk && maxOk,
-      reason: `ATR filter: ${atrPips.toFixed(1)} pips (min: ${config.atrFilterMin || "off"}, max: ${config.atrFilterMax || "off"})`,
-    });
+    gates.push(checkATRVolatility({
+      atrPips,
+      minPips: config.atrFilterMin ?? 0,
+      maxPips: config.atrFilterMax ?? 0,
+    }));
   }
 
   // Gate 10: Kill zone only

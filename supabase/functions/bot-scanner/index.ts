@@ -99,6 +99,7 @@ import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
+import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1402,13 +1403,7 @@ async function runSafetyGates(
     const atrPips = atrValue / spec.pipSize;
     const minPips = typeof config.atrFilterMin === "number" ? config.atrFilterMin : 0;
     const maxPips = typeof config.atrFilterMax === "number" ? config.atrFilterMax : 0;
-    if (minPips > 0 && atrPips < minPips) {
-      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips below minimum ${minPips}` });
-    } else if (maxPips > 0 && atrPips > maxPips) {
-      gates.push({ passed: false, reason: `ATR ${atrPips.toFixed(1)} pips above maximum ${maxPips}` });
-    } else {
-      gates.push({ passed: true, reason: `ATR ${atrPips.toFixed(1)} pips within range` });
-    }
+    gates.push(checkATRVolatility({ atrPips, minPips, maxPips }));
   }
 
   // Gate 22: Correlation Filter — block self-cancelling hedges; cap same-direction stacking
