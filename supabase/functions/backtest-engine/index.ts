@@ -116,6 +116,7 @@ import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
+import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -508,10 +509,7 @@ function runBacktestSafetyGates(
   const todayTrades = recentTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
   const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
   const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
-  gates.push({
-    passed: dailyLossPct < config.maxDailyLoss,
-    reason: `Daily loss: ${dailyLossPct.toFixed(1)}% (max: ${config.maxDailyLoss}%)`,
-  });
+  gates.push(checkDailyLossLimit({ dailyLossPercent: dailyLossPct, maxDailyLoss: config.maxDailyLoss }));
 
   // Gate 7: Portfolio heat
   const totalRisk = openPositions.reduce((s, p) => {
