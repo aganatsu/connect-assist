@@ -406,35 +406,16 @@ export const DEFAULTS = {
   _smtResult: null as any,
 };
 
-// ─── DST-Aware New York Time Helper ─────────────────────────────────
-export function toNYTime(utc: Date): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
-  const year = utc.getUTCFullYear();
-  const mar1 = new Date(Date.UTC(year, 2, 1));
-  const marSun2 = 14 - mar1.getUTCDay();
-  const edtStart = Date.UTC(year, 2, marSun2, 7, 0, 0);
-  const nov1 = new Date(Date.UTC(year, 10, 1));
-  const novSun1 = nov1.getUTCDay() === 0 ? 1 : 8 - nov1.getUTCDay();
-  const edtEnd = Date.UTC(year, 10, novSun1, 6, 0, 0);
-  const isEDT = utc.getTime() >= edtStart && utc.getTime() < edtEnd;
-  const offsetH = isEDT ? 4 : 5;
-  const nyMs = utc.getTime() - offsetH * 3600_000;
-  const ny = new Date(nyMs);
-  const h = ny.getUTCHours();
-  const m = ny.getUTCMinutes();
-  return { h, m, t: h + m / 60, tMin: h * 60 + m, isEDT };
-}
-
-// ─── Backtest variant: accepts a timestamp instead of using Date.now() ──
-export function toNYTimeAt(utcMs: number): { h: number; m: number; t: number; tMin: number; isEDT: boolean } {
-  return toNYTime(new Date(utcMs));
-}
-
-// ─── Session Detection (re-exported from sessions.ts — single source of truth) ──
+// ─── DST-Aware New York Time (re-exported from sessions.ts — single source of truth) ──
 import {
+  toNYTime as _toNYTime,
+  toNYTimeAt as _toNYTimeAt,
   detectSession as _detectSession,
   detectSilverBullet as _detectSilverBullet,
   detectMacroWindow as _detectMacroWindow,
 } from "./sessions.ts";
+export const toNYTime = _toNYTime;
+export const toNYTimeAt = _toNYTimeAt;
 export const detectSession = _detectSession;
 export const detectSilverBullet = _detectSilverBullet;
 export const detectMacroWindow = _detectMacroWindow;
