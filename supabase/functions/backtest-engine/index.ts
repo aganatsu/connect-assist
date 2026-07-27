@@ -112,6 +112,7 @@ import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type Ju
 import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
 import {
@@ -471,10 +472,7 @@ function runBacktestSafetyGates(
 
   // Gate 2: Max per symbol
   const symbolCount = openPositions.filter(p => p.symbol === symbol).length;
-  gates.push({
-    passed: symbolCount < config.maxPerSymbol,
-    reason: `${symbol} positions: ${symbolCount}/${config.maxPerSymbol}`,
-  });
+  gates.push(checkMaxPerSymbol({ symbolPositionCount: symbolCount, maxPerSymbol: config.maxPerSymbol, symbol }));
 
   // Gate 3: Duplicate direction (no same-direction trade on same symbol)
   const hasSameDir = openPositions.some(p => p.symbol === symbol && p.direction === direction);

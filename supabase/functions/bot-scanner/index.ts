@@ -92,6 +92,7 @@ import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } fro
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
+import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import {
@@ -1142,10 +1143,14 @@ async function runSafetyGates(
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
   if (sameDirectionExists && !config.allowSameDirectionStacking) {
     gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
-  } else if (symbolPositions >= config.maxPerSymbol) {
-    gates.push({ passed: false, reason: `Max ${config.maxPerSymbol} positions for ${symbol} reached` });
   } else {
-    gates.push({ passed: true, reason: `${symbolPositions}/${config.maxPerSymbol} for ${symbol}${sameDirectionExists ? " (stacking allowed)" : ""}` });
+    const perSymResult = checkMaxPerSymbol({ symbolPositionCount: symbolPositions, maxPerSymbol: config.maxPerSymbol, symbol });
+    // Append stacking note to pass reason when stacking is active
+    if (perSymResult.passed && sameDirectionExists) {
+      gates.push({ passed: true, reason: `${perSymResult.reason} (stacking allowed)` });
+    } else {
+      gates.push(perSymResult);
+    }
   }
 
   // Gate 6: Portfolio heat (actual risk per position)
