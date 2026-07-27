@@ -308,8 +308,9 @@ export const RUNTIME_DEFAULTS = {
   ictRiskFVGRuleOfTwoExit: true,
 
   // ── Correlation Filter ──
-  correlationFilterEnabled: true,
-  maxCorrelatedPositions: 2,
+  correlationFilterEnabled: false,
+  maxCorrelatedPositions: 1,
+  maxCorrelation: 0.8,
 
   // ── Entry/HTF Timeframes (set by style) ──
   entryTimeframe: "15min",
@@ -656,9 +657,10 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     ictRiskMaxTradesPerDay: strategy.ictRiskMaxTradesPerDay ?? raw.ictRiskMaxTradesPerDay ?? RUNTIME_DEFAULTS.ictRiskMaxTradesPerDay,
     ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? RUNTIME_DEFAULTS.ictRiskFVGRuleOfTwoExit,
 
-    // ── Correlation Filter ──
-    correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
-    maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    // ── Correlation Filter (source: instruments, matching bot-scanner) ──
+    correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
+    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation,
 
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,

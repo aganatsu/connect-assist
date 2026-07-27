@@ -113,6 +113,7 @@ const GATE_PATTERNS: Array<{ category: string; patterns: string[] }> = [
   { category: "portfolio_heat", patterns: ["Portfolio heat"] },
   { category: "daily_loss", patterns: ["Daily loss", "Daily net P&L"] },
   { category: "max_drawdown", patterns: ["Drawdown"] },
+  { category: "correlation", patterns: ["Hedge conflict on correlated", "Correlated same-direction", "No correlated conflicts"] },
   { category: "min_confluence", patterns: ["Score ", "threshold"] },
   { category: "smt_veto", patterns: ["SMT divergence opposite"] },
   { category: "min_rr", patterns: ["R:R "] },
@@ -122,7 +123,6 @@ const GATE_PATTERNS: Array<{ category: string; patterns: string[] }> = [
   { category: "consecutive_losses", patterns: ["consecutive losses"] },
   { category: "news_filter", patterns: ["News filter", "News conflict"] },
   { category: "atr_filter", patterns: ["ATR "] },
-  { category: "correlation", patterns: ["Correlation conflict", "Correlated exposure"] },
   { category: "tier1_gate", patterns: ["Tier 1", "tier1", "T1 "] },
   { category: "regime_gate", patterns: ["Regime gate", "regime mismatch", "Regime alignment"] },
 ];
