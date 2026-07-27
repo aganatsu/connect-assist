@@ -1,59 +1,58 @@
-# Task: Extract Gate — Duplicate Direction
-## Branch: manus/extract-gate-duplicate-direction
+# Task: Extract Gate — Max Drawdown (Circuit Breaker)
+## Branch: manus/extract-gate-max-drawdown
 ## Behavior changes
 none — pure refactor
 
 Both engines' pass/fail logic is preserved exactly:
-- Bot-scanner: passes `config.allowSameDirectionStacking` (user-configurable toggle)
-- Backtest-engine: passes `false` (always blocks — optimizer does not tune this parameter)
+- Bot-scanner: prop firm delegation bypass remains inline (shared function only handles the core drawdown math)
+- Backtest-engine: edge-case guard (`peakBalance > 0 && maxDrawdown > 0`) preserved in shared function
 
-The divergence is intentional, documented in the shared function's JSDoc and in the backtest-engine call site comment. The shared function makes this visible via a typed parameter rather than hiding it in two separate code paths.
-
-**Reason string change (cosmetic only):**
-- Bot-scanner fail reason: was `"Already long on EUR/USD — no duplicate (enable stacking to allow)"`, now `"Already long on EUR/USD"` (the hint text was only useful in the UI, not in gate logs; the config toggle name is self-documenting)
-- Backtest-engine: unchanged (`"Already long on EUR/USD"` → same)
+**Reason string change (cosmetic only, verified safe):**
+- Backtest-engine pass reason: was `"Drawdown: 5.0% (max: 10%)"`, now `"Drawdown 5.0%"` (colon removed, max not shown on pass)
+- Backtest-engine fail reason: was `"Drawdown: 5.0% (max: 10%)"`, now `"Drawdown 5.0% >= 10% limit"` (explicit comparison shown)
+- Verified via grep: `gatePerformanceEngine.ts` matches on `"Drawdown"` pattern — both old and new reason strings contain this substring, so the gate categorization system (`normalizeGateReason`) is unaffected.
 
 ## Files modified
-- `supabase/functions/_shared/gateDuplicateDirection.ts` — NEW shared gate function with typed `DuplicateDirectionGateInput` interface
-- `supabase/functions/_shared/gateDuplicateDirection.test.ts` — NEW cross-engine agreement tests (9 tests total)
-- `supabase/functions/bot-scanner/index.ts` — Added import (line 97), replaced Gate 5 duplicate-direction `if` branch with `checkDuplicateDirection(...)` call
-- `supabase/functions/backtest-engine/index.ts` — Added import (line 117), replaced Gate 3 inline logic with `checkDuplicateDirection(...)` call (hardcoded `false` for stacking, with comment explaining why)
+- `supabase/functions/_shared/gateMaxDrawdown.ts` — NEW shared gate function
+- `supabase/functions/_shared/gateMaxDrawdown.test.ts` — NEW cross-engine agreement tests (9 unit tests + 2 cross-engine suites)
+- `supabase/functions/bot-scanner/index.ts` — Added import (line 98), replaced Gate 8 inline drawdown math with `checkMaxDrawdown(...)` call (prop firm bypass preserved inline)
+- `supabase/functions/backtest-engine/index.ts` — Added import (line 118), replaced Gate 5 inline logic with single `checkMaxDrawdown(...)` call
 
 ## Tests added
-1. `gateDuplicateDirection: no duplicate, stacking disabled → pass`
-2. `gateDuplicateDirection: no duplicate, stacking enabled → pass`
-3. `gateDuplicateDirection: duplicate exists, stacking disabled → fail`
-4. `gateDuplicateDirection: duplicate exists, stacking enabled → pass`
-5. `gateDuplicateDirection: duplicate long, stacking disabled → fail with correct direction`
-6. `gateDuplicateDirection: duplicate short, stacking disabled → fail with correct direction`
-7. `cross-engine: shared pass/fail matches bot-scanner inline for all test cases` — 10 synthetic inputs covering all combinations of sameDir × stacking × direction
-8. `cross-engine: shared pass/fail matches backtest-engine inline (stacking=false) for all test cases` — 10 synthetic inputs, verifies pass/fail AND reason string agreement
-9. `divergence: bot-scanner allows stacking while backtest blocks (documented intentional)` — explicitly documents the intentional behavioral divergence as a test assertion
+1. `gateMaxDrawdown: no drawdown → pass`
+2. `gateMaxDrawdown: drawdown below limit → pass`
+3. `gateMaxDrawdown: drawdown exactly at limit → fail`
+4. `gateMaxDrawdown: drawdown above limit → fail`
+5. `gateMaxDrawdown: peakBalance <= 0 → pass (edge case)`
+6. `gateMaxDrawdown: maxDrawdown <= 0 → pass (edge case)`
+7. `gateMaxDrawdown: negative balance (unrealized loss) → fail if over limit`
+8. `cross-engine: shared pass/fail matches bot-scanner inline for all test cases` — 10 synthetic inputs
+9. `cross-engine: shared pass/fail matches backtest-engine inline for all test cases` — 11 synthetic inputs (includes edge cases)
 
 ## Tests run
 ```
 deno task test
-ok | 1682 passed | 0 failed (18s)
+ok | 1691 passed | 0 failed (18s)
 ```
 
 ## Regression check
-- Cross-engine agreement tests replicate original inline logic from each engine and assert the shared function produces identical pass/fail on 10 synthetic inputs each.
-- Bot-scanner's priority cascade preserved: `checkDuplicateDirection` is called first; only if it passes does the `checkMaxPerSymbol` count check run.
-- The divergence test (test #9) explicitly proves that the same function with different inputs produces different results — confirming the divergence is in the INPUT (config value), not the logic.
+- Cross-engine agreement tests replicate original inline logic from each engine and assert the shared function produces identical pass/fail on 10-11 synthetic inputs each.
+- Bot-scanner's prop firm delegation bypass is preserved inline — the shared function is only called in the `else` branch.
+- Edge cases (peakBalance=0, maxDrawdown=0) produce the same pass result as the original backtest inline guard.
 
 ## Open questions
-None. The `allowSameDirectionStacking` divergence is documented and intentional (optimizer does not tune this parameter today).
+None.
 
 ## Suggested PR title and description
-**Title:** `[extract-gate-duplicate-direction] Extract duplicate direction check to _shared/gateDuplicateDirection.ts`
+**Title:** `[extract-gate-max-drawdown] Extract max drawdown circuit breaker to _shared/gateMaxDrawdown.ts`
 
 **Description:**
-Extracts the "Duplicate Direction" gate check into a shared function with a typed `allowSameDirectionStacking` parameter, making the intentional behavioral divergence between engines explicit and self-documenting.
+Extracts the "Max Drawdown" gate check into a shared function. Bot-scanner's prop firm delegation bypass remains inline (it's a bot-scanner-specific feature). The core drawdown calculation (`(peak - balance) / peak * 100 >= maxDrawdown`) is now shared.
 
 **Changes:**
-- New `_shared/gateDuplicateDirection.ts` with typed interface and `checkDuplicateDirection()` function
-- Bot-scanner Gate 5: duplicate-direction `if` branch replaced with shared function call (passes `config.allowSameDirectionStacking`)
-- Backtest-engine Gate 3: inline logic replaced with shared function call (passes `false` with explanatory comment)
-- 9 tests including 2 cross-engine agreement suites + 1 divergence documentation test (1682 total tests pass)
+- New `_shared/gateMaxDrawdown.ts` with typed interface and `checkMaxDrawdown()` function
+- Bot-scanner Gate 8: inline math replaced with shared function call (prop firm bypass preserved)
+- Backtest-engine Gate 5: inline logic replaced with shared function call
+- 9 tests including 2 cross-engine agreement suites (1691 total tests pass)
 
-**Behavior:** No change — pure refactor. Same pass/fail outcomes for identical inputs. Cosmetic reason string change in bot-scanner fail path (removed hint text).
+**Behavior:** No change — pure refactor. Same pass/fail outcomes for identical inputs.
