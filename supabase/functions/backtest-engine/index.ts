@@ -113,6 +113,7 @@ import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
+import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
 import {
   generateInstrumentGamePlan,
@@ -492,21 +493,16 @@ function runBacktestSafetyGates(
     });
   }
 
-  // Gate 4: Min RR check (spread-adjusted)
-  let rrOk = true;
-  if (analysis.stopLoss && analysis.takeProfit) {
-    const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
-    const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const effectiveSpread = spreadPips > 0 ? spreadPips : (spec.typicalSpread ?? 1);
-    const spreadCostInPrice = effectiveSpread * spec.pipSize;
-    const effectiveReward = Math.max(0, rawReward - spreadCostInPrice);
-    const rawRR = risk > 0 ? rawReward / risk : 0;
-    const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
-    rrOk = effectiveRR >= config.minRiskReward;
-    gates.push({ passed: rrOk, reason: `RR: ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, spread ${effectiveSpread.toFixed(1)}p) min: ${config.minRiskReward}` });
-  } else {
-    gates.push({ passed: false, reason: "No SL/TP calculated" });
-  }
+  // Gate 4: Min RR check (spread-adjusted) — shared implementation
+  const rrGateResult = checkMinRR({
+    lastPrice: analysis.lastPrice,
+    stopLoss: analysis.stopLoss,
+    takeProfit: analysis.takeProfit,
+    symbol,
+    minRiskReward: config.minRiskReward,
+    spreadPipsOverride: spreadPips,
+  });
+  gates.push(rrGateResult);
 
   // Gate 5: Max drawdown (circuit breaker)
   if (peakBalance > 0 && config.maxDrawdown > 0) {
