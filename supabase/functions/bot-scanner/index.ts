@@ -96,6 +96,7 @@ import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
+import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1190,11 +1191,7 @@ async function runSafetyGates(
     const actualBase = account.daily_pnl_base_date === todayStr ? dailyPnlBase : balance;
     const dailyLoss = actualBase - balance;
     const dailyLossPercent = actualBase > 0 ? (dailyLoss / actualBase) * 100 : 0;
-    if (dailyLossPercent >= config.maxDailyLoss) {
-      gates.push({ passed: false, reason: `Daily loss ${dailyLossPercent.toFixed(1)}% >= ${config.maxDailyLoss}% limit` });
-    } else {
-      gates.push({ passed: true, reason: `Daily loss ${dailyLossPercent.toFixed(1)}%` });
-    }
+    gates.push(checkDailyLossLimit({ dailyLossPercent, maxDailyLoss: config.maxDailyLoss }));
   }
 
   // Gate 8: Max drawdown
