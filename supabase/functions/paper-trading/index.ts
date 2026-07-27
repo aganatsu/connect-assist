@@ -949,7 +949,17 @@ Deno.serve(async (req) => {
             const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
             const riskPips = Math.abs(entryPrice - sl) / spec.pipSize;
             // Use the proportional trail distance stored by scannerManagement,
-            // or fall back to max(configPips, 0.5 x riskPips)
+            // or fall back to max(configPips, 0.5 x riskPips).
+            // NOTE: The Math.max floor below is intentionally kept even though
+            // scannerManagement already applies the same floor before storing
+            // trailingStopPips. Two reasons:
+            //   1. Race-condition defense: paper-trading's ratchet runs on an
+            //      irregular, frontend-polling-driven tick (not a guaranteed
+            //      server cron), so it may read exitFlags before scannerManagement
+            //      has written the floored value.
+            //   2. Manual-override safety: per-trade config overrides can set
+            //      trailingStopPips to a dangerously small value; this floor
+            //      prevents the trail from being tighter than 50% of risk distance.
             const effectiveTrailPips = exitFlags.trailingStopPips
               ? Math.max(exitFlags.trailingStopPips, riskPips * 0.5)
               : riskPips * 0.5;
