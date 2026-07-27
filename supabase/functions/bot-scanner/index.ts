@@ -100,6 +100,7 @@ import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
+import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1521,13 +1522,12 @@ async function runSafetyGates(
   // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
   if (analysis.tieredScoring) {
     const ts = analysis.tieredScoring;
-    if (config.tier1GateEnabled === false) {
-      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${ts.tier1Count} core factors present)` });
-    } else if (!ts.tier1GatePassed) {
-      gates.push({ passed: false, reason: ts.tier1GateReason });
-    } else {
-      gates.push({ passed: true, reason: ts.tier1GateReason });
-    }
+    gates.push(checkTier1Minimum({
+      tier1GateEnabled: config.tier1GateEnabled !== false,
+      tier1GatePassed: !!ts.tier1GatePassed,
+      tier1GateReason: ts.tier1GateReason,
+      tier1Count: ts.tier1Count ?? 0,
+    }));
   }
 
   // Gate 20: Regime Alignment — subsumed by Direction Verdict (Gate 1) when active.
