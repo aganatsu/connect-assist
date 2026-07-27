@@ -104,6 +104,7 @@ import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
+import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import {
   detectSession as sharedDetectSession,
   detectSilverBullet as sharedDetectSilverBullet,
@@ -1557,6 +1558,10 @@ async function runSafetyGates(
 // ─── Main Handler ───────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // ─── Caller verification: reject requests without valid cron secret OR user JWT ───
+  const authError = verifyCronOrUserCaller(req);
+  if (authError) return authError;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
