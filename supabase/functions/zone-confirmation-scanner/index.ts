@@ -264,13 +264,25 @@ Deno.serve(async (req) => {
         const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
         if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
+          const maxAttempts = config.entry?.maxConfirmationAttempts ?? config.maxConfirmationAttempts ?? 3;
+          if (attempts >= maxAttempts) {
+            // Cap reached — cancel the order instead of retrying indefinitely
+            await supabase.from("pending_orders").update({
+              status: "cancelled",
+              cancel_reason: `Max confirmation attempts reached (${attempts}/${maxAttempts})`,
+              resolved_at: new Date().toISOString(),
+            }).eq("order_id", pending.order_id).eq("user_id", userId);
+            cancelled++;
+            console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CANCELLED: max confirmation attempts reached (${attempts}/${maxAttempts})`);
+            continue;
+          }
           await supabase.from("pending_orders").update({
             status: "pending",
             zone_touch_time: null,
             confirmation_attempts: attempts,
           }).eq("order_id", pending.order_id).eq("user_id", userId);
           resetToPending++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts})`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — price left zone (${currentPrice}), reset to pending (attempt ${attempts}/${maxAttempts})`);
           continue;
         }
 

@@ -212,9 +212,11 @@ Deno.test("No hardcoded session hours remain in gamePlan.ts", () => {
 });
 
 // ─── DST Transition Day Tests ───────────────────────────────────────────────
-// These verify that both old and new code agree on session boundaries during
-// the exact UTC moments when the NY offset shifts (spring forward / fall back).
-// Uses the code's OWN DST formula dates (which both implementations share).
+// These verify that session detection agrees across DST boundaries.
+// NOTE: smcAnalysis.ts's toNYTime is now a re-export of sessions.ts's toNYTime
+// (they are literally the same function). These tests serve as smoke tests
+// confirming the re-export resolves correctly and session detection remains
+// consistent across the DST transition moments.
 
 import { toNYTime as smcToNYTime } from "./smcAnalysis.ts";
 
@@ -324,8 +326,8 @@ Deno.test("DST: getUpcomingSession agrees at spring-forward pre-market boundary"
   const oldT = smcToNYTime(preMarketMoment).t;
   const oldResult = oldGetUpcomingSession(oldT);
 
-  // New code uses smcAnalysis.ts toNYTime internally (same function)
-  // So it must produce the same result
+  // smcToNYTime is now a re-export of sessions.ts toNYTime (same function object)
+  // This confirms the re-export resolves correctly
   const newT = smcToNYTime(preMarketMoment).t;
   const newResult = newGetUpcomingSession(newT);
   assertEquals(oldResult, newResult, "Pre-market detection must agree at DST boundary");

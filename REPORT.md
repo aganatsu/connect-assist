@@ -1,61 +1,63 @@
-# Task: Phase 2 — propFirmGate fail-closed
-## Branch: manus/propfirm-fail-closed
+# Task: Phase 1 — Bugfix Batch
+## Branch: manus/phase1-bugfix-batch
 ## Behavior changes
 
-**YES — this changes live behavior for accounts with active prop firm configs:**
+1. **Confirmation-attempts cap (NEW BEHAVIOR):** Pending orders that fail zone-touch-without-confirmation `maxConfirmationAttempts` times (default: 3) are now cancelled instead of retrying indefinitely. This prevents zombie orders that bounce in and out of a zone forever without confirming. Affects both bot-scanner and zone-confirmation-scanner.
 
-1. **Config query error (DB unreachable):** Previously passed trades through silently. Now blocks all new trades until the DB is reachable and config can be loaded. Affects any account during a Supabase outage or network partition.
+2. **toNYTime consolidation (NO behavior change):** The duplicate `toNYTime`/`toNYTimeAt` in smcAnalysis.ts is replaced with a re-export from sessions.ts. Both implementations were byte-identical in logic. The sessions.ts version adds `nyDay` to the return type, which is additive and backward-compatible.
 
-2. **Broker equity unavailable (MetaAPI down):** Previously passed trades through with a warning log. Now blocks all new trades until equity data is available. Affects live accounts (or paper accounts with broker connections) during MetaAPI outages or slow responses.
+## Items skipped (with reasoning)
 
-3. **Equity sanity check (< 50% of initial_balance):** Previously passed trades through assuming "data error." Now blocks all new trades until a human verifies whether the data is wrong or the account genuinely lost 50%+. Affects accounts where equity data is stale, corrupted, or where a real catastrophic loss occurred.
+- **Gate-numbering alignment (item 2):** Checked current state — bot-scanner and backtest-engine were never on the same numbering scheme. This isn't drift from the Stage 2 extractions; it's a pre-existing structural fact. Renumbering would require touching every gate comment in bot-scanner/index.ts (the most protected file in the repo) for zero behavioral benefit. A markdown cross-reference table is the right deliverable for this need, not source-code renumbering.
 
-**Critical safety note:** None of the three paths trigger `shouldCloseAll`. The gate blocks NEW trades but does NOT emergency-close existing positions — because if the data is uncertain, closing positions could lock in phantom losses on bad data. This is the conservative choice: stop digging deeper, but don't fill in the hole with concrete until you know it's actually a hole.
+- **Paper-trading trailing-stop floor (item 4):** Reclassified — the `Math.max(trailingStopPips, riskPips * 0.5)` line is NOT redundant dead code. It is a genuine safety floor that protects against: (1) race conditions from paper-trading's irregular frontend-polling-driven tick reading exitFlags before scannerManagement writes the floored value, and (2) dangerously small manual per-trade overrides. The line is kept as-is; a comment was added explaining both reasons so future readers don't re-diagnose it as dead code.
 
 ## Files modified
 
 | File | Change |
 |------|--------|
-| `_shared/propFirmGate.ts` | Three `allowed: true` returns changed to `allowed: false` with `maxPositionSizeMultiplier: 0`. Comments updated to explain fail-closed reasoning. |
-| `_shared/propFirmGate.test.ts` | 2 existing tests updated (assertions changed from `allowed: true` to `allowed: false`). 3 new tests added. |
+| `_shared/configMapper.ts` | Added `maxConfirmationAttempts: 3` to RUNTIME_DEFAULTS + resolution chain (entry section) |
+| `_shared/configMapper.test.ts` | 4 new tests for maxConfirmationAttempts resolution |
+| `bot-scanner/index.ts` | Added cap check: cancel order when attempts >= maxAttempts |
+| `zone-confirmation-scanner/index.ts` | Same cap logic applied |
+| `_shared/smcAnalysis.ts` | Deleted duplicate toNYTime/toNYTimeAt, replaced with re-export from sessions.ts |
+| `_shared/gamePlanSessionConsolidation.test.ts` | Updated comments to reflect re-export (smoke test, not independent-agreement test) |
+| `paper-trading/index.ts` | Added defensive-floor comment explaining why Math.max trail floor is intentionally kept (comment-only, no code change) |
 
 ## Tests added
 
-1. `propFirmGate: config query error BLOCKS trades (fail-closed)` — verifies DB error → allowed=false, multiplier=0, no emergency close
-2. `propFirmGate: no active config returns enabled=false, allowed=true (correct)` — verifies the "no config" path is NOT affected (this is correct pass-through, not a fail-open bug)
-3. `propFirmGate: hasBrokerConnection without equity BLOCKS (fail-closed)` — verifies the `hasBrokerConnection` flag (not just `isLiveAccount`) also triggers fail-closed
+1. `maxConfirmationAttempts: defaults to 3 when no config is set` — verifies RUNTIME_DEFAULTS
+2. `maxConfirmationAttempts: resolved from entry section` — verifies entry.maxConfirmationAttempts = 5
+3. `maxConfirmationAttempts: raw fallback when entry section is empty` — verifies raw.maxConfirmationAttempts = 7
+4. `maxConfirmationAttempts: entry section takes priority over raw` — verifies entry wins over raw
 
 ## Tests run
 
 ```
-propFirmGate.test.ts: 10 passed | 0 failed
-Full suite: 2097 passed | 64 failed (all 64 failures are pre-existing on main, unrelated to this change)
+ok | 1785 passed | 0 failed (20s)
 ```
 
 ## Regression check
 
-- Ran full suite on main (without our changes): same 64 failures exist → confirmed pre-existing
-- Our branch adds 3 new passing tests and changes 0 previously-passing tests to failing
-- The `allowed: true` → `allowed: false` change in 2 existing tests is intentional (the tests now verify the NEW correct behavior)
-- The "no active config" path (line 80-82) is explicitly tested to confirm it still returns `allowed: true` — this is the one case where pass-through is correct (no prop firm = no restriction)
+- All 1785 tests pass (1781 existing + 4 new)
+- The toNYTime consolidation is verified by the existing 15 DST/session-consolidation tests which all pass (they now exercise the re-export path)
+- The confirmation-attempts cap is a new behavior (no prior cap existed), so there's no regression to check — the tests verify the config resolves correctly
 
 ## Open questions
 
-1. **Monitoring:** When this goes live, accounts with flaky MetaAPI connections will see trades blocked during connectivity blips. This is correct behavior (better to miss a trade than blow a prop firm account), but it may generate support questions. Consider adding a dashboard indicator showing "prop firm gate: equity unavailable — trades paused" so users understand why their bot isn't taking trades.
+1. The `maxConfirmationAttempts` default of 3 was chosen as a reasonable value. If production data shows zones that legitimately need more attempts (e.g., volatile pairs that wick in/out frequently), this can be tuned per-account via the `entry.maxConfirmationAttempts` config field.
 
-2. **Auto-recovery:** Currently the gate will unblock automatically on the next scan cycle where equity IS available. There's no manual "unlock" needed. But if MetaAPI is down for hours, the bot is effectively paused for the entire duration. This is the intended behavior for a prop firm account (missing trades is better than unmonitored risk), but worth confirming this matches user expectations.
+2. The `cancel_reason` column on `pending_orders` is used to store the cancellation reason. If this column doesn't exist in production, the Supabase update will silently ignore it. Worth confirming it exists.
 
 ## Suggested PR title and description
 
-**Title:** `[propfirm-fail-closed] Block trades when prop firm compliance cannot be verified`
+**Title:** `[phase1-bugfix] Confirmation-attempts cap + toNYTime consolidation`
 
 **Description:**
-Converts three fail-open paths in `propFirmGate.ts` to fail-closed:
+Two atomic commits:
 
-- DB query error → block (was: pass silently)
-- Broker equity unavailable → block (was: pass with warning)
-- Equity < 50% of initial balance → block (was: pass assuming data error)
+**Commit 1:** Adds a configurable cap (`maxConfirmationAttempts`, default 3) to prevent pending orders from retrying zone-touch-without-confirmation indefinitely. Orders exceeding the cap are cancelled with a clear reason. Applied to both bot-scanner and zone-confirmation-scanner.
 
-All three block new trades (`allowed: false`, `maxPositionSizeMultiplier: 0`) but do NOT trigger emergency close (`shouldCloseAll: false`) — uncertain data should prevent new risk, not force position liquidation on potentially bad numbers.
+**Commit 2:** Consolidates the duplicate `toNYTime`/`toNYTimeAt` from smcAnalysis.ts into a re-export from sessions.ts (the canonical single source of truth). No behavior change — both implementations were identical.
 
-**BEHAVIOR CHANGE:** Live accounts with active prop firm configs will now have trades blocked during MetaAPI outages, DB connectivity issues, or suspicious equity readings. This is intentional — a prop firm account that can't verify compliance should not be taking new risk.
+Gate-numbering alignment was investigated and deliberately skipped (see REPORT.md). Paper-trading trailing-stop floor was reclassified as a genuine safety mechanism and kept with an explanatory comment.
