@@ -95,6 +95,7 @@ import { createScanCache } from "../_shared/dataCache.ts";
 import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
+import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1203,12 +1204,7 @@ async function runSafetyGates(
     gates.push({ passed: true, reason: `Drawdown delegated to prop firm gate (stricter thresholds)` });
   } else {
     const peakBalance = parseFloat(account.peak_balance || account.balance || "10000");
-    const drawdownPercent = peakBalance > 0 ? ((peakBalance - balance) / peakBalance) * 100 : 0;
-    if (drawdownPercent >= config.maxDrawdown) {
-      gates.push({ passed: false, reason: `Drawdown ${drawdownPercent.toFixed(1)}% >= ${config.maxDrawdown}% limit` });
-    } else {
-      gates.push({ passed: true, reason: `Drawdown ${drawdownPercent.toFixed(1)}%` });
-    }
+    gates.push(checkMaxDrawdown({ balance, peakBalance, maxDrawdown: config.maxDrawdown }));
   }
 
   // Gate 9: Min confluence (redundant but per spec)

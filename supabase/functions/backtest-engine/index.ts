@@ -115,6 +115,7 @@ import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
+import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -500,15 +501,7 @@ function runBacktestSafetyGates(
   gates.push(rrGateResult);
 
   // Gate 5: Max drawdown (circuit breaker)
-  if (peakBalance > 0 && config.maxDrawdown > 0) {
-    const currentDrawdownPct = ((peakBalance - balance) / peakBalance) * 100;
-    gates.push({
-      passed: currentDrawdownPct < config.maxDrawdown,
-      reason: `Drawdown: ${currentDrawdownPct.toFixed(1)}% (max: ${config.maxDrawdown}%)`,
-    });
-  } else {
-    gates.push({ passed: true, reason: "Drawdown within limits" });
-  }
+  gates.push(checkMaxDrawdown({ balance, peakBalance, maxDrawdown: config.maxDrawdown }));
 
   // Gate 6: Daily loss limit (use candle date, not wall-clock)
   const currentDate = new Date(currentCandleMs).toISOString().slice(0, 10);
