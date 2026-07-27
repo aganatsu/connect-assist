@@ -600,3 +600,105 @@ Deno.test("Correlation gate — DIVERGENCE: opposite direction now detected as h
   assertEquals(result.passed, false, "Opposite direction on correlated pair now detected as hedge");
   assertStringIncludes(result.reason, "Hedge conflict");
 });
+
+
+// ─── Default-path agreement tests (no config set → real fallback exercised) ──────
+// These verify that when NOTHING is set for correlation fields, both engines
+// resolve to identical defaults. This was previously broken:
+//   bot-scanner: correlationFilterEnabled=false, maxCorrelatedPositions=1
+//   configMapper: correlationFilterEnabled=true,  maxCorrelatedPositions=2
+// After the fix, both resolve to: false / 1 / 0.8
+
+import { RUNTIME_DEFAULTS, mapNestedToFlat } from "./configMapper.ts";
+
+Deno.test("Default-path agreement — RUNTIME_DEFAULTS match bot-scanner inline defaults", () => {
+  // bot-scanner inline defaults (line 900-902):
+  //   correlationFilterEnabled: instruments.X ?? raw.X ?? false
+  //   maxCorrelation: instruments.X ?? raw.X ?? 0.8
+  //   maxCorrelatedPositions: instruments.X ?? raw.X ?? 1
+  const botScannerDefaults = {
+    correlationFilterEnabled: false,
+    maxCorrelation: 0.8,
+    maxCorrelatedPositions: 1,
+  };
+  assertEquals(
+    RUNTIME_DEFAULTS.correlationFilterEnabled,
+    botScannerDefaults.correlationFilterEnabled,
+    "correlationFilterEnabled default must match bot-scanner (false)",
+  );
+  assertEquals(
+    RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    botScannerDefaults.maxCorrelatedPositions,
+    "maxCorrelatedPositions default must match bot-scanner (1)",
+  );
+  assertEquals(
+    RUNTIME_DEFAULTS.maxCorrelation,
+    botScannerDefaults.maxCorrelation,
+    "maxCorrelation default must match bot-scanner (0.8)",
+  );
+});
+
+Deno.test("Default-path agreement — mapNestedToFlat with empty config resolves to bot-scanner defaults", () => {
+  // Simulate an account that has NEVER set any correlation config fields.
+  // mapNestedToFlat receives an empty object → all fields fall through to RUNTIME_DEFAULTS.
+  const resolved = mapNestedToFlat({});
+  assertEquals(
+    resolved.correlationFilterEnabled,
+    false,
+    "Empty config → correlationFilterEnabled should be false (matching bot-scanner)",
+  );
+  assertEquals(
+    resolved.maxCorrelatedPositions,
+    1,
+    "Empty config → maxCorrelatedPositions should be 1 (matching bot-scanner)",
+  );
+  assertEquals(
+    resolved.maxCorrelation,
+    0.8,
+    "Empty config → maxCorrelation should be 0.8 (matching bot-scanner)",
+  );
+});
+
+Deno.test("Default-path agreement — instruments-section source is honored over strategy-section", () => {
+  // Verify that correlation fields are sourced from instruments, not strategy.
+  // If a user sets correlationFilterEnabled=true under instruments but false under strategy,
+  // instruments wins (matching bot-scanner's resolution chain).
+  const resolved = mapNestedToFlat({
+    instruments: { correlationFilterEnabled: true, maxCorrelatedPositions: 3 },
+    strategy: { correlationFilterEnabled: false, maxCorrelatedPositions: 5 },
+  });
+  assertEquals(
+    resolved.correlationFilterEnabled,
+    true,
+    "instruments.correlationFilterEnabled should win over strategy",
+  );
+  assertEquals(
+    resolved.maxCorrelatedPositions,
+    3,
+    "instruments.maxCorrelatedPositions should win over strategy",
+  );
+});
+
+Deno.test("Default-path agreement — bot-scanner and backtest produce same verdict with unset config", () => {
+  // The critical test: with DEFAULT (unset) config, both engines should behave identically.
+  // Default: correlationFilterEnabled=false → gate always passes regardless of positions.
+  const defaultConfig = {
+    correlationFilterEnabled: RUNTIME_DEFAULTS.correlationFilterEnabled,
+    maxCorrelatedPositions: RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    maxCorrelation: RUNTIME_DEFAULTS.maxCorrelation,
+  };
+  // With filter disabled, even highly-correlated same-direction positions should pass
+  const botResult = botScannerGate22(
+    "XAU/USD", "long",
+    [{ symbol: "XAG/USD", direction: "long" }],
+    defaultConfig,
+  );
+  const btResult = backtestGate20(
+    "XAU/USD", "long",
+    [{ symbol: "XAG/USD", direction: "long" }],
+    defaultConfig,
+  );
+  assertEquals(botResult.passed, true, "bot-scanner: filter disabled by default → pass");
+  assertEquals(btResult.passed, true, "backtest: filter disabled by default → pass");
+  assertEquals(botResult.passed, btResult.passed, "Both engines agree with default (unset) config");
+});
