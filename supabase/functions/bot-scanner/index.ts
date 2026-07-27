@@ -92,6 +92,7 @@ import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } fro
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
+import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1132,11 +1133,7 @@ async function runSafetyGates(
   }
 
   // Gate 4: Max open positions
-  if (openPositions.length >= config.maxOpenPositions) {
-    gates.push({ passed: false, reason: `Max positions (${config.maxOpenPositions}) reached` });
-  } else {
-    gates.push({ passed: true, reason: `${openPositions.length}/${config.maxOpenPositions} positions` });
-  }
+  gates.push(checkMaxPositions({ openPositionCount: openPositions.length, maxOpenPositions: config.maxOpenPositions }));
 
   // Gate 5: Max per symbol + same-direction duplicate check
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
