@@ -118,6 +118,7 @@ import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
+import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -525,17 +526,17 @@ function runBacktestSafetyGates(
   });
 
   // Gate 8: Cooldown (use candle time, not wall-clock)
-  const lastTradeOnSymbol = recentTrades.filter(t => t.symbol === symbol).slice(-1)[0];
-  let cooldownOk = true;
-  if (config.cooldownMinutes > 0 && lastTradeOnSymbol) {
-    const lastExitMs = new Date(lastTradeOnSymbol.exitTime).getTime();
-    const elapsedMin = (currentCandleMs - lastExitMs) / 60000;
-    cooldownOk = elapsedMin >= config.cooldownMinutes;
+  if (config.cooldownMinutes > 0) {
+    const lastTradeOnSymbol = recentTrades.filter(t => t.symbol === symbol).slice(-1)[0];
+    const elapsedMinutes = lastTradeOnSymbol
+      ? (currentCandleMs - new Date(lastTradeOnSymbol.exitTime).getTime()) / 60000
+      : null;
+    gates.push(checkCooldown({
+      elapsedMinutes,
+      cooldownMinutes: config.cooldownMinutes,
+      symbol,
+    }));
   }
-  gates.push({
-    passed: cooldownOk,
-    reason: cooldownOk ? "Cooldown clear" : `Cooldown active (${config.cooldownMinutes}min)`,
-  });
 
   // Gate 9: Consecutive losses (no auto-reset in backtest — see gateConsecutiveLosses.ts)
   if (config.maxConsecutiveLosses > 0) {
