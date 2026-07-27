@@ -1,8 +1,10 @@
-# Task: Consolidate Correlation Gate (Phase 3, Stage 3)
+# Task: Consolidate Correlation Gate + Fix Default-Value Divergence (Phase 3, Stage 3)
 
 ## Branch: manus/consolidate-correlation
 
 ## Behavior changes
+
+### Commit 1: Replace bucket-based CORRELATION_GROUPS with numeric-coefficient matrix
 
 1. **Backtest-engine Gate 20 now uses numeric correlation coefficients** instead of binary bucket membership. Pairs that were previously in the same bucket (e.g., EUR/USD + EUR/GBP in "EUR_CROSSES") but have low actual correlation (rawCorr=0.30) will now PASS the gate. Previously they would have been blocked.
 
@@ -14,17 +16,29 @@
 
 5. **Reason strings changed.** Old: `Correlation (METALS): 2/2 same-dir open`. New: `Correlated same-direction cap hit (threshold 0.8): 1/1 — XAG/USD long (raw ρ=0.85, eff=85%) — doubling`. This matches bot-scanner's format exactly.
 
-6. **gatePerformanceEngine pattern matching fixed.** The old patterns ("Correlation conflict", "Correlated exposure") did NOT match bot-scanner's actual reason strings — confirmed by testing. The new patterns correctly categorize all four of bot-scanner's current Gate 22 reason strings. Pattern ordering was also fixed (correlation now before min_confluence to prevent "threshold" false-matching).
+6. **gatePerformanceEngine pattern matching fixed.** The old patterns ("Correlation conflict", "Correlated exposure") did NOT match bot-scanner's actual reason strings — confirmed by testing. The new patterns correctly categorize all four of bot-scanner's current Gate 22 reason strings.
+
+### Commit 2: Align configMapper defaults to bot-scanner production values
+
+7. **configMapper `correlationFilterEnabled` default changed from `true` to `false`.** This means backtest-engine now defaults to correlation filter DISABLED — matching what bot-scanner (live) has always done. Any account that never explicitly set this field was previously getting different behavior between live (filter off) and backtest (filter on). Now they match.
+
+8. **configMapper `maxCorrelatedPositions` default changed from `2` to `1`.** Same rationale — accounts that explicitly enable the correlation filter but never set a cap will now get cap=1 in both engines (was 2 in backtest, 1 in live).
+
+9. **configMapper source-section changed from `strategy` to `instruments`** for `correlationFilterEnabled` and `maxCorrelatedPositions`. Bot-scanner sources all three correlation fields from `instruments`; configMapper now does the same.
+
+### Does this change live bot-scanner behavior?
+
+**No.** Bot-scanner uses its own inline resolution (lines 900-902), not configMapper. The changes here only affect configMapper, which is consumed by backtest-engine. No live account's behavior changes.
 
 ## Files modified
 
 | File | Description |
 |------|-------------|
-| `supabase/functions/backtest-engine/index.ts` | Deleted `CORRELATION_GROUPS` constant and `getCorrelationGroup()` helper. Rewrote Gate 20 to use `getCorrelation`/`getDirectionalCorrelation` from shared `portfolioCorrelation.ts`, with SMT and currency-decomposition fallbacks. Added import for `getCorrelation`/`getDirectionalCorrelation`. |
-| `supabase/functions/_shared/configMapper.ts` | Added `maxCorrelation: 0.8` to `RUNTIME_DEFAULTS` and added resolution chain line: `instruments.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation` |
-| `supabase/functions/_shared/gatePerformanceEngine.ts` | Updated correlation patterns from stale `["Correlation conflict", "Correlated exposure"]` to `["Hedge conflict on correlated", "Correlated same-direction", "No correlated conflicts"]`. Moved correlation entry before min_confluence to prevent "threshold" substring collision. |
+| `supabase/functions/backtest-engine/index.ts` | Deleted `CORRELATION_GROUPS` constant and `getCorrelationGroup()` helper. Rewrote Gate 20 to use `getCorrelation`/`getDirectionalCorrelation` from shared `portfolioCorrelation.ts`, with SMT and currency-decomposition fallbacks. |
+| `supabase/functions/_shared/configMapper.ts` | (1) Added `maxCorrelation: 0.8` to RUNTIME_DEFAULTS. (2) Changed `correlationFilterEnabled` default from `true` to `false`. (3) Changed `maxCorrelatedPositions` default from `2` to `1`. (4) Changed source-section from `strategy` to `instruments` for all three correlation fields. |
+| `supabase/functions/_shared/gatePerformanceEngine.ts` | Updated correlation patterns to match bot-scanner's actual reason strings. Moved correlation entry before min_confluence to prevent "threshold" substring collision. |
 | `supabase/functions/_shared/gatePerformanceEngine.test.ts` | Replaced 2 stale correlation tests with 3 tests covering bot-scanner's actual current reason strings. |
-| `supabase/functions/_shared/gateCorrelation.test.ts` | **NEW** — 26 cross-engine agreement tests covering all detection paths, threshold sensitivity, and documented divergences. |
+| `supabase/functions/_shared/gateCorrelation.test.ts` | **NEW** — 30 tests: 26 cross-engine agreement tests + 4 default-path agreement tests. |
 
 ## Tests added
 
@@ -56,6 +70,10 @@
 | `gateCorrelation.test.ts` | DIVERGENCE: AUD/USD + NZD/USD coefficient | Documents new mechanism |
 | `gateCorrelation.test.ts` | DIVERGENCE: EUR/USD + EUR/GBP now passes | Documents correct improvement |
 | `gateCorrelation.test.ts` | DIVERGENCE: opposite direction now hedge | Documents new capability |
+| `gateCorrelation.test.ts` | **Default-path: RUNTIME_DEFAULTS match bot-scanner** | Asserts all 3 defaults are identical |
+| `gateCorrelation.test.ts` | **Default-path: mapNestedToFlat with empty config** | Empty config resolves to bot-scanner defaults |
+| `gateCorrelation.test.ts` | **Default-path: instruments-section source honored** | instruments wins over strategy |
+| `gateCorrelation.test.ts` | **Default-path: same verdict with unset config** | Both engines pass (filter disabled) with unset config |
 | `gatePerformanceEngine.test.ts` | Hedge conflict maps to correlation | New pattern works |
 | `gatePerformanceEngine.test.ts` | Correlated same-direction cap maps | New pattern works |
 | `gatePerformanceEngine.test.ts` | No correlated conflicts maps | New pattern works |
@@ -63,37 +81,39 @@
 ## Tests run
 
 ```
-ok | 1777 passed | 0 failed (19s)
+ok | 1781 passed | 0 failed (19s)
 ```
 
 ## Regression check
 
-1. **Cross-engine agreement**: All 26 tests in `gateCorrelation.test.ts` verify that the backtest-engine Gate 20 produces identical `{ passed, reason }` output as bot-scanner Gate 22 for the same inputs.
+1. **Cross-engine agreement**: All 30 tests in `gateCorrelation.test.ts` verify that the backtest-engine Gate 20 produces identical `{ passed, reason }` output as bot-scanner Gate 22 for the same inputs, including the default/unset config path.
 
-2. **Intentional divergences documented**: Three tests explicitly document where the new behavior DIFFERS from the old bucket model, with explanations of why each is an improvement (not a regression).
+2. **Default-path specifically tested**: Four dedicated tests prove that when no correlation config is set, both engines resolve to `{ correlationFilterEnabled: false, maxCorrelatedPositions: 1, maxCorrelation: 0.8 }` and produce identical verdicts.
 
-3. **gatePerformanceEngine patterns**: Verified that the old patterns ("Correlation conflict", "Correlated exposure") matched NONE of bot-scanner's actual current reason strings — they were already broken. The fix restores correct categorization.
+3. **Source-section priority verified**: Test proves `instruments.X` wins over `strategy.X` in configMapper, matching bot-scanner's chain.
 
-4. **Config field sourced correctly**: `maxCorrelation` is sourced from `instruments` section (matching bot-scanner's inline resolution chain), not from `strategy` (where the other two correlation fields live in configMapper). This ensures users who have already set `maxCorrelation` in their DB config under `instruments` get it honored by both engines.
+4. **No live behavior change**: Bot-scanner uses its own inline resolution, not configMapper. Only backtest-engine behavior changes (it now matches live).
 
 ## Open questions
 
-1. **`unifiedPositionSizing.ts` still has its own `CORRELATION_GROUPS`** (line 117). This is used by bot-scanner for position sizing (correlation-adjusted risk), not for the gate decision. It's a separate concern and out of scope for this task, but flagged for awareness — it could be migrated to use `portfolioCorrelation.ts` coefficients in a future task.
+1. **`unifiedPositionSizing.ts` still has its own `CORRELATION_GROUPS`** (line 117). Used for position sizing, not gate decisions. Future cleanup candidate.
 
-2. **configMapper sources `correlationFilterEnabled` and `maxCorrelatedPositions` from `strategy` section**, but bot-scanner sources them from `instruments` section. I matched bot-scanner's actual source for `maxCorrelation` (instruments), but the two sibling fields have a pre-existing inconsistency. This doesn't cause bugs (both fall through to `raw.*` and then defaults) but is worth noting for a future cleanup.
+2. **Was there a deliberate reason for the old configMapper defaults (true/2)?** The task prompt asked this question. My analysis: this is drift, not deliberate design. configMapper was written later than bot-scanner's inline resolution, and the author likely chose "sensible" defaults without cross-referencing bot-scanner's actual values. The fact that the source-section was also different (strategy vs instruments) supports this being unintentional drift rather than a deliberate divergence.
 
 ## Suggested PR title and description
 
-**Title:** Replace backtest correlation gate with numeric-coefficient matrix (Phase 3, Stage 3)
+**Title:** [consolidate-correlation] Replace backtest correlation gate with numeric-coefficient matrix + fix default-value divergence
 
 **Description:**
-Replaces the binary bucket-based `CORRELATION_GROUPS` in backtest-engine with the same numeric-coefficient matrix (`portfolioCorrelation.ts`) that bot-scanner Gate 22 uses. This eliminates the last major source of divergence between the two engines' correlation logic.
+Two-commit fix for the correlation gate consolidation:
 
-**Key changes:**
-- Gate 20 now uses `getCorrelation()`/`getDirectionalCorrelation()` from shared library
-- Adds SMT pair and currency-decomposition fallbacks (matching bot-scanner exactly)
-- Adds `maxCorrelation` to shared `configMapper.ts` (was only in bot-scanner's inline config)
-- Fixes stale `gatePerformanceEngine.ts` patterns that didn't match bot-scanner's actual reason strings
-- 26 new cross-engine agreement tests + 3 updated pattern tests
+**Commit 1:** Replaces the binary bucket-based `CORRELATION_GROUPS` in backtest-engine with the same numeric-coefficient matrix (`portfolioCorrelation.ts`) that bot-scanner Gate 22 uses. Adds SMT pair and currency-decomposition fallbacks. Fixes stale gatePerformanceEngine patterns.
 
-**Behavior impact:** This changes which trades the backtest-engine blocks. Low-correlation pairs that happened to share a bucket (e.g., EUR/USD + EUR/GBP, rawCorr=0.30) will now pass. Opposite-direction positions on highly-correlated pairs will now be detected as hedges and blocked. See REPORT.md for full divergence documentation.
+**Commit 2:** Aligns configMapper's correlation defaults to bot-scanner's production values:
+- `correlationFilterEnabled`: `true` → `false`
+- `maxCorrelatedPositions`: `2` → `1`
+- Source-section: `strategy` → `instruments`
+
+**Live behavior impact:** None. Bot-scanner uses its own inline resolution. Only backtest-engine behavior changes — it now matches what live has always done for accounts with unset correlation config.
+
+**Backtest behavior impact:** Accounts that never set correlation config will now see the filter DISABLED by default in backtests (was incorrectly enabled). Accounts that explicitly enabled it will see cap=1 (was incorrectly 2). Both now match live.
