@@ -73,8 +73,10 @@ export async function runPropFirmGate(
     .maybeSingle();
 
   if (cfgErr) {
-    console.warn(`[prop-firm-gate] Config query error: ${cfgErr.message}`);
-    return { enabled: false, allowed: true, reason: "Config query error (non-blocking)", maxPositionSizeMultiplier: 1, shouldCloseAll: false, compliance: null, configId: null };
+    console.warn(`[prop-firm-gate] ⚠️ Config query error: ${cfgErr.message} — BLOCKING (fail-closed)`);
+    // FAIL-CLOSED: If we can't load the config, we can't verify compliance.
+    // Block new trades until the DB is reachable again.
+    return { enabled: true, allowed: false, reason: `Prop firm config query failed: ${cfgErr.message} — cannot verify compliance`, maxPositionSizeMultiplier: 0, shouldCloseAll: false, compliance: null, configId: null };
   }
 
   if (!pfConfig) {
@@ -91,15 +93,16 @@ export async function runPropFirmGate(
   if (opts?.brokerEquity && opts.brokerEquity > 0) {
     currentEquity = opts.brokerEquity;
   } else if (opts?.isLiveAccount || opts?.hasBrokerConnection) {
-    // SAFETY: Broker connection exists but equity fetch failed.
+    // FAIL-CLOSED: Broker connection exists but equity fetch failed.
     // Do NOT fall back to paper balance — it may not reflect the real MT5 account.
-    // Skip the prop firm gate entirely rather than act on bad data.
-    console.warn(`[prop-firm-gate] ⚠️ Broker connection exists but equity unavailable. Skipping prop firm check to avoid false emergency on stale/wrong data.`);
+    // Block new trades until equity data is available. Do NOT trigger emergency close
+    // (shouldCloseAll: false) because we can't confirm the account is actually in breach.
+    console.warn(`[prop-firm-gate] ⚠️ Broker connection exists but equity unavailable. BLOCKING new trades (fail-closed) — cannot verify compliance without equity data.`);
     return {
       enabled: true,
-      allowed: true,
-      reason: "Broker equity unavailable — prop firm check skipped (safety)",
-      maxPositionSizeMultiplier: 1,
+      allowed: false,
+      reason: "Broker equity unavailable — cannot verify prop firm compliance (blocking)",
+      maxPositionSizeMultiplier: 0,
       shouldCloseAll: false,
       compliance: null,
       configId: config.id,
@@ -124,16 +127,17 @@ export async function runPropFirmGate(
   }
 
   // ── 2b. Sanity check: equity vs initial_balance ──
-  // If currentEquity is less than 50% of initial_balance, this is almost certainly
-  // a data error (stale price, wrong account, etc.), not a real 50%+ drawdown.
-  // Skip the check rather than triggering a false emergency.
+  // If currentEquity is less than 50% of initial_balance, this is likely a data error
+  // (stale price, wrong account, etc.) — but it COULD be a real catastrophic loss.
+  // FAIL-CLOSED: Block new trades until a human verifies. Do NOT trigger emergency close
+  // (the data might be wrong, and closing positions on bad data could lock in phantom losses).
   if (currentEquity < config.initial_balance * 0.50) {
-    console.warn(`[prop-firm-gate] ⚠️ SANITY CHECK FAILED: equity $${currentEquity.toFixed(2)} is less than 50% of initial_balance $${config.initial_balance}. Likely data error — skipping prop firm check.`);
+    console.warn(`[prop-firm-gate] ⚠️ SANITY CHECK FAILED: equity $${currentEquity.toFixed(2)} is less than 50% of initial_balance $${config.initial_balance}. BLOCKING new trades — cannot determine if data error or real loss.`);
     return {
       enabled: true,
-      allowed: true,
-      reason: `Equity sanity check failed ($${currentEquity.toFixed(2)} < 50% of $${config.initial_balance}) — skipped`,
-      maxPositionSizeMultiplier: 1,
+      allowed: false,
+      reason: `Equity sanity check failed ($${currentEquity.toFixed(2)} < 50% of $${config.initial_balance}) — blocking until verified`,
+      maxPositionSizeMultiplier: 0,
       shouldCloseAll: false,
       compliance: null,
       configId: config.id,

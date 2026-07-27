@@ -143,22 +143,25 @@ function makeDailyState(overrides: any = {}) {
 
 // ─── Test: Live account without broker equity → skip ─────────────────────────
 
-Deno.test("propFirmGate: live account without broker equity skips check (safety)", async () => {
+Deno.test("propFirmGate: live account without broker equity BLOCKS trades (fail-closed)", async () => {
   const config = makeConfig();
   const dailyState = makeDailyState();
   const supabase = makeMockSupabase({ config, dailyState });
 
   // Simulate: live account, broker equity fetch FAILED (undefined)
   // Paper balance is $10,000 (wrong — real account is $100K)
+  // FAIL-CLOSED: should block, not pass
   const result = await runPropFirmGate(
     supabase, "test-user", "smc", 10_000, [], "scan-001",
     { brokerEquity: undefined, isLiveAccount: true },
   );
 
   assertEquals(result.enabled, true);
-  assertEquals(result.allowed, true);
-  assertEquals(result.shouldCloseAll, false);
+  assertEquals(result.allowed, false); // CHANGED: fail-closed
+  assertEquals(result.maxPositionSizeMultiplier, 0); // CHANGED: no sizing allowed
+  assertEquals(result.shouldCloseAll, false); // Don't close — can't confirm breach
   assert(result.reason.includes("Broker equity unavailable"));
+  assert(result.reason.includes("blocking"));
   assertEquals(result.configId, "test-config");
 });
 
@@ -182,23 +185,26 @@ Deno.test("propFirmGate: live account WITH broker equity proceeds normally", asy
 
 // ─── Test: Sanity check (equity < 50% of initial_balance) ────────────────────
 
-Deno.test("propFirmGate: equity sanity check blocks false emergency (paper mode)", async () => {
+Deno.test("propFirmGate: equity sanity check BLOCKS trades (fail-closed, paper mode)", async () => {
   const config = makeConfig({ initial_balance: 100_000 });
   const dailyState = makeDailyState();
   const supabase = makeMockSupabase({ config, dailyState });
 
-  // Simulate: paper balance is $10,000 (should be $100K — data error)
+  // Simulate: paper balance is $10,000 (should be $100K — possible data error OR real loss)
   // No open positions, so equity = paperBalance = $10,000
   // $10,000 < 50% of $100,000 → sanity check triggers
+  // FAIL-CLOSED: block trades, but don't emergency-close (data might be wrong)
   const result = await runPropFirmGate(
     supabase, "test-user", "smc", 10_000, [], "scan-003",
     { isLiveAccount: false },
   );
 
   assertEquals(result.enabled, true);
-  assertEquals(result.allowed, true);
-  assertEquals(result.shouldCloseAll, false);
+  assertEquals(result.allowed, false); // CHANGED: fail-closed
+  assertEquals(result.maxPositionSizeMultiplier, 0); // CHANGED: no sizing
+  assertEquals(result.shouldCloseAll, false); // Don't close on uncertain data
   assert(result.reason.includes("sanity check failed"));
+  assert(result.reason.includes("blocking"));
 });
 
 Deno.test("propFirmGate: equity at 60% of initial_balance passes sanity check", async () => {
@@ -401,4 +407,97 @@ Deno.test("propFirmEmergencyClose: no opts (backward compat) closes all", async 
 
   assertEquals(closedCount, 2);
   assertEquals(closedSymbols.length, 2);
+});
+
+// ─── Test: Config query error → fail-closed ─────────────────────────────────
+
+Deno.test("propFirmGate: config query error BLOCKS trades (fail-closed)", async () => {
+  // Simulate: DB query returns an error (network timeout, etc.)
+  const supabase = {
+    from: (table: string) => {
+      if (table === "prop_firm_config") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: null, error: { message: "connection timeout" } }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      return {};
+    },
+  };
+
+  const result = await runPropFirmGate(
+    supabase as any, "test-user", "smc", 100_000, [], "scan-008",
+  );
+
+  // FAIL-CLOSED: can't load config → can't verify compliance → block
+  assertEquals(result.enabled, true);
+  assertEquals(result.allowed, false);
+  assertEquals(result.maxPositionSizeMultiplier, 0);
+  assertEquals(result.shouldCloseAll, false);
+  assert(result.reason.includes("config query failed"));
+  assert(result.reason.includes("connection timeout"));
+  assertEquals(result.configId, null);
+});
+
+// ─── Test: No active config → correctly passes (not a fail-closed case) ─────
+
+Deno.test("propFirmGate: no active config returns enabled=false, allowed=true (correct)", async () => {
+  // Simulate: query succeeds but returns null (no active config for this user)
+  const supabase = {
+    from: (table: string) => {
+      if (table === "prop_firm_config") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: async () => ({ data: null, error: null }),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      return {};
+    },
+  };
+
+  const result = await runPropFirmGate(
+    supabase as any, "test-user", "smc", 100_000, [], "scan-009",
+  );
+
+  // No prop firm config = no restriction. This is NOT a fail-closed case.
+  assertEquals(result.enabled, false);
+  assertEquals(result.allowed, true);
+  assertEquals(result.maxPositionSizeMultiplier, 1);
+  assertEquals(result.reason, "No active prop firm config");
+});
+
+// ─── Test: hasBrokerConnection (not isLiveAccount) also triggers fail-closed ──
+
+Deno.test("propFirmGate: hasBrokerConnection without equity BLOCKS (fail-closed)", async () => {
+  const config = makeConfig();
+  const dailyState = makeDailyState();
+  const supabase = makeMockSupabase({ config, dailyState });
+
+  // Simulate: paper mode but broker connection exists (for prop firm tracking)
+  // Equity fetch failed — should still block
+  const result = await runPropFirmGate(
+    supabase, "test-user", "smc", 10_000, [], "scan-010",
+    { brokerEquity: undefined, isLiveAccount: false, hasBrokerConnection: true },
+  );
+
+  assertEquals(result.enabled, true);
+  assertEquals(result.allowed, false);
+  assertEquals(result.maxPositionSizeMultiplier, 0);
+  assertEquals(result.shouldCloseAll, false);
+  assert(result.reason.includes("Broker equity unavailable"));
+  assert(result.reason.includes("blocking"));
 });
