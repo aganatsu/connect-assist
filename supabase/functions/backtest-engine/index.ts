@@ -120,6 +120,7 @@ import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
+import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -601,15 +602,12 @@ function runBacktestSafetyGates(
 
   // Gate 16: Tier 1 gate (from confluenceScoring)
   if (analysis.tieredScoring) {
-    if (config.tier1GateEnabled === false) {
-      gates.push({ passed: true, reason: `Tier 1 gate DISABLED by config (${analysis.tieredScoring.tier1Count} core factors present)` });
-    } else {
-      const tier1Passed = analysis.tieredScoring.tier1GatePassed ?? true;
-      gates.push({
-        passed: tier1Passed,
-        reason: analysis.tieredScoring.tier1GateReason || (tier1Passed ? "Tier 1 gate passed" : "Tier 1 gate failed"),
-      });
-    }
+    gates.push(checkTier1Minimum({
+      tier1GateEnabled: config.tier1GateEnabled !== false,
+      tier1GatePassed: analysis.tieredScoring.tier1GatePassed ?? true, // backtest defaults to true when missing
+      tier1GateReason: analysis.tieredScoring.tier1GateReason,
+      tier1Count: analysis.tieredScoring.tier1Count ?? 0,
+    }));
   }
 
   // Gate 17: Direction Verdict (replaces legacy HTF Bias when available)
