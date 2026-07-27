@@ -310,6 +310,7 @@ export const RUNTIME_DEFAULTS = {
   // ── Correlation Filter ──
   correlationFilterEnabled: true,
   maxCorrelatedPositions: 2,
+  maxCorrelation: 0.8,
 
   // ── Entry/HTF Timeframes (set by style) ──
   entryTimeframe: "15min",
@@ -659,6 +660,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     // ── Correlation Filter ──
     correlationFilterEnabled: strategy.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? RUNTIME_DEFAULTS.correlationFilterEnabled,
     maxCorrelatedPositions: strategy.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? RUNTIME_DEFAULTS.maxCorrelatedPositions,
+    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation,
 
     // ── Limit Orders ──
     limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,

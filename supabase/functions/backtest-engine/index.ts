@@ -121,6 +121,7 @@ import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
+import { getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -426,25 +427,7 @@ function mapConfig(raw: any): any {
 }
 
 
-// ─── Correlation Groups (for Gate 20) ───────────────────────────────
-const CORRELATION_GROUPS: Record<string, string[]> = {
-  "USD_MAJORS": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
-  "JPY_CROSSES": ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "CAD/JPY", "CHF/JPY", "NZD/JPY"],
-  "EUR_CROSSES": ["EUR/USD", "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/NZD"],
-  "GBP_CROSSES": ["GBP/USD", "GBP/JPY", "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/NZD", "EUR/GBP"],
-  "AUD_NZD": ["AUD/USD", "NZD/USD", "AUD/NZD", "AUD/CAD", "AUD/JPY", "AUD/CHF"],
-  "CAD_CROSSES": ["USD/CAD", "EUR/CAD", "GBP/CAD", "AUD/CAD", "NZD/CAD", "CAD/JPY", "CAD/CHF"],
-  "INDICES": ["US30", "NAS100", "SPX500"],
-  "METALS": ["XAU/USD", "XAG/USD"],
-  "CRYPTO": ["BTC/USD", "ETH/USD"],
-};
 
-function getCorrelationGroup(symbol: string): string | null {
-  for (const [group, members] of Object.entries(CORRELATION_GROUPS)) {
-    if (members.includes(symbol)) return group;
-  }
-  return null;
-}
 
 // ─── Safety Gates (29 gates + 2 pre-gates — mirrors bot-scanner runSafetyGates) ──
 function runBacktestSafetyGates(
@@ -673,18 +656,105 @@ function runBacktestSafetyGates(
     }
   }
 
-  // Gate 20: Correlation filter
-  if (config.correlationFilterEnabled && config.maxCorrelatedPositions > 0) {
-    const group = getCorrelationGroup(symbol);
-    if (group) {
-      const groupMembers = CORRELATION_GROUPS[group] || [];
-      const correlatedOpen = openPositions.filter(p => groupMembers.includes(p.symbol) && p.direction === direction).length;
+  // Gate 20: Correlation filter — numeric coefficient matrix (mirrors bot-scanner Gate 22)
+  if (config.correlationFilterEnabled) {
+    const maxCorrelatedPos = Number(config.maxCorrelatedPositions) || 1;
+    const threshold = Number(config.maxCorrelation) || 0.8;
+    const newPairCurrencies = parsePairCurrencies(symbol);
+    const smtPair = SMT_PAIRS[symbol];
+
+    type Hit = { detail: string; kind: "doubling" | "hedge"; effCorr: number };
+    const hits: Hit[] = [];
+
+    for (const pos of openPositions) {
+      if (pos.symbol === symbol) continue; // same-symbol handled by Gate 2
+      const posDir = pos.direction;
+
+      // Numeric correlation from static matrix (returns 0 if pair unknown)
+      const rawCorr = getCorrelation(symbol, pos.symbol);
+      const effCorr = getDirectionalCorrelation(
+        { symbol, direction },
+        { symbol: pos.symbol, direction: posDir },
+      );
+
+      let matched = false;
+      if (Math.abs(rawCorr) >= threshold) {
+        if (effCorr >= threshold) {
+          hits.push({
+            kind: "doubling",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw \u03C1=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) \u2014 doubling`,
+          });
+          matched = true;
+        } else if (effCorr <= -threshold) {
+          hits.push({
+            kind: "hedge",
+            effCorr,
+            detail: `${pos.symbol} ${posDir} (raw \u03C1=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) \u2014 hedge conflict`,
+          });
+          matched = true;
+        }
+      }
+
+      // Fallback 1: SMT pair (positive-correlation proxy for pairs the matrix may miss)
+      if (!matched && smtPair && pos.symbol === smtPair) {
+        hits.push({
+          kind: posDir === direction ? "doubling" : "hedge",
+          effCorr: posDir === direction ? 0.85 : -0.85,
+          detail: `${pos.symbol} ${posDir} \u2014 SMT pair ${posDir === direction ? "doubling" : "hedge"}`,
+        });
+        matched = true;
+      }
+
+      // Fallback 2: currency decomposition \u2014 full opposite exposure on same two currencies
+      if (!matched && newPairCurrencies) {
+        const posCurrencies = parsePairCurrencies(pos.symbol);
+        if (posCurrencies) {
+          const [nb, nq] = newPairCurrencies;
+          const [pb, pq] = posCurrencies;
+          const newBuying = direction === "long" ? nb : nq;
+          const newSelling = direction === "long" ? nq : nb;
+          const posBuying = posDir === "long" ? pb : pq;
+          const posSelling = posDir === "long" ? pq : pb;
+          if (newBuying === posSelling && newSelling === posBuying) {
+            hits.push({
+              kind: "hedge",
+              effCorr: -1,
+              detail: `${pos.symbol} ${posDir} \u2014 perfect currency hedge on ${newBuying}/${newSelling}`,
+            });
+          } else if (newBuying === posBuying && newSelling === posSelling) {
+            hits.push({
+              kind: "doubling",
+              effCorr: 1,
+              detail: `${pos.symbol} ${posDir} \u2014 identical currency exposure`,
+            });
+          }
+        }
+      }
+    }
+
+    const hedgeHits = hits.filter(h => h.kind === "hedge");
+    const doublingHits = hits.filter(h => h.kind === "doubling");
+
+    if (hedgeHits.length > 0) {
+      // Hedges bet against yourself on correlated pairs \u2014 always block, regardless of cap.
       gates.push({
-        passed: correlatedOpen < config.maxCorrelatedPositions,
-        reason: `Correlation (${group}): ${correlatedOpen}/${config.maxCorrelatedPositions} same-dir open`,
+        passed: false,
+        reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
+      });
+    } else if (doublingHits.length >= maxCorrelatedPos) {
+      // Same-direction correlated exposure exceeds the concentration cap.
+      gates.push({
+        passed: false,
+        reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} \u2014 ${doublingHits.map(h => h.detail).join("; ")}`,
+      });
+    } else if (doublingHits.length > 0) {
+      gates.push({
+        passed: true,
+        reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} \u2014 ${doublingHits.map(h => h.detail).join("; ")}`,
       });
     } else {
-      gates.push({ passed: true, reason: "Correlation: no group" });
+      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
     }
   }
 

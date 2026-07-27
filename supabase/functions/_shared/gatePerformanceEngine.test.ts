@@ -228,16 +228,23 @@ Deno.test("normalizeGateReason — ATR above max maps to atr_filter", () => {
   );
 });
 
-Deno.test("normalizeGateReason — Correlation conflict maps correctly", () => {
+Deno.test("normalizeGateReason — Hedge conflict on correlated pair maps to correlation", () => {
   assertEquals(
-    normalizeGateReason("Correlation conflict: long EUR/USD vs open short EUR/GBP"),
+    normalizeGateReason("Hedge conflict on correlated pair(s) blocked (threshold 0.8): GBP/USD short (raw \u03C1=0.85, eff=-85%) \u2014 hedge conflict"),
     "correlation"
   );
 });
 
-Deno.test("normalizeGateReason — Correlated exposure maps to correlation", () => {
+Deno.test("normalizeGateReason — Correlated same-direction cap maps to correlation", () => {
   assertEquals(
-    normalizeGateReason("Correlated exposure limit: 3 correlated positions >= 2 max — EUR/USD; EUR/GBP; EUR/JPY"),
+    normalizeGateReason("Correlated same-direction cap hit (threshold 0.8): 2/1 \u2014 XAG/USD long (raw \u03C1=0.85, eff=85%) \u2014 doubling"),
+    "correlation"
+  );
+});
+
+Deno.test("normalizeGateReason — No correlated conflicts maps to correlation", () => {
+  assertEquals(
+    normalizeGateReason("No correlated conflicts (threshold 0.8)"),
     "correlation"
   );
 });
