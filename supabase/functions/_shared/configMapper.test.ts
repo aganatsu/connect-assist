@@ -712,3 +712,25 @@ Deno.test("mapNestedToFlat: strategy.requireUnifiedZone takes priority over raw"
   });
   assertEquals(result.requireUnifiedZone, true);
 });
+
+// ─── maxConfirmationAttempts ─────────────────────────────────────────────────
+
+Deno.test("maxConfirmationAttempts: defaults to 3 when no config is set", () => {
+  const config = mapNestedToFlat(null);
+  assertEquals(config.maxConfirmationAttempts, 3);
+});
+
+Deno.test("maxConfirmationAttempts: resolved from entry section", () => {
+  const config = mapNestedToFlat({ entry: { maxConfirmationAttempts: 5 } });
+  assertEquals(config.maxConfirmationAttempts, 5);
+});
+
+Deno.test("maxConfirmationAttempts: raw fallback when entry section is empty", () => {
+  const config = mapNestedToFlat({ maxConfirmationAttempts: 7 });
+  assertEquals(config.maxConfirmationAttempts, 7);
+});
+
+Deno.test("maxConfirmationAttempts: entry section takes priority over raw", () => {
+  const config = mapNestedToFlat({ entry: { maxConfirmationAttempts: 2 }, maxConfirmationAttempts: 10 });
+  assertEquals(config.maxConfirmationAttempts, 2);
+});
