@@ -94,6 +94,7 @@ import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts"
 import { createScanCache } from "../_shared/dataCache.ts";
 import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
+import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1136,11 +1137,12 @@ async function runSafetyGates(
   // Gate 4: Max open positions
   gates.push(checkMaxPositions({ openPositionCount: openPositions.length, maxOpenPositions: config.maxOpenPositions }));
 
-  // Gate 5: Max per symbol + same-direction duplicate check
+  // Gate 5: Same-direction duplicate + max per symbol
   const symbolPositions = openPositions.filter(p => p.symbol === symbol).length;
   const sameDirectionExists = openPositions.some(p => p.symbol === symbol && p.direction === direction);
-  if (sameDirectionExists && !config.allowSameDirectionStacking) {
-    gates.push({ passed: false, reason: `Already ${direction} on ${symbol} — no duplicate (enable stacking to allow)` });
+  const dupResult = checkDuplicateDirection({ sameDirectionExists, allowSameDirectionStacking: config.allowSameDirectionStacking, direction, symbol });
+  if (!dupResult.passed) {
+    gates.push(dupResult);
   } else {
     const perSymResult = checkMaxPerSymbol({ symbolPositionCount: symbolPositions, maxPerSymbol: config.maxPerSymbol, symbol });
     // Append stacking note to pass reason when stacking is active
