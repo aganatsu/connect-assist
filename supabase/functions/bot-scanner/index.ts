@@ -94,6 +94,7 @@ import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts"
 import { createScanCache } from "../_shared/dataCache.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
+import { checkMinRR } from "../_shared/gateMinRR.ts";
 import {
   detectSession as sharedDetectSession,
   detectSilverBullet as sharedDetectSilverBullet,
@@ -1223,31 +1224,16 @@ async function runSafetyGates(
     }
   }
 
-  // Gate 10: Min R:R (spread + commission adjusted)
-  // Subtract typical spread cost AND estimated commission cost from reward to get effective R:R.
-  if (analysis.stopLoss && analysis.takeProfit) {
-    const risk = Math.abs(analysis.lastPrice - analysis.stopLoss);
-    const rawReward = Math.abs(analysis.takeProfit - analysis.lastPrice);
-    const pairSpec = SPECS[symbol] || SPECS["EUR/USD"];
-    const spreadCostInPrice = (pairSpec.typicalSpread ?? 1) * pairSpec.pipSize;
-    // Estimate commission cost in price terms: commissionPerLot / (lotUnits * quoteToUSD)
-    // This converts the dollar commission into price-movement equivalent
-    const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
-    const avgCommPerLot = (config as any)._avgCommissionPerLot ?? 0;
-    const commCostInPrice = avgCommPerLot > 0 ? avgCommPerLot / (pairSpec.lotUnits * quoteToUSD) : 0;
-    const totalCostInPrice = spreadCostInPrice + commCostInPrice;
-    const effectiveReward = Math.max(0, rawReward - totalCostInPrice);
-    const rawRR = risk > 0 ? rawReward / risk : 0;
-    const effectiveRR = risk > 0 ? effectiveReward / risk : 0;
-    const costDetail = avgCommPerLot > 0 ? `spread ${pairSpec.typicalSpread}p + comm $${avgCommPerLot.toFixed(1)}/lot` : `spread ${pairSpec.typicalSpread}p`;
-    if (effectiveRR < config.minRiskReward) {
-      gates.push({ passed: false, reason: `R:R ${rawRR.toFixed(2)} raw, ${effectiveRR.toFixed(2)} effective (${costDetail}) < ${config.minRiskReward} min` });
-    } else {
-      gates.push({ passed: true, reason: `R:R ${effectiveRR.toFixed(2)} effective (${rawRR.toFixed(2)} raw, ${costDetail})` });
-    }
-  } else {
-    gates.push({ passed: false, reason: "No valid SL/TP for R:R check" });
-  }
+  // Gate 10: Min R:R (spread + commission adjusted) — shared implementation
+  gates.push(checkMinRR({
+    lastPrice: analysis.lastPrice,
+    stopLoss: analysis.stopLoss,
+    takeProfit: analysis.takeProfit,
+    symbol,
+    minRiskReward: config.minRiskReward,
+    commissionPerLot: (config as any)._avgCommissionPerLot ?? 0,
+    rateMap,
+  }));
 
   // Gate 11: Opening Range — wait for completion (Fix #12: use interval-aware candle time)
   if (config.openingRange?.enabled && config.openingRange?.waitForCompletion) {
