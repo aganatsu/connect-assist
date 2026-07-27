@@ -97,6 +97,7 @@ import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
+import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1297,20 +1298,14 @@ async function runSafetyGates(
         if (parseFloat(t.pnl) < 0) consecutiveLosses++;
         else break;
       }
-      if (consecutiveLosses >= config.maxConsecutiveLosses) {
-        // Check if enough time has passed since the last loss to auto-reset (4 hours)
-        const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
-        const hoursSinceLast = (Date.now() - lastLossTime) / (1000 * 60 * 60);
-        const resetHours = 4;
-        if (hoursSinceLast >= resetHours) {
-          gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses but auto-reset after ${resetHours}h cooldown (${Math.floor(hoursSinceLast)}h elapsed)` });
-        } else {
-          const remaining = Math.ceil((resetHours - hoursSinceLast) * 60);
-          gates.push({ passed: false, reason: `${consecutiveLosses} consecutive losses >= ${config.maxConsecutiveLosses} limit — auto-resets in ${remaining}min` });
-        }
-      } else {
-        gates.push({ passed: true, reason: `${consecutiveLosses} consecutive losses` });
-      }
+      const lastLossTime = new Date(recentHistory[0].closed_at).getTime();
+      const hoursSinceLastLoss = (Date.now() - lastLossTime) / (1000 * 60 * 60);
+      gates.push(checkConsecutiveLosses({
+        consecutiveLosses,
+        maxConsecutiveLosses: config.maxConsecutiveLosses,
+        hoursSinceLastLoss,
+        autoResetHours: 4,
+      }));
     } else {
       gates.push({ passed: true, reason: "No trade history for consecutive loss check" });
     }

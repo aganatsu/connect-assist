@@ -117,6 +117,7 @@ import { checkMaxPerSymbol } from "../_shared/gateMaxPerSymbol.ts";
 import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
+import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
@@ -536,17 +537,18 @@ function runBacktestSafetyGates(
     reason: cooldownOk ? "Cooldown clear" : `Cooldown active (${config.cooldownMinutes}min)`,
   });
 
-  // Gate 9: Consecutive losses
+  // Gate 9: Consecutive losses (no auto-reset in backtest — see gateConsecutiveLosses.ts)
   if (config.maxConsecutiveLosses > 0) {
     let consLosses = 0;
     for (let i = recentTrades.length - 1; i >= 0; i--) {
       if (recentTrades[i].pnl < 0) consLosses++;
       else break;
     }
-    gates.push({
-      passed: consLosses < config.maxConsecutiveLosses,
-      reason: `Consecutive losses: ${consLosses}/${config.maxConsecutiveLosses}`,
-    });
+    gates.push(checkConsecutiveLosses({
+      consecutiveLosses: consLosses,
+      maxConsecutiveLosses: config.maxConsecutiveLosses,
+      // No autoResetHours — backtest uses simple threshold (see JSDoc in shared function)
+    }));
   }
 
   // Gate 9b: ATR Volatility Filter
