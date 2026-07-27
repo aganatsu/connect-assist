@@ -64,6 +64,8 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "scan", label: "News Pause (minutes)", keywords: ["news", "pause", "minutes", "before"] },
   { tab: "scan", label: "Opening Range", keywords: ["opening range", "or", "candle", "bias", "judas"] },
   { tab: "scan", label: "Game Plan", keywords: ["game plan", "session", "dol", "ipda", "bias"] },
+  { tab: "scan", label: "Game Plan Enforcement", keywords: ["game plan", "hard", "soft", "off", "block", "reject", "enforcement"] },
+  { tab: "scan", label: "Hard-Rejection Confidence", keywords: ["game plan", "confidence", "threshold", "hard block", "reject"] },
   { tab: "scan", label: "Precision Filters", keywords: ["precision", "filters", "htf", "displacement", "judas", "fvg", "kill zone", "validation", "gates"] },
   { tab: "scan", label: "HTF Framework", keywords: ["ict", "htf", "framework", "weekly", "daily", "containment"] },
   { tab: "scan", label: "Displacement-Validated MSS", keywords: ["ict", "displacement", "mss", "market structure shift"] },
@@ -190,6 +192,14 @@ const BASE_CONFIG = {
   exit: { slMethod: "structure", slBufferPips: 2, tpMethod: "rr", tpRRRatio: 2 },
   instruments: { enabled: null },
   sessions: { filter: ["london", "newyork"] },
+  gamePlan: {
+    enabled: false,
+    enforcementMode: "hard",
+    hardBlockThreshold: 75,
+    autoKeyLevels: true,
+    sessionBias: true,
+    pdLevels: true,
+  },
   protection: { maxDailyLoss: 500, maxConsecutiveLosses: 3, circuitBreakerPct: 20 },
   account: { startingBalance: 10000 },
   management: { trailingStopEnabled: false, breakEvenEnabled: false, partialTPEnabled: false, fridayCloseEnabled: true, fridayCloseHour: 20 },
@@ -270,6 +280,23 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         parsed.instruments.enabled = Object.keys(allowed).filter((k: string) => allowed[k]);
         delete parsed.instruments.allowedInstruments;
       }
+      // Migrate the legacy hidden GP threshold into the user-facing Game Plan
+      // settings without breaking old presets/config exports.
+      const legacyGPThreshold =
+        parsed.gamePlan?.hardBlockThreshold
+        ?? parsed.strategy?.gpHardBlockThreshold
+        ?? parsed.gpHardBlockThreshold
+        ?? 75;
+      parsed.gamePlan = {
+        ...(parsed.gamePlan || {}),
+        enabled: parsed.gamePlan?.enabled ?? false,
+        enforcementMode:
+          parsed.gamePlan?.enforcementMode
+          ?? parsed.strategy?.gpEnforcementMode
+          ?? parsed.gpEnforcementMode
+          ?? (legacyGPThreshold === 0 ? "off" : "hard"),
+        hardBlockThreshold: legacyGPThreshold === 0 ? 75 : legacyGPThreshold,
+      };
       setConfig(parsed);
     }
   }, [rawConfig, open]);

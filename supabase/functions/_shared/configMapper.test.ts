@@ -755,4 +755,27 @@ Deno.test("gpHardBlockThreshold: strategy section takes priority over raw", () =
 Deno.test("gpHardBlockThreshold: set to 0 disables the gate (allows all counter-bias trades)", () => {
   const config = mapNestedToFlat({ strategy: { gpHardBlockThreshold: 0 } });
   assertEquals(config.gpHardBlockThreshold, 0);
+  assertEquals(config.gpEnforcementMode, "off");
+});
+
+Deno.test("game plan enforcement: defaults to hard", () => {
+  const config = mapNestedToFlat(null);
+  assertEquals(config.gamePlanEnabled, true);
+  assertEquals(config.gpEnforcementMode, "hard");
+});
+
+Deno.test("game plan enforcement: resolves nested user-facing settings first", () => {
+  const config = mapNestedToFlat({
+    gamePlan: { enabled: false, enforcementMode: "soft", hardBlockThreshold: 82 },
+    strategy: { gpEnforcementMode: "hard", gpHardBlockThreshold: 75 },
+  });
+  assertEquals(config.gamePlanEnabled, false);
+  assertEquals(config.gpEnforcementMode, "soft");
+  assertEquals(config.gpHardBlockThreshold, 82);
+});
+
+Deno.test("game plan enforcement: supports legacy strategy mode", () => {
+  const config = mapNestedToFlat({ strategy: { gpEnforcementMode: "off", gpHardBlockThreshold: 75 } });
+  assertEquals(config.gpEnforcementMode, "off");
+  assertEquals(config.gpHardBlockThreshold, 75);
 });

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
+import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -43,7 +44,7 @@ import {
   normalizeSymKey,
 } from "../_shared/smcAnalysis.ts";
 import {
-  generateInstrumentGamePlan, buildSessionGamePlan, filterTradeByGamePlan,
+  generateInstrumentGamePlan, buildSessionGamePlan,
   getCurrentSession, fetchNewsForGamePlan, enrichGamePlanWithNews,
   type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
@@ -3890,7 +3891,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Pass the per-instrument game plan data into the confluence engine so it can
     // use bias, DOL, key levels, and focus-pair status for scoring and TP placement.
     // The game plan is generated once per session (Layer 2) and consumed here (Layer 3).
-    if (activeGamePlan) {
+    const gpEnforcementMode = ((config as any).gpEnforcementMode ?? "hard") as "off" | "soft" | "hard";
+    if (activeGamePlan && gpEnforcementMode !== "off") {
       const pairPlan = activeGamePlan.plans.find((p: InstrumentGamePlan) => p.symbol === pair) || null;
       (pairConfig as any)._gamePlanContext = pairPlan ? {
         bias: pairPlan.bias,
@@ -5617,25 +5619,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       // validated via backtest and deployed, revisit whether this gate is still needed
       // or whether the reweighted verdict makes it redundant. Do not leave both running
       // indefinitely without checking.
-      const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
       if (activeGamePlan) {
-        if (!gpFilter.allowed) {
-          const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
-          const biasConf = pairPlan?.biasConfidence ?? 0;
-          const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
-
-          if (gpThreshold > 0 && biasConf >= gpThreshold) {
-            // HARD BLOCK: GP bias confidence exceeds threshold — reject trade
-            gates.push({ passed: false, reason: `GP filter (hard block): ${gpFilter.reason} — bias confidence ${biasConf}% >= threshold ${gpThreshold}%` });
-            console.log(`[scan ${scanCycleId}] ❌ ${pair}: GP hard gate BLOCKED — bias ${biasConf}% opposes ${analysis.direction} (threshold: ${gpThreshold}%)`);
-          } else {
-            // SOFT: below threshold — log but allow (scoring penalty still applies via GP Bias Confidence factor)
-            gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
-            console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (conf: ${biasConf}%, threshold: ${gpThreshold}%)`);
-          }
-        } else {
-          gates.push({ passed: true, reason: gpFilter.reason });
-        }
+        const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
+        const gpGate = evaluateGamePlanGate(activeGamePlan, pair, analysis.direction, gpEnforcementMode, gpThreshold);
+        gates.push({ passed: gpGate.passed, reason: gpGate.reason });
+        console.log(
+          `[scan ${scanCycleId}] ${gpGate.passed ? "ℹ️" : "❌"} ${pair}: GP gate ${gpGate.passed ? "passed" : "BLOCKED"}`
+          + ` — mode=${gpEnforcementMode}, biasConf=${gpGate.biasConfidence}%, threshold=${gpThreshold}%, direction=${analysis.direction}`,
+        );
       }
       // ── News Impact Alignment Gate ──
       // If we have analyzed news impacts, check if the trade direction aligns with news bias.

@@ -415,6 +415,65 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         <ToggleField label="Enable Game Plan" description="Generate pre-session game plan with key levels and bias" checked={config.gamePlan?.enabled ?? false} onChange={v => updateField('gamePlan', 'enabled', v)} />
         {config.gamePlan?.enabled && (
           <>
+            <div className="border border-border/60 rounded-md p-3 space-y-3">
+              <div>
+                <p className="text-xs font-semibold">Bias Enforcement</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Controls what happens when a setup opposes the active Game Plan bias.
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">Mode</Label>
+                <Select
+                  value={config.gamePlan?.enforcementMode ?? "hard"}
+                  onValueChange={(v: "off" | "soft" | "hard") => updateField("gamePlan", "enforcementMode", v)}
+                >
+                  <SelectTrigger className="h-8 text-xs w-44"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off" className="text-xs">Off — log only</SelectItem>
+                    <SelectItem value="soft" className="text-xs">Soft — score impact</SelectItem>
+                    <SelectItem value="hard" className="text-xs">Hard — block trade</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Badge
+                  variant="outline"
+                  className={`text-[9px] font-mono ${
+                    (config.gamePlan?.enforcementMode ?? "hard") === "hard"
+                      ? "text-red-500 border-red-500/40"
+                      : (config.gamePlan?.enforcementMode ?? "hard") === "soft"
+                        ? "text-amber-500 border-amber-500/40"
+                        : "text-muted-foreground"
+                  }`}
+                >
+                  {(config.gamePlan?.enforcementMode ?? "hard") === "hard"
+                    ? "BLOCKING"
+                    : (config.gamePlan?.enforcementMode ?? "hard") === "soft"
+                      ? "SCORING"
+                      : "LOG ONLY"}
+                </Badge>
+              </div>
+              {(config.gamePlan?.enforcementMode ?? "hard") === "hard" && (
+                <div className="pt-2 border-t border-border/40 space-y-2">
+                  <div className="flex items-center gap-4">
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-40">Hard-Rejection Confidence</Label>
+                    <Slider
+                      value={[config.gamePlan?.hardBlockThreshold ?? 75]}
+                      onValueChange={v => updateField("gamePlan", "hardBlockThreshold", v[0])}
+                      min={50}
+                      max={100}
+                      step={1}
+                      className="flex-1"
+                    />
+                    <span className="text-[10px] font-mono font-bold w-10 text-right">
+                      {config.gamePlan?.hardBlockThreshold ?? 75}%
+                    </span>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">
+                    Opposing setups are blocked when Game Plan confidence meets or exceeds this value. Recommended: 75%.
+                  </p>
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <ToggleField label="Auto Key Levels" description="Auto-detect OBs, FVGs, liquidity" checked={config.gamePlan?.autoKeyLevels ?? true} onChange={v => updateField('gamePlan', 'autoKeyLevels', v)} />
               <ToggleField label="Session Bias" description="Calculate directional bias per session" checked={config.gamePlan?.sessionBias ?? true} onChange={v => updateField('gamePlan', 'sessionBias', v)} />

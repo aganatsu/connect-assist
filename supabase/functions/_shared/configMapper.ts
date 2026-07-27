@@ -158,6 +158,9 @@ export const RUNTIME_DEFAULTS = {
   newsFilterPauseMinutes: 30,
 
   // ── Game Plan Hard Gate (Stopgap — see bot-scanner GP filter section) ──
+  gamePlanEnabled: true,
+  // off = log only, soft = score impact, hard = block at threshold.
+  gpEnforcementMode: "hard" as "off" | "soft" | "hard",
   // When GP bias confidence >= this threshold AND signal opposes the bias,
   // the trade is hard-blocked. Set to 0 to disable. Default: 75.
   gpHardBlockThreshold: 75,
@@ -608,7 +611,25 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? RUNTIME_DEFAULTS.newsFilterPauseMinutes,
 
     // ── Game Plan Hard Gate (Stopgap) ──
-    gpHardBlockThreshold: strategy.gpHardBlockThreshold ?? raw.gpHardBlockThreshold ?? RUNTIME_DEFAULTS.gpHardBlockThreshold,
+    gamePlanEnabled:
+      raw.gamePlan?.enabled
+      ?? raw.gamePlanEnabled
+      ?? RUNTIME_DEFAULTS.gamePlanEnabled,
+    gpEnforcementMode: (
+      raw.gamePlan?.enforcementMode
+      ?? strategy.gpEnforcementMode
+      ?? raw.gpEnforcementMode
+      ?? (
+        (raw.gamePlan?.hardBlockThreshold ?? strategy.gpHardBlockThreshold ?? raw.gpHardBlockThreshold) === 0
+          ? "off"
+          : RUNTIME_DEFAULTS.gpEnforcementMode
+      )
+    ) as "off" | "soft" | "hard",
+    gpHardBlockThreshold:
+      raw.gamePlan?.hardBlockThreshold
+      ?? strategy.gpHardBlockThreshold
+      ?? raw.gpHardBlockThreshold
+      ?? RUNTIME_DEFAULTS.gpHardBlockThreshold,
 
     // ── ATR Volatility Filter ──
     atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? RUNTIME_DEFAULTS.atrFilterEnabled,
