@@ -5604,10 +5604,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       //   flat-EV trade category with high conviction opposition is not worth the risk,
       //   NOT on the basis that the data proves it loses money.
       //
-      // MONITOR: As more trades accumulate in the 75%+ bucket, check whether the pattern
-      // differs by asset class (gold/commodities vs forex). The single large-instrument
-      // outlier skewing a 7-trade sample suggests this bucket may need splitting by
-      // instrument type eventually, not just by confidence level.
+      // MONITOR — reassess this gate when either condition is met:
+      //   (a) The 75%+ bucket reaches 25+ total trades (currently n=7), OR
+      //   (b) The 75%+ bucket accumulates 5+ commodity/gold trades specifically.
+      // At that point, re-run the win-rate and net-P&L analysis split by asset class
+      // (gold/commodities vs forex). The single large-instrument outlier skewing a
+      // 7-trade sample suggests this bucket may need splitting by instrument type,
+      // not just by confidence level. If the data clearly favors allowing one asset
+      // class through, consider per-instrument gpHardBlockThreshold overrides.
       //
       // REMOVAL CONDITION: Once Step 4 (Direction Verdict GP reweight to ~0.20) is
       // validated via backtest and deployed, revisit whether this gate is still needed
