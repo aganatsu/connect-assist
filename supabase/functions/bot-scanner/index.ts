@@ -98,6 +98,7 @@ import { checkDuplicateDirection } from "../_shared/gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "../_shared/gateMaxDrawdown.ts";
 import { checkDailyLossLimit } from "../_shared/gateDailyLossLimit.ts";
 import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
+import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { analyzeWeeklyBiasAndDOL } from "../_shared/weeklyBiasDOL.ts";
 import { runSMCEnhancements, type SMCEnhancementsResult } from "../_shared/smcEnhancements.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
@@ -1275,17 +1276,14 @@ async function runSafetyGates(
   if (config.cooldownMinutes > 0) {
     const { data: recentTrades } = await supabase.from("paper_trade_history").select("closed_at")
       .eq("user_id", userId).eq("symbol", symbol).order("closed_at", { ascending: false }).limit(1);
-    if (recentTrades && recentTrades.length > 0) {
-      const lastClose = new Date(recentTrades[0].closed_at).getTime();
-      const elapsed = (Date.now() - lastClose) / 60000;
-      if (elapsed < config.cooldownMinutes) {
-        gates.push({ passed: false, reason: `Cooldown: ${Math.ceil(config.cooldownMinutes - elapsed)}min remaining for ${symbol}` });
-      } else {
-        gates.push({ passed: true, reason: `Cooldown passed (${Math.floor(elapsed)}min since last)` });
-      }
-    } else {
-      gates.push({ passed: true, reason: "No recent trades — cooldown OK" });
-    }
+    const elapsedMinutes = (recentTrades && recentTrades.length > 0)
+      ? (Date.now() - new Date(recentTrades[0].closed_at).getTime()) / 60000
+      : null;
+    gates.push(checkCooldown({
+      elapsedMinutes,
+      cooldownMinutes: config.cooldownMinutes,
+      symbol,
+    }));
   }
 
   // Gate 14: Max Consecutive Losses (with 4-hour auto-reset cooldown)
