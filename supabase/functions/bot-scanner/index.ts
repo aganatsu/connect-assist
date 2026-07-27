@@ -5586,19 +5586,49 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
       );
-      // ── Game Plan Filter Gate (SOFT — Phase 7 migration) ──
-      // Previously a binary veto that blocked trades opposing the game plan bias.
-      // Now converted to info-only: the scoring impact is handled by the GP Bias
-      // Confidence factor (Phase 5) which applies a continuous penalty/bonus.
-      // The gate always passes but logs what the legacy behavior would have done.
+      // ── Game Plan Filter Gate ──
+      // ARCHITECTURE NOTE (stopgap — pending Step 4: Direction Verdict GP reweight):
+      // GP bias currently feeds into three uncoordinated places:
+      //   1. Direction Verdict (weight 0.08 — lowest of 5 sources)
+      //   2. Confluence scoring (GP Bias Confidence factor: flat -0.61 or -0.22 penalty)
+      //   3. This gate (previously hardcoded to always pass regardless of computed verdict)
+      // This conditional hard block is a FOURTH mechanism layered on top, not a fix to
+      // that underlying disagreement. It is shipped as a stopgap because real money is
+      // at risk while the proper fix (raising GP weight in Direction Verdict from 0.08
+      // to ~0.20 and backtesting the impact) is built.
+      //
+      // Data justification (n=76 trades with GP filter data, Jul 2026):
+      //   75%+ counter-bias bucket: 7 trades, 4W/3L, 57.1% WR.
+      //   Excluding one XAU/USD outlier (+$1,028): 6 trades, net +$7 — effectively flat.
+      //   The data is genuinely neutral; this gate is justified on the basis that a
+      //   flat-EV trade category with high conviction opposition is not worth the risk,
+      //   NOT on the basis that the data proves it loses money.
+      //
+      // MONITOR: As more trades accumulate in the 75%+ bucket, check whether the pattern
+      // differs by asset class (gold/commodities vs forex). The single large-instrument
+      // outlier skewing a 7-trade sample suggests this bucket may need splitting by
+      // instrument type eventually, not just by confidence level.
+      //
+      // REMOVAL CONDITION: Once Step 4 (Direction Verdict GP reweight to ~0.20) is
+      // validated via backtest and deployed, revisit whether this gate is still needed
+      // or whether the reweighted verdict makes it redundant. Do not leave both running
+      // indefinitely without checking.
       const gpFilter = filterTradeByGamePlan(activeGamePlan, pair, analysis.direction);
       if (activeGamePlan) {
         if (!gpFilter.allowed) {
           const pairPlan = activeGamePlan?.plans?.find((p: any) => p.symbol === pair);
           const biasConf = pairPlan?.biasConfidence ?? 0;
-          // Info-only: log what the old gate would have done
-          gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
-          console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (legacy gate would have blocked at ${biasConf}% conf)`);
+          const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
+
+          if (gpThreshold > 0 && biasConf >= gpThreshold) {
+            // HARD BLOCK: GP bias confidence exceeds threshold — reject trade
+            gates.push({ passed: false, reason: `GP filter (hard block): ${gpFilter.reason} — bias confidence ${biasConf}% >= threshold ${gpThreshold}%` });
+            console.log(`[scan ${scanCycleId}] ❌ ${pair}: GP hard gate BLOCKED — bias ${biasConf}% opposes ${analysis.direction} (threshold: ${gpThreshold}%)`);
+          } else {
+            // SOFT: below threshold — log but allow (scoring penalty still applies via GP Bias Confidence factor)
+            gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
+            console.log(`[scan ${scanCycleId}] ℹ️ ${pair}: GP bias opposes direction — soft penalty applied via scoring (conf: ${biasConf}%, threshold: ${gpThreshold}%)`);
+          }
         } else {
           gates.push({ passed: true, reason: gpFilter.reason });
         }

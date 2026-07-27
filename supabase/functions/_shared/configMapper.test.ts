@@ -734,3 +734,25 @@ Deno.test("maxConfirmationAttempts: entry section takes priority over raw", () =
   const config = mapNestedToFlat({ entry: { maxConfirmationAttempts: 2 }, maxConfirmationAttempts: 10 });
   assertEquals(config.maxConfirmationAttempts, 2);
 });
+
+// ─── gpHardBlockThreshold (Game Plan Hard Gate Stopgap) ─────────────────────
+Deno.test("gpHardBlockThreshold: defaults to 75 when no config is set", () => {
+  const config = mapNestedToFlat(null);
+  assertEquals(config.gpHardBlockThreshold, 75);
+});
+Deno.test("gpHardBlockThreshold: resolved from strategy section", () => {
+  const config = mapNestedToFlat({ strategy: { gpHardBlockThreshold: 80 } });
+  assertEquals(config.gpHardBlockThreshold, 80);
+});
+Deno.test("gpHardBlockThreshold: raw fallback when strategy section is empty", () => {
+  const config = mapNestedToFlat({ gpHardBlockThreshold: 65 });
+  assertEquals(config.gpHardBlockThreshold, 65);
+});
+Deno.test("gpHardBlockThreshold: strategy section takes priority over raw", () => {
+  const config = mapNestedToFlat({ strategy: { gpHardBlockThreshold: 80 }, gpHardBlockThreshold: 60 });
+  assertEquals(config.gpHardBlockThreshold, 80);
+});
+Deno.test("gpHardBlockThreshold: set to 0 disables the gate (allows all counter-bias trades)", () => {
+  const config = mapNestedToFlat({ strategy: { gpHardBlockThreshold: 0 } });
+  assertEquals(config.gpHardBlockThreshold, 0);
+});
