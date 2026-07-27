@@ -112,6 +112,7 @@ import { detectJudasSwing as detectICTJudasSwing, type JudasSwingResult, type Ju
 import { validateFVGBatch, type FVGInvalidationConfig, DEFAULT_FVG_INVALIDATION_CONFIG } from "../_shared/ictFVGInvalidation.ts";
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
+import { checkMaxPositions } from "../_shared/gateMaxPositions.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
 import {
@@ -463,11 +464,7 @@ function runBacktestSafetyGates(
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
 
   // Gate 1: Max open positions
-  const openCount = openPositions.length;
-  gates.push({
-    passed: openCount < config.maxOpenPositions,
-    reason: `Open positions: ${openCount}/${config.maxOpenPositions}`,
-  });
+  gates.push(checkMaxPositions({ openPositionCount: openPositions.length, maxOpenPositions: config.maxOpenPositions }));
 
   // Gate 2: Max per symbol
   const symbolCount = openPositions.filter(p => p.symbol === symbol).length;
