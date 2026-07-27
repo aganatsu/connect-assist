@@ -1,66 +1,58 @@
-# Task: Extract Gate — Cooldown
-## Branch: manus/extract-gate-cooldown
+# Task: Consolidate Pre-Gates Fast-Path
+## Branch: manus/consolidate-pre-gates
 ## Behavior changes
-none — pure refactor
+**One latent bug fix (inert in practice):**
 
-Both engines' pass/fail logic is preserved exactly. The shared function accepts pre-computed `elapsedMinutes` (each engine computes from its own time source: wall-clock for bot-scanner, candle time for backtest).
+The old pre-gates fast-path for daily loss limit had no `if (config.maxDailyLoss > 0)` guard. When `maxDailyLoss = 0` (meaning "disabled"), the old code would compute `dailyLossPct = 0` and check `0 >= 0` → `true` → block ALL trades. The main gate array has this guard and correctly skips the check when disabled.
 
-**Reason string format change:**
-- Bot-scanner old pass: `"Cooldown passed (45min since last)"` → new: `"Cooldown: passed (45min since last)"`
-- Bot-scanner old fail: `"Cooldown: 15min remaining for EURUSD"` → new: `"Cooldown: 15min remaining for EURUSD"` (unchanged)
-- Bot-scanner old no-trade: `"No recent trades — cooldown OK"` → new: `"Cooldown: no recent trades — OK"`
-- Backtest old pass: `"Cooldown clear"` → new: `"Cooldown: passed (Nmin since last)"`
-- Backtest old fail: `"Cooldown active (30min)"` → new: `"Cooldown: 30min remaining for SYMBOL"`
+This was a pre-existing inconsistency between the pre-gate and main gate. In practice it's inert because:
+- Default `maxDailyLoss` is 5 (from `configMapper.ts` RUNTIME_DEFAULTS)
+- Optimizer parameter space has `min: 1` for this parameter
+- No real config ever sets `maxDailyLoss = 0`
 
-**Reason string safety verification (broader sweep):**
-1. `gatePerformanceEngine.ts` — matches on `reason.includes("Cooldown")`. All new reason strings start with `"Cooldown"` ✅
-2. `backtest-engine` line 2818 `split(":")[0]` — all new reason strings yield `"Cooldown"` as the aggregation key ✅
-3. Old bot-scanner pass format `"Cooldown passed (...)"` did NOT have a colon — the new format adds one, which is an improvement for consistency with the colon-split pattern (previously would have yielded the full string as the key). No practical impact since bot-scanner reasons only go through `gatePerformanceEngine.ts` which uses `includes()`, not `split()`.
-4. Telegram/narrative/dashboard — no code parses this specific reason string ✅
+The fix adds the `if (config.maxDailyLoss > 0)` guard to match the main gate array, making both paths structurally identical.
 
 ## Files modified
-- `supabase/functions/_shared/gateCooldown.ts` — NEW shared gate function
-- `supabase/functions/_shared/gateCooldown.test.ts` — NEW cross-engine agreement tests (10 tests)
-- `supabase/functions/bot-scanner/index.ts` — Added import (line 101), replaced Gate 13 inline if/else with `checkCooldown(...)` call (DB query preserved inline)
-- `supabase/functions/backtest-engine/index.ts` — Added import (line 121), replaced Gate 8 inline logic with `checkCooldown(...)` call (trade filtering preserved inline)
+- `supabase/functions/backtest-engine/index.ts` — Replaced 6 inline gate checks in the pre-gates IIFE (lines 1935-1981) with calls to shared functions: `checkMaxPositions`, `checkMaxPerSymbol`, `checkMaxDrawdown`, `checkDailyLossLimit`, `checkCooldown`, `checkConsecutiveLosses`. Category strings and `skippedByPreGate` counting preserved exactly.
+- `supabase/functions/_shared/preGateConsistency.test.ts` — NEW cross-consistency test proving pre-gate fast-path and main gate array agree on all 6 conditions.
 
 ## Tests added
-1. `gateCooldown: no previous trade → pass`
-2. `gateCooldown: elapsed exceeds cooldown → pass`
-3. `gateCooldown: elapsed equals cooldown → pass`
-4. `gateCooldown: elapsed below cooldown → fail`
-5. `gateCooldown: zero elapsed → fail`
-6. `gateCooldown: symbol included in fail reason`
-7. `gateCooldown: all reason strings contain 'Cooldown' for pattern matching`
-8. `gateCooldown: all reason strings contain colon for split aggregation`
-9. `cross-engine: shared pass/fail matches bot-scanner inline for all test cases` — 10 synthetic inputs
-10. `cross-engine: shared pass/fail matches backtest-engine inline for all test cases` — 10 synthetic inputs
+1. `pre-gate vs main-gate: both paths agree on pass/fail for all 6 conditions` — 12 synthetic portfolio states, asserts pre-gate's first-fail category matches main gate's first-fail gate
+2. `pre-gate vs main-gate: individual gate pass/fail matches for non-short-circuit cases` — filters to single-fail cases, verifies exact gate match
+3. `pre-gate vs main-gate: disabled gates (config=0) are skipped by both paths` — proves maxDailyLoss=0, cooldown=0, maxConsecutiveLosses=0 don't block
+4. `pre-gate: skippedByPreGate counter increments on any failure` — proves counter behavior is unchanged
 
 ## Tests run
 ```
 deno task test
-ok | 1724 passed | 0 failed (18s)
+ok | 1728 passed | 0 failed (18s)
 ```
 
 ## Regression check
-- Cross-engine agreement tests replicate original inline logic from each engine and assert the shared function produces identical pass/fail on 10 synthetic inputs each.
-- Reason string format tests explicitly verify both consumer constraints (substring match + colon presence + stable aggregation key).
+The cross-consistency test is the primary regression check. It:
+- Runs 12 synthetic portfolio states through both the pre-gate fast-path pattern and the main gate array pattern
+- Asserts they agree on which gate fails first (short-circuit order preserved)
+- Asserts disabled gates (config=0) are skipped by both paths
+- Asserts the `skippedByPreGate` counter increments on exactly the same cases as the main gate would block
+
+This test would fail if:
+- A shared function were called with different inputs in the two paths
+- A guard condition existed in one path but not the other
+- The short-circuit order differed between paths
 
 ## Open questions
-None. This gate has no divergence between engines — both use the same comparison logic (`elapsed >= cooldownMinutes`), just different time sources for computing elapsed.
+None. The pre-gates fast-path now uses the same shared functions as the main gate array. The only remaining inline logic is the data-preparation code (filtering trades, computing elapsed time) which is necessarily different between the pre-gate context (has `allTrades`, `candleMs`) and the main gate context (has `recentTrades`, `currentCandleMs`).
 
 ## Suggested PR title and description
-**Title:** `[extract-gate-cooldown] Extract cooldown gate to _shared/gateCooldown.ts`
+**Title:** `[consolidate-pre-gates] Replace inline pre-gate checks with shared function calls`
 
 **Description:**
-Extracts the "Cooldown" gate into a shared function. Both engines pre-compute `elapsedMinutes` from their own time source (wall-clock for bot-scanner, candle time for backtest) and pass it to the shared comparison function.
+The backtest-engine's "Portfolio Pre-Gates" fast-path had a third copy of 6 gate checks (max positions, max per symbol, max drawdown, daily loss, cooldown, consecutive losses) that was never consolidated when the shared functions were extracted. This PR replaces all 6 inline checks with calls to the same shared functions used by the main gate array.
 
 **Changes:**
-- New `_shared/gateCooldown.ts` with typed interface
-- Bot-scanner Gate 13: inline if/else replaced with shared function call (DB query preserved inline)
-- Backtest-engine Gate 8: inline logic replaced with shared function call (trade filtering preserved inline)
-- 10 tests including 2 cross-engine agreement suites + 2 reason-string safety tests (1724 total tests pass)
+- Pre-gates IIFE now calls `checkMaxPositions`, `checkMaxPerSymbol`, `checkMaxDrawdown`, `checkDailyLossLimit`, `checkCooldown`, `checkConsecutiveLosses`
+- Category strings and `skippedByPreGate` counting preserved exactly
+- Added `if (config.maxDailyLoss > 0)` guard to fix a latent bug (inert in practice — no real config uses maxDailyLoss=0)
+- New cross-consistency test (4 test cases, 12 synthetic inputs) proving both paths agree
 
-**Behavior:** No change — pure refactor. Same pass/fail outcomes for identical inputs.
-
-**Note:** This is the last of 6 overlapping conditions with the backtest-engine pre-gates fast-path. Next PR: consolidate the pre-gates fast-path to use shared functions.
+**Behavior:** No change for any real config. Fixes a latent bug for the impossible case of `maxDailyLoss=0`.

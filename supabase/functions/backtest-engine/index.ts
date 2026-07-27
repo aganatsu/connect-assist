@@ -1933,32 +1933,39 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const relevantWeekly = weeklyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
 
                 // ── Portfolio Pre-Gates (cheap checks before expensive analysis) ──
-        // These gates only need portfolio state, not analysis results
+        // These gates only need portfolio state, not analysis results.
+        // Uses shared gate functions for single-source-of-truth consistency
+        // with the main gate array (see runBacktestSafetyGates).
         const preGateFailed = (() => {
           // Gate 1: Max open positions
-          if (openPositions.length >= config.maxOpenPositions) return "max_positions";
+          if (!checkMaxPositions({ openPositionCount: openPositions.length, maxOpenPositions: config.maxOpenPositions }).passed)
+            return "max_positions";
           // Gate 2: Max per symbol
           const symCount = openPositions.filter(p => p.symbol === symbol).length;
-          if (symCount >= config.maxPerSymbol) return "max_per_symbol";
+          if (!checkMaxPerSymbol({ symbolPositionCount: symCount, maxPerSymbol: config.maxPerSymbol }).passed)
+            return "max_per_symbol";
           // Gate 5: Max drawdown (circuit breaker)
           if (peakBalance > 0 && config.maxDrawdown > 0) {
-            const dd = ((peakBalance - balance) / peakBalance) * 100;
-            if (dd >= config.maxDrawdown) return "max_drawdown";
+            if (!checkMaxDrawdown({ peakBalance, currentBalance: balance, maxDrawdownPercent: config.maxDrawdown }).passed)
+              return "max_drawdown";
           }
           // Gate 6: Daily loss limit
-          const currentDate = new Date(candleMs).toISOString().slice(0, 10);
-          const todayTrades = allTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
-          const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
-          const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
-          if (dailyLossPct >= config.maxDailyLoss) return "daily_loss";
+          if (config.maxDailyLoss > 0) {
+            const currentDate = new Date(candleMs).toISOString().slice(0, 10);
+            const todayTrades = allTrades.filter(t => t.exitTime.slice(0, 10) === currentDate);
+            const dailyPnl = todayTrades.reduce((s, t) => s + t.pnl, 0);
+            const dailyLossPct = balance > 0 ? Math.abs(Math.min(0, dailyPnl)) / balance * 100 : 0;
+            if (!checkDailyLossLimit({ dailyLossPercent: dailyLossPct, maxDailyLoss: config.maxDailyLoss }).passed)
+              return "daily_loss";
+          }
           // Gate 8: Cooldown
           if (config.cooldownMinutes > 0) {
             const lastOnSym = allTrades.filter(t => t.symbol === symbol).slice(-1)[0];
-            if (lastOnSym) {
-              const lastExitMs = new Date(lastOnSym.exitTime).getTime();
-              const elapsedMin = (candleMs - lastExitMs) / 60000;
-              if (elapsedMin < config.cooldownMinutes) return "cooldown";
-            }
+            const elapsedMinutes = lastOnSym
+              ? (candleMs - new Date(lastOnSym.exitTime).getTime()) / 60000
+              : null;
+            if (!checkCooldown({ elapsedMinutes, cooldownMinutes: config.cooldownMinutes, symbol }).passed)
+              return "cooldown";
           }
           // Gate 9: Consecutive losses
           if (config.maxConsecutiveLosses > 0) {
@@ -1967,7 +1974,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               if (allTrades[j].pnl < 0) consLosses++;
               else break;
             }
-            if (consLosses >= config.maxConsecutiveLosses) return "consecutive_losses";
+            if (!checkConsecutiveLosses({ consecutiveLosses: consLosses, maxConsecutiveLosses: config.maxConsecutiveLosses }).passed)
+              return "consecutive_losses";
           }
           return null;
         })();
