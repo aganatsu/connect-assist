@@ -4,12 +4,10 @@
  * Single source of truth for all position sizing calculations.
  * Wraps the core calculatePositionSize() from smcAnalysis.ts and adds:
  *
- *   1. **Portfolio heat check** — Refuse to size if total portfolio risk exceeds limit
- *   2. **Correlation adjustment** — Reduce size for correlated open positions
- *   3. **Volatility regime scaling** — Scale size down in high-vol regimes
- *   4. **Prop firm compliance** — Apply drawdown-aware size caps
- *   5. **Commission-aware sizing** — Deduct expected round-trip commission from risk budget
- *   6. **Consistent rounding** — All paths produce 0.01 lot increments
+ *   1. **Volatility regime scaling** — Scale size down in high-vol regimes
+ *   2. **Prop firm compliance** — Apply drawdown-aware size caps
+ *   3. **Commission-aware sizing** — Deduct expected round-trip commission from risk budget
+ *   4. **Consistent rounding** — All paths produce 0.01 lot increments
  *
  * This module does NOT replace calculatePositionSize() in smcAnalysis.ts.
  * Instead, it wraps it with additional safety layers. The raw function
@@ -104,38 +102,11 @@ export interface SizingResult {
 }
 
 export interface SizingAdjustment {
-  type: "portfolio_heat" | "correlation" | "volatility" | "prop_firm" | "max_lot_cap" | "min_lot_floor";
+  type: "volatility" | "prop_firm" | "max_lot_cap" | "min_lot_floor";
   /** Multiplier applied (e.g., 0.5 = halved) */
   multiplier: number;
   /** Human-readable reason */
   reason: string;
-}
-
-// ─── Correlation Map ─────────────────────────────────────────────────
-
-/** Known high-correlation pairs (|r| > 0.7 historically) */
-const CORRELATION_GROUPS: Record<string, string[]> = {
-  "USD_STRENGTH": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
-  "JPY_WEAKNESS": ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "CAD/JPY", "CHF/JPY", "NZD/JPY"],
-  "COMMODITY": ["AUD/USD", "NZD/USD", "AUD/NZD", "AUD/CAD"],
-  "EUR_CROSS": ["EUR/USD", "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/NZD", "EUR/CAD", "EUR/CHF"],
-  "GBP_CROSS": ["GBP/USD", "GBP/JPY", "GBP/AUD", "GBP/NZD", "GBP/CAD", "GBP/CHF", "EUR/GBP"],
-  // Crypto, metals, energy, equities — previously had zero correlation coverage.
-  "METALS": ["XAU/USD", "XAG/USD"],
-  "CRYPTO_MAJORS": ["BTC/USD", "ETH/USD"],
-  "RISK_ON_EQUITY": ["US30", "NAS100", "SPX500"],
-  // Gold/oil often move together on USD-strength/risk days; loose but worth capping.
-  "USD_HAVENS": ["XAU/USD", "US Oil"],
-};
-
-/**
- * Check if two symbols are in the same correlation group.
- */
-function areCorrelated(symbolA: string, symbolB: string): boolean {
-  for (const group of Object.values(CORRELATION_GROUPS)) {
-    if (group.includes(symbolA) && group.includes(symbolB)) return true;
-  }
-  return false;
 }
 
 // ─── Volatility Scaling ──────────────────────────────────────────────
@@ -152,6 +123,14 @@ const VOLATILITY_MULTIPLIERS: Record<string, number> = {
 /**
  * Compute position size with all safety layers applied.
  * This is the SINGLE function all live execution paths should use.
+ *
+ * NOTE on `portfolio` parameter: Live portfolio-heat and correlation checks
+ * are handled by bot-scanner's own gates (Gate 6 for heat, Gate 22 for
+ * correlation via portfolioCorrelation.ts). This parameter is currently
+ * unused — all live call sites pass `undefined`. It is retained on the
+ * signature pending a decision on whether to formally remove it (which
+ * would touch every call site) or re-integrate it with the real
+ * portfolioCorrelation.ts matrix in a future pass.
  */
 export function computePositionSize(
   input: SizingInput,
@@ -162,7 +141,7 @@ export function computePositionSize(
   const adjustments: SizingAdjustment[] = [];
   const spec = SPECS[input.symbol] || SPECS["EUR/USD"];
 
-  // NEW: tightest USD risk budget implied by any hard cap below.
+  // Tightest USD risk budget implied by any hard cap below.
   // Stays Infinity if no cap tighter than the base size ever applied.
   let hardCapUSD = Infinity;
 
@@ -186,83 +165,7 @@ export function computePositionSize(
 
   let lots = baseLots;
 
-  // Step 2: Portfolio heat check
-  if (portfolio) {
-    const maxHeat = portfolio.maxPortfolioHeat ?? 6.0;
-    const currentHeat = portfolio.openPositions.reduce((sum, p) => sum + p.riskUSD, 0);
-    const currentHeatPercent = input.balance > 0 ? (currentHeat / input.balance) * 100 : 0;
-
-    if (currentHeatPercent >= maxHeat) {
-      return {
-        lots: 0,
-        riskUSD: 0,
-        riskPercent: 0,
-        baseLots,
-        adjustments: [{
-          type: "portfolio_heat",
-          multiplier: 0,
-          reason: `Portfolio heat ${currentHeatPercent.toFixed(1)}% >= max ${maxHeat}%`,
-        }],
-        rejected: true,
-        rejectionReason: `Portfolio heat limit reached (${currentHeatPercent.toFixed(1)}% >= ${maxHeat}%)`,
-      };
-    }
-
-    // Reduce size if approaching heat limit
-    const remainingHeatPercent = maxHeat - currentHeatPercent;
-    const thisTradeHeatPercent = input.riskPercent;
-    if (thisTradeHeatPercent > remainingHeatPercent) {
-      const heatMultiplier = remainingHeatPercent / thisTradeHeatPercent;
-      lots = Math.round(lots * heatMultiplier * 100) / 100;
-      // This cap represents a real USD ceiling — remember it.
-      hardCapUSD = Math.min(hardCapUSD, (remainingHeatPercent / 100) * input.balance);
-      adjustments.push({
-        type: "portfolio_heat",
-        multiplier: heatMultiplier,
-        reason: `Reduced to fit remaining heat budget (${remainingHeatPercent.toFixed(1)}% remaining)`,
-      });
-    }
-  }
-
-  // Step 3: Correlation adjustment
-  if (portfolio && portfolio.openPositions.length > 0) {
-    const maxCorrelated = portfolio.maxCorrelatedExposure ?? 3.0;
-    const correlatedRisk = portfolio.openPositions
-      .filter((p) => areCorrelated(p.symbol, input.symbol))
-      .reduce((sum, p) => sum + p.riskUSD, 0);
-    const correlatedPercent = input.balance > 0 ? (correlatedRisk / input.balance) * 100 : 0;
-
-    if (correlatedPercent >= maxCorrelated) {
-      return {
-        lots: 0,
-        riskUSD: 0,
-        riskPercent: 0,
-        baseLots,
-        adjustments: [{
-          type: "correlation",
-          multiplier: 0,
-          reason: `Correlated exposure ${correlatedPercent.toFixed(1)}% >= max ${maxCorrelated}%`,
-        }],
-        rejected: true,
-        rejectionReason: `Correlated exposure limit (${correlatedPercent.toFixed(1)}% in same group)`,
-      };
-    }
-
-    // Reduce if approaching correlated limit
-    const remainingCorrelated = maxCorrelated - correlatedPercent;
-    if (input.riskPercent > remainingCorrelated && remainingCorrelated > 0) {
-      const corrMultiplier = remainingCorrelated / input.riskPercent;
-      lots = Math.round(lots * corrMultiplier * 100) / 100;
-      hardCapUSD = Math.min(hardCapUSD, (remainingCorrelated / 100) * input.balance);
-      adjustments.push({
-        type: "correlation",
-        multiplier: corrMultiplier,
-        reason: `Correlated pairs at ${correlatedPercent.toFixed(1)}%, reducing to fit ${maxCorrelated}% cap`,
-      });
-    }
-  }
-
-  // Step 4: Volatility regime scaling
+  // Step 2: Volatility regime scaling
   if (volatility) {
     const volMultiplier = VOLATILITY_MULTIPLIERS[volatility.regime] ?? 1.0;
     if (volMultiplier < 1.0) {
@@ -275,7 +178,7 @@ export function computePositionSize(
     }
   }
 
-  // Step 5: Prop firm compliance
+  // Step 3: Prop firm compliance
   if (propFirm?.enabled) {
     // Apply size multiplier from prop firm gate
     if (propFirm.sizeMultiplier !== undefined && propFirm.sizeMultiplier < 1.0) {
@@ -309,19 +212,15 @@ export function computePositionSize(
     }
   }
 
-  // Step 6: Enforce minimum lot — but never past a hard budget cap.
-  // Check both: lots that are positive but below 0.01, AND lots that rounded
-  // to 0.00 due to 2-decimal rounding but had a hard cap applied (meaning the
-  // intent was to size down, not reject outright).
+  // Step 4: Enforce minimum lot — but never past a hard budget cap.
   if ((lots < 0.01 && lots > 0) || (lots === 0 && hardCapUSD < Infinity)) {
     const slDistance = Math.abs(input.entryPrice - input.stopLoss);
     const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
     const riskAtMinLot = slDistance * spec.lotUnits * 0.01 * quoteToUSD;
 
     if (riskAtMinLot > hardCapUSD) {
-      // Flooring to 0.01 lots would breach the tightest hard cap that applied
-      // (portfolio heat, correlation, or prop-firm daily loss). Reject instead
-      // of silently taking on more risk than that cap allows.
+      // Flooring to 0.01 lots would breach the tightest hard cap that applied.
+      // Reject instead of silently taking on more risk than that cap allows.
       return {
         lots: 0, riskUSD: 0, riskPercent: 0, baseLots,
         adjustments: [...adjustments, { type: "min_lot_floor", multiplier: 0,
@@ -376,37 +275,4 @@ export function calculatePositionRisk(
   const slDistance = Math.abs(entryPrice - stopLoss);
   const quoteToUSD = getQuoteToUSDRate(symbol, rateMap);
   return slDistance * spec.lotUnits * lots * quoteToUSD;
-}
-
-// ─── Utility: Check if new trade would breach portfolio limits ───────
-
-/**
- * Quick pre-check before running full sizing.
- * Returns true if the trade is allowed, false if it would breach limits.
- */
-export function canOpenNewTrade(
-  balance: number,
-  riskPercent: number,
-  openPositions: OpenPositionRisk[],
-  symbol: string,
-  maxPortfolioHeat: number = 6.0,
-  maxCorrelatedExposure: number = 3.0,
-): { allowed: boolean; reason?: string } {
-  const currentHeat = openPositions.reduce((sum, p) => sum + p.riskUSD, 0);
-  const currentHeatPercent = balance > 0 ? (currentHeat / balance) * 100 : 0;
-
-  if (currentHeatPercent >= maxPortfolioHeat) {
-    return { allowed: false, reason: `Portfolio heat ${currentHeatPercent.toFixed(1)}% >= ${maxPortfolioHeat}%` };
-  }
-
-  const correlatedRisk = openPositions
-    .filter((p) => areCorrelated(p.symbol, symbol))
-    .reduce((sum, p) => sum + p.riskUSD, 0);
-  const correlatedPercent = balance > 0 ? (correlatedRisk / balance) * 100 : 0;
-
-  if (correlatedPercent >= maxCorrelatedExposure) {
-    return { allowed: false, reason: `Correlated exposure ${correlatedPercent.toFixed(1)}% >= ${maxCorrelatedExposure}%` };
-  }
-
-  return { allowed: true };
 }
