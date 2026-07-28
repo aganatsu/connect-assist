@@ -22,8 +22,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   SPECS,
-  analyzeMarketStructure,
-  normalizeSymKey,
   type Candle,
 } from "../_shared/smcAnalysis.ts";
 import {
@@ -36,6 +34,18 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
+import { mapNestedToFlat, type RuntimeConfig } from "../_shared/configMapper.ts";
+import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
+import {
+  evaluateFinalTradeAuthorization,
+  type DirectionVerdictForAuthorization,
+} from "../_shared/finalTradeAuthorization.ts";
+import {
+  validatePendingOrderThesis,
+  type ThesisValidationResult,
+} from "../_shared/thesisValidator.ts";
+import { runPropFirmGate, type PropFirmGateResult } from "../_shared/propFirmGate.ts";
+import type { SessionGamePlan } from "../_shared/gamePlan.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -43,17 +53,53 @@ const BOT_ID = "smc";
 
 // ─── Candle Fetching ────────────────────────────────────────────────────────
 
-// Minimal broker connection for candle fetching
-let _brokerConn: BrokerConn | null = null;
-
-async function fetchCandles(symbol: string, interval = "5m"): Promise<Candle[]> {
+async function fetchCandles(
+  symbol: string,
+  interval = "5m",
+  brokerConn: BrokerConn | null = null,
+  limit = 100,
+): Promise<Candle[]> {
   const result = await fetchCandlesWithFallback({
     symbol,
     interval,
-    limit: 100, // Only need recent candles for CHoCH detection
-    brokerConn: _brokerConn,
+    limit,
+    brokerConn,
   });
   return result.candles;
+}
+
+function parseSessionGamePlan(row: any): SessionGamePlan | null {
+  const cached = row?.details_json;
+  if (!cached || cached.type !== "game_plan") return null;
+  return {
+    session: cached.session,
+    generatedAt: cached.generated_at,
+    plans: cached.plans || [],
+    focusPairs: cached.focus_pairs || [],
+    newsEvents: cached.newsEvents || [],
+    summary: cached.summary || "",
+  } as SessionGamePlan;
+}
+
+function findCurrentDirectionVerdict(
+  recentScanLogs: any[],
+  symbol: string,
+): DirectionVerdictForAuthorization | null {
+  for (const log of recentScanLogs || []) {
+    const details = log?.details_json;
+    if (!Array.isArray(details)) continue;
+    const pairDetail = details.find((detail: any) => detail?.pair === symbol || detail?.symbol === symbol);
+    const verdict = pairDetail?.directionVerdict;
+    if (verdict && typeof verdict === "object") {
+      return {
+        verdict: verdict.effectiveDirection ?? verdict.verdict ?? null,
+        shouldBlock: verdict.shouldBlock ?? verdict.directionSource === "blocked",
+        blockReason: verdict.blockReason ?? verdict.summary ?? null,
+        confidence: verdict.confidence ?? null,
+      };
+    }
+  }
+  return null;
 }
 
 // ─── Spread Check (for broker mirroring) ────────────────────────────────────
@@ -149,9 +195,13 @@ Deno.serve(async (req) => {
     const userDataMap: Record<string, {
       telegramChatIds: string[];
       brokerConnections: any[];
+      brokerConn: BrokerConn | null;
       openPositions: any[];
-      account: any;
-      config: any;
+      account: any | null;
+      config: RuntimeConfig;
+      rawConfig: any;
+      gamePlan: SessionGamePlan | null;
+      recentScanLogs: any[];
     }> = {};
 
     for (const userId of userIds) {
@@ -187,8 +237,10 @@ Deno.serve(async (req) => {
         .from("bot_configs").select("config_json")
         .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
-      // Set up broker connection for candle fetching (MetaApi preferred)
+      // Keep the candle connection scoped to this user. A module-global
+      // connection can leak the last loaded user's feed into another account.
       const metaConn = (connections || []).find((c: any) => c.broker_type === "metaapi");
+      let brokerConn: BrokerConn | null = null;
       if (metaConn) {
         let authToken = metaConn.api_key;
         let metaAccountId = metaConn.account_id;
@@ -196,15 +248,40 @@ Deno.serve(async (req) => {
           authToken = metaConn.account_id;
           metaAccountId = metaConn.api_key;
         }
-        _brokerConn = { api_key: authToken, account_id: metaAccountId };
+        brokerConn = { api_key: authToken, account_id: metaAccountId };
       }
 
+      // Load the latest active Game Plan directly, then recent completed scan
+      // evidence for the current Direction Verdict. Do not rely on the latest
+      // 20 arbitrary rows to contain a Game Plan.
+      const { data: gamePlanRows } = await supabase
+        .from("scan_logs")
+        .select("created_at, details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .contains("details_json", { type: "game_plan" })
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const { data: recentScanLogs } = await supabase
+        .from("scan_logs")
+        .select("created_at, details_json")
+        .eq("user_id", userId)
+        .eq("bot_id", BOT_ID)
+        .gt("pairs_scanned", 0)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      const rawConfig = botConfig?.config_json || {};
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
+        brokerConn,
         openPositions: openPositions || [],
-        account: account || { execution_mode: "paper" },
-        config: botConfig?.config_json || {},
+        account: account || null,
+        config: mapNestedToFlat(rawConfig),
+        rawConfig,
+        gamePlan: parseSessionGamePlan(gamePlanRows?.[0]),
+        recentScanLogs: recentScanLogs || [],
       };
     }
 
@@ -220,11 +297,31 @@ Deno.serve(async (req) => {
         const userData = userDataMap[userId];
         if (!userData) { stillHunting++; continue; }
 
-        const { telegramChatIds, brokerConnections, openPositions, account, config } = userData;
-        const strategyConfig = config.strategy || {};
+        const {
+          telegramChatIds,
+          brokerConnections,
+          brokerConn,
+          openPositions,
+          account,
+          config,
+          rawConfig,
+          gamePlan,
+          recentScanLogs,
+        } = userData;
+
+        // Avoid market-data work when execution is administratively disabled.
+        // The atomic RPC repeats these checks immediately before insertion.
+        if (!account || account.kill_switch_active === true || account.is_running !== true || account.is_paused === true) {
+          stillHunting++;
+          console.log(
+            `[zone-confirm] ${pending.symbol} ${pending.direction} — execution disabled`
+            + ` (account=${!!account}, running=${account?.is_running}, paused=${account?.is_paused}, kill=${account?.kill_switch_active})`,
+          );
+          continue;
+        }
 
         // Fetch fresh 5m candles for this pair
-        const candles5m = await fetchCandles(pending.symbol, "5m");
+        const candles5m = await fetchCandles(pending.symbol, "5m", brokerConn);
         if (candles5m.length < 10) {
           console.log(`[zone-confirm] ${pending.symbol} — insufficient 5m candles (${candles5m.length})`);
           stillHunting++;
@@ -264,7 +361,7 @@ Deno.serve(async (req) => {
         const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
         if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
-          const maxAttempts = config.entry?.maxConfirmationAttempts ?? config.maxConfirmationAttempts ?? 3;
+          const maxAttempts = config.maxConfirmationAttempts ?? 3;
           if (attempts >= maxAttempts) {
             // Cap reached — cancel the order instead of retrying indefinitely
             await supabase.from("pending_orders").update({
@@ -321,7 +418,7 @@ Deno.serve(async (req) => {
         // Fetch 1m candles for LTF CHoCH detection (Level 2 in hierarchy)
         let candles1m: Candle[] = [];
         try {
-          candles1m = await fetchCandles(pending.symbol, "1m");
+          candles1m = await fetchCandles(pending.symbol, "1m", brokerConn);
         } catch { /* non-critical: LTF path just won't fire */ }
 
         // Extract sweep data from signal_reason (stored at order placement time)
@@ -335,68 +432,73 @@ Deno.serve(async (req) => {
           }
         } catch { /* non-critical */ }
 
-        const confirmationSignal = detectZoneConfirmation(
-          candles5m,
-          pending.direction as "long" | "short",
-          DEFAULT_ZONE_CONFIRMATION_CONFIG,
-          zoneTouchIdx,
-          pending.symbol,
-          (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
-          candles1m.length >= 15 ? candles1m : undefined,
-          sweepEventData,
-        );
+        // Respect the canonical confirmation method saved in Bot Config.
+        // The previous fast scanner always used CHoCH and could therefore fill
+        // an indicators-only or CHoCH+indicators setup without its required leg.
+        const confirmationMethod = config.confirmationMethod || "choch";
+        let confirmationSignal = confirmationMethod === "indicators"
+          ? null
+          : detectZoneConfirmation(
+            candles5m,
+            pending.direction as "long" | "short",
+            DEFAULT_ZONE_CONFIRMATION_CONFIG,
+            zoneTouchIdx,
+            pending.symbol,
+            (zoneLow > 0 && zoneHigh > 0) ? { zoneHigh, zoneLow } : undefined,
+            candles1m.length >= 15 ? candles1m : undefined,
+            sweepEventData,
+          );
+        const indicatorConfirmation = confirmationMethod === "choch"
+          ? null
+          : checkIndicatorConfirmation(
+            candles5m,
+            pending.direction as "long" | "short",
+            { minIndicators: config.indicatorMinCount || 3 },
+          );
+        const confirmationPassed = confirmationMethod === "choch"
+          ? !!confirmationSignal
+          : confirmationMethod === "indicators"
+          ? !!indicatorConfirmation?.confirmed
+          : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
 
-        if (!confirmationSignal) {
+        if (!confirmationPassed) {
           stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — no confirmation yet (all tiers checked)`);
+          console.log(
+            `[zone-confirm] ${pending.symbol} ${pending.direction} — no ${confirmationMethod} confirmation yet`
+            + ` (CHoCH=${confirmationSignal ? `T${confirmationSignal.tier}` : "none"}, indicators=${indicatorConfirmation?.passedCount ?? 0}/4)`,
+          );
           continue;
         }
+
+        if (!confirmationSignal && indicatorConfirmation?.confirmed) {
+          confirmationSignal = {
+            type: (pending.direction === "long" ? "bullish_choch" : "bearish_choch") as any,
+            tier: 2,
+            price: currentPrice,
+            candleIndex: candles5m.length - 1,
+            displacement: 0.5,
+            significance: undefined,
+            closeBased: false,
+            supportingSignals: ["indicator_confirmation", indicatorConfirmation.summary],
+          };
+        }
+        const confirmedSignal = confirmationSignal!;
 
         // ── Tier gate: require Tier 1 or 2 when no refined zone is available ──
         // Tier 1 (close-based CHoCH) and Tier 2 (wick CHoCH + supporting signal)
         // are both valid structural confirmations. Only block Tier 3 (reversal
         // pattern without any CHoCH) when there's no refined zone.
-        if (!hasRefinedZone && confirmationSignal.tier === 3) {
+        if (confirmationMethod !== "indicators" && !hasRefinedZone && confirmedSignal.tier === 3) {
           stillHunting++;
-          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmationSignal.tier} signal rejected (no refined zone, Tier 1/2 required)`);
+          console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — T${confirmedSignal.tier} signal rejected (no refined zone, Tier 1/2 required)`);
           continue;
         }
 
         // ═══════════════════════════════════════════════════════════════════
         // CONFIRMED! Enter the trade (tiered confirmation passed).
         // ═══════════════════════════════════════════════════════════════
-        console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmationSignal)}`);
-        console.log(`[zone-confirm] Tier: ${confirmationSignal.tier}, Type: ${confirmationSignal.type}`);
-
-        // Check max positions gate — canonical: risk.maxConcurrentTrades (UI field).
-        // Runtime config.maxOpenPositions is populated from that same source by configMapper.
-        const maxOpenPositions = parseInt(String(
-          config.risk?.maxConcurrentTrades ?? config.maxOpenPositions ?? 3
-        ), 10);
-        const maxPerSymbol = config.risk?.maxPerSymbol || config.maxPerSymbol || 2;
-        const currentOpenCount = openPositions.length;
-        const currentSymbolCount = openPositions.filter((p: any) => p.symbol === pending.symbol).length;
-
-        if (currentOpenCount >= maxOpenPositions) {
-          await supabase.from("pending_orders").update({
-            status: "cancelled",
-            cancel_reason: `[fast-confirm] Max open positions reached (${currentOpenCount}/${maxOpenPositions})`,
-            resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
-          cancelled++;
-          console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max positions (${currentOpenCount}/${maxOpenPositions})`);
-          continue;
-        }
-        if (currentSymbolCount >= maxPerSymbol) {
-          await supabase.from("pending_orders").update({
-            status: "cancelled",
-            cancel_reason: `[fast-confirm] Max per symbol reached (${currentSymbolCount}/${maxPerSymbol})`,
-            resolved_at: new Date().toISOString(),
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
-          cancelled++;
-          console.log(`[zone-confirm] SKIPPED ${pending.symbol} — max per symbol (${currentSymbolCount}/${maxPerSymbol})`);
-          continue;
-        }
+        console.log(`[zone-confirm] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmedSignal)}`);
+        console.log(`[zone-confirm] Tier: ${confirmedSignal.tier}, Type: ${confirmedSignal.type}, Method: ${confirmationMethod}`);
 
         // Confirmation is a go/no-go signal — fill at current market price.
         // Since we already verified price is inside the refined zone (15m OB/FVG),
@@ -408,7 +510,172 @@ Deno.serve(async (req) => {
         const orderId = crypto.randomUUID().slice(0, 8);
         const nowStr = new Date().toISOString();
 
-        // Build signal_reason with confirmation data
+        // ── Fresh thesis, account, direction, Game Plan, prop-firm and spread checks ──
+        const requireThesisValidation = rawConfig?.strategy?.thesisValidationEnabled
+          ?? rawConfig?.thesisValidationEnabled
+          ?? true;
+        let thesisResult: ThesisValidationResult | null = null;
+        if (requireThesisValidation) {
+          try {
+            const [dailyCandles, h4Candles, h1Candles] = await Promise.all([
+              fetchCandles(pending.symbol, "1d", brokerConn, 120),
+              fetchCandles(pending.symbol, "4h", brokerConn, 120),
+              fetchCandles(pending.symbol, "1h", brokerConn, 120),
+            ]);
+            thesisResult = validatePendingOrderThesis(
+              {
+                order_id: pending.order_id,
+                symbol: pending.symbol,
+                direction: pending.direction as "long" | "short",
+                entry_price: pending.entry_price,
+                signal_reason: pending.signal_reason,
+              },
+              {
+                fotsiResult: null,
+                lastGamePlan: gamePlan,
+                dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
+                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+                h1Candles: h1Candles.length >= 20 ? h1Candles : null,
+              },
+            );
+          } catch (e: any) {
+            console.warn(`[zone-confirm] Fresh thesis validation failed for ${pending.symbol}: ${e?.message}`);
+          }
+        }
+
+        let brokerEquity: number | undefined;
+        if (account.execution_mode === "live" && brokerConn) {
+          try {
+            const { res, body } = await metaFetch(
+              brokerConn.account_id,
+              brokerConn.api_key,
+              (base) => `${base}/account-information`,
+            );
+            if (res.ok) {
+              const equityData = JSON.parse(body);
+              const parsedEquity = Number(equityData.equity ?? equityData.balance);
+              if (Number.isFinite(parsedEquity) && parsedEquity > 0) brokerEquity = parsedEquity;
+            }
+          } catch (e: any) {
+            console.warn(`[zone-confirm] Broker equity unavailable for ${pending.symbol}: ${e?.message}`);
+          }
+        }
+
+        let propFirmResult: PropFirmGateResult | null = null;
+        try {
+          propFirmResult = await runPropFirmGate(
+            supabase,
+            userId,
+            BOT_ID,
+            Number(account.balance || 0),
+            openPositions,
+            `fast-confirm-${pending.id}`,
+            {
+              brokerEquity,
+              isLiveAccount: account.execution_mode === "live",
+              hasBrokerConnection: account.execution_mode === "live" && !!brokerConn,
+            },
+          );
+        } catch (e: any) {
+          propFirmResult = {
+            enabled: true,
+            allowed: false,
+            reason: `Prop-firm verification error: ${e?.message}`,
+            maxPositionSizeMultiplier: 0,
+            shouldCloseAll: false,
+            compliance: null,
+            configId: null,
+          };
+        }
+
+        const spreadConfig = {
+          spreadFilterEnabled: config.spreadFilterEnabled,
+          maxSpreadPips: config.maxSpreadPips,
+        };
+        const liveMode = account.execution_mode === "live";
+        const spreadResults: Array<{ conn: any; result: Awaited<ReturnType<typeof fetchBrokerSpread>> }> = [];
+        if (liveMode && config.spreadFilterEnabled) {
+          for (const conn of brokerConnections) {
+            let metaAccountId: string | undefined;
+            let authToken: string | undefined;
+            if (conn.broker_type === "metaapi") {
+              metaAccountId = conn.account_id;
+              authToken = conn.api_key;
+              if (metaAccountId?.startsWith("eyJ") && authToken && /^[0-9a-f-]{36}$/.test(authToken)) {
+                authToken = conn.account_id;
+                metaAccountId = conn.api_key;
+              }
+            }
+            spreadResults.push({
+              conn,
+              result: await fetchBrokerSpread(conn, pending.symbol, spreadConfig, metaAccountId, authToken),
+            });
+          }
+        }
+        const availableSpreads = spreadResults.filter((item) => !!item.result);
+        const passingSpreads = spreadResults.filter((item) => item.result?.passed);
+        const approvedBrokerConnections = liveMode && config.spreadFilterEnabled
+          ? passingSpreads.map((item) => item.conn)
+          : brokerConnections;
+        const bestSpread = availableSpreads
+          .map((item) => item.result!)
+          .sort((a, b) => a.spreadPips - b.spreadPips)[0];
+
+        const directionVerdict = findCurrentDirectionVerdict(recentScanLogs, pending.symbol);
+        const authorization = evaluateFinalTradeAuthorization({
+          account,
+          candidate: {
+            symbol: pending.symbol,
+            direction: pending.direction as "long" | "short",
+            entryPrice: actualFillPrice,
+            stopLoss: Number(pending.stop_loss),
+            takeProfit: Number(pending.take_profit),
+          },
+          openPositions,
+          maxOpenPositions: config.maxOpenPositions,
+          maxPerSymbol: config.maxPerSymbol,
+          allowSameDirectionStacking: config.allowSameDirectionStacking,
+          maxDailyLoss: config.maxDailyLoss,
+          maxDrawdown: config.maxDrawdown,
+          minimumRiskReward: config.minRiskReward,
+          directionVerdict,
+          requireDirectionVerdict: true,
+          gamePlan,
+          gamePlanEnabled: config.gamePlanEnabled,
+          gamePlanMode: config.gpEnforcementMode,
+          gamePlanMinimumConfidence: config.gpHardBlockThreshold,
+          thesisResult,
+          requireThesisValidation,
+          propFirm: propFirmResult
+            ? { enabled: propFirmResult.enabled, allowed: propFirmResult.allowed, reason: propFirmResult.reason }
+            : null,
+          requirePropFirmResult: true,
+          spread: {
+            required: liveMode && config.spreadFilterEnabled,
+            available: !liveMode || !config.spreadFilterEnabled || availableSpreads.length > 0,
+            passed: !liveMode || !config.spreadFilterEnabled || passingSpreads.length > 0,
+            spreadPips: bestSpread?.spreadPips,
+            maximumPips: bestSpread?.effectiveMax,
+          },
+        });
+
+        if (!authorization.authorized) {
+          const cancelPermanently = !authorization.retryable;
+          await supabase.from("pending_orders").update({
+            ...(cancelPermanently ? {
+              status: "cancelled",
+              cancel_reason: `[final-auth:${authorization.code}] ${authorization.reason}`,
+              resolved_at: nowStr,
+            } : {}),
+            final_authorization: authorization,
+          }).eq("id", pending.id).eq("user_id", userId);
+          if (cancelPermanently) cancelled++;
+          else stillHunting++;
+          console.warn(`[zone-confirm] FINAL AUTH BLOCKED ${pending.symbol}: ${authorization.code} — ${authorization.reason}`);
+          continue;
+        }
+
+        // Build signal_reason with confirmation and final authorization data.
         let parsedSignalReason: any = {};
         try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
         const signalReason = {
@@ -417,15 +684,16 @@ Deno.serve(async (req) => {
           confirmationEntry: true,
           fastConfirmScanner: true, // Flag that this was filled by the fast-confirm scanner
           confirmation: {
-            type: confirmationSignal.type,
-            tier: confirmationSignal.tier,
-            price: confirmationSignal.price,
-            displacement: confirmationSignal.displacement,
-            significance: confirmationSignal.significance,
-            closeBased: confirmationSignal.closeBased,
-            supportingSignals: confirmationSignal.supportingSignals,
+            type: confirmedSignal.type,
+            tier: confirmedSignal.tier,
+            price: confirmedSignal.price,
+            displacement: confirmedSignal.displacement,
+            significance: confirmedSignal.significance,
+            closeBased: confirmedSignal.closeBased,
+            supportingSignals: confirmedSignal.supportingSignals,
             zoneTouchTime: pending.zone_touch_time,
             confirmationAttempts: pending.confirmation_attempts || 0,
+            method: confirmationMethod,
           },
           limitOrderOrigin: {
             orderType: pending.order_type,
@@ -438,28 +706,36 @@ Deno.serve(async (req) => {
             fromWatchlist: pending.from_watchlist,
             stagedCycles: pending.staged_cycles,
           },
+          finalAuthorization: authorization,
         };
 
-        // Insert paper position
-        await supabase.from("paper_positions").insert({
-          user_id: userId,
-          position_id: positionId,
-          symbol: pending.symbol,
-          direction: pending.direction,
-          size: pending.size.toString(),
-          entry_price: actualFillPrice.toString(),
-          current_price: currentPrice.toString(),
-          stop_loss: pending.stop_loss.toString(),
-          take_profit: pending.take_profit.toString(),
-          open_time: nowStr,
-          signal_reason: JSON.stringify(signalReason),
-          signal_score: pending.signal_score?.toString() || "0",
-          order_id: orderId,
-          position_status: "open",
-          bot_id: BOT_ID,
-          order_type: "limit",
-          trigger_price: entryPrice.toString(),
+        // One database transaction claims the pending order, rechecks account
+        // state, inserts the position and resolves the order. Only the winning
+        // scanner may continue to notifications or broker mirroring.
+        const fillReason = `[fast-confirm] ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
+          + ` (method: ${confirmationMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
+          + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
+        const { data: fillResult, error: fillError } = await supabase.rpc("finalize_pending_order_fill", {
+          p_pending_id: pending.id,
+          p_user_id: userId,
+          p_bot_id: BOT_ID,
+          p_fill_price: actualFillPrice,
+          p_current_price: currentPrice,
+          p_position_order_id: orderId,
+          p_signal_reason: signalReason,
+          p_fill_reason: fillReason,
+          p_authorization: authorization,
+          p_max_open_positions: config.maxOpenPositions,
+          p_max_per_symbol: config.maxPerSymbol,
+          p_allow_same_direction: config.allowSameDirectionStacking,
         });
+        if (fillError || !fillResult?.filled) {
+          console.warn(
+            `[zone-confirm] Atomic fill declined ${pending.symbol}:`
+            + ` ${fillError?.message || fillResult?.code || "unknown"}`,
+          );
+          continue;
+        }
 
         // Insert trade reasoning
         await supabase.from("trade_reasonings").insert({
@@ -468,24 +744,24 @@ Deno.serve(async (req) => {
           symbol: pending.symbol,
           direction: pending.direction,
           confluence_score: Math.round(parseFloat(pending.signal_score || "0")),
-          summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
+          summary: `[FAST-CONFIRM] ${pending.from_watchlist ? "[WATCHLIST] " : ""}${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)} (zone: ${pending.entry_zone_type}, limit was ${entryPrice})`,
           bias: pending.direction === "long" ? "bullish" : "bearish",
           session: "confirmation_fill",
           timeframe: "5m",
         });
 
-        // Update pending order to filled
-        await supabase.from("pending_orders").update({
-          status: "filled",
-          fill_reason: `[fast-confirm] ${confirmationSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmationSignal.displacement.toFixed(2)}, signals: ${confirmationSignal.supportingSignals.join(", ")})`,
-          filled_at: nowStr,
-          resolved_at: nowStr,
-        }).eq("order_id", pending.order_id).eq("user_id", userId);
-
         confirmed++;
 
         // Update openPositions array for subsequent max-position checks in same batch
-        openPositions.push({ symbol: pending.symbol, position_id: positionId, position_status: "open" });
+        openPositions.push({
+          symbol: pending.symbol,
+          direction: pending.direction,
+          size: pending.size,
+          entry_price: actualFillPrice,
+          stop_loss: pending.stop_loss,
+          position_id: positionId,
+          position_status: "open",
+        });
 
         // ── Telegram notification ──
         if (telegramChatIds.length > 0) {
@@ -501,12 +777,12 @@ Deno.serve(async (req) => {
             `<b>Symbol:</b> ${pending.symbol}\n` +
             `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
             `<b>Size:</b> ${pending.size} lots\n` +
-            `<b>Entry:</b> ${fmt(actualFillPrice)} (${confirmationSignal.type})\n` +
+            `<b>Entry:</b> ${fmt(actualFillPrice)} (${confirmedSignal.type})\n` +
             `<b>Zone Level:</b> ${fmt(entryPrice)}\n` +
             `<b>SL:</b> ${fmt(pending.stop_loss)}\n` +
             `<b>TP:</b> ${fmt(pending.take_profit)}\n` +
             `<b>Score:</b> ${pending.signal_score}\n` +
-            `<b>Confirmation:</b> ${confirmationSignal.type} (disp: ${confirmationSignal.displacement.toFixed(2)})\n` +
+            `<b>Confirmation:</b> ${confirmedSignal.type} (disp: ${confirmedSignal.displacement.toFixed(2)})\n` +
             `<b>Scanner:</b> Fast-confirm (60s poll)\n` +
             `<b>Zone:</b> ${pending.entry_zone_type} [${fmt(pending.entry_zone_low || "0")} - ${fmt(pending.entry_zone_high || "0")}]` +
             (pending.from_watchlist ? `\n\n📋 <b>From Watchlist</b> (${pending.staged_cycles} cycles)` : "");
@@ -522,14 +798,9 @@ Deno.serve(async (req) => {
         }
 
         // ── Broker mirroring ──
-        if (account.execution_mode === "live" && brokerConnections.length > 0) {
-          const spreadConfig = {
-            spreadFilterEnabled: strategyConfig.spreadFilterEnabled ?? config.spreadFilterEnabled ?? true,
-            maxSpreadPips: strategyConfig.maxSpreadPips ?? config.maxSpreadPips ?? 0,
-          };
-
+        if (account.execution_mode === "live" && approvedBrokerConnections.length > 0) {
           const mirroredConnIds: string[] = [];
-          for (const conn of brokerConnections) {
+          for (const conn of approvedBrokerConnections) {
             try {
               let metaAccountId: string | undefined;
               let authToken: string | undefined;
@@ -540,13 +811,6 @@ Deno.serve(async (req) => {
                   authToken = conn.account_id;
                   metaAccountId = conn.api_key;
                 }
-              }
-
-              // Spread check
-              const spreadResult = await fetchBrokerSpread(conn, pending.symbol, spreadConfig, metaAccountId, authToken);
-              if (spreadResult && !spreadResult.passed) {
-                console.warn(`[zone-confirm] Spread too wide for ${pending.symbol} on ${conn.display_name} — skipping`);
-                continue;
               }
 
               if (conn.broker_type !== "metaapi") {
