@@ -399,13 +399,18 @@ function determineBias(
   }
 
   // 6. Regime directional bias (weight: 1)
+  // Regime classifiers may return confidence either as a 0–1 ratio or a
+  // 0–100 percentage. Normalize only for display so 0.33 is shown as 33%.
+  const regimeConfidencePercent = Math.round(
+    regime.confidence <= 1 ? regime.confidence * 100 : regime.confidence,
+  );
   if (regime.directionalBias === "bullish") {
     bullishVotes += 1;
-    reasoning.push(`Regime: ${regime.regime} (bullish bias, ${regime.confidence}% conf)`);
+    reasoning.push(`Regime: ${regime.regime} (bullish bias, ${regimeConfidencePercent}% conf)`);
     addEvidence("market_regime", "Market regime", "bullish", 1, true, `${regime.regime} regime has bullish bias`);
   } else if (regime.directionalBias === "bearish") {
     bearishVotes += 1;
-    reasoning.push(`Regime: ${regime.regime} (bearish bias, ${regime.confidence}% conf)`);
+    reasoning.push(`Regime: ${regime.regime} (bearish bias, ${regimeConfidencePercent}% conf)`);
     addEvidence("market_regime", "Market regime", "bearish", 1, true, `${regime.regime} regime has bearish bias`);
   } else {
     reasoning.push(`Regime: ${regime.regime} (neutral)`);

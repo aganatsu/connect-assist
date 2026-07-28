@@ -228,8 +228,11 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           <span className={`font-mono text-xs font-bold uppercase ${getBiasColor(plan.bias)}`}>
             {plan.bias}
           </span>
-          <span className={`font-mono text-[10px] ${getConfidenceColor(plan.biasConfidence)}`}>
-            {plan.biasConfidence}%
+          <span
+            className={`font-mono text-[10px] ${getConfidenceColor(plan.biasConfidence)}`}
+            title="Weighted directional support from the legacy vote model; this is not a win probability."
+          >
+            {plan.biasConfidence}% support
           </span>
           {expanded ? <ChevronUp className="h-3 w-3 text-muted-foreground" /> : <ChevronDown className="h-3 w-3 text-muted-foreground" />}
         </div>
@@ -279,14 +282,14 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           {plan.conviction && (
             <div>
               <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-                Plan Quality
+                Decision Evidence
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
                 {[
-                  ["V2 Confidence", plan.conviction.confidence],
-                  ["Direction", plan.conviction.directionalStrength],
-                  ["Coverage", plan.conviction.evidenceCoverage],
-                  ["Quality", plan.conviction.planQuality],
+                  ["Actionable Conviction", plan.conviction.confidence],
+                  ["Net Directional Edge", plan.conviction.directionalStrength],
+                  ["Input Coverage", plan.conviction.evidenceCoverage],
+                  ["Plan Coherence", plan.conviction.planQuality],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="border border-border/50 bg-background/30 p-1.5">
                     <div className="text-[8px] uppercase text-muted-foreground">{label}</div>

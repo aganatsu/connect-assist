@@ -13,6 +13,8 @@ import {
 import {
   logRejectedSetup,
   shouldLogBelowThreshold,
+  normalizeRejectedGate,
+  buildRejectedOpportunityKey,
   type RejectedSetupParams,
 } from "./rejectedSetupLogger.ts";
 
@@ -54,6 +56,47 @@ Deno.test("shouldLogBelowThreshold: 2 T1 factors → true", () => {
 
 Deno.test("shouldLogBelowThreshold: 5 T1 factors → true", () => {
   assertEquals(shouldLogBelowThreshold(5), true);
+});
+
+Deno.test("normalizeRejectedGate collapses dynamic duplicate and loss-limit messages", () => {
+  assertEquals(
+    normalizeRejectedGate("Already long on GBP/CAD — no duplicate (enable stacking to allow)"),
+    "duplicate_position",
+  );
+  assertEquals(
+    normalizeRejectedGate("5 consecutive losses >= 5 limit — auto-resets in 23min"),
+    "consecutive_loss_limit",
+  );
+  assertEquals(
+    normalizeRejectedGate("Direction BLOCKED: verdict conflicts with signal (conf: 74%)"),
+    "direction_verdict",
+  );
+  assertEquals(
+    normalizeRejectedGate("Buying in premium zone rejected — price at 72% of range"),
+    "premium_discount",
+  );
+  assertEquals(
+    normalizeRejectedGate("Gameplan hard block: bearish 64% vs LONG"),
+    "gameplan_alignment",
+  );
+});
+
+Deno.test("buildRejectedOpportunityKey is stable across dynamic gate wording", () => {
+  const first = buildRejectedOpportunityKey({
+    symbol: "GBP/USD",
+    direction: "long",
+    rejectionType: "gate_blocked",
+    sessionName: "London",
+    failedGates: ["5 consecutive losses >= 5 limit — auto-resets in 23min"],
+  });
+  const second = buildRejectedOpportunityKey({
+    symbol: "GBP/USD",
+    direction: "long",
+    rejectionType: "gate_blocked",
+    sessionName: "London",
+    failedGates: ["5 consecutive losses >= 5 limit — auto-resets in 53min"],
+  });
+  assertEquals(first, second);
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -111,6 +154,11 @@ Deno.test("logRejectedSetup: gate_blocked inserts correct row", async () => {
   assertEquals(row.fotsi_quote_tsi, -20);
   assertEquals(row.price_at_rejection, 1.0855);
   assertEquals(row.outcome_status, "pending");
+  assertEquals(row.normalized_gates, ["correlation", "max_positions"]);
+  assertEquals(
+    row.opportunity_key,
+    "eur/usd|long|gate_blocked|london|correlation+max_positions",
+  );
 });
 
 Deno.test("logRejectedSetup: below_threshold_strong_t1 with minimal fields", async () => {
