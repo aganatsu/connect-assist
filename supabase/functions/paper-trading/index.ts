@@ -1527,8 +1527,112 @@ Deno.serve(async (req) => {
     }
 
     if (action === "set_execution_mode") {
-      await supabase.from("paper_accounts").update({ execution_mode: payload.mode }).eq("user_id", user.id);
-      return respond({ success: true });
+      const requestedMode = payload.mode;
+      if (requestedMode !== "paper" && requestedMode !== "live") {
+        return respond({
+          error: "Execution mode must be either paper or live",
+          code: "invalid_execution_mode",
+        }, 400);
+      }
+
+      await ensureAccount(supabase, user.id);
+      const { data: currentAccount, error: accountReadError } = await supabase
+        .from("paper_accounts")
+        .select("execution_mode")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (accountReadError) {
+        return respond({
+          error: `Could not read execution mode: ${accountReadError.message}`,
+          code: "execution_mode_read_failed",
+        }, 500);
+      }
+      if (!currentAccount) {
+        return respond({
+          error: "Trading account is unavailable",
+          code: "account_missing",
+        }, 404);
+      }
+      if (currentAccount.execution_mode === requestedMode) {
+        return respond({
+          success: true,
+          executionMode: currentAccount.execution_mode,
+          unchanged: true,
+        });
+      }
+
+      if (requestedMode === "live") {
+        const { data: activeBroker, error: brokerReadError } = await supabase
+          .from("broker_connections")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("is_active", true)
+          .limit(1)
+          .maybeSingle();
+        if (brokerReadError) {
+          return respond({
+            error: `Could not verify broker connection: ${brokerReadError.message}`,
+            code: "broker_verification_failed",
+          }, 500);
+        }
+        if (!activeBroker) {
+          return respond({
+            error: "Connect and activate a broker before switching to live mode",
+            code: "active_broker_required",
+          }, 409);
+        }
+      }
+
+      if (requestedMode === "paper") {
+        const { data: openPosition, error: positionReadError } = await supabase
+          .from("paper_positions")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("position_status", "open")
+          .limit(1)
+          .maybeSingle();
+        if (positionReadError) {
+          return respond({
+            error: `Could not verify open positions: ${positionReadError.message}`,
+            code: "position_verification_failed",
+          }, 500);
+        }
+        if (openPosition) {
+          return respond({
+            error: "Close all open positions before switching to paper mode",
+            code: "open_positions_require_live_management",
+          }, 409);
+        }
+      }
+
+      const { data: persistedAccount, error: modeUpdateError } = await supabase
+        .from("paper_accounts")
+        .update({ execution_mode: requestedMode })
+        .eq("user_id", user.id)
+        .select("execution_mode")
+        .maybeSingle();
+      if (modeUpdateError) {
+        return respond({
+          error: `Execution mode was not saved: ${modeUpdateError.message}`,
+          code: "execution_mode_update_failed",
+        }, 500);
+      }
+      if (!persistedAccount) {
+        return respond({
+          error: "Execution mode update did not affect a trading account",
+          code: "execution_mode_not_persisted",
+        }, 409);
+      }
+      if (persistedAccount.execution_mode !== requestedMode) {
+        return respond({
+          error: `Execution mode verification failed: database returned ${persistedAccount.execution_mode}`,
+          code: "execution_mode_verification_failed",
+        }, 409);
+      }
+      return respond({
+        success: true,
+        executionMode: persistedAccount.execution_mode,
+      });
     }
 
     return respond({ error: "Unknown action" });
@@ -1546,8 +1650,9 @@ async function ensureAccount(supabase: any, userId: string) {
   }
 }
 
-function respond(data: any) {
+function respond(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
+    status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }

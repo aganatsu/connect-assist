@@ -380,7 +380,13 @@ export const paperApi = {
   resetAccount: () => invokeFunction("paper-trading", { action: "reset_account" }),
   resetBalanceOnly: () => invokeFunction("paper-trading", { action: "reset_balance_only" }),
   setBalance: (balance: number) => invokeFunction("paper-trading", { action: "set_balance", balance }),
-  setExecutionMode: (mode: "paper" | "live") => invokeFunction("paper-trading", { action: "set_execution_mode", mode }),
+  setExecutionMode: (mode: "paper" | "live") =>
+    invokeFunction<{
+      success?: boolean;
+      executionMode?: "paper" | "live";
+      error?: string;
+      fallback?: boolean;
+    }>("paper-trading", { action: "set_execution_mode", mode }),
 };
 
 // ── Backtest Engine ──
