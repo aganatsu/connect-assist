@@ -3,6 +3,10 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
+  evaluateFinalTradeAuthorization,
+  type DirectionVerdictForAuthorization,
+} from "../_shared/finalTradeAuthorization.ts";
+import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
 } from "../_shared/gamePlanShadowAudit.ts";
@@ -2527,16 +2531,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // This runs BEFORE the game plan generation section (which is after management-only return).
   // One lightweight DB query to get the most recent game plan for thesis validation.
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
-  if ((config as any).thesisValidationEnabled !== false) {
+  let _recentScanLogsForFillAuthorization: any[] = [];
+  if ((config as any).thesisValidationEnabled !== false || (config as any).gamePlanEnabled !== false) {
     try {
       const { data: recentGPLogs } = await supabase
         .from("scan_logs")
-        .select("details_json")
+        .select("created_at, details_json")
         .eq("user_id", userId)
         .eq("bot_id", BOT_ID)
+        .contains("details_json", { type: "game_plan" })
         .order("created_at", { ascending: false })
-        .limit(20);
-      const gpLog = (recentGPLogs || []).find((log: any) => log.details_json?.type === "game_plan");
+        .limit(1);
+      const gpLog = recentGPLogs?.[0];
       if (gpLog?.details_json) {
         const cached = gpLog.details_json;
         _lastGamePlanForValidation = {
@@ -2549,10 +2555,39 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         } as SessionGamePlan;
       }
     } catch (gpErr: any) {
-      // Fail-open: if game plan load fails, thesis validation still runs (just without GP check)
+      // Final authorization fails closed in hard Game Plan mode if this remains unavailable.
       console.warn(`[scan ${scanCycleId}] Thesis validation: failed to load game plan: ${gpErr?.message}`);
     }
   }
+  try {
+    const { data: recentScanLogs } = await supabase
+      .from("scan_logs")
+      .select("created_at, details_json")
+      .eq("user_id", userId)
+      .eq("bot_id", BOT_ID)
+      .gt("pairs_scanned", 0)
+      .order("created_at", { ascending: false })
+      .limit(5);
+    _recentScanLogsForFillAuthorization = recentScanLogs || [];
+  } catch (directionLogErr: any) {
+    console.warn(`[scan ${scanCycleId}] Fill authorization: failed to load recent Direction Verdicts: ${directionLogErr?.message}`);
+  }
+
+  const latestDirectionVerdictFor = (symbol: string): DirectionVerdictForAuthorization | null => {
+    for (const log of _recentScanLogsForFillAuthorization) {
+      if (!Array.isArray(log?.details_json)) continue;
+      const pairDetail = log.details_json.find((item: any) => item?.pair === symbol || item?.symbol === symbol);
+      const verdict = pairDetail?.directionVerdict;
+      if (!verdict || typeof verdict !== "object") continue;
+      return {
+        verdict: verdict.effectiveDirection ?? verdict.verdict ?? null,
+        shouldBlock: verdict.shouldBlock ?? verdict.directionSource === "blocked",
+        blockReason: verdict.blockReason ?? verdict.summary ?? null,
+        confidence: verdict.confidence ?? null,
+      };
+    }
+    return null;
+  };
 
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
   let pendingFilled = 0;
@@ -2620,6 +2655,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // orders whose original trade thesis has been invalidated.
         // Fail-open: errors/missing data never cause cancellation.
         // ═══════════════════════════════════════════════════════════════════
+        let pendingThesisResult: ThesisValidationResult | null = null;
         if ((config as any).thesisValidationEnabled !== false) {
           try {
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
@@ -2644,6 +2680,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 h1Candles: tvH1.length >= 20 ? tvH1 : null,
               },
             );
+            pendingThesisResult = thesisResult;
             if (!thesisResult.valid) {
               await supabase.from("pending_orders").update({
                 status: "cancelled",
@@ -2902,30 +2939,6 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[pending] ${pending.symbol} ${pending.direction} — CONFIRMED! ${formatConfirmationSummary(confirmedSignal)}`);
           console.log(`[pending] Confirmation tier: ${confirmedSignal.tier}, type: ${confirmedSignal.type}`);
 
-          // L3 Fix: Check Gate 4/5 (max positions, max per symbol) at fill time.
-          const currentOpenCount = openPosArr.length;
-          const currentSymbolCount = openPosArr.filter((p: any) => p.symbol === pending.symbol).length;
-          if (currentOpenCount >= (parseInt(String(config.maxOpenPositions), 10) || 3)) {
-            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max open positions reached (${currentOpenCount}/${config.maxOpenPositions})`);
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              cancel_reason: `Max open positions reached (${currentOpenCount}/${config.maxOpenPositions}) at confirmation time`,
-              resolved_at: new Date().toISOString(),
-            }).eq("order_id", pending.order_id).eq("user_id", userId);
-            pendingCancelled++;
-            continue;
-          }
-          if (currentSymbolCount >= (config.maxPerSymbol || 2)) {
-            console.log(`[pending] SKIPPED confirmed fill ${pending.symbol} ${pending.direction} — max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol})`);
-            await supabase.from("pending_orders").update({
-              status: "cancelled",
-              cancel_reason: `Max per symbol reached (${currentSymbolCount}/${config.maxPerSymbol}) at confirmation time`,
-              resolved_at: new Date().toISOString(),
-            }).eq("order_id", pending.order_id).eq("user_id", userId);
-            pendingCancelled++;
-            continue;
-          }
-
           // Confirmation is go/no-go — fill at current market price (already inside refined zone)
           const actualFillPrice = currentPrice;
           console.log(`[pending] CONFIRMED FILL ${pending.symbol} ${pending.direction} — confirmed @ refined zone, fill at ${actualFillPrice} (zone entry was ${entryPrice})`);
@@ -2936,22 +2949,140 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const nowStr = new Date().toISOString();
           const exitFlags = pending.exit_flags || {};
 
-          // GUARD: reject confirmed-fill inserts whose SL/TP orientation doesn't match direction.
-          {
-            const eNum = Number(actualFillPrice);
-            const sNum = Number(pending.stop_loss);
-            const tNum = Number(pending.take_profit);
-            const ok = pending.direction === "long"
-              ? (sNum < eNum && tNum > eNum)
-              : (sNum > eNum && tNum < eNum);
-            if (!ok) {
-              console.error(`[GUARD] ${pending.symbol} ${pending.direction} CONFIRMED-FILL REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
-              await supabase.from("pending_orders").update({
-                status: "cancelled",
-                cancel_reason: `Orientation guard: SL/TP inverted vs direction (entry=${eNum} sl=${sNum} tp=${tNum})`,
-              }).eq("order_id", pending.order_id).eq("user_id", userId);
-              continue;
+          let brokerEquity: number | undefined;
+          if (account.execution_mode === "live" && _scanBrokerConn) {
+            try {
+              const { res, body } = await metaFetch(
+                _scanBrokerConn.account_id,
+                _scanBrokerConn.api_key,
+                (base) => `${base}/account-information`,
+              );
+              if (res.ok) {
+                const equityData = JSON.parse(body);
+                const parsedEquity = Number(equityData.equity ?? equityData.balance);
+                if (Number.isFinite(parsedEquity) && parsedEquity > 0) brokerEquity = parsedEquity;
+              }
+            } catch (e: any) {
+              console.warn(`[pending] Broker equity unavailable for final authorization: ${e?.message}`);
             }
+          }
+
+          let pendingPropFirmResult: PropFirmGateResult | null = null;
+          try {
+            pendingPropFirmResult = await runPropFirmGate(
+              supabase,
+              userId,
+              BOT_ID,
+              balance,
+              openPosArr,
+              `${scanCycleId}-pending-${pending.id}`,
+              {
+                brokerEquity,
+                isLiveAccount: account.execution_mode === "live",
+                hasBrokerConnection: account.execution_mode === "live" && !!_scanBrokerConn,
+                fxMarketClosed,
+              },
+            );
+          } catch (e: any) {
+            pendingPropFirmResult = {
+              enabled: true,
+              allowed: false,
+              reason: `Prop-firm verification error: ${e?.message}`,
+              maxPositionSizeMultiplier: 0,
+              shouldCloseAll: false,
+              compliance: null,
+              configId: null,
+            };
+          }
+
+          const { data: pendingConnections } = account.execution_mode === "live"
+            ? await supabase.from("broker_connections")
+              .select("*")
+              .eq("user_id", userId)
+              .in("broker_type", ["metaapi", "oanda"])
+              .eq("is_active", true)
+            : { data: [] as any[] };
+          const spreadResults: Array<{ conn: any; result: Awaited<ReturnType<typeof fetchBrokerSpread>> }> = [];
+          if (account.execution_mode === "live" && config.spreadFilterEnabled) {
+            for (const conn of pendingConnections || []) {
+              let metaAccountId: string | undefined;
+              let authToken: string | undefined;
+              if (conn.broker_type === "metaapi") {
+                metaAccountId = conn.account_id;
+                authToken = conn.api_key;
+                if (metaAccountId?.startsWith("eyJ") && authToken && /^[0-9a-f-]{36}$/.test(authToken)) {
+                  authToken = conn.account_id;
+                  metaAccountId = conn.api_key;
+                }
+              }
+              spreadResults.push({
+                conn,
+                result: await fetchBrokerSpread(conn, pending.symbol, config, metaAccountId, authToken),
+              });
+            }
+          }
+          const availableSpreads = spreadResults.filter((item) => !!item.result);
+          const passingSpreads = spreadResults.filter((item) => item.result?.passed);
+          const approvedPendingConnections = account.execution_mode === "live" && config.spreadFilterEnabled
+            ? passingSpreads.map((item) => item.conn)
+            : (pendingConnections || []);
+          const bestSpread = availableSpreads
+            .map((item) => item.result!)
+            .sort((a, b) => a.spreadPips - b.spreadPips)[0];
+
+          const finalAuthorization = evaluateFinalTradeAuthorization({
+            account,
+            candidate: {
+              symbol: pending.symbol,
+              direction: pending.direction as "long" | "short",
+              entryPrice: actualFillPrice,
+              stopLoss: Number(pending.stop_loss),
+              takeProfit: Number(pending.take_profit),
+            },
+            openPositions: openPosArr,
+            maxOpenPositions: config.maxOpenPositions,
+            maxPerSymbol: config.maxPerSymbol,
+            allowSameDirectionStacking: config.allowSameDirectionStacking,
+            maxDailyLoss: config.maxDailyLoss,
+            maxDrawdown: config.maxDrawdown,
+            minimumRiskReward: config.minRiskReward,
+            directionVerdict: latestDirectionVerdictFor(pending.symbol),
+            requireDirectionVerdict: true,
+            gamePlan: _lastGamePlanForValidation,
+            gamePlanEnabled: config.gamePlanEnabled,
+            gamePlanMode: config.gpEnforcementMode,
+            gamePlanMinimumConfidence: config.gpHardBlockThreshold,
+            thesisResult: pendingThesisResult,
+            requireThesisValidation: (config as any).thesisValidationEnabled !== false,
+            propFirm: pendingPropFirmResult
+              ? {
+                enabled: pendingPropFirmResult.enabled,
+                allowed: pendingPropFirmResult.allowed,
+                reason: pendingPropFirmResult.reason,
+              }
+              : null,
+            requirePropFirmResult: true,
+            spread: {
+              required: account.execution_mode === "live" && config.spreadFilterEnabled,
+              available: account.execution_mode !== "live" || !config.spreadFilterEnabled || availableSpreads.length > 0,
+              passed: account.execution_mode !== "live" || !config.spreadFilterEnabled || passingSpreads.length > 0,
+              spreadPips: bestSpread?.spreadPips,
+              maximumPips: bestSpread?.effectiveMax,
+            },
+          });
+          if (!finalAuthorization.authorized) {
+            const cancelPermanently = !finalAuthorization.retryable;
+            await supabase.from("pending_orders").update({
+              ...(cancelPermanently ? {
+                status: "cancelled",
+                cancel_reason: `[final-auth:${finalAuthorization.code}] ${finalAuthorization.reason}`,
+                resolved_at: nowStr,
+              } : {}),
+              final_authorization: finalAuthorization,
+            }).eq("id", pending.id).eq("user_id", userId);
+            if (cancelPermanently) pendingCancelled++;
+            console.warn(`[pending] FINAL AUTH BLOCKED ${pending.symbol}: ${finalAuthorization.code} — ${finalAuthorization.reason}`);
+            continue;
           }
 
           // Build signal_reason with limit order provenance + confirmation data
@@ -2986,27 +3117,33 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               fromWatchlist: pending.from_watchlist,
               stagedCycles: pending.staged_cycles,
             },
+            finalAuthorization,
           };
 
-          await supabase.from("paper_positions").insert({
-            user_id: userId,
-            position_id: positionId,
-            symbol: pending.symbol,
-            direction: pending.direction,
-            size: pending.size.toString(),
-            entry_price: actualFillPrice.toString(),  // L1: use actual fill price, not limit price
-            current_price: currentPrice.toString(),
-            stop_loss: pending.stop_loss.toString(),
-            take_profit: pending.take_profit.toString(),
-            open_time: nowStr,
-            signal_reason: JSON.stringify(signalReason),
-            signal_score: pending.signal_score?.toString() || "0",
-            order_id: orderId,
-            position_status: "open",
-            bot_id: BOT_ID,
-            order_type: "limit",
-            trigger_price: entryPrice.toString(),
+          const fillReason = `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
+            + ` (method: ${confMethod}, displacement: ${confirmedSignal.displacement.toFixed(2)},`
+            + ` signals: ${confirmedSignal.supportingSignals.join(", ")})`;
+          const { data: atomicFill, error: atomicFillError } = await supabase.rpc("finalize_pending_order_fill", {
+            p_pending_id: pending.id,
+            p_user_id: userId,
+            p_bot_id: BOT_ID,
+            p_fill_price: actualFillPrice,
+            p_current_price: currentPrice,
+            p_position_order_id: orderId,
+            p_signal_reason: signalReason,
+            p_fill_reason: fillReason,
+            p_authorization: finalAuthorization,
+            p_max_open_positions: config.maxOpenPositions,
+            p_max_per_symbol: config.maxPerSymbol,
+            p_allow_same_direction: config.allowSameDirectionStacking,
           });
+          if (atomicFillError || !atomicFill?.filled) {
+            console.warn(
+              `[pending] Atomic fill declined ${pending.symbol}:`
+              + ` ${atomicFillError?.message || atomicFill?.code || "unknown"}`,
+            );
+            continue;
+          }
 
           await supabase.from("trade_reasonings").insert({
             user_id: userId,
@@ -3020,17 +3157,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             timeframe: "5m",
           });
 
-          await supabase.from("pending_orders").update({
-            status: "filled",
-            fill_reason: `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)} (displacement: ${confirmedSignal.displacement.toFixed(2)}, signals: ${confirmedSignal.supportingSignals.join(", ")})`,
-            filled_at: nowStr,
-            resolved_at: nowStr,
-          }).eq("order_id", pending.order_id).eq("user_id", userId);
-
           pendingFilled++;
           tradesPlaced++;
 
-          openPosArr.push({ symbol: pending.symbol, size: pending.size.toString(), entry_price: actualFillPrice.toString(), direction: pending.direction, position_id: positionId, position_status: "open", order_id: orderId, open_time: nowStr, signal_score: pending.signal_score?.toString() || "0" });
+          openPosArr.push({
+            symbol: pending.symbol,
+            size: pending.size.toString(),
+            entry_price: actualFillPrice.toString(),
+            stop_loss: pending.stop_loss.toString(),
+            direction: pending.direction,
+            position_id: positionId,
+            position_status: "open",
+            order_id: orderId,
+            open_time: nowStr,
+            signal_score: pending.signal_score?.toString() || "0",
+          });
 
           // Send Telegram notification for confirmed entry
           if (telegramChatIds.length > 0 && shouldNotify("confirmed_entry")) {
@@ -3080,30 +3221,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
           // Mirror to brokers for limit order fills
           if (account.execution_mode === "live") {
-            const { data: connections } = await supabase.from("broker_connections")
-              .select("*").eq("user_id", userId).in("broker_type", ["metaapi", "oanda"]).eq("is_active", true);
-            if (connections && connections.length > 0) {
+            if (approvedPendingConnections.length > 0) {
               const mirroredConnIds: string[] = [];
-              for (const conn of connections) {
+              for (const conn of approvedPendingConnections) {
                 try {
-                  // B4 Fix: Add spread check before mirroring limit fills to brokers.
-                  // Market order path checks spread; limit fills should too.
-                  let metaAccountIdForSpread: string | undefined;
-                  let authTokenForSpread: string | undefined;
-                  if (conn.broker_type === "metaapi") {
-                    metaAccountIdForSpread = conn.account_id;
-                    authTokenForSpread = conn.api_key;
-                    if (metaAccountIdForSpread?.startsWith("eyJ") && authTokenForSpread && /^[0-9a-f-]{36}$/.test(authTokenForSpread)) {
-                      authTokenForSpread = conn.account_id;
-                      metaAccountIdForSpread = conn.api_key;
-                    }
-                  }
-                  const spreadResult = await fetchBrokerSpread(conn, pending.symbol, config, metaAccountIdForSpread, authTokenForSpread);
-                  if (spreadResult && !spreadResult.passed) {
-                    console.warn(`[limit-fill-mirror] ${conn.display_name}: spread too wide (${spreadResult.spreadPips.toFixed(2)}p > ${spreadResult.effectiveMax}p) — skipping broker mirror for ${pending.symbol} (B4 safety)`);
-                    continue;
-                  }
-
                   if (conn.broker_type !== "metaapi") {
                     const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
                       method: "POST",
@@ -3174,8 +3295,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   let propFirmGateResult: PropFirmGateResult | null = null;
   let propFirmSizeMultiplier = 1.0;
   try {
-    // Determine broker equity — fetch from MetaAPI whenever a broker connection exists
-    // (even in paper mode) so prop firm compliance tracks the real MT5 account
+    // In live mode, use MetaAPI equity for prop-firm compliance. In paper mode,
+    // keep the compliance calculation tied to the paper account taking trades.
     let brokerEquity: number | undefined;
     const isLiveMode = account.execution_mode === "live";
     // Only fetch broker equity in LIVE mode. In paper mode the prop firm gate
@@ -6301,7 +6422,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -7014,8 +7135,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
 
         // ── Breaker Block Entry Signal (SMC Enhancement) ──
-        // Even when the main signal is gate-blocked, a breaker block can fire its own
-        // pending order. Breakers are independent entry models with their own confluence.
+        // Breakers remain an independent setup model, but they are not an
+        // independent execution authority. Direction, Game Plan, account,
+        // exposure, drawdown and prop-firm checks must authorize the candidate.
         if (smcEnhResult?.breakerBlocks && smcEnhResult.breakerBlocks.length > 0 && config.smcEnhancements?.enableBreakerBlocks) {
           for (const breaker of smcEnhResult.breakerBlocks) {
             if (!breaker.retestComplete) continue; // Only fire when retest is confirmed
@@ -7049,7 +7171,58 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               { balance, riskPercent: pairConfig.riskPerTrade * 0.5, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
               undefined, undefined, undefined,
             );
-            let breakerSize = Math.max(breakerSizing.lots, 0.01);
+            let breakerSize = Math.max(breakerSizing.lots * propFirmSizeMultiplier, 0.01);
+
+            const breakerAuthorization = evaluateFinalTradeAuthorization({
+              account,
+              candidate: {
+                symbol: pair,
+                direction: breakerDir,
+                entryPrice: breakerEntry,
+                stopLoss: breakerSL,
+                takeProfit: breakerTP,
+              },
+              openPositions: openPosArr,
+              maxOpenPositions: config.maxOpenPositions,
+              maxPerSymbol: config.maxPerSymbol,
+              allowSameDirectionStacking: config.allowSameDirectionStacking,
+              maxDailyLoss: config.maxDailyLoss,
+              maxDrawdown: config.maxDrawdown,
+              minimumRiskReward: config.minRiskReward,
+              directionVerdict: directionVerdict
+                ? {
+                  verdict: directionVerdict.verdict,
+                  shouldBlock: directionVerdict.shouldBlock,
+                  blockReason: directionVerdict.blockReason,
+                  confidence: directionVerdict.confidence,
+                }
+                : null,
+              requireDirectionVerdict: true,
+              gamePlan: activeGamePlan,
+              gamePlanEnabled,
+              gamePlanMode: gpEnforcementMode,
+              gamePlanMinimumConfidence: (config as any).gpHardBlockThreshold ?? 75,
+              thesisResult: null,
+              requireThesisValidation: false,
+              propFirm: propFirmGateResult
+                ? {
+                  enabled: propFirmGateResult.enabled,
+                  allowed: propFirmGateResult.allowed,
+                  reason: propFirmGateResult.reason,
+                }
+                : null,
+              requirePropFirmResult: true,
+              // Spread and fresh thesis are rechecked when the pending order
+              // reaches confirmation. Placement itself does not execute.
+              spread: { required: false, available: true, passed: true },
+            });
+            if (!breakerAuthorization.authorized) {
+              console.warn(
+                `[breaker] ${pair} ${breakerDir}: FINAL AUTH BLOCKED`
+                + ` ${breakerAuthorization.code} — ${breakerAuthorization.reason}`,
+              );
+              continue;
+            }
 
             const breakerOrderId = `brk-${crypto.randomUUID().slice(0, 6)}`;
             const breakerExpiry = config.limitOrderExpiryMinutes || 60;
@@ -7082,6 +7255,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 originalSL: breakerSL,
                 originalTP: breakerTP,
                 tpMethod: config.tpMethod || "rr_ratio",
+                directionVerdict: (detail as any).directionVerdict || null,
+                gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
+                candidateAuthorization: breakerAuthorization,
               }),
               signal_score: breaker.confidence * 100,
               setup_type: "breaker_retest",
