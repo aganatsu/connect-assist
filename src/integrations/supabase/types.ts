@@ -482,6 +482,7 @@ export type Database = {
           signal_score: string
           size: number | null
           size_old: string | null
+          source_pending_order_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
           symbol: string
@@ -512,6 +513,7 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
+          source_pending_order_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol: string
@@ -542,6 +544,7 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
+          source_pending_order_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol?: string
@@ -654,6 +657,7 @@ export type Database = {
           expiry_minutes: number
           fill_reason: string | null
           filled_at: string | null
+          final_authorization: Json | null
           from_watchlist: boolean
           id: string
           order_id: string
@@ -694,6 +698,7 @@ export type Database = {
           expiry_minutes?: number
           fill_reason?: string | null
           filled_at?: string | null
+          final_authorization?: Json | null
           from_watchlist?: boolean
           id?: string
           order_id: string
@@ -734,6 +739,7 @@ export type Database = {
           expiry_minutes?: number
           fill_reason?: string | null
           filled_at?: string | null
+          final_authorization?: Json | null
           from_watchlist?: boolean
           id?: string
           order_id?: string
@@ -1607,7 +1613,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      finalize_pending_order_fill: {
+        Args: {
+          p_allow_same_direction: boolean
+          p_authorization: Json
+          p_bot_id: string
+          p_current_price: number
+          p_fill_price: number
+          p_fill_reason: string
+          p_max_open_positions: number
+          p_max_per_symbol: number
+          p_pending_id: string
+          p_position_order_id: string
+          p_signal_reason: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never
