@@ -3173,7 +3173,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Determine broker equity — fetch from MetaAPI whenever a broker connection exists
     // (even in paper mode) so prop firm compliance tracks the real MT5 account
     let brokerEquity: number | undefined;
-    if (_scanBrokerConn) {
+    const isLiveMode = account.execution_mode === "live";
+    // Only fetch broker equity in LIVE mode. In paper mode the prop firm gate
+    // should track the paper balance — the MT5 account isn't the one taking trades.
+    if (_scanBrokerConn && isLiveMode) {
       try {
         const metaAccountId = _scanBrokerConn.account_id;
         const authToken = _scanBrokerConn.api_key;
@@ -3198,7 +3201,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
     propFirmGateResult = await runPropFirmGate(
       supabase, userId, BOT_ID, balance, openPosArr, scanCycleId,
-      { brokerEquity, isLiveAccount: account.execution_mode === "live", hasBrokerConnection: !!_scanBrokerConn, fxMarketClosed },
+      { brokerEquity, isLiveAccount: isLiveMode, hasBrokerConnection: isLiveMode && !!_scanBrokerConn, fxMarketClosed },
     );
 
     if (propFirmGateResult.enabled) {
