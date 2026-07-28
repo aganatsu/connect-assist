@@ -962,6 +962,8 @@ export type Database = {
           id: string
           mae_pips: number | null
           mfe_pips: number | null
+          normalized_gates: string[]
+          opportunity_key: string | null
           outcome_checked_at: string | null
           outcome_status: string
           price_at_rejection: number | null
@@ -972,6 +974,7 @@ export type Database = {
           rejection_type: string
           rr_ratio: number | null
           session_name: string | null
+          shadow_decision: Json | null
           sl_hit: boolean | null
           stop_loss: number | null
           symbol: string
@@ -996,6 +999,8 @@ export type Database = {
           id?: string
           mae_pips?: number | null
           mfe_pips?: number | null
+          normalized_gates?: string[]
+          opportunity_key?: string | null
           outcome_checked_at?: string | null
           outcome_status?: string
           price_at_rejection?: number | null
@@ -1006,6 +1011,7 @@ export type Database = {
           rejection_type: string
           rr_ratio?: number | null
           session_name?: string | null
+          shadow_decision?: Json | null
           sl_hit?: boolean | null
           stop_loss?: number | null
           symbol: string
@@ -1030,6 +1036,8 @@ export type Database = {
           id?: string
           mae_pips?: number | null
           mfe_pips?: number | null
+          normalized_gates?: string[]
+          opportunity_key?: string | null
           outcome_checked_at?: string | null
           outcome_status?: string
           price_at_rejection?: number | null
@@ -1040,6 +1048,7 @@ export type Database = {
           rejection_type?: string
           rr_ratio?: number | null
           session_name?: string | null
+          shadow_decision?: Json | null
           sl_hit?: boolean | null
           stop_loss?: number | null
           symbol?: string
