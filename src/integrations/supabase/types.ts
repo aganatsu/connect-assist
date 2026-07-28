@@ -541,6 +541,7 @@ export type Database = {
           direction: string
           entry_price: number | null
           entry_price_old: string | null
+          final_authorization: Json | null
           id: string
           mirrored_connection_ids: string[]
           open_time: string
@@ -553,6 +554,7 @@ export type Database = {
           signal_score: string
           size: number | null
           size_old: string | null
+          source_candidate_key: string | null
           source_pending_order_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
@@ -572,6 +574,7 @@ export type Database = {
           direction: string
           entry_price?: number | null
           entry_price_old?: string | null
+          final_authorization?: Json | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time: string
@@ -584,6 +587,7 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
+          source_candidate_key?: string | null
           source_pending_order_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -603,6 +607,7 @@ export type Database = {
           direction?: string
           entry_price?: number | null
           entry_price_old?: string | null
+          final_authorization?: Json | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time?: string
@@ -615,6 +620,7 @@ export type Database = {
           signal_score?: string
           size?: number | null
           size_old?: string | null
+          source_candidate_key?: string | null
           source_pending_order_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
@@ -1704,6 +1710,20 @@ export type Database = {
           p_ledger_id: string
           p_response_payload: Json
           p_status: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      finalize_market_entry: {
+        Args: {
+          p_allow_same_direction: boolean
+          p_authorization: Json
+          p_bot_id: string
+          p_close_on_reverse: boolean
+          p_max_open_positions: number
+          p_max_per_symbol: number
+          p_position: Json
+          p_source_candidate_key: string
           p_user_id: string
         }
         Returns: Json
