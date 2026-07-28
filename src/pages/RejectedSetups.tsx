@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,23 +16,44 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, LineChart, Line, Area, AreaChart,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  PieChart, Pie, Cell, Area, AreaChart,
 } from "recharts";
 import {
-  ShieldX, ShieldCheck, TrendingUp, TrendingDown, Target, AlertTriangle,
   RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
 } from "lucide-react";
 import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
+import {
+  collapseRejectedOpportunities,
+  normalizeRejectedGate,
+  normalizedGateLabel,
+} from "@/lib/rejectedSetupAnalytics";
 
 // ── Types ──
+interface ShadowAudit {
+  decision?: string;
+  riskBand?: string;
+  reasons?: string[];
+  currentSystem?: {
+    decision?: string;
+    reason?: string | null;
+  };
+}
+
 interface RejectedSetup {
   id: string;
   symbol: string;
   direction: string;
   rejection_type: string;
   failed_gates: string[] | null;
+  normalized_gates?: string[] | null;
+  opportunity_key?: string | null;
+  shadow_decision?: ShadowAudit | null;
+  raw_detail?: {
+    gamePlanShadowAudit?: ShadowAudit | null;
+    [key: string]: unknown;
+  } | null;
   confluence_score: number;
   tier1_count: number;
   tier1_factors: string[] | null;
@@ -102,18 +123,37 @@ function toCSV(rows: Record<string, any>[]): string {
 
 const tsStamp = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 
+function getShadowAudit(setup: RejectedSetup): ShadowAudit | null {
+  return setup.shadow_decision || setup.raw_detail?.gamePlanShadowAudit || null;
+}
+
+function getDisplayGates(setup: RejectedSetup): string[] {
+  const codes = setup.normalized_gates?.length
+    ? setup.normalized_gates
+    : (setup.failed_gates || []).map(normalizeRejectedGate);
+  return [...new Set(codes)].map(normalizedGateLabel);
+}
+
 // ── Data Fetching ──
 async function fetchRejectedSetups(userId: string, days: number): Promise<RejectedSetup[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await (supabase as any)
-    .from("rejected_setups")
-    .select("*")
-    .eq("user_id", userId)
-    .gte("rejected_at", since)
-    .order("rejected_at", { ascending: false })
-    .limit(500);
-  if (error) throw new Error(error.message);
-  return data || [];
+  const pageSize = 1000;
+  const rows: RejectedSetup[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await (supabase as any)
+      .from("rejected_setups")
+      .select("*")
+      .eq("user_id", userId)
+      .gte("rejected_at", since)
+      .order("rejected_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
 }
 
 // ── Summary Stats ──
@@ -136,17 +176,27 @@ function computeStats(setups: RejectedSetup[]) {
 function computeGateBreakdown(setups: RejectedSetup[]) {
   const gateMap = new Map<string, { total: number; wouldWon: number; wouldLost: number }>();
   for (const s of setups) {
-    if (!s.failed_gates) continue;
-    for (const gate of s.failed_gates) {
-      const entry = gateMap.get(gate) || { total: 0, wouldWon: 0, wouldLost: 0 };
+    const gates = s.normalized_gates?.length
+      ? s.normalized_gates
+      : (s.failed_gates || []).map(normalizeRejectedGate);
+    for (const gateCode of new Set(gates)) {
+      const entry = gateMap.get(gateCode) || { total: 0, wouldWon: 0, wouldLost: 0 };
       entry.total++;
       if (s.outcome_status === "would_have_won") entry.wouldWon++;
       if (s.outcome_status === "would_have_lost") entry.wouldLost++;
-      gateMap.set(gate, entry);
+      gateMap.set(gateCode, entry);
     }
   }
   return Array.from(gateMap.entries())
-    .map(([gate, stats]) => ({ gate, ...stats, winRate: stats.total > 0 ? (stats.wouldWon / stats.total) * 100 : 0 }))
+    .map(([gateCode, stats]) => {
+      const resolved = stats.wouldWon + stats.wouldLost;
+      return {
+        gateCode,
+        gate: normalizedGateLabel(gateCode),
+        ...stats,
+        winRate: resolved > 0 ? (stats.wouldWon / resolved) * 100 : 0,
+      };
+    })
     .sort((a, b) => b.total - a.total);
 }
 
@@ -195,13 +245,28 @@ export default function RejectedSetups() {
     refetchInterval: 60_000,
   });
 
-  // Filters
-  const setups = useMemo(() => {
-    let filtered = rawSetups;
-    if (symbolFilter !== "all") filtered = filtered.filter(s => s.symbol === symbolFilter);
-    if (outcomeFilter !== "all") filtered = filtered.filter(s => s.outcome_status === outcomeFilter);
-    return filtered;
-  }, [rawSetups, symbolFilter, outcomeFilter]);
+  // Collapse repeated scanner observations before applying outcome filters so
+  // analytics measure distinct market opportunities instead of scan frequency.
+  const filteredRawSetups = useMemo(
+    () => symbolFilter === "all"
+      ? rawSetups
+      : rawSetups.filter((setup) => setup.symbol === symbolFilter),
+    [rawSetups, symbolFilter],
+  );
+  const opportunities = useMemo(
+    () => collapseRejectedOpportunities(filteredRawSetups),
+    [filteredRawSetups],
+  );
+  const setups = useMemo(
+    () => outcomeFilter === "all"
+      ? opportunities
+      : opportunities.filter((setup) => setup.outcome_status === outcomeFilter),
+    [opportunities, outcomeFilter],
+  );
+  const displayedScanCount = useMemo(
+    () => setups.reduce((total, setup) => total + setup.occurrence_count, 0),
+    [setups],
+  );
 
   const symbols = useMemo(() => [...new Set(rawSetups.map(s => s.symbol))].sort(), [rawSetups]);
   const stats = useMemo(() => computeStats(setups), [setups]);
@@ -214,7 +279,9 @@ export default function RejectedSetups() {
       { metric: "Range (days)", value: days },
       { metric: "Symbol Filter", value: symbolFilter },
       { metric: "Outcome Filter", value: outcomeFilter },
-      { metric: "Total Rejected", value: stats.total },
+      { metric: "Distinct Opportunities", value: stats.total },
+      { metric: "Scanner Observations", value: displayedScanCount },
+      { metric: "Repeated Observations Collapsed", value: displayedScanCount - setups.length },
       { metric: "Resolved", value: stats.resolved },
       { metric: "Would Have Won", value: stats.winners },
       { metric: "Would Have Lost", value: stats.losers },
@@ -252,11 +319,12 @@ export default function RejectedSetups() {
 
   const downloadGates = () => {
     const rows = gateBreakdown.map((g) => ({
+      gate_code: g.gateCode,
       gate: g.gate,
       total_blocked: g.total,
       would_won: g.wouldWon,
       would_lost: g.wouldLost,
-      win_rate_pct: g.winRate.toFixed(2),
+      winner_block_rate_pct: g.winRate.toFixed(2),
     }));
     downloadFile(`rejected-gates-${tsStamp()}.csv`, toCSV(rows), "text/csv");
   };
@@ -264,6 +332,9 @@ export default function RejectedSetups() {
   const downloadSetups = () => {
     const rows = setups.map((s) => ({
       rejected_at: s.rejected_at,
+      first_seen_at: s.first_seen_at,
+      last_seen_at: s.last_seen_at,
+      scanner_observations: s.occurrence_count,
       symbol: s.symbol,
       direction: s.direction,
       rejection_type: s.rejection_type,
@@ -271,6 +342,12 @@ export default function RejectedSetups() {
       tier1_count: s.tier1_count,
       tier1_factors: s.tier1_factors,
       failed_gates: s.failed_gates,
+      normalized_gates: s.normalized_gates,
+      current_decision: getShadowAudit(s)?.currentSystem?.decision,
+      current_reason: getShadowAudit(s)?.currentSystem?.reason,
+      shadow_decision: getShadowAudit(s)?.decision,
+      shadow_risk_band: getShadowAudit(s)?.riskBand,
+      shadow_reasons: getShadowAudit(s)?.reasons,
       entry_price: s.entry_price,
       stop_loss: s.stop_loss,
       take_profit: s.take_profit,
@@ -283,6 +360,7 @@ export default function RejectedSetups() {
       fotsi_quote_tsi: s.fotsi_quote_tsi,
       price_at_rejection: s.price_at_rejection,
       outcome_status: s.outcome_status,
+      mixed_outcome: s.mixed_outcome,
       mfe_pips: s.mfe_pips,
       mae_pips: s.mae_pips,
       tp_hit: s.tp_hit,
@@ -360,7 +438,7 @@ export default function RejectedSetups() {
                 <DropdownMenuItem onClick={downloadSummary} className="text-xs">Summary Analytics (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadOverview} className="text-xs">Overview Charts (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadGates} className="text-xs">Gate Analysis (CSV)</DropdownMenuItem>
-                <DropdownMenuItem onClick={downloadSetups} className="text-xs">All Setups (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadSetups} className="text-xs">Distinct Opportunities (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">AI Advisor (JSON)</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={downloadAll} className="text-xs font-medium">Download All</DropdownMenuItem>
@@ -400,8 +478,11 @@ export default function RejectedSetups() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Card className="border-border/50">
             <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">Total Rejected</p>
+              <p className="text-xs text-muted-foreground">Distinct Opportunities</p>
               <p className="text-2xl font-bold">{stats.total}</p>
+              <p className="text-[10px] text-muted-foreground">
+                {displayedScanCount} scans · {displayedScanCount - setups.length} repeats removed
+              </p>
             </CardContent>
           </Card>
           <Card className="border-border/50">
@@ -444,7 +525,7 @@ export default function RejectedSetups() {
             <TabsTrigger value="advisor" className="text-xs h-7 gap-1">
               <Sparkles className="h-3 w-3" /> Advisor
             </TabsTrigger>
-            <TabsTrigger value="table" className="text-xs h-7">All Setups</TabsTrigger>
+            <TabsTrigger value="table" className="text-xs h-7">Opportunities</TabsTrigger>
           </TabsList>
 
           {/* Overview Tab */}
@@ -487,7 +568,7 @@ export default function RejectedSetups() {
               {/* Daily Trend */}
               <Card className="border-border/50">
                 <CardHeader className="pb-2 pt-3 px-4">
-                  <CardTitle className="text-sm font-medium">Daily Rejections & Outcomes</CardTitle>
+                  <CardTitle className="text-sm font-medium">Daily Opportunities & Outcomes</CardTitle>
                 </CardHeader>
                 <CardContent className="px-2 pb-3">
                   {dailyTrend.length > 0 ? (
@@ -528,7 +609,7 @@ export default function RejectedSetups() {
                       ];
                       for (const s of setups) {
                         const score = s.confluence_score;
-                        let idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
+                        const idx = score < 40 ? 0 : score < 50 ? 1 : score < 60 ? 2 : score < 70 ? 3 : score < 80 ? 4 : 5;
                         if (s.outcome_status === "would_have_won") buckets[idx].won++;
                         if (s.outcome_status === "would_have_lost") buckets[idx].lost++;
                       }
@@ -554,7 +635,7 @@ export default function RejectedSetups() {
             <Card className="border-border/50">
               <CardHeader className="pb-2 pt-3 px-4">
                 <CardTitle className="text-sm font-medium">Gate Effectiveness</CardTitle>
-                <p className="text-xs text-muted-foreground">Which gates block the most would-have-won setups? High % = gate may be too aggressive.</p>
+                <p className="text-xs text-muted-foreground">Distinct opportunities by normalized gate. High winner-block % may indicate an overly aggressive gate.</p>
               </CardHeader>
               <CardContent className="px-4 pb-3">
                 {gateBreakdown.length > 0 ? (
@@ -578,7 +659,7 @@ export default function RejectedSetups() {
                             />
                           </div>
                           <span className={`text-xs font-mono w-12 text-right ${g.winRate > 50 ? "text-warn" : "text-profit"}`}>
-                            {g.winRate.toFixed(0)}% WR
+                            {g.winRate.toFixed(0)}% WB
                           </span>
                         </div>
                       </div>
@@ -624,7 +705,7 @@ export default function RejectedSetups() {
                 {isLoading ? (
                   <div className="py-12 text-center text-sm text-muted-foreground">Loading...</div>
                 ) : setups.length === 0 ? (
-                  <div className="py-12 text-center text-sm text-muted-foreground">No rejected setups in this period</div>
+                  <div className="py-12 text-center text-sm text-muted-foreground">No rejected opportunities in this period</div>
                 ) : isMobile ? (
                   /* Mobile: stacked cards */
                   <div className="divide-y divide-border/30">
@@ -643,15 +724,17 @@ export default function RejectedSetups() {
                           <span>{formatBrokerTime(s.rejected_at)}</span>
                           <span>Score: {s.confluence_score.toFixed(1)}</span>
                           <span>T1: {s.tier1_count}</span>
+                          {s.occurrence_count > 1 && <span>{s.occurrence_count} scans</span>}
                         </div>
-                        {s.failed_gates && s.failed_gates.length > 0 && (
+                        {getDisplayGates(s).length > 0 && (
                           <div className="flex flex-wrap gap-1">
-                            {s.failed_gates.slice(0, 3).map((g, i) => (
+                            {getDisplayGates(s).slice(0, 3).map((g, i) => (
                               <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
                             ))}
-                            {s.failed_gates.length > 3 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{s.failed_gates.length - 3}</Badge>}
+                            {getDisplayGates(s).length > 3 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{getDisplayGates(s).length - 3}</Badge>}
                           </div>
                         )}
+                        <ShadowDecision audit={getShadowAudit(s)} />
                         {(s.mfe_pips !== null || s.mae_pips !== null) && (
                           <div className="flex gap-3 text-[10px]">
                             {s.mfe_pips !== null && <span className="text-profit">MFE: {formatPipDisplay(s.mfe_pips, s.symbol)}</span>}
@@ -677,6 +760,7 @@ export default function RejectedSetups() {
                           <th className="text-left px-3 py-2 font-medium">RR</th>
                           <th className="text-left px-3 py-2 font-medium">MFE</th>
                           <th className="text-left px-3 py-2 font-medium">MAE</th>
+                          <th className="text-left px-3 py-2 font-medium">Current vs Shadow</th>
                           <th className="text-left px-3 py-2 font-medium">Outcome</th>
                         </tr>
                       </thead>
@@ -687,7 +771,12 @@ export default function RejectedSetups() {
                               className={`border-b border-border/20 hover:bg-muted/20 cursor-pointer transition-colors ${expandedRow === s.id ? 'bg-muted/30' : ''}`}
                               onClick={() => setExpandedRow(expandedRow === s.id ? null : s.id)}
                             >
-                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">{formatBrokerTime(s.rejected_at)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
+                                <div>{formatBrokerTime(s.rejected_at)}</div>
+                                {s.occurrence_count > 1 && (
+                                  <div className="text-[9px]">{s.occurrence_count} scans collapsed</div>
+                                )}
+                              </td>
                               <td className="px-3 py-2 font-medium">{s.symbol}</td>
                               <td className="px-3 py-2">
                                 <span className={s.direction === "long" ? "text-profit" : "text-loss"}>
@@ -699,20 +788,21 @@ export default function RejectedSetups() {
                               <td className="px-3 py-2">{s.tier1_count}</td>
                               <td className="px-3 py-2 max-w-[200px]">
                                 <div className="flex flex-wrap gap-0.5">
-                                  {(s.failed_gates || []).slice(0, 2).map((g, i) => (
+                                  {getDisplayGates(s).slice(0, 2).map((g, i) => (
                                     <Badge key={i} variant="secondary" className="text-[9px] px-1 py-0">{g}</Badge>
                                   ))}
-                                  {(s.failed_gates || []).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{(s.failed_gates || []).length - 2}</Badge>}
+                                  {getDisplayGates(s).length > 2 && <Badge variant="secondary" className="text-[9px] px-1 py-0">+{getDisplayGates(s).length - 2}</Badge>}
                                 </div>
                               </td>
                               <td className="px-3 py-2 font-mono">{s.rr_ratio ? s.rr_ratio.toFixed(1) : "—"}</td>
                               <td className="px-3 py-2 font-mono text-profit">{formatPipDisplay(s.mfe_pips, s.symbol)}</td>
                               <td className="px-3 py-2 font-mono text-loss">{formatPipDisplay(s.mae_pips !== null ? -s.mae_pips : null, s.symbol)}</td>
+                              <td className="px-3 py-2 min-w-[150px]"><ShadowDecision audit={getShadowAudit(s)} /></td>
                               <td className="px-3 py-2"><OutcomeBadge status={s.outcome_status} /></td>
                             </tr>
                             {expandedRow === s.id && (
                               <tr>
-                                <td colSpan={11} className="px-3 py-0">
+                                <td colSpan={12} className="px-3 py-0">
                                   <TradeDetailCard
                                     symbol={s.symbol}
                                     direction={s.direction}
@@ -761,4 +851,38 @@ function OutcomeBadge({ status }: { status: string }) {
   };
   const c = config[status] || config.pending;
   return <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${c.className}`}>{c.label}</Badge>;
+}
+
+function ShadowDecision({ audit }: { audit: ShadowAudit | null }) {
+  if (!audit) {
+    return <span className="text-[10px] text-muted-foreground">Available on new scans</span>;
+  }
+
+  const current = audit.currentSystem?.decision || "not_evaluated";
+  const proposed = audit.decision || "not_evaluated";
+  const reason = [
+    audit.currentSystem?.reason ? `Current: ${audit.currentSystem.reason}` : null,
+    audit.reasons?.length ? `Shadow: ${audit.reasons.join("; ")}` : null,
+  ].filter(Boolean).join("\n");
+
+  return (
+    <div className="flex flex-wrap items-center gap-1" title={reason}>
+      <Badge variant="outline" className="text-[9px] px-1 py-0">
+        NOW {current.toUpperCase()}
+      </Badge>
+      <span className="text-[9px] text-muted-foreground">→</span>
+      <Badge
+        variant="outline"
+        className={`text-[9px] px-1 py-0 ${
+          proposed === "eligible"
+            ? "text-profit border-emerald-500/30"
+            : proposed === "skip"
+              ? "text-loss border-destructive/30"
+              : "text-amber-500 border-amber-500/30"
+        }`}
+      >
+        SHADOW {proposed.toUpperCase()}
+      </Badge>
+    </div>
+  );
 }

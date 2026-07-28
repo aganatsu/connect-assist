@@ -2,6 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
+import {
+  evaluateGamePlanShadowAudit,
+  finalizeShadowCurrentDecision,
+} from "../_shared/gamePlanShadowAudit.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -4451,6 +4455,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             high: multiTF.bestZone.impulse.high,
             low: multiTF.bestZone.impulse.low,
             direction: multiTF.bestZone.impulse.direction,
+            endDate: multiTF.bestZone.impulse.endDate || null,
+            spanBars: multiTF.bestZone.impulse.spanBars ?? null,
           } : null,
           bestZone: multiTF.bestZone ? {
             type: multiTF.bestZone.zone.poi.type,
@@ -4907,6 +4913,44 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
+    // ── Gameplan hierarchy shadow audit ─────────────────────────────────────
+    // Observability only: this result is persisted for later outcome analysis,
+    // but it is never read by scoring, gates, sizing, or execution.
+    const shadowPairPlan = activeGamePlan?.plans?.find(
+      (plan: InstrumentGamePlan) => plan.symbol === pair,
+    ) || null;
+    (detail as any).gamePlanShadowAudit = evaluateGamePlanShadowAudit({
+      plan: shadowPairPlan ? {
+        bias: shadowPairPlan.bias,
+        legacyConfidence: shadowPairPlan.biasConfidence,
+        state: shadowPairPlan.state,
+        stateReason: shadowPairPlan.stateReason,
+        tradeable: shadowPairPlan.tradeable,
+        conviction: shadowPairPlan.conviction,
+      } : null,
+      direction: analysis.direction === "long" || analysis.direction === "short"
+        ? analysis.direction
+        : null,
+      directionVerdict: directionVerdict ? {
+        verdict: directionVerdict.verdict,
+        confidence: directionVerdict.confidence,
+        shouldBlock: directionVerdict.shouldBlock,
+      } : null,
+      impulseZone: {
+        hasZone: !!izData?.hasZone,
+        entryReady: unifiedGatePassed
+          || izData?.bestZone?.priceAtZoneStrict === true,
+        score: unifiedZoneData?.unifiedScore ?? izData?.bestZone?.totalScore ?? null,
+        fibDepth: izData?.bestZone?.fibDepth ?? null,
+        selectedTimeframe: unifiedZoneData?.selectedTF ?? izData?.selectedTF ?? null,
+        // The current Impulse Zone engine does not expose a computed freshness
+        // verdict. Preserve its source timing so freshness can be calibrated
+        // from real outcomes instead of inventing a boolean.
+        isFresh: null,
+        impulseEndDate: izData?.impulse?.endDate ?? null,
+        impulseSpanBars: izData?.impulse?.spanBars ?? null,
+      },
+    });
     if (unifiedGatePassed) {
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
@@ -5671,13 +5715,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
 
       const allPassed = gates.every(g => g.passed);
+      (detail as any).gamePlanShadowAudit = finalizeShadowCurrentDecision(
+        (detail as any).gamePlanShadowAudit,
+        allPassed && !!analysis.stopLoss && !!analysis.takeProfit ? "allow" : "block",
+        allPassed
+          ? (!analysis.stopLoss || !analysis.takeProfit ? "No valid SL/TP" : null)
+          : gates.filter(g => !g.passed).map(g => g.reason).join("; "),
+      );
       // ── Sync detail with post-credit state so dashboard display matches gate decisions ──
       // Impulse zone credits (lines ~3934-4120) reassign analysis.tieredScoring to a new object,
       // but detail.tieredScoring still references the pre-credit snapshot. Sync it here.
       detail.tieredScoring = analysis.tieredScoring;
       detail.score = analysis.score;
       detail.gates = gates;
-      detail.gamePlan = gpFilter; // attach game plan filter result to scan detail
+      detail.gamePlan = shadowPairPlan ? {
+        bias: shadowPairPlan.bias,
+        biasConfidence: shadowPairPlan.biasConfidence,
+        state: shadowPairPlan.state,
+        stateReason: shadowPairPlan.stateReason,
+      } : null;
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs
@@ -6245,7 +6301,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-            signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -6506,6 +6562,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           enforcementMode: gpEnforcementMode,
           hardBlockThreshold: (config as any).gpHardBlockThreshold ?? 75,
           gateDecision: entryGamePlanGate || null,
+          shadowAudit: (detail as any).gamePlanShadowAudit || null,
           capturedAt: nowStr,
         } : null;
         await supabase.from("paper_positions").insert({
@@ -6519,7 +6576,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, gamePlanSnapshot, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, gamePlanSnapshot, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",
@@ -6944,6 +7001,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             fotsiBaseTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[0]] : undefined,
             fotsiQuoteTsi: _rsCurrencies && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies[1]] : undefined,
             priceAtRejection: analysis.lastPrice,
+            rawDetail: {
+              scanCycleId,
+              gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+              directionVerdict: (detail as any).directionVerdict || null,
+              impulseZone: (detail as any).impulseZone || null,
+            },
           });
         } catch (rsErr: any) {
           // Non-fatal: logging failure must never block the scanner
@@ -7057,6 +7120,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       }
     } else {
       if (analysis.score < adjustedMinConfluence) {
+        (detail as any).gamePlanShadowAudit = finalizeShadowCurrentDecision(
+          (detail as any).gamePlanShadowAudit,
+          "block",
+          `Confluence ${effectiveScore.toFixed(1)}% is below ${conflictAdjustedMinConfluence}%`,
+        );
         // ── Rejected Setup Logging: below-threshold with strong T1 ──
         if (analysis.direction && shouldLogBelowThreshold(analysis.tieredScoring?.tier1Count ?? 0)) {
           try {
@@ -7085,6 +7153,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               fotsiBaseTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[0]] : undefined,
               fotsiQuoteTsi: _rsCurrencies2 && _fotsiResult ? _fotsiResult.strengths[_rsCurrencies2[1]] : undefined,
               priceAtRejection: analysis.lastPrice,
+              rawDetail: {
+                scanCycleId,
+                gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+                directionVerdict: (detail as any).directionVerdict || null,
+                impulseZone: (detail as any).impulseZone || null,
+              },
             });
           } catch (rsErr: any) {
             console.warn(`[rejected-setup] Below-threshold logging error for ${pair}: ${rsErr?.message}`);
