@@ -142,7 +142,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "place_order") {
-      const { symbol, direction, size, stopLoss, takeProfit } = payload;
+      const { symbol, direction, size, stopLoss, takeProfit, positionId } = payload;
 
       if (conn.broker_type === "oanda") {
         const baseUrl = conn.is_live ? "https://api-fxtrade.oanda.com" : "https://api-fxpractice.oanda.com";
@@ -154,24 +154,38 @@ Deno.serve(async (req) => {
         const orderBody: any = {
           order: { type: "MARKET", instrument: oandaInstrument, units: units.toString(), timeInForce: "FOK", positionFill: "DEFAULT" },
         };
+        if (positionId) {
+          const clientId = String(positionId).slice(0, 128);
+          const clientComment = `paper:${positionId}`.slice(0, 128);
+          orderBody.order.clientExtensions = {
+            id: clientId,
+            tag: "smc",
+            comment: clientComment,
+          };
+          orderBody.order.tradeClientExtensions = {
+            id: clientId,
+            tag: "smc",
+            comment: clientComment,
+          };
+        }
         if (slPrice) orderBody.order.stopLossOnFill = { price: slPrice, timeInForce: "GTC" };
         if (tpPrice) orderBody.order.takeProfitOnFill = { price: tpPrice };
 
-        // H9: Retry with backoff on 5xx/connection errors
-        const result = await retryWithBackoff(async () => {
-          const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
-            method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
-            body: JSON.stringify(orderBody),
-          });
-          if (!res.ok) {
-            const err = await res.json();
-            const errMsg = `OANDA order failed: ${JSON.stringify(err)}`;
-            if (res.status >= 500) throw new Error(errMsg); // retryable
-            throw Object.assign(new Error(errMsg), { nonRetryable: true }); // 4xx — don't retry
-          }
-          return await res.json();
-        }, (err) => !err.nonRetryable && isRetryableError(err));
-        return respond(result);
+        // Market orders are never retried automatically. A timeout or lost 5xx
+        // response may still mean OANDA accepted the order.
+        const res = await fetch(`${baseUrl}/v3/accounts/${conn.account_id}/orders`, {
+          method: "POST", headers: { Authorization: `Bearer ${conn.api_key}`, "Content-Type": "application/json" },
+          body: JSON.stringify(orderBody),
+        });
+        if (!res.ok) {
+          const details = await res.text();
+          return respond({
+            error: `OANDA order failed: ${res.status}`,
+            details,
+            fallback: res.status >= 500,
+          }, res.status);
+        }
+        return respond(await res.json());
       }
 
       if (conn.broker_type === "metaapi") {
@@ -179,24 +193,31 @@ Deno.serve(async (req) => {
           actionType: direction === "long" ? "ORDER_TYPE_BUY" : "ORDER_TYPE_SELL",
           symbol: resolveSymbol(symbol, conn), volume: size,
         };
+        if (positionId) tradeBody.comment = `paper:${positionId}`;
         if (stopLoss) tradeBody.stopLoss = stopLoss;
         if (takeProfit) tradeBody.takeProfit = takeProfit;
 
-        // H9: Retry with backoff on 5xx/connection errors
-        const result = await retryWithBackoff(async () => {
-          const { res, body } = await metaFetch(conn.account_id, conn.api_key, (b) => `${b}/trade`, {
+        // Do not region-failover a market order. If the first response is
+        // uncertain, the caller's durable ledger must reconcile before retry.
+        const { res, body } = await metaFetch(
+          conn.account_id,
+          conn.api_key,
+          (b) => `${b}/trade`,
+          {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tradeBody),
-          });
-          if (!res.ok) {
-            if (res.status >= 500 || /not connected to broker|region/i.test(body)) {
-              throw new Error(`MetaAPI order failed: ${res.status} — ${body.slice(0, 200)}`);
-            }
-            // 4xx — don't retry, return error response
-            return { _noRetry: true, error: `MetaAPI order failed: ${res.status}`, details: body, fallback: false };
-          }
-          return JSON.parse(body);
-        }, isRetryableError);
-        return respond(result);
+          },
+          { allowFailover: false },
+        );
+        if (!res.ok) {
+          const uncertain = res.status >= 500 ||
+            /not connected to broker|region|network error|timeout/i.test(body);
+          return respond({
+            error: `MetaAPI order failed: ${res.status}`,
+            details: body,
+            fallback: uncertain,
+          }, uncertain ? 200 : res.status);
+        }
+        return respond(JSON.parse(body));
       }
     }
 

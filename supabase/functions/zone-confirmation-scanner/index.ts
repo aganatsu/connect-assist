@@ -46,6 +46,9 @@ import {
 } from "../_shared/thesisValidator.ts";
 import { runPropFirmGate, type PropFirmGateResult } from "../_shared/propFirmGate.ts";
 import type { SessionGamePlan } from "../_shared/gamePlan.ts";
+import {
+  executeBrokerOrderWithLedger,
+} from "../_shared/brokerExecutionLedger.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -815,21 +818,57 @@ Deno.serve(async (req) => {
 
               if (conn.broker_type !== "metaapi") {
                 // OANDA or other — use broker-execute function
-                const exRes = await fetch(`${supabaseUrl}/functions/v1/broker-execute`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
-                  body: JSON.stringify({
-                    action: "place_order",
-                    connectionId: conn.id,
-                    symbol: pending.symbol,
-                    direction: pending.direction,
-                    size: parseFloat(pending.size),
-                    stopLoss: parseFloat(pending.stop_loss),
-                    takeProfit: parseFloat(pending.take_profit),
+                const ledgerExecution = await executeBrokerOrderWithLedger(
+                  supabase,
+                  {
                     userId,
-                  }),
-                });
-                if (exRes.ok) mirroredConnIds.push(conn.id);
+                    botId: BOT_ID,
+                    positionId,
+                    brokerConnectionId: conn.id,
+                    route: "fast_confirmation",
+                    requestPayload: {
+                      symbol: pending.symbol,
+                      direction: pending.direction,
+                      size: parseFloat(pending.size),
+                      stopLoss: parseFloat(pending.stop_loss),
+                      takeProfit: parseFloat(pending.take_profit),
+                    },
+                  },
+                  async () => {
+                    const exRes = await fetch(`${supabaseUrl}/functions/v1/broker-execute`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${supabaseKey}` },
+                      body: JSON.stringify({
+                        action: "place_order",
+                        connectionId: conn.id,
+                        symbol: pending.symbol,
+                        direction: pending.direction,
+                        size: parseFloat(pending.size),
+                        stopLoss: parseFloat(pending.stop_loss),
+                        takeProfit: parseFloat(pending.take_profit),
+                        positionId,
+                        userId,
+                      }),
+                    });
+                    const rawBody = await exRes.text();
+                    let parsedBody: any = null;
+                    try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                    return {
+                      ok: exRes.ok,
+                      httpStatus: exRes.status,
+                      parsedBody,
+                      rawBody,
+                    };
+                  },
+                );
+                if (ledgerExecution.status === "succeeded") {
+                  mirroredConnIds.push(conn.id);
+                } else {
+                  console.warn(
+                    `[zone-confirm] Broker execution ${ledgerExecution.status}`
+                    + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
+                  );
+                }
                 continue;
               }
 
@@ -843,12 +882,53 @@ Deno.serve(async (req) => {
               };
               if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
               if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
-              const { res: mt5Res } = await metaFetch(metaAccountId!, authToken!, (base) => `${base}/trade`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(mt5Body),
-              });
-              if (mt5Res.ok) mirroredConnIds.push(conn.id);
+              const ledgerExecution = await executeBrokerOrderWithLedger(
+                supabase,
+                {
+                  userId,
+                  botId: BOT_ID,
+                  positionId,
+                  brokerConnectionId: conn.id,
+                  route: "fast_confirmation",
+                  requestPayload: {
+                    symbol: pending.symbol,
+                    brokerSymbol,
+                    direction: pending.direction,
+                    volume: parseFloat(pending.size),
+                    stopLoss: pending.stop_loss ? parseFloat(pending.stop_loss) : null,
+                    takeProfit: pending.take_profit ? parseFloat(pending.take_profit) : null,
+                  },
+                },
+                async () => {
+                  const { res: mt5Res, body: rawBody } = await metaFetch(
+                    metaAccountId!,
+                    authToken!,
+                    (base) => `${base}/trade`,
+                    {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(mt5Body),
+                    },
+                    { allowFailover: false },
+                  );
+                  let parsedBody: any = null;
+                  try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                  return {
+                    ok: mt5Res.ok,
+                    httpStatus: mt5Res.status,
+                    parsedBody,
+                    rawBody,
+                  };
+                },
+              );
+              if (ledgerExecution.status === "succeeded") {
+                mirroredConnIds.push(conn.id);
+              } else {
+                console.warn(
+                  `[zone-confirm] Broker execution ${ledgerExecution.status}`
+                  + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
+                );
+              }
             } catch (e: any) {
               console.warn(`[zone-confirm] Broker mirror error [${conn.display_name}]: ${e?.message}`);
             }

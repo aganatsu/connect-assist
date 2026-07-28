@@ -131,6 +131,43 @@ export interface ReconcileOptions {
   scanCycleId?: string;
 }
 
+export function findOandaBrokerPosition(
+  oandaPositions: any[],
+  position: Pick<ReconcilePosition, "position_id" | "symbol" | "direction">,
+  connection: BrokerConnection,
+): {
+  trade: any | null;
+  match: "exact" | "legacy" | "ambiguous" | "none";
+  instrument: string;
+} {
+  const instrument = resolveOandaSymbol(position.symbol, connection);
+  const commentTag = `paper:${position.position_id}`;
+  const exactTrade = oandaPositions.find((trade: any) =>
+    trade.clientExtensions?.id === position.position_id ||
+    trade.clientExtensions?.comment === commentTag
+  );
+  if (exactTrade) return { trade: exactTrade, match: "exact", instrument };
+
+  const legacyCandidates = oandaPositions.filter((trade: any) => {
+    const instrumentMatches = trade.instrument === instrument;
+    const units = parseFloat(
+      trade.currentUnits || trade.initialUnits || "0",
+    );
+    const directionMatches = position.direction === "long"
+      ? units > 0
+      : units < 0;
+    return instrumentMatches && directionMatches;
+  });
+  if (legacyCandidates.length === 1) {
+    return { trade: legacyCandidates[0], match: "legacy", instrument };
+  }
+  return {
+    trade: null,
+    match: legacyCandidates.length > 1 ? "ambiguous" : "none",
+    instrument,
+  };
+}
+
 // ─── In-Memory Mismatch Tracker ─────────────────────────────────────────
 // Keyed by position_id. Resets to 0 when broker confirms match.
 // Acceptable to lose on function cold-start (edge function lifecycle).
@@ -176,17 +213,17 @@ export async function reconcileBrokerState(opts: ReconcileOptions): Promise<Reco
 
       for (const pos of positionsForConn) {
         try {
-          // OANDA matching: by instrument + direction (OANDA doesn't support comment tags)
-          const oandaInstrument = resolveOandaSymbol(pos.symbol, conn);
-          const brokerPos = oandaPositions.find((t: any) => {
-            const instrMatch = t.instrument === oandaInstrument;
-            const units = parseFloat(t.currentUnits || t.initialUnits || "0");
-            const dirMatch = pos.direction === "long" ? units > 0 : units < 0;
-            return instrMatch && dirMatch;
-          });
+          // New orders carry our position id in OANDA tradeClientExtensions.
+          // Prefer that exact identity. Use instrument+direction only for a
+          // single unambiguous legacy trade created before client tags existed.
+          const matched = findOandaBrokerPosition(oandaPositions, pos, conn);
+          const brokerPos = matched.trade;
 
           if (!brokerPos) {
-            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "not_found", detail: `no OANDA trade for ${oandaInstrument} ${pos.direction}` });
+            const detail = matched.match === "ambiguous"
+              ? `ambiguous OANDA legacy trades for ${matched.instrument} ${pos.direction}`
+              : `no OANDA trade for ${matched.instrument} ${pos.direction}`;
+            results.push({ positionId: pos.position_id, symbol: pos.symbol, status: "not_found", detail });
             continue;
           }
 

@@ -202,6 +202,69 @@ export type Database = {
         }
         Relationships: []
       }
+      broker_execution_ledger: {
+        Row: {
+          action: string
+          attempt_count: number
+          bot_id: string
+          broker_connection_id: string
+          broker_order_id: string | null
+          claim_token: string
+          created_at: string
+          finished_at: string | null
+          id: string
+          last_error: string | null
+          position_id: string
+          request_payload: Json
+          response_payload: Json | null
+          route: string
+          started_at: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          action?: string
+          attempt_count?: number
+          bot_id?: string
+          broker_connection_id: string
+          broker_order_id?: string | null
+          claim_token?: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          position_id: string
+          request_payload?: Json
+          response_payload?: Json | null
+          route: string
+          started_at?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          action?: string
+          attempt_count?: number
+          bot_id?: string
+          broker_connection_id?: string
+          broker_order_id?: string | null
+          claim_token?: string
+          created_at?: string
+          finished_at?: string | null
+          id?: string
+          last_error?: string | null
+          position_id?: string
+          request_payload?: Json
+          response_payload?: Json | null
+          route?: string
+          started_at?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       close_audit_log: {
         Row: {
           broker_connection_id: string | null
@@ -1613,6 +1676,30 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_broker_execution: {
+        Args: {
+          p_action: string
+          p_bot_id: string
+          p_broker_connection_id: string
+          p_position_id: string
+          p_request_payload: Json
+          p_route: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      complete_broker_execution: {
+        Args: {
+          p_broker_order_id: string | null
+          p_claim_token: string
+          p_last_error: string | null
+          p_ledger_id: string
+          p_response_payload: Json | null
+          p_status: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       finalize_pending_order_fill: {
         Args: {
           p_allow_same_direction: boolean
