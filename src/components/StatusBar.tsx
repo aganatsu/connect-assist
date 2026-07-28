@@ -3,6 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Wifi, WifiOff } from "lucide-react";
 import { paperApi } from "@/lib/api";
 
+export function getExecutionMode(status: any): "paper" | "live" {
+  return status?.executionMode === "live" || status?.account?.execution_mode === "live"
+    ? "live"
+    : "paper";
+}
+
 export function StatusBar() {
   const [time, setTime] = useState(new Date());
   const [online, setOnline] = useState(navigator.onLine);
@@ -14,7 +20,7 @@ export function StatusBar() {
     retry: false,
   });
 
-  const executionMode = status?.account?.execution_mode || "paper";
+  const executionMode = getExecutionMode(status);
   const openPositions = status?.positions?.length ?? 0;
   const isLive = executionMode === "live";
 

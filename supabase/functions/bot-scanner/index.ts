@@ -3475,6 +3475,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               amdPhase: p.amdPhase, zone: p.zone, htfTrend: p.htfTrend,
               h4Trend: p.h4Trend, tradeable: p.tradeable, skipReason: p.skipReason,
               scenarios: p.scenarios, keyLevels: p.keyLevels.slice(0, 10),
+              state: p.state, stateReason: p.stateReason, conviction: p.conviction,
+              evidence: p.evidence, supportingEvidence: p.supportingEvidence,
+              conflictingEvidence: p.conflictingEvidence, expiresAt: p.expiresAt,
               newsBias: (p as any).newsBias || null,
               newsConfirmation: (p as any).newsConfirmation || null,
               newsConflict: (p as any).newsConflict || null,
@@ -6490,6 +6493,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
         }
+        // Preserve the exact Game Plan that authorized this entry. This snapshot is
+        // immutable trade evidence; closed-trade analysis must not use a later plan.
+        const entryGamePlan = activeGamePlan?.plans?.find((plan: InstrumentGamePlan) => plan.symbol === pair) || null;
+        const entryGamePlanGate = Array.isArray(detail.gates)
+          ? detail.gates.find((gate: any) => typeof gate?.reason === "string" && gate.reason.startsWith("GP filter"))
+          : null;
+        const gamePlanSnapshot = entryGamePlan ? {
+          session: activeGamePlan?.session,
+          generatedAt: activeGamePlan?.generatedAt,
+          expiresAt: entryGamePlan.expiresAt || null,
+          symbol: entryGamePlan.symbol,
+          bias: entryGamePlan.bias,
+          legacyConfidence: entryGamePlan.biasConfidence,
+          state: entryGamePlan.state || (entryGamePlan.tradeable ? "tradeable" : "skip"),
+          stateReason: entryGamePlan.stateReason || entryGamePlan.skipReason || null,
+          conviction: entryGamePlan.conviction || null,
+          evidence: entryGamePlan.evidence || [],
+          supportingEvidence: entryGamePlan.supportingEvidence || [],
+          conflictingEvidence: entryGamePlan.conflictingEvidence || [],
+          dol: entryGamePlan.dol,
+          zone: entryGamePlan.zone,
+          regime: entryGamePlan.regime,
+          htfTrend: entryGamePlan.htfTrend,
+          h4Trend: entryGamePlan.h4Trend,
+          scenarios: entryGamePlan.scenarios || [],
+          candidateDirection: analysis.direction,
+          enforcementMode: gpEnforcementMode,
+          hardBlockThreshold: (config as any).gpHardBlockThreshold ?? 75,
+          gateDecision: entryGamePlanGate || null,
+          capturedAt: nowStr,
+        } : null;
         await supabase.from("paper_positions").insert({
           user_id: userId,
           position_id: positionId,
@@ -6501,7 +6535,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           stop_loss: sl.toString(),
           take_profit: tp.toString(),
           open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
+          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, gamePlanSnapshot, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
           signal_score: analysis.score.toString(),
           order_id: orderId,
           position_status: "open",

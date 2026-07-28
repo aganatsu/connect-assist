@@ -1459,7 +1459,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
@@ -1525,6 +1525,50 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                                   adj: {sr.directionVerdict.scoreAdjustment > 0 ? "+" : ""}{sr.directionVerdict.scoreAdjustment.toFixed(2)}
                                 </span>
                               )}
+                            </div>
+                          )}
+                          {/* ── Immutable entry-time Game Plan snapshot ── */}
+                          {sr.gamePlanSnapshot && (
+                            <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5 space-y-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="text-[8px] text-cyan-400 uppercase tracking-wider font-bold">Entry Game Plan</p>
+                                <span className={`text-[8px] font-bold px-1 py-0.5 rounded ${
+                                  sr.gamePlanSnapshot.state === "tradeable" ? "bg-success/15 text-success"
+                                  : sr.gamePlanSnapshot.state === "wait" ? "bg-warning/15 text-warning"
+                                  : "bg-muted/30 text-muted-foreground"
+                                }`}>
+                                  {(sr.gamePlanSnapshot.state || "legacy").toUpperCase()}
+                                </span>
+                                <span className={`text-[9px] font-bold ${
+                                  sr.gamePlanSnapshot.bias === "bullish" ? "text-success"
+                                  : sr.gamePlanSnapshot.bias === "bearish" ? "text-destructive"
+                                  : "text-muted-foreground"
+                                }`}>
+                                  {(sr.gamePlanSnapshot.bias || "neutral").toUpperCase()} {sr.gamePlanSnapshot.legacyConfidence ?? 0}%
+                                </span>
+                                <span className="text-[8px] text-muted-foreground">
+                                  {sr.gamePlanSnapshot.enforcementMode || "unknown"} mode
+                                </span>
+                              </div>
+                              {sr.gamePlanSnapshot.stateReason && (
+                                <p className="text-[9px] text-foreground/80">{sr.gamePlanSnapshot.stateReason}</p>
+                              )}
+                              {sr.gamePlanSnapshot.conviction && (
+                                <div className="flex gap-2 text-[8px] font-mono text-muted-foreground flex-wrap">
+                                  <span>V2 {Math.round(sr.gamePlanSnapshot.conviction.confidence)}%</span>
+                                  <span>Direction {Math.round(sr.gamePlanSnapshot.conviction.directionalStrength)}%</span>
+                                  <span>Coverage {Math.round(sr.gamePlanSnapshot.conviction.evidenceCoverage)}%</span>
+                                  <span>Quality {Math.round(sr.gamePlanSnapshot.conviction.planQuality)}%</span>
+                                </div>
+                              )}
+                              {sr.gamePlanSnapshot.gateDecision?.reason && (
+                                <p className={`text-[9px] ${sr.gamePlanSnapshot.gateDecision.passed ? "text-muted-foreground" : "text-destructive"}`}>
+                                  {sr.gamePlanSnapshot.gateDecision.passed ? "✓" : "✕"} {sr.gamePlanSnapshot.gateDecision.reason}
+                                </p>
+                              )}
+                              <div className="text-[8px] text-muted-foreground">
+                                Captured {sr.gamePlanSnapshot.capturedAt ? new Date(sr.gamePlanSnapshot.capturedAt).toLocaleString() : "at entry"}
+                              </div>
                             </div>
                           )}
                           {/* ── Regime Detection ── */}

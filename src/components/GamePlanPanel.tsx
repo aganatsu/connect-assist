@@ -53,6 +53,25 @@ interface NewsEvent {
   previous?: string;
 }
 
+type GamePlanState = "tradeable" | "wait" | "skip";
+
+interface BiasEvidence {
+  id: string;
+  label: string;
+  direction: "bullish" | "bearish" | "neutral";
+  weight: number;
+  available: boolean;
+  contribution: number;
+  reason: string;
+}
+
+interface GamePlanConviction {
+  directionalStrength: number;
+  evidenceCoverage: number;
+  planQuality: number;
+  confidence: number;
+}
+
 interface InstrumentPlan {
   symbol: string;
   bias: "bullish" | "bearish" | "neutral";
@@ -65,6 +84,13 @@ interface InstrumentPlan {
   htfTrend: string;
   h4Trend: string;
   tradeable: boolean;
+  state?: GamePlanState;
+  stateReason?: string;
+  conviction?: GamePlanConviction;
+  evidence?: BiasEvidence[];
+  supportingEvidence?: BiasEvidence[];
+  conflictingEvidence?: BiasEvidence[];
+  expiresAt?: string;
   skipReason?: string;
   scenarios: Scenario[];
   keyLevels: KeyLevel[];
@@ -125,6 +151,16 @@ function getConfidenceColor(confidence: number) {
   return "text-muted-foreground";
 }
 
+function getPlanState(plan: InstrumentPlan): GamePlanState {
+  return plan.state || (plan.tradeable && plan.bias !== "neutral" ? "tradeable" : "skip");
+}
+
+function getStateBadge(state: GamePlanState) {
+  if (state === "tradeable") return "bg-badge-profit text-profit border-emerald-500/30";
+  if (state === "wait") return "bg-badge-warn text-warn border-orange-500/30";
+  return "bg-zinc-800/50 text-muted-foreground border-zinc-600";
+}
+
 function getLevelTypeIcon(type: string) {
   switch (type) {
     case "ob": return <Shield className="h-3 w-3 text-cyan-400" />;
@@ -170,6 +206,7 @@ function formatDateTime(isoStr: string) {
 
 function BiasCard({ plan }: { plan: InstrumentPlan }) {
   const [expanded, setExpanded] = useState(false);
+  const state = getPlanState(plan);
 
   return (
     <div
@@ -181,11 +218,9 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
         <div className="flex items-center gap-2">
           {getBiasIcon(plan.bias)}
           <span className="font-mono text-sm font-semibold">{plan.symbol}</span>
-          {!plan.tradeable && (
-            <Badge variant="outline" className="text-[9px] h-4 bg-zinc-800/50 text-muted-foreground border-zinc-600">
-              SKIP
-            </Badge>
-          )}
+          <Badge variant="outline" className={`text-[9px] h-4 ${getStateBadge(state)}`}>
+            {state.toUpperCase()}
+          </Badge>
         </div>
         <div className="flex items-center gap-2">
           <span className={`font-mono text-xs font-bold uppercase ${getBiasColor(plan.bias)}`}>
@@ -227,11 +262,75 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
           <span className="text-[10px] text-highlight font-mono">{plan.skipReason}</span>
         </div>
       )}
+      {!plan.skipReason && plan.stateReason && state !== "tradeable" && (
+        <div className="flex items-center gap-1.5 mt-1.5">
+          <AlertTriangle className="h-3 w-3 text-highlight shrink-0" />
+          <span className="text-[10px] text-highlight font-mono">{plan.stateReason}</span>
+        </div>
+      )}
 
       {/* Expanded content */}
       {expanded && (
         <div className="mt-3 space-y-3">
           <Separator className="bg-border/50" />
+
+          {plan.conviction && (
+            <div>
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                Plan Quality
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                {[
+                  ["V2 Confidence", plan.conviction.confidence],
+                  ["Direction", plan.conviction.directionalStrength],
+                  ["Coverage", plan.conviction.evidenceCoverage],
+                  ["Quality", plan.conviction.planQuality],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="border border-border/50 bg-background/30 p-1.5">
+                    <div className="text-[8px] uppercase text-muted-foreground">{label}</div>
+                    <div className="text-xs font-mono font-semibold">{Number(value).toFixed(0)}%</div>
+                  </div>
+                ))}
+              </div>
+              {plan.stateReason && (
+                <div className="text-[10px] text-foreground/70 font-mono mt-1.5">
+                  {plan.stateReason}
+                </div>
+              )}
+              {plan.expiresAt && (
+                <div className="text-[9px] text-muted-foreground font-mono mt-1">
+                  Expires: {formatDateTime(plan.expiresAt)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {plan.evidence && plan.evidence.length > 0 && (
+            <div>
+              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
+                Evidence
+              </div>
+              <div className="space-y-1">
+                {plan.evidence.map((item) => (
+                  <div key={item.id} className="flex items-start justify-between gap-2 text-[10px] font-mono">
+                    <div className="min-w-0">
+                      <span className={
+                        !item.available ? "text-muted-foreground"
+                        : item.direction === plan.bias ? "text-profit"
+                        : item.direction === "neutral" ? "text-muted-foreground"
+                        : "text-loss"
+                      }>
+                        {!item.available ? "○" : item.direction === plan.bias ? "✓" : item.direction === "neutral" ? "—" : "×"}
+                      </span>
+                      <span className="ml-1.5 text-foreground/80">{item.label}</span>
+                      <div className="text-[9px] text-muted-foreground ml-4">{item.reason}</div>
+                    </div>
+                    <span className="text-muted-foreground shrink-0">{item.weight}w</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Bias Reasoning */}
           <div>
@@ -398,15 +497,19 @@ export function GamePlanPanel() {
     return gamePlanLogs[selectedPlanIdx] || null;
   }, [gamePlanLogs, selectedPlanIdx]);
 
-  // Separate focus and skip pairs
-  const focusPairs = useMemo(() => {
+  const tradeablePairs = useMemo(() => {
     if (!currentPlan) return [];
-    return currentPlan.plans.filter(p => p.tradeable && p.bias !== "neutral");
+    return currentPlan.plans.filter(p => getPlanState(p) === "tradeable");
+  }, [currentPlan]);
+
+  const waitPairs = useMemo(() => {
+    if (!currentPlan) return [];
+    return currentPlan.plans.filter(p => getPlanState(p) === "wait");
   }, [currentPlan]);
 
   const skipPairs = useMemo(() => {
     if (!currentPlan) return [];
-    return currentPlan.plans.filter(p => !p.tradeable || p.bias === "neutral");
+    return currentPlan.plans.filter(p => getPlanState(p) === "skip");
   }, [currentPlan]);
 
   if (isLoading) return <GamePlanSkeleton />;
@@ -434,8 +537,14 @@ export function GamePlanPanel() {
               <span className="text-sm font-semibold font-mono">
                 {currentPlan.session} Session
               </span>
-              <Badge variant="outline" className="text-[9px] h-4 bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
-                {currentPlan.focus_pairs.length} FOCUS
+              <Badge variant="outline" className="text-[9px] h-4 bg-badge-profit text-profit border-emerald-500/30">
+                {tradeablePairs.length} TRADEABLE
+              </Badge>
+              <Badge variant="outline" className="text-[9px] h-4 bg-badge-warn text-warn border-orange-500/30">
+                {waitPairs.length} WAIT
+              </Badge>
+              <Badge variant="outline" className="text-[9px] h-4 bg-zinc-500/10 text-muted-foreground border-zinc-500/30">
+                {skipPairs.length} SKIP
               </Badge>
             </div>
             <div className="flex items-center gap-1.5">
@@ -522,30 +631,47 @@ export function GamePlanPanel() {
             </Card>
           )}
 
-          {/* Focus Pairs */}
-          {focusPairs.length > 0 && (
+          {/* Tradeable Pairs */}
+          {tradeablePairs.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <Eye className="h-3.5 w-3.5 text-cyan-400" />
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Focus Pairs ({focusPairs.length})
+                  Tradeable Pairs ({tradeablePairs.length})
                 </span>
               </div>
               <div className="space-y-1.5">
-                {focusPairs.map(plan => (
+                {tradeablePairs.map(plan => (
                   <BiasCard key={plan.symbol} plan={plan} />
                 ))}
               </div>
             </div>
           )}
 
-          {/* Skip / Neutral Pairs */}
+          {/* Waiting Pairs */}
+          {waitPairs.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-2">
+                <Clock className="h-3.5 w-3.5 text-warn" />
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  Waiting for Conditions ({waitPairs.length})
+                </span>
+              </div>
+              <div className="space-y-1.5">
+                {waitPairs.map(plan => (
+                  <BiasCard key={plan.symbol} plan={plan} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Skip Pairs */}
           {skipPairs.length > 0 && (
             <div>
               <div className="flex items-center gap-1.5 mb-2">
                 <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  Skipped / Neutral ({skipPairs.length})
+                  Skipped ({skipPairs.length})
                 </span>
               </div>
               <div className="space-y-1.5">

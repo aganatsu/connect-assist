@@ -34,6 +34,14 @@ import {
   detectSession as sharedDetectSession,
   SESSION_WINDOWS,
 } from "./sessions.ts";
+import {
+  classifyGamePlan,
+  type BiasEvidence,
+  type GamePlanConviction,
+  type GamePlanState,
+} from "./gamePlanClassifier.ts";
+
+export type { BiasEvidence, GamePlanConviction, GamePlanState } from "./gamePlanClassifier.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -99,12 +107,24 @@ export interface InstrumentGamePlan {
   weeklyProfile?: import("./weeklyProfile.ts").WeeklyProfile;
   /** Whether to trade this instrument this session */
   tradeable: boolean;
+  /** V2 informational classification; legacy tradeable remains authoritative during shadow rollout. */
+  state?: GamePlanState;
+  /** Human-readable explanation for the V2 state. */
+  stateReason?: string;
+  /** Conflict-aware conviction metrics used for shadow evaluation. */
+  conviction?: GamePlanConviction;
+  /** Auditable inputs that produced the bias. */
+  evidence?: BiasEvidence[];
+  supportingEvidence?: BiasEvidence[];
+  conflictingEvidence?: BiasEvidence[];
   /** Reason if not tradeable */
   skipReason?: string;
   /** Last price at time of analysis */
   lastPrice: number;
   /** Timestamp of game plan generation */
   generatedAt: string;
+  /** Informational expiry matching the default four-hour plan refresh window. */
+  expiresAt?: string;
 }
 
 export interface SessionGamePlan {
@@ -281,53 +301,86 @@ function determineBias(
   amd: { phase: string; bias: string | null },
   dol: DOLTarget | null,
   regime: { regime: string; directionalBias: string; confidence: number },
-): { bias: BiasDirection; confidence: number; reasoning: string[] } {
+  availability: { daily: boolean; h4: boolean; location: boolean },
+): { bias: BiasDirection; confidence: number; reasoning: string[]; evidence: BiasEvidence[] } {
   let bullishVotes = 0;
   let bearishVotes = 0;
   const reasoning: string[] = [];
+  const evidence: BiasEvidence[] = [];
+
+  const addEvidence = (
+    id: string,
+    label: string,
+    direction: BiasDirection,
+    weight: number,
+    available: boolean,
+    reason: string,
+  ) => {
+    evidence.push({
+      id,
+      label,
+      direction,
+      weight,
+      available,
+      contribution: direction === "bullish" ? weight : direction === "bearish" ? -weight : 0,
+      reason,
+    });
+  };
 
   // 1. Daily trend (weight: 3)
   if (dailyTrend === "bullish") {
     bullishVotes += 3;
     reasoning.push("D1 structure: bullish (HH/HL)");
+    addEvidence("daily_structure", "Daily structure", "bullish", 3, true, "D1 structure is bullish (HH/HL)");
   } else if (dailyTrend === "bearish") {
     bearishVotes += 3;
     reasoning.push("D1 structure: bearish (LH/LL)");
+    addEvidence("daily_structure", "Daily structure", "bearish", 3, true, "D1 structure is bearish (LH/LL)");
   } else {
     reasoning.push("D1 structure: ranging — no clear trend");
+    addEvidence("daily_structure", "Daily structure", "neutral", 3, availability.daily, availability.daily ? "D1 structure is ranging" : "D1 structure unavailable");
   }
 
   // 2. 4H trend (weight: 2)
   if (h4Trend === "bullish") {
     bullishVotes += 2;
     reasoning.push("4H structure: bullish");
+    addEvidence("h4_structure", "4H structure", "bullish", 2, true, "4H structure is bullish");
   } else if (h4Trend === "bearish") {
     bearishVotes += 2;
     reasoning.push("4H structure: bearish");
+    addEvidence("h4_structure", "4H structure", "bearish", 2, true, "4H structure is bearish");
   } else {
     reasoning.push("4H structure: ranging");
+    addEvidence("h4_structure", "4H structure", "neutral", 2, availability.h4, availability.h4 ? "4H structure is ranging" : "4H structure unavailable");
   }
 
   // 3. Premium/Discount zone (weight: 2)
   if (zone === "discount" && zonePercent < 40) {
     bullishVotes += 2;
     reasoning.push(`Price in discount zone (${zonePercent.toFixed(0)}%) — look for longs`);
+    addEvidence("market_location", "Premium/discount", "bullish", 2, true, `Price is in discount (${zonePercent.toFixed(0)}%)`);
   } else if (zone === "premium" && zonePercent > 60) {
     bearishVotes += 2;
     reasoning.push(`Price in premium zone (${zonePercent.toFixed(0)}%) — look for shorts`);
+    addEvidence("market_location", "Premium/discount", "bearish", 2, true, `Price is in premium (${zonePercent.toFixed(0)}%)`);
   } else {
     reasoning.push(`Price in equilibrium (${zonePercent.toFixed(0)}%)`);
+    addEvidence("market_location", "Premium/discount", "neutral", 2, availability.location && Number.isFinite(zonePercent), availability.location ? `Price is near equilibrium (${zonePercent.toFixed(0)}%)` : "Premium/discount location unavailable");
   }
 
   // 4. AMD phase (weight: 2)
   if (amd.bias === "bullish") {
     bullishVotes += 2;
     reasoning.push(`AMD: ${amd.phase} — bullish bias (sell-side swept)`);
+    addEvidence("amd_phase", "AMD phase", "bullish", 2, true, `${amd.phase}: sell-side liquidity swept`);
   } else if (amd.bias === "bearish") {
     bearishVotes += 2;
     reasoning.push(`AMD: ${amd.phase} — bearish bias (buy-side swept)`);
+    addEvidence("amd_phase", "AMD phase", "bearish", 2, true, `${amd.phase}: buy-side liquidity swept`);
   } else {
     reasoning.push(`AMD: ${amd.phase} — no clear sweep bias`);
+    addEvidence("amd_phase", "AMD phase", "neutral", 2, amd.phase !== "unknown", `${amd.phase}: no clear sweep bias`);
   }
 
   // 5. DOL direction (weight: 1)
@@ -335,21 +388,28 @@ function determineBias(
     if (dol.type === "buy-side") {
       bullishVotes += 1;
       reasoning.push(`DOL: buy-side at ${dol.price.toFixed(5)} (${dol.description})`);
+      addEvidence("draw_on_liquidity", "Draw on liquidity", "bullish", 1, true, `${dol.description} above price`);
     } else {
       bearishVotes += 1;
       reasoning.push(`DOL: sell-side at ${dol.price.toFixed(5)} (${dol.description})`);
+      addEvidence("draw_on_liquidity", "Draw on liquidity", "bearish", 1, true, `${dol.description} below price`);
     }
+  } else {
+    addEvidence("draw_on_liquidity", "Draw on liquidity", "neutral", 1, false, "No validated liquidity target");
   }
 
   // 6. Regime directional bias (weight: 1)
   if (regime.directionalBias === "bullish") {
     bullishVotes += 1;
     reasoning.push(`Regime: ${regime.regime} (bullish bias, ${regime.confidence}% conf)`);
+    addEvidence("market_regime", "Market regime", "bullish", 1, true, `${regime.regime} regime has bullish bias`);
   } else if (regime.directionalBias === "bearish") {
     bearishVotes += 1;
     reasoning.push(`Regime: ${regime.regime} (bearish bias, ${regime.confidence}% conf)`);
+    addEvidence("market_regime", "Market regime", "bearish", 1, true, `${regime.regime} regime has bearish bias`);
   } else {
     reasoning.push(`Regime: ${regime.regime} (neutral)`);
+    addEvidence("market_regime", "Market regime", "neutral", 1, regime.regime !== "unknown", `${regime.regime} regime is neutral`);
   }
 
   // Calculate final bias
@@ -373,7 +433,7 @@ function determineBias(
     confidence = Math.round(((bullishVotes + bearishVotes) / maxPossible) * 50);
   }
 
-  return { bias, confidence, reasoning };
+  return { bias, confidence, reasoning, evidence };
 }
 
 // ─── Key Level Extraction ───────────────────────────────────────────────────
@@ -667,7 +727,7 @@ export function generateInstrumentGamePlan(
   );
 
   // ── Bias Determination ──
-  const { bias, confidence, reasoning } = determineBias(
+  const { bias, confidence, reasoning, evidence } = determineBias(
     htfTrend,
     h4Trend,
     pd.currentZone,
@@ -675,6 +735,11 @@ export function generateInstrumentGamePlan(
     amd,
     dol,
     regimeResult,
+    {
+      daily: !!dailyStructure,
+      h4: !!h4Structure,
+      location: entryCandles.length > 0 || dailyCandles.length > 0,
+    },
   );
 
   // ── Key Levels ──
@@ -723,6 +788,20 @@ export function generateInstrumentGamePlan(
     // Crypto trades all sessions, but note reduced volume
   }
 
+  const classification = classifyGamePlan({
+    bias,
+    legacyConfidence: confidence,
+    dailyTrend: htfTrend,
+    h4Trend,
+    zone: pd.currentZone,
+    regime: regimeResult.regime,
+    hasDOL: !!dol,
+    legacyTradeable: tradeable,
+    legacySkipReason: skipReason,
+    evidence,
+  });
+  const generatedAt = new Date();
+
   return {
     symbol,
     session,
@@ -742,9 +821,16 @@ export function generateInstrumentGamePlan(
     ipdaRanges: ipdaRanges ?? undefined,
     weeklyProfile,
     tradeable,
+    state: classification.state,
+    stateReason: classification.stateReason,
+    conviction: classification.conviction,
+    evidence,
+    supportingEvidence: classification.supportingEvidence,
+    conflictingEvidence: classification.conflictingEvidence,
     skipReason,
     lastPrice,
-    generatedAt: new Date().toISOString(),
+    generatedAt: generatedAt.toISOString(),
+    expiresAt: new Date(generatedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
   };
 }
 
@@ -759,7 +845,7 @@ export function buildSessionGamePlan(
   instrumentPlans: InstrumentGamePlan[],
 ): SessionGamePlan {
   const focusPairs = instrumentPlans
-    .filter(p => p.tradeable && p.bias !== "neutral" && p.biasConfidence >= 30)
+    .filter(p => p.state ? p.state === "tradeable" : (p.tradeable && p.bias !== "neutral" && p.biasConfidence >= 30))
     .sort((a, b) => b.biasConfidence - a.biasConfidence)
     .map(p => p.symbol);
 
