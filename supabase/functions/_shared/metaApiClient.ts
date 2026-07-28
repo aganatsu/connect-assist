@@ -2,11 +2,15 @@
  * metaApiClient.ts — MetaAPI Region Failover (Single Source of Truth)
  * ═══════════════════════════════════════════════════════════════════
  *
- * All MetaAPI HTTP calls go through metaFetch(), which:
+ * MetaAPI HTTP calls go through metaFetch(), which by default:
  *   1. Tries cached region first (from previous successful call for this account)
  *   2. Falls back through ["london", "new-york", "singapore"] on region mismatch
  *   3. Caches successful region for subsequent calls
  *   4. Logs warnings on failover for observability
+ *
+ * Non-idempotent calls such as opening a market order must pass
+ * allowFailover: false. A lost response can mean the broker accepted the order,
+ * so silently sending it to another region could create a duplicate trade.
  *
  * Previously duplicated in: bot-scanner, broker-execute, paper-trading,
  * zone-confirmation-scanner, reconcileBrokerState, candleSource (as metaFetchCandles).
@@ -38,9 +42,15 @@ export async function metaFetch(
   authToken: string,
   pathBuilder: (base: string) => string,
   init?: RequestInit,
+  options?: { allowFailover?: boolean },
 ): Promise<{ res: Response; body: string }> {
   const cached = regionCache.get(accountId);
-  const order = cached ? [cached, ...META_REGIONS.filter(r => r !== cached)] : META_REGIONS;
+  const preferredRegion = cached || META_REGIONS[0];
+  const order = options?.allowFailover === false
+    ? [preferredRegion]
+    : cached
+    ? [cached, ...META_REGIONS.filter((r) => r !== cached)]
+    : META_REGIONS;
   let lastBody = ""; let lastStatus = 504;
   for (const region of order) {
     const url = pathBuilder(metaBaseUrl(region, accountId));
@@ -55,11 +65,19 @@ export async function metaFetch(
       if (!/region|not connected to broker/i.test(body)) {
         return { res: new Response(body, { status: res.status }), body };
       }
-      console.warn(`MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`);
+      console.warn(
+        options?.allowFailover === false
+          ? `MetaAPI ${region} returned ${res.status}; unsafe region failover suppressed`
+          : `MetaAPI ${region} returned ${res.status} (region/connection mismatch), trying next...`,
+      );
     } catch (err) {
       lastBody = `network error: ${(err as Error).message}`;
       lastStatus = 504;
-      console.warn(`MetaAPI ${region} network error, trying next: ${(err as Error).message}`);
+      console.warn(
+        options?.allowFailover === false
+          ? `MetaAPI ${region} network error; unsafe retry suppressed: ${(err as Error).message}`
+          : `MetaAPI ${region} network error, trying next: ${(err as Error).message}`,
+      );
     } finally {
       clearTimeout(timer);
     }

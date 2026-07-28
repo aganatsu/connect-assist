@@ -9,6 +9,7 @@ const fastScannerUrl = new URL(
   import.meta.url,
 );
 const botScannerUrl = new URL("../bot-scanner/index.ts", import.meta.url);
+const brokerExecuteUrl = new URL("../broker-execute/index.ts", import.meta.url);
 
 Deno.test("fast confirmation uses shared authorization and atomic fill only", async () => {
   const source = await Deno.readTextFile(fastScannerUrl.pathname);
@@ -78,4 +79,65 @@ Deno.test("fast confirmation respects confirmationMethod and user-scoped broker 
     false,
     "Broker connection must not be shared across users",
   );
+});
+
+Deno.test("all live entry routes claim durable broker execution before sending", async () => {
+  const fastSource = await Deno.readTextFile(fastScannerUrl.pathname);
+  const botSource = await Deno.readTextFile(botScannerUrl.pathname);
+
+  assertStringIncludes(fastSource, "executeBrokerOrderWithLedger(");
+  assertStringIncludes(fastSource, 'route: "fast_confirmation"');
+
+  assertStringIncludes(botSource, "executeBrokerOrderWithLedger(");
+  assertStringIncludes(botSource, 'route: "normal_pending"');
+  assertStringIncludes(botSource, 'route: "direct_market"');
+
+  assertEquals(
+    fastSource.split("executeBrokerOrderWithLedger(").length - 1,
+    2,
+    "Fast confirmation must ledger both MetaAPI and non-MetaAPI sends",
+  );
+  assertEquals(
+    botSource.split("executeBrokerOrderWithLedger(").length - 1,
+    4,
+    "Bot scanner must ledger normal-pending and direct-market sends for both broker paths",
+  );
+});
+
+Deno.test("broker-execute carries local position identity to both brokers", async () => {
+  const source = await Deno.readTextFile(brokerExecuteUrl.pathname);
+  assertStringIncludes(
+    source,
+    "const { symbol, direction, size, stopLoss, takeProfit, positionId }",
+  );
+  assertStringIncludes(source, "tradeClientExtensions");
+  assertStringIncludes(source, "clientExtensions");
+  assertStringIncludes(source, "tradeBody.comment = `paper:${positionId}`");
+});
+
+Deno.test("live market-order sends suppress unsafe automatic retries", async () => {
+  const brokerSource = await Deno.readTextFile(brokerExecuteUrl.pathname);
+  const placeOrderStart = brokerSource.indexOf(
+    'if (action === "place_order")',
+  );
+  const placeOrderEnd = brokerSource.indexOf(
+    'if (action === "account_balance")',
+    placeOrderStart,
+  );
+  assert(
+    placeOrderStart >= 0 && placeOrderEnd > placeOrderStart,
+    "Broker place-order section must be discoverable",
+  );
+  const placeOrderSection = brokerSource.slice(placeOrderStart, placeOrderEnd);
+  assertEquals(
+    placeOrderSection.includes("retryWithBackoff("),
+    false,
+    "Opening a market order must not retry after an uncertain result",
+  );
+  assertStringIncludes(placeOrderSection, "allowFailover: false");
+
+  const fastSource = await Deno.readTextFile(fastScannerUrl.pathname);
+  const botSource = await Deno.readTextFile(botScannerUrl.pathname);
+  assertStringIncludes(fastSource, "allowFailover: false");
+  assertStringIncludes(botSource, "allowFailover: false");
 });

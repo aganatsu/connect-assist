@@ -67,6 +67,9 @@ import {
   type ReconcilePosition, type BrokerConnection,
 } from "../_shared/reconcileBrokerState.ts";
 import {
+  executeBrokerOrderWithLedger,
+} from "../_shared/brokerExecutionLedger.ts";
+import {
   analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
   type NewsEvent, type NewsImpactResult,
 } from "../_shared/newsImpact.ts";
@@ -3226,12 +3229,47 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               for (const conn of approvedPendingConnections) {
                 try {
                   if (conn.broker_type !== "metaapi") {
-                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
-                      body: JSON.stringify({ action: "place_order", connectionId: conn.id, symbol: pending.symbol, direction: pending.direction, size: parseFloat(pending.size), stopLoss: parseFloat(pending.stop_loss), takeProfit: parseFloat(pending.take_profit), userId }),
-                    });
-                    if (exRes.ok) { mirroredConnIds.push(conn.id); }
+                    const ledgerExecution = await executeBrokerOrderWithLedger(
+                      supabase,
+                      {
+                        userId,
+                        botId: BOT_ID,
+                        positionId,
+                        brokerConnectionId: conn.id,
+                        route: "normal_pending",
+                        requestPayload: {
+                          symbol: pending.symbol,
+                          direction: pending.direction,
+                          size: parseFloat(pending.size),
+                          stopLoss: parseFloat(pending.stop_loss),
+                          takeProfit: parseFloat(pending.take_profit),
+                        },
+                      },
+                      async () => {
+                        const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json", Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}` },
+                          body: JSON.stringify({ action: "place_order", connectionId: conn.id, symbol: pending.symbol, direction: pending.direction, size: parseFloat(pending.size), stopLoss: parseFloat(pending.stop_loss), takeProfit: parseFloat(pending.take_profit), positionId, userId }),
+                        });
+                        const rawBody = await exRes.text();
+                        let parsedBody: any = null;
+                        try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                        return {
+                          ok: exRes.ok,
+                          httpStatus: exRes.status,
+                          parsedBody,
+                          rawBody,
+                        };
+                      },
+                    );
+                    if (ledgerExecution.status === "succeeded") {
+                      mirroredConnIds.push(conn.id);
+                    } else {
+                      console.warn(
+                        `[pending] Broker execution ${ledgerExecution.status}`
+                        + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
+                      );
+                    }
                     continue;
                   }
                   let authToken = conn.api_key;
@@ -3249,8 +3287,53 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                   };
                   if (pending.stop_loss) mt5Body.stopLoss = parseFloat(pending.stop_loss);
                   if (pending.take_profit) mt5Body.takeProfit = parseFloat(pending.take_profit);
-                  const { res: mt5Res } = await metaFetch(metaAccountId, authToken, (base: string) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
-                  if (mt5Res.ok) { mirroredConnIds.push(conn.id); }
+                  const ledgerExecution = await executeBrokerOrderWithLedger(
+                    supabase,
+                    {
+                      userId,
+                      botId: BOT_ID,
+                      positionId,
+                      brokerConnectionId: conn.id,
+                      route: "normal_pending",
+                      requestPayload: {
+                        symbol: pending.symbol,
+                        brokerSymbol,
+                        direction: pending.direction,
+                        volume: parseFloat(pending.size),
+                        stopLoss: pending.stop_loss ? parseFloat(pending.stop_loss) : null,
+                        takeProfit: pending.take_profit ? parseFloat(pending.take_profit) : null,
+                      },
+                    },
+                    async () => {
+                      const { res: mt5Res, body: rawBody } = await metaFetch(
+                        metaAccountId,
+                        authToken,
+                        (base: string) => `${base}/trade`,
+                        {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(mt5Body),
+                        },
+                        { allowFailover: false },
+                      );
+                      let parsedBody: any = null;
+                      try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                      return {
+                        ok: mt5Res.ok,
+                        httpStatus: mt5Res.status,
+                        parsedBody,
+                        rawBody,
+                      };
+                    },
+                  );
+                  if (ledgerExecution.status === "succeeded") {
+                    mirroredConnIds.push(conn.id);
+                  } else {
+                    console.warn(
+                      `[pending] Broker execution ${ledgerExecution.status}`
+                      + ` [${conn.display_name}]: ${ledgerExecution.error || "reconciliation required"}`,
+                    );
+                  }
                 } catch (e: any) { console.warn(`Limit fill broker mirror [${conn.display_name}] error: ${e?.message}`); }
               }
               if (mirroredConnIds.length > 0) {
@@ -6805,28 +6888,57 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                       oandaTP = adj.brokerTP;
                       console.log(`OANDA SL/TP adjusted for spread [${conn.display_name}]: SL ${sl} → ${oandaSL}, TP ${tp} → ${oandaTP}`);
                     }
-                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the broker-execute function
-                    const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
-                      },
-                      body: JSON.stringify({
-                        action: "place_order",
-                        connectionId: conn.id,
-                        symbol: pair,
-                        direction: analysis.direction,
-                        size,
-                        stopLoss: oandaSL,
-                        takeProfit: oandaTP,
+                    // Non-MetaAPI brokers (e.g. OANDA) are mirrored via the
+                    // broker-execute function after a durable execution claim.
+                    const ledgerExecution = await executeBrokerOrderWithLedger(
+                      supabase,
+                      {
                         userId,
-                      }),
-                    });
-                    const exBody = await exRes.text();
-                    let parsedEx: any = null;
-                    try { parsedEx = JSON.parse(exBody); } catch {}
-                    if (exRes.ok && !(parsedEx?.error)) {
+                        botId: BOT_ID,
+                        positionId,
+                        brokerConnectionId: conn.id,
+                        route: "direct_market",
+                        requestPayload: {
+                          symbol: pair,
+                          direction: analysis.direction,
+                          size,
+                          stopLoss: oandaSL,
+                          takeProfit: oandaTP,
+                        },
+                      },
+                      async () => {
+                        const exRes = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/broker-execute`, {
+                          method: "POST",
+                          headers: {
+                            "Content-Type": "application/json",
+                            Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                          },
+                          body: JSON.stringify({
+                            action: "place_order",
+                            connectionId: conn.id,
+                            symbol: pair,
+                            direction: analysis.direction,
+                            size,
+                            stopLoss: oandaSL,
+                            takeProfit: oandaTP,
+                            positionId,
+                            userId,
+                          }),
+                        });
+                        const rawBody = await exRes.text();
+                        let parsedBody: any = null;
+                        try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                        return {
+                          ok: exRes.ok,
+                          httpStatus: exRes.status,
+                          parsedBody,
+                          rawBody,
+                        };
+                      },
+                    );
+                    const exBody = ledgerExecution.rawBody || "";
+                    const parsedEx = ledgerExecution.parsedBody;
+                    if (ledgerExecution.status === "succeeded") {
                       console.log(`Broker mirror [${conn.display_name}] (${conn.broker_type}): SUCCESS — ${exBody.slice(0, 300)}`);
                       mirrorResults.push(`${conn.display_name}: success`);
                       mirroredConnIds.push(conn.id);
@@ -6859,11 +6971,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                         console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
                       }
                     } else {
-                      const reason = parsedEx?.error || exBody.slice(0, 200);
-                      console.warn(`Broker mirror [${conn.display_name}] (${conn.broker_type}) failed: ${reason}`);
-                      mirrorResults.push(`${conn.display_name}: skipped — ${reason}`);
+                      const reason = ledgerExecution.error
+                        || parsedEx?.error
+                        || exBody.slice(0, 200)
+                        || "reconciliation required";
+                      console.warn(
+                        `Broker mirror [${conn.display_name}] (${conn.broker_type})`
+                        + ` ${ledgerExecution.status}: ${reason}`,
+                      );
+                      mirrorResults.push(`${conn.display_name}: ${ledgerExecution.status} — ${reason}`);
                       // Circuit breaker: record failure (transient if HTTP error, permanent if auth)
-                      const isTransient = !reason.includes("auth") && !reason.includes("invalid");
+                      const isTransient = ledgerExecution.status === "uncertain";
                       brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: reason, isTransient });
                     }
                     continue;
@@ -6985,65 +7103,114 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                    if (brokerSL) mt5Body.stopLoss = brokerSL;
                    if (brokerTP) mt5Body.takeProfit = brokerTP;
                    console.log(`Broker mirror [${conn.display_name}]: sending ${pair} → ${brokerSymbol} ${analysis.direction} ${brokerVolume} lots, SL=${brokerSL}, TP=${brokerTP}, spread=${metaSpread?.spreadPips?.toFixed(2) ?? "?"} pips`);
-                   const { res: mt5Res, body: resBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/trade`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mt5Body) });
-                   if (mt5Res.ok) {
-                     console.log(`Broker mirror [${conn.display_name}]: SUCCESS ${mt5Res.status} — ${resBody.slice(0, 500)}`);
+                   const ledgerExecution = await executeBrokerOrderWithLedger(
+                     supabase,
+                     {
+                       userId,
+                       botId: BOT_ID,
+                       positionId,
+                       brokerConnectionId: conn.id,
+                       route: "direct_market",
+                       requestPayload: {
+                         symbol: pair,
+                         brokerSymbol,
+                         direction: analysis.direction,
+                         volume: brokerVolume,
+                         stopLoss: brokerSL,
+                         takeProfit: brokerTP,
+                       },
+                     },
+                     async () => {
+                       const { res: mt5Res, body: rawBody } = await metaFetch(
+                         metaAccountId,
+                         authToken,
+                         (base) => `${base}/trade`,
+                         {
+                           method: "POST",
+                           headers: { "Content-Type": "application/json" },
+                           body: JSON.stringify(mt5Body),
+                         },
+                         { allowFailover: false },
+                       );
+                       let parsedBody: any = null;
+                       try { parsedBody = rawBody ? JSON.parse(rawBody) : null; } catch {}
+                       return {
+                         ok: mt5Res.ok,
+                         httpStatus: mt5Res.status,
+                         parsedBody,
+                         rawBody,
+                       };
+                     },
+                   );
+                   const resBody = ledgerExecution.rawBody || "";
+                   const parsed = ledgerExecution.parsedBody || {};
+                   if (ledgerExecution.status === "succeeded") {
+                     console.log(`Broker mirror [${conn.display_name}]: SUCCESS — ${resBody.slice(0, 500)}`);
+                     mirrorResults.push(`${conn.display_name}: success`);
+                     mirroredConnIds.push(conn.id);
+                     brokerHealthMap[conn.id] = updateHealth(connHealth, {
+                       connectionId: conn.id,
+                       success: true,
+                       latencyMs: 0,
+                       isTransient: false,
+                     });
+                     // Auto-detect commission from MetaApi trade response
                      try {
-                       const parsed = JSON.parse(resBody);
-                         if (parsed.stringCode && parsed.stringCode !== "TRADE_RETCODE_DONE" && parsed.stringCode !== "ERR_NO_ERROR") {
-                           console.warn(`Broker mirror [${conn.display_name}]: trade rejected by broker — ${parsed.stringCode}: ${parsed.message || ""}`);
-                           mirrorResults.push(`${conn.display_name}: rejected ${parsed.stringCode}`);
-                           // Circuit breaker: broker rejection is NOT transient (won't open circuit)
-                           brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: false, latencyMs: 0, error: parsed.stringCode, isTransient: false });
-                        } else {
-                          mirrorResults.push(`${conn.display_name}: success`);
-                          mirroredConnIds.push(conn.id);
-                          // Circuit breaker: record success
-                          brokerHealthMap[conn.id] = updateHealth(connHealth, { connectionId: conn.id, success: true, latencyMs: 0, isTransient: false });
-                          // Auto-detect commission from MetaApi trade response
-                          try {
-                            const orderId = parsed.orderId || parsed.positionId;
-                            if (orderId) {
-                              // Fetch the deal associated with this order to get commission + fill price
-                              const { res: dealRes, body: dealBody } = await metaFetch(metaAccountId, authToken, (base) => `${base}/history-deals/position/${orderId}`);
-                              if (dealRes.ok) {
-                                const deals = JSON.parse(dealBody);
-                                const dealArr = Array.isArray(deals) ? deals : [];
-                                for (const deal of dealArr) {
-                                  // Extract actual fill price from deal (first deal with price is the entry)
-                                  if (!brokerFillPrice && deal.price != null) {
-                                    const metaFillPrice = parseFloat(deal.price);
-                                    if (metaFillPrice > 0) {
-                                      brokerFillPrice = metaFillPrice;
-                                      console.log(`[broker-fill-price] MetaApi [${conn.display_name}]: fill price ${metaFillPrice}`);
-                                    }
-                                  }
-                                  if (deal.commission !== undefined && deal.volume > 0) {
-                                    const dealComm = Math.abs(parseFloat(deal.commission || "0"));
-                                    const dealVol = parseFloat(deal.volume || "0");
-                                    if (dealComm > 0 && dealVol > 0) {
-                                      const commPerLot = dealComm / dealVol; // per-side per lot
-                                      console.log(`[commission auto-detect] MetaApi [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from deal (comm=$${dealComm}, vol=${dealVol})`);
-                                      await supabase.from("broker_connections")
-                                        .update({ detected_commission_per_lot: commPerLot })
-                                        .eq("id", conn.id);
-                                      break;
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          } catch (commErr: any) {
-                            console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
-                          }
-                        }
-                      } catch { mirrorResults.push(`${conn.display_name}: success`); mirroredConnIds.push(conn.id); }
+                       const brokerOrderId = ledgerExecution.brokerOrderId
+                         || parsed.orderId
+                         || parsed.positionId;
+                       if (brokerOrderId) {
+                         // Fetch the deal associated with this order to get commission + fill price
+                         const { res: dealRes, body: dealBody } = await metaFetch(
+                           metaAccountId,
+                           authToken,
+                           (base) => `${base}/history-deals/position/${brokerOrderId}`,
+                         );
+                         if (dealRes.ok) {
+                           const deals = JSON.parse(dealBody);
+                           const dealArr = Array.isArray(deals) ? deals : [];
+                           for (const deal of dealArr) {
+                             if (!brokerFillPrice && deal.price != null) {
+                               const metaFillPrice = parseFloat(deal.price);
+                               if (metaFillPrice > 0) {
+                                 brokerFillPrice = metaFillPrice;
+                                 console.log(`[broker-fill-price] MetaApi [${conn.display_name}]: fill price ${metaFillPrice}`);
+                               }
+                             }
+                             if (deal.commission !== undefined && deal.volume > 0) {
+                               const dealComm = Math.abs(parseFloat(deal.commission || "0"));
+                               const dealVol = parseFloat(deal.volume || "0");
+                               if (dealComm > 0 && dealVol > 0) {
+                                 const commPerLot = dealComm / dealVol;
+                                 console.log(`[commission auto-detect] MetaApi [${conn.display_name}]: $${commPerLot.toFixed(3)}/lot/side from deal (comm=$${dealComm}, vol=${dealVol})`);
+                                 await supabase.from("broker_connections")
+                                   .update({ detected_commission_per_lot: commPerLot })
+                                   .eq("id", conn.id);
+                                 break;
+                               }
+                             }
+                           }
+                         }
+                       }
+                     } catch (commErr: any) {
+                       console.warn(`Commission auto-detect failed [${conn.display_name}]: ${commErr?.message}`);
+                     }
                    } else {
-                     console.warn(`Broker mirror [${conn.display_name}] failed [${mt5Res.status}]: ${resBody.slice(0, 500)}`);
-                     mirrorResults.push(`${conn.display_name}: failed ${mt5Res.status}`);
-                     // Circuit breaker: record failure
-                     const isTransient = mt5Res.status >= 500 || mt5Res.status === 429;
-                     brokerHealthMap[conn.id] = updateHealth(brokerHealthMap[conn.id] || createInitialHealth(conn.id), { connectionId: conn.id, success: false, latencyMs: 0, error: `HTTP ${mt5Res.status}`, isTransient });
+                     const reason = ledgerExecution.error || "reconciliation required";
+                     console.warn(
+                       `Broker mirror [${conn.display_name}] ${ledgerExecution.status}: ${reason}`,
+                     );
+                     mirrorResults.push(`${conn.display_name}: ${ledgerExecution.status} — ${reason}`);
+                     brokerHealthMap[conn.id] = updateHealth(
+                       brokerHealthMap[conn.id] || createInitialHealth(conn.id),
+                       {
+                         connectionId: conn.id,
+                         success: false,
+                         latencyMs: 0,
+                         error: reason,
+                         isTransient: ledgerExecution.status === "uncertain",
+                       },
+                     );
                    }
                  } catch (connErr: any) {
                   console.warn(`Broker mirror [${conn.display_name}] error: ${connErr?.message || connErr}`);
