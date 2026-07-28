@@ -34,3 +34,35 @@ export function requirePersistedExecutionMode(
   }
   return requestedMode;
 }
+
+/**
+ * Prefer the edge function's read-after-write result. If an older deployed
+ * function omits that field, verify the final database-backed status before
+ * deciding whether the switch succeeded.
+ */
+export async function verifyExecutionModeChange(
+  response: ExecutionModeResponse | null | undefined,
+  requestedMode: ExecutionMode,
+  readPersistedMode: () => Promise<string | undefined>,
+): Promise<ExecutionMode> {
+  try {
+    return requirePersistedExecutionMode(response, requestedMode);
+  } catch (responseError) {
+    let persistedMode: string | undefined;
+    try {
+      persistedMode = await readPersistedMode();
+    } catch {
+      throw responseError;
+    }
+
+    if (persistedMode === requestedMode) {
+      return requestedMode;
+    }
+    if (persistedMode) {
+      throw new Error(
+        `Execution mode verification failed: requested ${requestedMode}, but the database returned ${persistedMode}.`,
+      );
+    }
+    throw responseError;
+  }
+}
