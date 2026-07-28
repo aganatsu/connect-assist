@@ -37,6 +37,7 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
+import { requirePersistedExecutionMode, type ExecutionMode } from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -161,6 +162,24 @@ export default function BotView() {
       setShowSetBalance(false);
     },
     onError: (err: any) => toast.error(err.message || "Failed to set balance"),
+  });
+  const modeMut = useMutation({
+    mutationFn: async (mode: ExecutionMode) => {
+      const result = await paperApi.setExecutionMode(mode);
+      requirePersistedExecutionMode(result, mode);
+      return result;
+    },
+    onSuccess: (result, mode) => {
+      queryClient.setQueryData(["paper-status"], (current: any) => ({
+        ...(current || {}),
+        executionMode: result.executionMode,
+      }));
+      queryClient.invalidateQueries({ queryKey: ["paper-status"] });
+      toast.success(mode === "live"
+        ? "Live execution enabled and verified"
+        : "Paper execution enabled and verified");
+    },
+    onError: (err: any) => toast.error(err.message || "Execution mode was not changed"),
   });
   const scanMut = useMutation({
     mutationFn: () => scannerApi.manualScan(),
@@ -496,12 +515,31 @@ export default function BotView() {
             <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 ${d.executionMode === "live" ? "bg-destructive/20 text-destructive" : "bg-success/20 text-success"}`}>
               {d.executionMode === "live" ? "LIVE" : "PAPER"}
             </span>
-            {d.executionMode !== "live" && (
-              <button className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline" onClick={() => {
-                if (confirm("Switch to LIVE mode? Bot trades will be mirrored to your connected broker account(s).")) {
-                  paperApi.setExecutionMode("live").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }));
-                }
-              }}>→ Live</button>
+            {d.executionMode !== "live" ? (
+              <button
+                className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={modeMut.isPending}
+                onClick={() => {
+                  if (window.confirm("Switch to LIVE mode? New bot trades will be mirrored to your active broker connection(s).")) {
+                    modeMut.mutate("live");
+                  }
+                }}
+              >
+                {modeMut.isPending ? "Verifying…" : "→ Live"}
+              </button>
+            ) : (
+              <button
+                className="text-[9px] uppercase tracking-wider text-muted-foreground hover:text-foreground underline disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={modeMut.isPending || d.positions.length > 0}
+                title={d.positions.length > 0 ? "Close all open positions before switching to Paper" : "Switch new execution back to Paper"}
+                onClick={() => {
+                  if (window.confirm("Switch to PAPER mode? New bot trades will no longer be mirrored to your broker.")) {
+                    modeMut.mutate("paper");
+                  }
+                }}
+              >
+                {modeMut.isPending ? "Verifying…" : "→ Paper"}
+              </button>
             )}
 
             {activeConnections.length > 0 ? (
