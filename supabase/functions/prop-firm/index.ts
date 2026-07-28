@@ -247,6 +247,55 @@ Deno.serve(async (req: Request) => {
         return json({ success: true });
       }
 
+      case "config.setActive": {
+        const active = body.active === true;
+        const { data, error } = await supabase
+          .from("prop_firm_config")
+          .update({ is_active: active })
+          .eq("user_id", userId)
+          .eq("bot_id", botId)
+          .select()
+          .maybeSingle();
+        if (error) return json({ error: error.message }, 500);
+        if (!data) return json({ error: "No prop firm config found for this bot" }, 404);
+        return json({ success: true, config: data });
+      }
+
+      case "daily.unlock": {
+        const { data: config } = await supabase
+          .from("prop_firm_config")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("bot_id", botId)
+          .maybeSingle();
+        if (!config) return json({ error: "No prop firm config found" }, 404);
+
+        const now = new Date();
+        const resetHour = getResetHourUTC(now);
+        const tradingDay = getCESTTradingDay(now, resetHour);
+
+        const { data: state, error } = await supabase
+          .from("prop_firm_daily_state")
+          .update({ is_locked: false, lock_reason: null, locked_at: null })
+          .eq("config_id", config.id)
+          .eq("trading_day", tradingDay)
+          .select()
+          .maybeSingle();
+        if (error) return json({ error: error.message }, 500);
+
+        // Log a manual unlock event (best-effort)
+        try {
+          await supabase.from("prop_firm_events").insert({
+            config_id: config.id,
+            event_type: "manual_unlock",
+            severity: "info",
+            message: `Manual unlock for ${tradingDay}`,
+          });
+        } catch (_) { /* ignore */ }
+
+        return json({ success: true, dailyState: state });
+      }
+
       case "events": {
         const limit = body.limit || 50;
         const offset = body.offset || 0;

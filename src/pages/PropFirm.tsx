@@ -110,9 +110,30 @@ export default function PropFirm() {
     },
   });
 
+  const setActiveMutation = useMutation({
+    mutationFn: (active: boolean) => propFirmApi.setActive(active),
+    onSuccess: (_data, active) => {
+      queryClient.invalidateQueries({ queryKey: ["prop-firm-status"] });
+      toast.success(active ? "Prop firm gate enabled" : "Prop firm gate disabled — scans will resume");
+    },
+    onError: (e: any) => toast.error(`Toggle failed: ${e?.message || "Unknown error"}`),
+  });
+
+  const unlockMutation = useMutation({
+    mutationFn: () => propFirmApi.unlockToday(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prop-firm-status"] });
+      queryClient.invalidateQueries({ queryKey: ["prop-firm-events"] });
+      toast.success("Today unlocked — scans will resume on next cycle");
+    },
+    onError: (e: any) => toast.error(`Unlock failed: ${e?.message || "Unknown error"}`),
+  });
+
   const isActive = statusData?.active === true;
   const config: PropFirmConfig | null = statusData?.config || null;
   const dailyState: DailyState | null = statusData?.dailyState || null;
+  const configExists = !!config;
+  const gateEnabled = !!config?.is_active;
   const derived = statusData?.derived || {};
   const events: PropFirmEvent[] = eventsData?.events || statusData?.events || [];
   const history = historyData?.history || [];
@@ -130,13 +151,43 @@ export default function PropFirm() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {isActive && (
+            {configExists && gateEnabled && (
               <Badge variant={dailyState?.is_locked ? "destructive" : "default"} className="gap-1">
                 {dailyState?.is_locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
                 {dailyState?.is_locked ? "LOCKED" : "ACTIVE"}
               </Badge>
             )}
-            {!isActive && <Badge variant="secondary">Not Configured</Badge>}
+            {configExists && !gateEnabled && (
+              <Badge variant="outline" className="gap-1">
+                <Unlock className="w-3 h-3" /> DISABLED
+              </Badge>
+            )}
+            {!configExists && <Badge variant="secondary">Not Configured</Badge>}
+            {configExists && dailyState?.is_locked && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => unlockMutation.mutate()}
+                disabled={unlockMutation.isPending}
+                className="gap-1"
+              >
+                <Unlock className="w-3 h-3" />
+                {unlockMutation.isPending ? "Unlocking…" : "Unlock today"}
+              </Button>
+            )}
+            {configExists && (
+              <div className="flex items-center gap-2 pl-2 border-l">
+                <Label htmlFor="pf-gate-toggle" className="text-xs text-muted-foreground cursor-pointer">
+                  Prop firm gate
+                </Label>
+                <Switch
+                  id="pf-gate-toggle"
+                  checked={gateEnabled}
+                  disabled={setActiveMutation.isPending}
+                  onCheckedChange={(v) => setActiveMutation.mutate(v)}
+                />
+              </div>
+            )}
           </div>
         </div>
 
