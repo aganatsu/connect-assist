@@ -10,6 +10,10 @@ const fastScannerUrl = new URL(
 );
 const botScannerUrl = new URL("../bot-scanner/index.ts", import.meta.url);
 const brokerExecuteUrl = new URL("../broker-execute/index.ts", import.meta.url);
+const phaseOneMigrationUrl = new URL(
+  "../../migrations/20260728200000_complete_phase1_execution_authority.sql",
+  import.meta.url,
+);
 
 Deno.test("fast confirmation uses shared authorization and atomic fill only", async () => {
   const source = await Deno.readTextFile(fastScannerUrl.pathname);
@@ -64,6 +68,74 @@ Deno.test("breaker placement cannot bypass final direction and Game Plan authori
   );
   assertStringIncludes(breakerSection, "directionVerdict:");
   assertStringIncludes(breakerSection, "gamePlan: activeGamePlan");
+});
+
+Deno.test("immediate market entries use shared authorization and an atomic claim", async () => {
+  const source = await Deno.readTextFile(botScannerUrl.pathname);
+  const start = source.indexOf("// Place position (market order)");
+  const end = source.indexOf("// Store trade reasoning", start);
+  assert(
+    start >= 0 && end > start,
+    "Market-entry section must be discoverable",
+  );
+  const marketSection = source.slice(start, end);
+  const authorizationAt = marketSection.indexOf(
+    "evaluateFinalTradeAuthorization({",
+  );
+  const atomicClaimAt = marketSection.indexOf(
+    'supabase.rpc("finalize_market_entry"',
+  );
+  const closeOnReverseAt = marketSection.indexOf(
+    "await closeOppositePositionsAfterEntry()",
+  );
+  assert(authorizationAt >= 0, "Market entry must call final authorization");
+  assert(
+    atomicClaimAt > authorizationAt,
+    "Final authorization must precede the atomic market-entry claim",
+  );
+  assert(
+    closeOnReverseAt > atomicClaimAt,
+    "Close-on-reverse must run only after the market entry claim succeeds",
+  );
+  assertEquals(
+    marketSection.includes('supabase.from("paper_positions").insert'),
+    false,
+    "Market entry must not insert a position outside the atomic RPC",
+  );
+});
+
+Deno.test("all automated entry models terminate in an authorized execution route", async () => {
+  const source = await Deno.readTextFile(botScannerUrl.pathname);
+  for (
+    const marker of [
+      'signalSource = "unified"',
+      'signalSource = "cascade"',
+      'signalSource = "standalone"',
+      "isPromotedFromStaging",
+      'signalSource: "breaker"',
+    ]
+  ) {
+    assertStringIncludes(source, marker);
+  }
+  assertStringIncludes(source, "evaluateFinalTradeAuthorization({");
+  assertStringIncludes(source, 'supabase.rpc("finalize_pending_order_fill"');
+  assertStringIncludes(source, 'supabase.rpc("finalize_market_entry"');
+});
+
+Deno.test("database serializes and deduplicates immediate and pending entries", async () => {
+  const migration = await Deno.readTextFile(phaseOneMigrationUrl.pathname);
+  assertStringIncludes(
+    migration,
+    "CREATE OR REPLACE FUNCTION public.finalize_market_entry",
+  );
+  assertStringIncludes(migration, "FOR UPDATE");
+  assertStringIncludes(migration, "idx_paper_positions_candidate_source");
+  assertStringIncludes(
+    migration,
+    "WHERE status IN ('pending', 'awaiting_confirmation')",
+  );
+  assertStringIncludes(migration, "persist_pending_fill_authorization");
+  assertStringIncludes(migration, "WHEN unique_violation");
 });
 
 Deno.test("fast confirmation respects confirmationMethod and user-scoped broker connection", async () => {

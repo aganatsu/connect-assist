@@ -9,6 +9,7 @@ import {
 } from "./gamePlanGate.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ThesisValidationResult } from "./thesisValidator.ts";
+import type { FinalRuntimeGateStates } from "./finalRuntimeGates.ts";
 
 export type TradeDirection = "long" | "short";
 
@@ -17,8 +18,10 @@ export type FinalAuthorizationCode =
   | "bot_stopped"
   | "bot_paused"
   | "kill_switch"
+  | "execution_mode"
   | "invalid_price"
   | "invalid_orientation"
+  | "price_or_candle_stale"
   | "direction_unavailable"
   | "direction_blocked"
   | "direction_conflict"
@@ -31,6 +34,10 @@ export type FinalAuthorizationCode =
   | "duplicate_direction"
   | "max_per_symbol"
   | "portfolio_heat"
+  | "correlation"
+  | "cooldown"
+  | "news"
+  | "session"
   | "daily_loss"
   | "max_drawdown"
   | "spread_unavailable"
@@ -100,8 +107,6 @@ export interface FinalTradeAuthorizationInput {
   maxOpenPositions: number;
   maxPerSymbol: number;
   allowSameDirectionStacking: boolean;
-  portfolioHeatLimit?: number;
-  riskPerTradeFallback?: number;
   maxDailyLoss: number;
   maxDrawdown: number;
   minimumRiskReward: number;
@@ -116,6 +121,7 @@ export interface FinalTradeAuthorizationInput {
   propFirm: PropFirmAuthorizationState | null;
   requirePropFirmResult?: boolean;
   spread: SpreadAuthorizationState;
+  runtimeGates: FinalRuntimeGateStates;
   additionalGates?: AdditionalAuthorizationGate[];
   now?: Date;
 }
@@ -189,6 +195,28 @@ export function evaluateFinalTradeAuthorization(
     passed: true,
     reason: "Account is running and execution is enabled",
   });
+
+  const namedRuntimeGates: Array<{
+    code: FinalAuthorizationCode;
+    gate: AdditionalAuthorizationGate;
+  }> = [
+    { code: "execution_mode", gate: input.runtimeGates.executionMode },
+    {
+      code: "price_or_candle_stale",
+      gate: input.runtimeGates.freshness,
+    },
+    { code: "session", gate: input.runtimeGates.session },
+    { code: "news", gate: input.runtimeGates.news },
+    { code: "cooldown", gate: input.runtimeGates.cooldown },
+    { code: "correlation", gate: input.runtimeGates.correlation },
+    { code: "portfolio_heat", gate: input.runtimeGates.portfolioHeat },
+  ];
+  for (const { code, gate } of namedRuntimeGates) {
+    if (!gate.passed) {
+      return deny(code, gate.reason, true, checks, now);
+    }
+    checks.push(gate);
+  }
 
   const { candidate } = input;
   const entry = asFiniteNumber(candidate.entryPrice);
@@ -373,41 +401,6 @@ export function evaluateFinalTradeAuthorization(
     return deny("max_per_symbol", perSymbol.reason, true, checks, now);
   }
   checks.push(perSymbol);
-
-  if ((input.portfolioHeatLimit ?? 0) > 0) {
-    const balance = asFiniteNumber(account.balance);
-    let riskDollars = 0;
-    for (const position of input.openPositions) {
-      const positionEntry = asFiniteNumber(position.entry_price);
-      const positionStop = asFiniteNumber(position.stop_loss);
-      const positionSize = asFiniteNumber(position.size);
-      if (positionEntry > 0 && positionStop > 0 && positionSize > 0) {
-        // Conservative account-currency approximation. The main scanner retains
-        // its quote-currency conversion; this final check prevents a stale fill
-        // from proceeding when the portfolio is already at its configured limit.
-        riskDollars += Math.abs(positionEntry - positionStop) * positionSize *
-          100_000;
-      } else {
-        riskDollars += balance * ((input.riskPerTradeFallback ?? 0) / 100);
-      }
-    }
-    const heatPercent = balance > 0 ? (riskDollars / balance) * 100 : 0;
-    if (heatPercent >= (input.portfolioHeatLimit ?? 0)) {
-      return deny(
-        "portfolio_heat",
-        `Portfolio heat ${heatPercent.toFixed(1)}% is at or above ${
-          (input.portfolioHeatLimit ?? 0).toFixed(1)
-        }%`,
-        true,
-        checks,
-        now,
-      );
-    }
-    checks.push({
-      passed: true,
-      reason: `Portfolio heat ${heatPercent.toFixed(1)}% is within limit`,
-    });
-  }
 
   const balance = asFiniteNumber(account.balance);
   if (input.propFirm?.enabled) {

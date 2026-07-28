@@ -7,6 +7,9 @@ import {
   type DirectionVerdictForAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import {
+  buildFinalRuntimeGateStates,
+} from "../_shared/finalRuntimeGates.ts";
+import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
 } from "../_shared/gamePlanShadowAudit.ts";
@@ -100,7 +103,8 @@ import { updateConviction, buildConvictionKey, saveConvictionState, loadConvicti
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
 import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
-import { checkPortfolioConflict, getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
+import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
+import { checkCorrelationExposure } from "../_shared/gateCorrelation.ts";
 import { adjustTPForRegime } from "../_shared/exitEngine.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
@@ -1431,106 +1435,15 @@ async function runSafetyGates(
   // Currency decomposition + SMT_PAIRS retained as belt-and-suspenders for pairs
   // that are absent from the matrix.
   // Config: correlationFilterEnabled, maxCorrelation (0-1 threshold), maxCorrelatedPositions
-  if ((config as any).correlationFilterEnabled) {
-    const maxCorrelatedPos = Number((config as any).maxCorrelatedPositions) || 1;
-    const threshold = Number((config as any).maxCorrelation) || 0.8;
-    const newPairCurrencies = parsePairCurrencies(symbol);
-    const smtPair = SMT_PAIRS[symbol];
-
-    type Hit = { detail: string; kind: "doubling" | "hedge"; effCorr: number };
-    const hits: Hit[] = [];
-
-    for (const pos of openPositions) {
-      if (pos.symbol === symbol) continue; // same-symbol handled by Gate 5
-      const posDir = pos.direction;
-
-      // Numeric correlation from static matrix (returns 0 if pair unknown)
-      const rawCorr = getCorrelation(symbol, pos.symbol);
-      const effCorr = getDirectionalCorrelation(
-        { symbol, direction: direction as "long" | "short" },
-        { symbol: pos.symbol, direction: posDir as "long" | "short" },
-      );
-
-      let matched = false;
-      if (Math.abs(rawCorr) >= threshold) {
-        if (effCorr >= threshold) {
-          hits.push({
-            kind: "doubling",
-            effCorr,
-            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — doubling`,
-          });
-          matched = true;
-        } else if (effCorr <= -threshold) {
-          hits.push({
-            kind: "hedge",
-            effCorr,
-            detail: `${pos.symbol} ${posDir} (raw ρ=${rawCorr.toFixed(2)}, eff=${(effCorr * 100).toFixed(0)}%) — hedge conflict`,
-          });
-          matched = true;
-        }
-      }
-
-      // Fallback 1: SMT pair (positive-correlation proxy for pairs the matrix may miss)
-      if (!matched && smtPair && pos.symbol === smtPair) {
-        hits.push({
-          kind: posDir === direction ? "doubling" : "hedge",
-          effCorr: posDir === direction ? 0.85 : -0.85,
-          detail: `${pos.symbol} ${posDir} — SMT pair ${posDir === direction ? "doubling" : "hedge"}`,
-        });
-        matched = true;
-      }
-
-      // Fallback 2: currency decomposition — full opposite exposure on same two currencies
-      if (!matched && newPairCurrencies) {
-        const posCurrencies = parsePairCurrencies(pos.symbol);
-        if (posCurrencies) {
-          const [nb, nq] = newPairCurrencies;
-          const [pb, pq] = posCurrencies;
-          const newBuying = direction === "long" ? nb : nq;
-          const newSelling = direction === "long" ? nq : nb;
-          const posBuying = posDir === "long" ? pb : pq;
-          const posSelling = posDir === "long" ? pq : pb;
-          if (newBuying === posSelling && newSelling === posBuying) {
-            hits.push({
-              kind: "hedge",
-              effCorr: -1,
-              detail: `${pos.symbol} ${posDir} — perfect currency hedge on ${newBuying}/${newSelling}`,
-            });
-          } else if (newBuying === posBuying && newSelling === posSelling) {
-            hits.push({
-              kind: "doubling",
-              effCorr: 1,
-              detail: `${pos.symbol} ${posDir} — identical currency exposure`,
-            });
-          }
-        }
-      }
-    }
-
-    const hedgeHits = hits.filter(h => h.kind === "hedge");
-    const doublingHits = hits.filter(h => h.kind === "doubling");
-
-    if (hedgeHits.length > 0) {
-      // Hedges bet against yourself on correlated pairs — always block, regardless of cap.
-      gates.push({
-        passed: false,
-        reason: `Hedge conflict on correlated pair(s) blocked (threshold ${threshold}): ${hedgeHits.map(h => h.detail).join("; ")}`,
-      });
-    } else if (doublingHits.length >= maxCorrelatedPos) {
-      // Same-direction correlated exposure exceeds the concentration cap.
-      gates.push({
-        passed: false,
-        reason: `Correlated same-direction cap hit (threshold ${threshold}): ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
-      });
-    } else if (doublingHits.length > 0) {
-      gates.push({
-        passed: true,
-        reason: `Correlated same-direction positions: ${doublingHits.length}/${maxCorrelatedPos} — ${doublingHits.map(h => h.detail).join("; ")}`,
-      });
-    } else {
-      gates.push({ passed: true, reason: `No correlated conflicts (threshold ${threshold})` });
-    }
-  }
+  gates.push(checkCorrelationExposure({
+    enabled: !!(config as any).correlationFilterEnabled,
+    symbol,
+    direction: direction as "long" | "short",
+    openPositions,
+    maxCorrelation: Number((config as any).maxCorrelation) || 0.8,
+    maxCorrelatedPositions:
+      Number((config as any).maxCorrelatedPositions) || 1,
+  }));
 
   // Gate 19: Tier 1 Minimum (must have at least 2 core factors)
   if (analysis.tieredScoring) {
@@ -3033,6 +2946,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             .map((item) => item.result!)
             .sort((a, b) => a.spreadPips - b.spreadPips)[0];
 
+          const pendingRuntimeGates = await buildFinalRuntimeGateStates({
+            supabase,
+            userId,
+            accountExecutionMode: account.execution_mode,
+            symbol: pending.symbol,
+            direction: pending.direction as "long" | "short",
+            currentPrice: actualFillPrice,
+            candles: pendingCandles,
+            interval: config.entryTimeframe || "15min",
+            openPositions: openPosArr,
+            accountBalance: account.balance,
+            config: {
+              portfolioHeat: config.portfolioHeat,
+              riskPerTrade: config.riskPerTrade,
+              correlationFilterEnabled: config.correlationFilterEnabled,
+              maxCorrelation: config.maxCorrelation,
+              maxCorrelatedPositions: config.maxCorrelatedPositions,
+              cooldownMinutes: config.cooldownMinutes,
+              newsFilterEnabled: config.newsFilterEnabled,
+              newsFilterPauseMinutes: config.newsFilterPauseMinutes,
+              enabledSessions: config.enabledSessions,
+              enabledDays: config.enabledDays,
+              killZoneOnly: config.killZoneOnly,
+            },
+            rateMap,
+          });
           const finalAuthorization = evaluateFinalTradeAuthorization({
             account,
             candidate: {
@@ -3072,6 +3011,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               spreadPips: bestSpread?.spreadPips,
               maximumPips: bestSpread?.effectiveMax,
             },
+            runtimeGates: pendingRuntimeGates,
           });
           if (!finalAuthorization.authorized) {
             const cancelPermanently = !finalAuthorization.retryable;
@@ -6620,11 +6560,191 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           scanDetails.push(detail);
           continue;
         }
+
+        // Immediate market entries are execution events, not merely candidate
+        // discovery. Rebuild every time-sensitive gate immediately before the
+        // atomic database claim so this route cannot bypass the same authority
+        // used by both confirmation scanners.
+        const directAuthorizationPositions = pairConfig.closeOnReverse
+          ? openPosArr.filter((position: any) =>
+            !(
+              position.symbol === pair &&
+              position.direction !== analysis.direction
+            )
+          )
+          : openPosArr;
+        const directThesisResult = validatePendingOrderThesis(
+          {
+            order_id: `market:${scanCycleId}:${pair}`,
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            entry_price: marketEntryPrice,
+            signal_reason: {
+              directionVerdict: (detail as any).directionVerdict || null,
+            },
+          },
+          {
+            fotsiResult: _fotsiResult,
+            lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
+            dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
+            h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+            h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
+          },
+        );
+        const { data: directConnections } =
+          account.execution_mode === "live"
+            ? await supabase.from("broker_connections")
+              .select("*")
+              .eq("user_id", userId)
+              .in("broker_type", ["metaapi", "oanda"])
+              .eq("is_active", true)
+            : { data: [] as any[] };
+        const directSpreadResults: Array<{
+          result: Awaited<ReturnType<typeof fetchBrokerSpread>>;
+        }> = [];
+        if (
+          account.execution_mode === "live" &&
+          pairConfig.spreadFilterEnabled
+        ) {
+          for (const connection of directConnections || []) {
+            let metaAccountId: string | undefined;
+            let authToken: string | undefined;
+            if (connection.broker_type === "metaapi") {
+              metaAccountId = connection.account_id;
+              authToken = connection.api_key;
+              if (
+                metaAccountId?.startsWith("eyJ") &&
+                authToken &&
+                /^[0-9a-f-]{36}$/.test(authToken)
+              ) {
+                authToken = connection.account_id;
+                metaAccountId = connection.api_key;
+              }
+            }
+            directSpreadResults.push({
+              result: await fetchBrokerSpread(
+                connection,
+                pair,
+                pairConfig,
+                metaAccountId,
+                authToken,
+              ),
+            });
+          }
+        }
+        const directAvailableSpreads = directSpreadResults.filter((item) =>
+          !!item.result
+        );
+        const directPassingSpreads = directSpreadResults.filter((item) =>
+          item.result?.passed
+        );
+        const directBestSpread = directAvailableSpreads
+          .map((item) => item.result!)
+          .sort((a, b) => a.spreadPips - b.spreadPips)[0];
+        const directRuntimeGates = await buildFinalRuntimeGateStates({
+          supabase,
+          userId,
+          accountExecutionMode: account.execution_mode,
+          symbol: pair,
+          direction: analysis.direction as "long" | "short",
+          currentPrice: marketEntryPrice,
+          candles,
+          interval: entryInterval,
+          openPositions: directAuthorizationPositions,
+          accountBalance: account.balance,
+          config: {
+            portfolioHeat: pairConfig.portfolioHeat,
+            riskPerTrade: pairConfig.riskPerTrade,
+            correlationFilterEnabled: pairConfig.correlationFilterEnabled,
+            maxCorrelation: pairConfig.maxCorrelation,
+            maxCorrelatedPositions: pairConfig.maxCorrelatedPositions,
+            cooldownMinutes: pairConfig.cooldownMinutes,
+            newsFilterEnabled: pairConfig.newsFilterEnabled,
+            newsFilterPauseMinutes: pairConfig.newsFilterPauseMinutes,
+            enabledSessions: pairConfig.enabledSessions,
+            enabledDays: pairConfig.enabledDays,
+            killZoneOnly: pairConfig.killZoneOnly,
+          },
+          rateMap,
+        });
+        const directAuthorization = evaluateFinalTradeAuthorization({
+          account,
+          candidate: {
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            entryPrice: marketEntryPrice,
+            stopLoss: Number(sl),
+            takeProfit: Number(tp),
+          },
+          openPositions: directAuthorizationPositions,
+          maxOpenPositions: pairConfig.maxOpenPositions,
+          maxPerSymbol: pairConfig.maxPerSymbol,
+          allowSameDirectionStacking:
+            pairConfig.allowSameDirectionStacking,
+          maxDailyLoss: pairConfig.maxDailyLoss,
+          maxDrawdown: pairConfig.maxDrawdown,
+          minimumRiskReward: pairConfig.minRiskReward,
+          directionVerdict: directionVerdict
+            ? {
+              verdict: directionVerdict.verdict,
+              shouldBlock: directionVerdict.shouldBlock,
+              blockReason: directionVerdict.blockReason,
+              confidence: directionVerdict.confidence,
+            }
+            : null,
+          requireDirectionVerdict: true,
+          gamePlan: activeGamePlan,
+          gamePlanEnabled,
+          gamePlanMode: gpEnforcementMode,
+          gamePlanMinimumConfidence:
+            (pairConfig as any).gpHardBlockThreshold ?? 75,
+          thesisResult: directThesisResult,
+          requireThesisValidation: true,
+          propFirm: propFirmGateResult
+            ? {
+              enabled: propFirmGateResult.enabled,
+              allowed: propFirmGateResult.allowed,
+              reason: propFirmGateResult.reason,
+            }
+            : null,
+          requirePropFirmResult: true,
+          spread: {
+            required:
+              account.execution_mode === "live" &&
+              pairConfig.spreadFilterEnabled,
+            available:
+              account.execution_mode !== "live" ||
+              !pairConfig.spreadFilterEnabled ||
+              directAvailableSpreads.length > 0,
+            passed:
+              account.execution_mode !== "live" ||
+              !pairConfig.spreadFilterEnabled ||
+              directPassingSpreads.length > 0,
+            spreadPips: directBestSpread?.spreadPips,
+            maximumPips: directBestSpread?.effectiveMax,
+          },
+          runtimeGates: directRuntimeGates,
+        });
+        if (!directAuthorization.authorized) {
+          detail.status = "blocked_final_authorization";
+          detail.skipReason =
+            `[final-auth:${directAuthorization.code}] `
+            + directAuthorization.reason;
+          detail.finalAuthorization = directAuthorization;
+          console.warn(
+            `[market] ${pair} ${analysis.direction}: FINAL AUTH BLOCKED `
+            + `${directAuthorization.code} — ${directAuthorization.reason}`,
+          );
+          scanDetails.push(detail);
+          continue;
+        }
+
         // Close on Reverse: close existing opposite-direction positions for this symbol.
         // MOVED here (from before the pending-order branch) so this only fires when the
         // new signal is actually about to open a live market position — never on signals
         // that get queued as pending limit orders which may never trigger.
-        if (pairConfig.closeOnReverse) {
+        const closeOppositePositionsAfterEntry = async () => {
+          if (!pairConfig.closeOnReverse) return;
           const oppositeDir = analysis.direction === "long" ? "short" : "long";
           const oppositePositions = openPosArr.filter((p: any) => p.symbol === pair && p.direction === oppositeDir && p.position_status === "open");
           for (const opp of oppositePositions) {
@@ -6717,7 +6837,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           // gate checks in this scan cycle don't over-count.
           const closedIds = new Set(oppositePositions.map((p: any) => p.position_id));
           openPosArr = openPosArr.filter((p: any) => !closedIds.has(p.position_id));
-        }
+        };
         // GUARD: reject trades whose SL/TP orientation doesn't match direction.
         // For long: SL must be below entry, TP above. For short: SL above, TP below.
         // This catches direction-vs-zone contradictions (e.g. LONG verdict with SHORT zone SL/TP)
@@ -6769,23 +6889,121 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           shadowAudit: (detail as any).gamePlanShadowAudit || null,
           capturedAt: nowStr,
         } : null;
-        await supabase.from("paper_positions").insert({
-          user_id: userId,
-          position_id: positionId,
-          symbol: pair,
-          direction: analysis.direction,
-          size: size.toString(),
-          entry_price: marketEntryPrice.toString(),
-          current_price: analysis.lastPrice.toString(),
-          stop_loss: sl.toString(),
-          take_profit: tp.toString(),
-          open_time: nowStr,
-          signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, setupRationale: setupClassification.rationale, entryTimeframe: pairConfig.entryTimeframe, originalSL: sl, originalTP: tp, exitFlags, spreadFilter: { enabled: pairConfig.spreadFilterEnabled, maxPips: pairConfig.maxSpreadPips }, newsFilter: { enabled: pairConfig.newsFilterEnabled, pauseMinutes: pairConfig.newsFilterPauseMinutes }, fotsi: analysis.fotsiAlignment ? { base: analysis.fotsiAlignment.baseTSI, quote: analysis.fotsiAlignment.quoteTSI, spread: analysis.fotsiAlignment.spread, score: analysis.fotsiAlignment.score, label: analysis.fotsiAlignment.label } : null, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, gamePlanSnapshot, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at, promotionReason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles` } } : {}) }),
-          signal_score: analysis.score.toString(),
-          order_id: orderId,
-          position_status: "open",
-          bot_id: BOT_ID,
-        });
+        const directSignalReason = {
+          bot: BOT_ID,
+          summary: analysis.summary,
+          setupType: setupClassification.setupType,
+          setupConfidence: setupClassification.confidence,
+          setupRationale: setupClassification.rationale,
+          entryTimeframe: pairConfig.entryTimeframe,
+          originalSL: sl,
+          originalTP: tp,
+          exitFlags,
+          spreadFilter: {
+            enabled: pairConfig.spreadFilterEnabled,
+            maxPips: pairConfig.maxSpreadPips,
+          },
+          newsFilter: {
+            enabled: pairConfig.newsFilterEnabled,
+            pauseMinutes: pairConfig.newsFilterPauseMinutes,
+          },
+          fotsi: analysis.fotsiAlignment
+            ? {
+              base: analysis.fotsiAlignment.baseTSI,
+              quote: analysis.fotsiAlignment.quoteTSI,
+              spread: analysis.fotsiAlignment.spread,
+              score: analysis.fotsiAlignment.score,
+              label: analysis.fotsiAlignment.label,
+            }
+            : null,
+          factorScores: analysis.factors,
+          tieredScoring: analysis.tieredScoring || null,
+          regimeData: detail.regimeData || null,
+          confluenceStacking: detail.confluenceStacking || null,
+          sweepReclaim: detail.sweepReclaim || null,
+          pullbackHealth: detail.pullbackHealth || null,
+          structureIntel: detail.structureIntel || null,
+          entityLifecycles:
+            detail.analysis_snapshot?.entityLifecycles || null,
+          gates: detail.gates || null,
+          setupClassification: detail.setupClassification || null,
+          fibLevels: detail.fibLevels || null,
+          impulseZone: (detail as any).impulseZone || null,
+          directionVerdict: (detail as any).directionVerdict || null,
+          gamePlanShadowAudit:
+            (detail as any).gamePlanShadowAudit || null,
+          signalSource: (detail as any).signalSource || null,
+          unifiedZone: (detail as any).unifiedZone || null,
+          gamePlanSnapshot,
+          finalAuthorization: directAuthorization,
+          confirmationMethod: pairConfig.confirmationMethod || "choch",
+          tpMethod: pairConfig.tpMethod || "rr_ratio",
+          ...(isPromotedFromStaging && existingStaged
+            ? {
+              promotedFromWatchlist: true,
+              watchlistOrigin: {
+                initialScore: parseFloat(existingStaged.initial_score),
+                cyclesWatched: existingStaged.scan_cycles + 1,
+                stagedAt: existingStaged.staged_at,
+                promotionReason:
+                  `Score reached ${analysis.score.toFixed(1)}% `
+                  + `(gate: ${adjustedMinConfluence}%) after `
+                  + `${existingStaged.scan_cycles + 1} cycles`,
+              },
+            }
+            : {}),
+        };
+        const sourceCandleTime =
+          candles[candles.length - 1]?.datetime || nowStr;
+        const directCandidateKey = [
+          "direct",
+          pair,
+          analysis.direction,
+          sourceCandleTime,
+          (detail as any).signalSource || "unknown",
+        ].join(":");
+        const { data: directFill, error: directFillError } =
+          await supabase.rpc("finalize_market_entry", {
+            p_user_id: userId,
+            p_bot_id: BOT_ID,
+            p_source_candidate_key: directCandidateKey,
+            p_position: {
+              position_id: positionId,
+              symbol: pair,
+              direction: analysis.direction,
+              size: size.toString(),
+              entry_price: marketEntryPrice.toString(),
+              current_price: analysis.lastPrice.toString(),
+              stop_loss: sl.toString(),
+              take_profit: tp.toString(),
+              open_time: nowStr,
+              signal_reason: directSignalReason,
+              signal_score: analysis.score.toString(),
+              order_id: orderId,
+            },
+            p_authorization: directAuthorization,
+            p_max_open_positions: pairConfig.maxOpenPositions,
+            p_max_per_symbol: pairConfig.maxPerSymbol,
+            p_allow_same_direction:
+              pairConfig.allowSameDirectionStacking,
+            p_close_on_reverse: pairConfig.closeOnReverse,
+          });
+        if (directFillError || !directFill?.filled) {
+          detail.status = "market_entry_claim_failed";
+          detail.skipReason = directFillError?.message ||
+            directFill?.reason ||
+            "Atomic market entry was not claimed";
+          console.warn(
+            `[market] ${pair} ${analysis.direction}: atomic entry rejected — `
+            + `${directFillError?.message || directFill?.code || "unknown"}`,
+          );
+          scanDetails.push(detail);
+          continue;
+        }
+
+        // Only the scanner that won the atomic market-entry claim may replace
+        // the opposite position, notify, or send an order to a broker.
+        await closeOppositePositionsAfterEntry();
 
         // Store trade reasoning
         await supabase.from("trade_reasonings").insert({
@@ -7340,6 +7558,57 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             );
             let breakerSize = Math.max(breakerSizing.lots * propFirmSizeMultiplier, 0.01);
 
+            const breakerThesisResult = validatePendingOrderThesis(
+              {
+                order_id: `breaker:${scanCycleId}:${pair}`,
+                symbol: pair,
+                direction: breakerDir,
+                entry_price: breakerEntry,
+                signal_reason: {
+                  directionVerdict: (detail as any).directionVerdict || null,
+                },
+              },
+              {
+                fotsiResult: _fotsiResult,
+                lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
+                dailyCandles: dailyCandles.length >= 20
+                  ? dailyCandles
+                  : null,
+                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+                h1Candles: hourlyCandles.length >= 20
+                  ? hourlyCandles
+                  : null,
+              },
+            );
+            const breakerRuntimeGates = await buildFinalRuntimeGateStates({
+              supabase,
+              userId,
+              accountExecutionMode: account.execution_mode,
+              symbol: pair,
+              direction: breakerDir,
+              currentPrice: analysis.lastPrice,
+              candles,
+              interval: entryInterval,
+              openPositions: openPosArr,
+              accountBalance: account.balance,
+              config: {
+                portfolioHeat: pairConfig.portfolioHeat,
+                riskPerTrade: pairConfig.riskPerTrade,
+                correlationFilterEnabled:
+                  pairConfig.correlationFilterEnabled,
+                maxCorrelation: pairConfig.maxCorrelation,
+                maxCorrelatedPositions:
+                  pairConfig.maxCorrelatedPositions,
+                cooldownMinutes: pairConfig.cooldownMinutes,
+                newsFilterEnabled: pairConfig.newsFilterEnabled,
+                newsFilterPauseMinutes:
+                  pairConfig.newsFilterPauseMinutes,
+                enabledSessions: pairConfig.enabledSessions,
+                enabledDays: pairConfig.enabledDays,
+                killZoneOnly: pairConfig.killZoneOnly,
+              },
+              rateMap,
+            });
             const breakerAuthorization = evaluateFinalTradeAuthorization({
               account,
               candidate: {
@@ -7369,8 +7638,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               gamePlanEnabled,
               gamePlanMode: gpEnforcementMode,
               gamePlanMinimumConfidence: (config as any).gpHardBlockThreshold ?? 75,
-              thesisResult: null,
-              requireThesisValidation: false,
+              thesisResult: breakerThesisResult,
+              requireThesisValidation: true,
               propFirm: propFirmGateResult
                 ? {
                   enabled: propFirmGateResult.enabled,
@@ -7382,6 +7651,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               // Spread and fresh thesis are rechecked when the pending order
               // reaches confirmation. Placement itself does not execute.
               spread: { required: false, available: true, passed: true },
+              runtimeGates: breakerRuntimeGates,
             });
             if (!breakerAuthorization.authorized) {
               console.warn(

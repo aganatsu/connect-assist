@@ -5,8 +5,8 @@
  * signalSource and unifiedZone fields. This test would have FAILED before
  * the manus/signal-source-badge change, since those fields were not persisted.
  *
- * Approach: We extract the signal_reason JSON.stringify template from bot-scanner
- * by reading the file and verifying the string includes the expected fields.
+ * Approach: We inspect the signal-reason payloads in bot-scanner and verify the
+ * expected fields are passed to the database.
  * This is a static analysis test — it doesn't run the full scanner but proves
  * the schema is correct.
  */
@@ -17,25 +17,25 @@ Deno.test("signal_reason JSON includes signalSource field (market order path)", 
     new URL("../bot-scanner/index.ts", import.meta.url)
   );
 
-  // Find the market-order signal_reason line (the one with setupRationale which is unique to market orders)
-  // This is a very long single line, so we search line-by-line
-  const lines = botScanner.split("\n");
-  let marketOrderLine: string | null = null;
-  for (const line of lines) {
-    if (line.includes("signal_reason: JSON.stringify") && line.includes("setupRationale")) {
-      marketOrderLine = line;
-      break;
-    }
-  }
-  assert(marketOrderLine, "Should find market-order signal_reason JSON.stringify");
+  const start = botScanner.indexOf("const directSignalReason = {");
+  const end = botScanner.indexOf(
+    "// Only the scanner that won the atomic market-entry claim",
+    start,
+  );
+  assert(start >= 0 && end > start, "Should find atomic market-order signal_reason payload");
+  const marketOrderPayload = botScanner.slice(start, end);
 
   assert(
-    marketOrderLine!.includes("signalSource: (detail as any).signalSource"),
+    marketOrderPayload.includes("signalSource: (detail as any).signalSource"),
     "Market-order signal_reason must include signalSource field"
   );
   assert(
-    marketOrderLine!.includes("unifiedZone: (detail as any).unifiedZone"),
+    marketOrderPayload.includes("unifiedZone: (detail as any).unifiedZone"),
     "Market-order signal_reason must include unifiedZone field"
+  );
+  assert(
+    marketOrderPayload.includes("signal_reason: directSignalReason"),
+    "Atomic market entry must persist the assembled signal_reason payload"
   );
 });
 
