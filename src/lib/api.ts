@@ -584,6 +584,8 @@ export const propFirmApi = {
   getConfig: (botId = "smc") => invokeFunction("prop-firm", { action: "config.get", botId }),
   saveConfig: (config: any, botId = "smc") => invokeFunction("prop-firm", { action: "config.save", config, botId }),
   deleteConfig: (botId = "smc") => invokeFunction("prop-firm", { action: "config.delete", botId }),
+  setActive: (active: boolean, botId = "smc") => invokeFunction("prop-firm", { action: "config.setActive", active, botId }),
+  unlockToday: (botId = "smc") => invokeFunction("prop-firm", { action: "daily.unlock", botId }),
   events: (limit = 50, offset = 0, botId = "smc") => invokeFunction("prop-firm", { action: "events", limit, offset, botId }),
   dailyHistory: (days = 30, botId = "smc") => invokeFunction("prop-firm", { action: "daily_history", days, botId }),
 };
