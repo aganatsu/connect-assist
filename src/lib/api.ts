@@ -413,6 +413,15 @@ export const backtestApi = {
 // ── Bot Scanner (Bot #1 — SMC) ──
 export const scannerApi = {
   manualScan: () => invokeFunction("bot-scanner", { action: "manual_scan" }),
+  refreshGamePlan: () => invokeFunction<{
+    success: boolean;
+    generatedAt: string;
+    session: string;
+    planCount: number;
+    tradeableCount: number;
+    waitCount: number;
+    skipCount: number;
+  }>("game-plan-refresh", { action: "refresh" }),
   logs: async () => {
     const { data, error } = await (supabase as any)
       .from("scan_logs")

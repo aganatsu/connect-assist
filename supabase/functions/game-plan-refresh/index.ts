@@ -1,0 +1,239 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
+import { corsHeaders } from "../_shared/cors.ts";
+import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
+import { mapNestedToFlat } from "../_shared/configMapper.ts";
+import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally } from "../_shared/candleSource.ts";
+import { createScanCache } from "../_shared/dataCache.ts";
+import {
+  buildSessionGamePlan,
+  enrichGamePlanWithNews,
+  fetchNewsForGamePlan,
+  generateInstrumentGamePlan,
+  getCurrentSession,
+  type InstrumentGamePlan,
+} from "../_shared/gamePlan.ts";
+import type { Candle } from "../_shared/smcAnalysis.ts";
+
+const BOT_ID = "smc";
+
+function respond(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function getEntryInterval(entryTf: string): string {
+  const map: Record<string, string> = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "15min": "15m",
+    "30m": "30m",
+    "1h": "1h",
+    "4h": "1h",
+    "1d": "1d",
+    "1day": "1d",
+  };
+  return map[entryTf] || "15m";
+}
+
+function getEntryRange(entryTf: string): string {
+  const map: Record<string, string> = {
+    "1m": "1d",
+    "5m": "5d",
+    "15m": "5d",
+    "15min": "5d",
+    "30m": "5d",
+    "1h": "1mo",
+    "4h": "1mo",
+  };
+  return map[entryTf] || "5d";
+}
+
+async function getUserId(req: Request, supabaseUrl: string): Promise<string | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) return null;
+
+  const token = authHeader.slice(7);
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  const userClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+  });
+  const { data, error } = await userClient.auth.getClaims(token);
+  if (error || !data?.claims?.sub) return null;
+  return String(data.claims.sub);
+}
+
+async function loadConfig(adminClient: any, userId: string) {
+  const { data, error } = await adminClient
+    .from("bot_configs")
+    .select("config_json")
+    .eq("user_id", userId)
+    .is("connection_id", null)
+    .maybeSingle();
+  if (error) throw new Error(`Could not load bot configuration: ${error.message}`);
+  return mapNestedToFlat(data?.config_json || null);
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  const authError = verifyCronOrUserCaller(req);
+  if (authError) return authError;
+
+  try {
+    const body = await req.json().catch(() => ({}));
+    if (body.action !== "refresh") return respond({ error: "Unknown action" }, 400);
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const userId = await getUserId(req, supabaseUrl);
+    if (!userId) return respond({ error: "Unauthorized" }, 401);
+
+    const adminClient = createClient(supabaseUrl, serviceRoleKey);
+    const config = await loadConfig(adminClient, userId);
+    if (config.gamePlanEnabled === false) {
+      return respond({ error: "Game Plan is disabled in bot configuration" }, 409);
+    }
+
+    beginScanSourceTally();
+    const fetchCandles = async (symbol: string, interval: string, _range: string): Promise<Candle[]> => {
+      const result = await fetchCandlesWithFallback({
+        symbol,
+        interval,
+        limit: 300,
+        skipBroker: true,
+      });
+      return result.candles;
+    };
+    const scanCache = createScanCache(fetchCandles);
+    const currentSession = getCurrentSession();
+    const instrumentPlans: InstrumentGamePlan[] = [];
+    const errors: Array<{ symbol: string; error: string }> = [];
+    const batchSize = 3;
+    const batchDelayMs = 1200;
+
+    for (let i = 0; i < config.instruments.length; i += batchSize) {
+      const batch = config.instruments.slice(i, i + batchSize);
+      const batchPlans = await Promise.all(batch.map(async (symbol: string) => {
+        try {
+          const [daily, h4, entry, hourly] = await Promise.all([
+            scanCache.get(symbol, "1d", "1y"),
+            scanCache.get(symbol, "4h", "1mo"),
+            scanCache.get(symbol, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
+            scanCache.get(symbol, "1h", "5d"),
+          ]);
+          if (daily.length < 10 || entry.length < 10) {
+            errors.push({ symbol, error: "Insufficient candle history" });
+            return null;
+          }
+          return generateInstrumentGamePlan(
+            symbol,
+            daily,
+            h4,
+            entry,
+            hourly,
+            currentSession,
+            {
+              ipdaRangesEnabled: config.ipdaRangesEnabled !== false,
+              equalHighsLowsSensitivity: config.equalHighsLowsSensitivity,
+              liquidityPoolMinTouches: config.liquidityPoolMinTouches,
+            },
+          );
+        } catch (error: any) {
+          errors.push({ symbol, error: error?.message || "Generation failed" });
+          return null;
+        }
+      }));
+
+      for (const plan of batchPlans) {
+        if (plan) instrumentPlans.push(plan);
+      }
+      if (i + batchSize < config.instruments.length) {
+        await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
+      }
+    }
+
+    if (instrumentPlans.length === 0) {
+      return respond({ error: "No Game Plan could be generated", details: errors }, 422);
+    }
+
+    let gamePlan = buildSessionGamePlan(currentSession, instrumentPlans);
+    try {
+      const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
+      gamePlan = enrichGamePlanWithNews(gamePlan, newsEvents);
+    } catch (error: any) {
+      console.warn(`[game-plan-refresh] News enrichment failed: ${error?.message || error}`);
+    }
+
+    const detailsJson = {
+      type: "game_plan",
+      source: "manual_refresh",
+      session: currentSession,
+      generated_at: gamePlan.generatedAt,
+      focus_pairs: gamePlan.focusPairs,
+      plans: gamePlan.plans.map((plan) => ({
+        symbol: plan.symbol,
+        bias: plan.bias,
+        biasConfidence: plan.biasConfidence,
+        biasReasoning: plan.biasReasoning,
+        dol: plan.dol,
+        regime: plan.regime,
+        amdPhase: plan.amdPhase,
+        zone: plan.zone,
+        htfTrend: plan.htfTrend,
+        h4Trend: plan.h4Trend,
+        tradeable: plan.tradeable,
+        skipReason: plan.skipReason,
+        scenarios: plan.scenarios,
+        keyLevels: plan.keyLevels.slice(0, 10),
+        state: plan.state,
+        stateReason: plan.stateReason,
+        conviction: plan.conviction,
+        evidence: plan.evidence,
+        supportingEvidence: plan.supportingEvidence,
+        conflictingEvidence: plan.conflictingEvidence,
+        expiresAt: plan.expiresAt,
+      })),
+      newsEvents: gamePlan.newsEvents || [],
+      summary: gamePlan.summary,
+      generationErrors: errors,
+    };
+
+    const { data: storedPlan, error: insertError } = await adminClient
+      .from("scan_logs")
+      .insert({
+        user_id: userId,
+        bot_id: BOT_ID,
+        pairs_scanned: 0,
+        signals_found: 0,
+        trades_placed: 0,
+        details_json: detailsJson,
+      })
+      .select("id, scanned_at")
+      .single();
+    if (insertError) throw new Error(`Could not save Game Plan: ${insertError.message}`);
+
+    const tradeableCount = gamePlan.plans.filter((plan) => plan.state === "tradeable").length;
+    const waitCount = gamePlan.plans.filter((plan) => plan.state === "wait").length;
+    const skipCount = gamePlan.plans.filter((plan) => plan.state === "skip").length;
+
+    return respond({
+      success: true,
+      id: storedPlan.id,
+      generatedAt: gamePlan.generatedAt,
+      scannedAt: storedPlan.scanned_at,
+      session: currentSession,
+      planCount: gamePlan.plans.length,
+      tradeableCount,
+      waitCount,
+      skipCount,
+      source: endScanSourceTally(),
+      warnings: errors,
+    });
+  } catch (error: any) {
+    console.error("[game-plan-refresh] Failed:", error?.message || error);
+    return respond({ error: error?.message || "Game Plan refresh failed" }, 500);
+  }
+});

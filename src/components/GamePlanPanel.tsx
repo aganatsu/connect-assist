@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { formatPrice } from "@/lib/formatTime";
+import { scannerApi } from "@/lib/api";
+import { toast } from "sonner";
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -487,6 +489,20 @@ export function GamePlanPanel() {
     refetchInterval: 60000, // refresh every minute
   });
 
+  const refreshGamePlan = useMutation({
+    mutationFn: scannerApi.refreshGamePlan,
+    onSuccess: async (result) => {
+      setSelectedPlanIdx(0);
+      await refetch();
+      toast.success(
+        `Game Plan regenerated: ${result.tradeableCount} tradeable, ${result.waitCount} wait, ${result.skipCount} skip`,
+      );
+    },
+    onError: (refreshError: Error) => {
+      toast.error(`Game Plan refresh failed: ${refreshError.message}`);
+    },
+  });
+
   const currentPlan = useMemo(() => {
     if (!gamePlanLogs || gamePlanLogs.length === 0) return null;
     return gamePlanLogs[selectedPlanIdx]?.details_json || null;
@@ -564,14 +580,17 @@ export function GamePlanPanel() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={() => refetch()}
-                    className="p-1 hover:bg-accent/50 transition-colors"
+                    type="button"
+                    aria-label="Regenerate game plan"
+                    onClick={() => refreshGamePlan.mutate()}
+                    disabled={refreshGamePlan.isPending}
+                    className="p-1 hover:bg-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                    <RefreshCw className={`h-3.5 w-3.5 text-muted-foreground ${refreshGamePlan.isPending ? "animate-spin" : ""}`} />
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-[10px]">
-                  Refresh game plan
+                  {refreshGamePlan.isPending ? "Generating new game plan…" : "Regenerate game plan now"}
                 </TooltipContent>
               </Tooltip>
             </div>
