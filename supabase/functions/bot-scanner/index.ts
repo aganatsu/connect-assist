@@ -3177,12 +3177,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       try {
         const metaAccountId = _scanBrokerConn.account_id;
         const authToken = _scanBrokerConn.api_key;
-        const metaBase = `https://mt-client-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${metaAccountId}`;
-        const eqRes = await fetch(`${metaBase}/account-information`, {
-          headers: { "auth-token": authToken },
-        });
+        // Use region-failover metaFetch — the legacy non-regional URL
+        // (mt-client-api-v1.agiliumtrade.agiliumtrade.ai) has an expired TLS cert
+        // and fails, which blocks all scans via the fail-closed prop firm gate.
+        const { res: eqRes, body: eqBody } = await metaFetch(
+          metaAccountId,
+          authToken,
+          (base) => `${base}/account-information`,
+        );
         if (eqRes.ok) {
-          const eqData = await eqRes.json();
+          const eqData = JSON.parse(eqBody);
           brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
           console.log(`[prop-firm-gate] Broker equity fetched: $${brokerEquity.toFixed(2)}`);
         } else {
