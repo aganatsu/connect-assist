@@ -128,11 +128,11 @@ import { computeManagementDecision, type StructureCheckResult } from "../_shared
 import {
   generateInstrumentGamePlan,
   buildSessionGamePlan,
-  filterTradeByGamePlan,
   type InstrumentGamePlan,
   type SessionGamePlan,
   type SessionName as GPSessionName,
 } from "../_shared/gamePlan.ts";
+import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
   updateConviction,
   evaluateEvidence,
@@ -1980,7 +1980,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Game Plan: regenerate when session changes ──
-        const gpSession = mapSessionToGP(session.name);
+        const gpSession = config.gamePlanEnabled !== false ? mapSessionToGP(session.name) : null;
         if (gpSession && gpSession !== lastGPSession) {
           lastGPSession = gpSession;
           try {
@@ -2194,7 +2194,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Game Plan Context Injection (same as bot-scanner) ──
-        if (activeGamePlan) {
+        if (activeGamePlan && config.gpEnforcementMode !== "off") {
           const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol) || null;
           (pairConfig as any)._gamePlanContext = pairPlan ? {
             bias: pairPlan.bias,
@@ -2874,17 +2874,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
 
-        // ── Game Plan Soft Gate (Phase 5 confidence factor) ──
-        // Same as bot-scanner: always passes, but logs alignment info
-        if (activeGamePlan && analysis.direction) {
-          const gpFilter = filterTradeByGamePlan(activeGamePlan, symbol, analysis.direction);
-          if (!gpFilter.allowed) {
-            const pairPlan = activeGamePlan.plans?.find(p => p.symbol === symbol);
-            const biasConf = pairPlan?.biasConfidence ?? 0;
-            gates.push({ passed: true, reason: `GP filter (soft): ${gpFilter.reason} — handled by GP Bias Confidence scoring (conf: ${biasConf}%)` });
-          } else {
-            gates.push({ passed: true, reason: gpFilter.reason });
-          }
+        // ── Game Plan + Direction Verdict Alignment Gate ──
+        // Shared with the live scanner so backtest results reflect the exact
+        // entry authorization policy used in production.
+        if (config.gamePlanEnabled !== false && analysis.direction) {
+          const gpGate = evaluateGamePlanGate(
+            activeGamePlan,
+            symbol,
+            analysis.direction,
+            config.gpEnforcementMode ?? "hard",
+            config.gpHardBlockThreshold ?? 75,
+          );
+          gates.push({ passed: gpGate.passed, reason: gpGate.reason });
         }
         const failedGates = gates.filter(g => !g.passed);
         const allPassed = failedGates.length === 0;

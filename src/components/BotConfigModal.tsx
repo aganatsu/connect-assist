@@ -65,7 +65,7 @@ const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
   { tab: "scan", label: "Opening Range", keywords: ["opening range", "or", "candle", "bias", "judas"] },
   { tab: "scan", label: "Game Plan", keywords: ["game plan", "session", "dol", "ipda", "bias"] },
   { tab: "scan", label: "Game Plan Enforcement", keywords: ["game plan", "hard", "soft", "off", "block", "reject", "enforcement"] },
-  { tab: "scan", label: "Hard-Rejection Confidence", keywords: ["game plan", "confidence", "threshold", "hard block", "reject"] },
+  { tab: "scan", label: "Minimum Plan Confidence", keywords: ["game plan", "confidence", "threshold", "hard block", "alignment"] },
   { tab: "scan", label: "Precision Filters", keywords: ["precision", "filters", "htf", "displacement", "judas", "fvg", "kill zone", "validation", "gates"] },
   { tab: "scan", label: "HTF Framework", keywords: ["ict", "htf", "framework", "weekly", "daily", "containment"] },
   { tab: "scan", label: "Displacement-Validated MSS", keywords: ["ict", "displacement", "mss", "market structure shift"] },

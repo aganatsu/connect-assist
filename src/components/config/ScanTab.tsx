@@ -455,7 +455,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               {(config.gamePlan?.enforcementMode ?? "hard") === "hard" && (
                 <div className="pt-2 border-t border-border/40 space-y-2">
                   <div className="flex items-center gap-4">
-                    <Label className="text-[10px] text-muted-foreground shrink-0 w-40">Hard-Rejection Confidence</Label>
+                    <Label className="text-[10px] text-muted-foreground shrink-0 w-40">Minimum Plan Confidence</Label>
                     <Slider
                       value={[config.gamePlan?.hardBlockThreshold ?? 75]}
                       onValueChange={v => updateField("gamePlan", "hardBlockThreshold", v[0])}
@@ -469,7 +469,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                     </span>
                   </div>
                   <p className="text-[9px] text-muted-foreground">
-                    Opposing setups are blocked when Game Plan confidence meets or exceeds this value. Recommended: 75%.
+                    Hard mode requires the Game Plan and Direction Verdict to agree, and the plan must meet this confidence before an automatic trade is authorized. Recommended: 75%.
                   </p>
                 </div>
               )}

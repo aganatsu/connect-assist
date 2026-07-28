@@ -3293,10 +3293,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
   // Config: gamePlanEnabled (bool), gamePlanNotify (bool), gamePlanRefreshHours (number)
   // ═══════════════════════════════════════════════════════════════════════════
+  const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
   let activeGamePlan: SessionGamePlan | null = null;
   try {
     const currentSessionName = getCurrentSession();
-    const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
     const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
     const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
@@ -5591,38 +5591,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         rateMap, convictionCandles, directionVerdict,
         propFirmGateResult?.enabled || false,
       );
-      // ── Game Plan Filter Gate ──
-      // ARCHITECTURE NOTE (stopgap — pending Step 4: Direction Verdict GP reweight):
-      // GP bias currently feeds into three uncoordinated places:
-      //   1. Direction Verdict (weight 0.08 — lowest of 5 sources)
-      //   2. Confluence scoring (GP Bias Confidence factor: flat -0.61 or -0.22 penalty)
-      //   3. This gate (previously hardcoded to always pass regardless of computed verdict)
-      // This conditional hard block is a FOURTH mechanism layered on top, not a fix to
-      // that underlying disagreement. It is shipped as a stopgap because real money is
-      // at risk while the proper fix (raising GP weight in Direction Verdict from 0.08
-      // to ~0.20 and backtesting the impact) is built.
-      //
-      // Data justification (n=76 trades with GP filter data, Jul 2026):
-      //   75%+ counter-bias bucket: 7 trades, 4W/3L, 57.1% WR.
-      //   Excluding one XAU/USD outlier (+$1,028): 6 trades, net +$7 — effectively flat.
-      //   The data is genuinely neutral; this gate is justified on the basis that a
-      //   flat-EV trade category with high conviction opposition is not worth the risk,
-      //   NOT on the basis that the data proves it loses money.
-      //
-      // MONITOR — reassess this gate when either condition is met:
-      //   (a) The 75%+ bucket reaches 25+ total trades (currently n=7), OR
-      //   (b) The 75%+ bucket accumulates 5+ commodity/gold trades specifically.
-      // At that point, re-run the win-rate and net-P&L analysis split by asset class
-      // (gold/commodities vs forex). The single large-instrument outlier skewing a
-      // 7-trade sample suggests this bucket may need splitting by instrument type,
-      // not just by confidence level. If the data clearly favors allowing one asset
-      // class through, consider per-instrument gpHardBlockThreshold overrides.
-      //
-      // REMOVAL CONDITION: Once Step 4 (Direction Verdict GP reweight to ~0.20) is
-      // validated via backtest and deployed, revisit whether this gate is still needed
-      // or whether the reweighted verdict makes it redundant. Do not leave both running
-      // indefinitely without checking.
-      if (activeGamePlan) {
+      // ── Game Plan + Direction Verdict Alignment Gate ──
+      // analysis.direction has already been synchronized to the authoritative
+      // Direction Verdict above. In hard mode, the active Game Plan authorizes
+      // whether that final direction may proceed; missing, neutral, waiting,
+      // low-confidence, and opposing plans all fail closed.
+      if (gamePlanEnabled) {
         const gpThreshold = (config as any).gpHardBlockThreshold ?? 75;
         const gpGate = evaluateGamePlanGate(activeGamePlan, pair, analysis.direction, gpEnforcementMode, gpThreshold);
         gates.push({ passed: gpGate.passed, reason: gpGate.reason });
@@ -6497,7 +6471,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // immutable trade evidence; closed-trade analysis must not use a later plan.
         const entryGamePlan = activeGamePlan?.plans?.find((plan: InstrumentGamePlan) => plan.symbol === pair) || null;
         const entryGamePlanGate = Array.isArray(detail.gates)
-          ? detail.gates.find((gate: any) => typeof gate?.reason === "string" && gate.reason.startsWith("GP filter"))
+          ? detail.gates.find((gate: any) =>
+            typeof gate?.reason === "string"
+            && (gate.reason.startsWith("GP filter") || gate.reason.startsWith("GP alignment"))
+          )
           : null;
         const gamePlanSnapshot = entryGamePlan ? {
           session: activeGamePlan?.session,

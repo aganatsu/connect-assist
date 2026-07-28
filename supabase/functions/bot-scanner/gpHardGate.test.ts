@@ -1,11 +1,11 @@
 /**
- * gpHardGate.test.ts — GP Hard Gate Stopgap Behavior Tests
- * ─────────────────────────────────────────────────────────
- * Tests the conditional hard block on counter-bias trades when
- * GP bias confidence >= gpHardBlockThreshold.
- *
- * These tests verify the gate logic in isolation by simulating
- * the gate decision that bot-scanner/index.ts makes at line ~5621.
+ * gpHardGate.test.ts — Game Plan + Direction Verdict alignment tests
+ * ───────────────────────────────────────────────────────────────────
+ * Hard mode is an authorization gate:
+ *   1. A current per-pair Game Plan must exist.
+ *   2. The pair must be tradeable and directionally biased.
+ *   3. The Direction Verdict must match the Game Plan bias.
+ *   4. The aligned Game Plan must meet the minimum confidence.
  *
  * Run: deno test --no-check --allow-all supabase/functions/bot-scanner/gpHardGate.test.ts
  */
@@ -14,116 +14,162 @@ import {
   assert,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
+import type { SessionGamePlan } from "../_shared/gamePlan.ts";
 
-// ─── Test fixtures ──────────────────────────────────────────────────
-const gamePlanBearish82 = {
+const gamePlan = {
   plans: [
-    { symbol: "GBP/USD", bias: "bearish", biasConfidence: 82, tradeable: true },
-    { symbol: "EUR/USD", bias: "bullish", biasConfidence: 70, tradeable: true },
-    { symbol: "XAU/USD", bias: "bearish", biasConfidence: 60, tradeable: true },
+    { symbol: "GBP/USD", bias: "bearish", biasConfidence: 82, tradeable: true, state: "tradeable" },
+    { symbol: "EUR/USD", bias: "bullish", biasConfidence: 70, tradeable: true, state: "tradeable" },
+    { symbol: "XAU/USD", bias: "bearish", biasConfidence: 60, tradeable: true, state: "tradeable" },
+    {
+      symbol: "AUD/USD",
+      bias: "neutral",
+      biasConfidence: 90,
+      tradeable: true,
+      state: "tradeable",
+      regime: "trending",
+    },
+    {
+      symbol: "USD/CAD",
+      bias: "bearish",
+      biasConfidence: 85,
+      tradeable: true,
+      state: "wait",
+      stateReason: "Waiting for price to reach the planned zone",
+      regime: "transitional",
+    },
+    { symbol: "NZD/USD", bias: "bullish", biasConfidence: 85, tradeable: true, state: "tradeable", regime: "transitional" },
   ],
 };
 
-function evaluate(pair: string, direction: string, threshold = 75, mode: "off" | "soft" | "hard" = "hard") {
-  return evaluateGamePlanGate(gamePlanBearish82 as any, pair, direction, mode, threshold);
+function evaluate(
+  pair: string,
+  direction: string,
+  threshold = 75,
+  mode: "off" | "soft" | "hard" = "hard",
+) {
+  return evaluateGamePlanGate(gamePlan as unknown as SessionGamePlan, pair, direction, mode, threshold);
 }
 
-// ─── Tests ──────────────────────────────────────────────────────────
-
-Deno.test("GP hard gate: blocks counter-bias trade when confidence >= threshold (82% >= 75%)", () => {
+Deno.test("GP hard alignment: blocks an opposing direction above the confidence minimum", () => {
   const result = evaluate("GBP/USD", "long");
   assertEquals(result.passed, false);
-  assert(result.reason.includes("hard block"));
-  assert(result.reason.includes("82%"));
+  assert(result.reason.includes("authorizes SHORT"));
+  assert(result.reason.includes("Direction Verdict is LONG"));
 });
 
-Deno.test("GP hard gate: allows counter-bias trade when confidence < threshold (60% < 75%)", () => {
+Deno.test("GP hard alignment: blocks an opposing direction below the confidence minimum", () => {
   const result = evaluate("XAU/USD", "long");
-  assertEquals(result.passed, true);
-  assert(result.reason.includes("soft"));
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("authorizes SHORT"));
   assert(result.reason.includes("60%"));
 });
 
-Deno.test("GP hard gate: allows aligned trade regardless of confidence", () => {
-  // EUR/USD is bullish 70%, going long = aligned
-  const result = evaluate("EUR/USD", "long");
-  assertEquals(result.passed, true);
-  assert(result.reason.includes("aligns"));
-});
-
-Deno.test("GP hard gate: threshold=0 disables the gate entirely (allows all)", () => {
-  const result = evaluate("GBP/USD", "long", 0);
-  assertEquals(result.passed, true);
-  assert(result.reason.includes("below threshold"));
-});
-
-Deno.test("GP hard gate: exact threshold boundary (70% >= 70% → blocks)", () => {
-  // EUR/USD bearish direction would be "short" against bullish 70%
-  const result = evaluate("EUR/USD", "short", 70);
+Deno.test("GP hard alignment: waits when directions align but plan confidence is below minimum", () => {
+  const result = evaluate("XAU/USD", "short");
   assertEquals(result.passed, false);
-  assert(result.reason.includes("hard block"));
-  assert(result.reason.includes("70%"));
+  assert(result.reason.includes("directions agree on SHORT"));
+  assert(result.reason.includes("below the 75% minimum"));
 });
 
-Deno.test("GP hard gate: just below threshold (70% < 71% → allows)", () => {
-  const result = evaluate("EUR/USD", "short", 71);
+Deno.test("GP hard alignment: allows aligned direction above the confidence minimum", () => {
+  const result = evaluate("GBP/USD", "short");
   assertEquals(result.passed, true);
-  assert(result.reason.includes("soft"));
+  assert(result.reason.includes("PASSED"));
+  assert(result.reason.includes("agree on SHORT"));
 });
 
-Deno.test("GP hard gate: pair not in game plan → always passes", () => {
+Deno.test("GP hard alignment: allows aligned direction at exact confidence boundary", () => {
+  const result = evaluate("EUR/USD", "long", 70);
+  assertEquals(result.passed, true);
+  assert(result.reason.includes("minimum 70%"));
+});
+
+Deno.test("GP hard alignment: threshold zero removes only the confidence floor, not direction alignment", () => {
+  const aligned = evaluate("XAU/USD", "short", 0);
+  const opposing = evaluate("XAU/USD", "long", 0);
+  assertEquals(aligned.passed, true);
+  assertEquals(opposing.passed, false);
+});
+
+Deno.test("GP hard alignment: missing pair plan fails closed", () => {
   const result = evaluate("AUD/JPY", "long");
-  assertEquals(result.passed, true);
-  assert(result.reason.includes("No game plan for AUD/JPY"));
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("no active plan exists for AUD/JPY"));
 });
 
-Deno.test("GP hard gate: null game plan → always passes", () => {
+Deno.test("GP hard alignment: missing active Game Plan fails closed", () => {
   const result = evaluateGamePlanGate(null, "GBP/USD", "long", "hard", 75);
-  // filterTradeByGamePlan returns allowed:true when gamePlan is null
-  assertEquals(result.passed, true);
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("no active Game Plan"));
 });
 
-Deno.test("GP hard gate: regression — today's GBP/USD trade would have been blocked", () => {
-  // Exact scenario from Jul 27 2026: GBP/USD long against 82% bearish bias
-  const todayPlan = {
+Deno.test("GP hard alignment: neutral plan waits because no direction is authorized", () => {
+  const result = evaluate("AUD/USD", "long");
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("neutral"));
+  assert(result.reason.includes("no direction is authorized"));
+});
+
+Deno.test("GP hard alignment: V2 wait state remains blocked even when direction and confidence align", () => {
+  const result = evaluate("USD/CAD", "short");
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("WAIT"));
+  assert(result.reason.includes("Waiting for price"));
+});
+
+Deno.test("GP hard alignment: transitional regime waits even if a stale plan says tradeable", () => {
+  const result = evaluate("NZD/USD", "long");
+  assertEquals(result.passed, false);
+  assert(result.reason.includes("regime is transitional"));
+});
+
+Deno.test("GP hard alignment: pair explicitly marked skip remains blocked", () => {
+  const skipPlan = {
     plans: [
-      { symbol: "GBP/USD", bias: "bearish", biasConfidence: 82, tradeable: true },
+      {
+        symbol: "GBP/USD",
+        bias: "bearish",
+        biasConfidence: 80,
+        tradeable: false,
+        state: "skip",
+        skipReason: "High-impact news",
+      },
     ],
   };
-  const result = evaluateGamePlanGate(todayPlan as any, "GBP/USD", "long", "hard", 75);
+  const result = evaluateGamePlanGate(skipPlan as unknown as SessionGamePlan, "GBP/USD", "short", "hard", 75);
   assertEquals(result.passed, false);
-  assert(result.reason.includes("hard block"));
-  assert(result.reason.includes("82%"));
-  assert(result.reason.includes("75%"));
+  assert(result.reason.includes("marked skip"));
 });
 
-Deno.test("GP enforcement off: logs an 82% conflict without blocking", () => {
+Deno.test("GP enforcement off: logs conflict without blocking", () => {
   const result = evaluate("GBP/USD", "long", 75, "off");
   assertEquals(result.passed, true);
   assertEquals(result.mode, "off");
   assert(result.reason.includes("log only"));
 });
 
-Deno.test("GP enforcement soft: scores an 82% conflict without blocking", () => {
+Deno.test("GP enforcement soft: scores conflict without blocking", () => {
   const result = evaluate("GBP/USD", "long", 75, "soft");
   assertEquals(result.passed, true);
   assertEquals(result.mode, "soft");
   assert(result.reason.includes("soft"));
 });
 
-Deno.test("GP enforcement hard: blocks a pair explicitly marked skip", () => {
-  const skipPlan = {
+Deno.test("GP hard alignment regression: GBP/CAD 64% bearish plan blocks 77% LONG verdict", () => {
+  const gbpCadPlan = {
     plans: [
       {
-        symbol: "GBP/USD",
+        symbol: "GBP/CAD",
         bias: "bearish",
-        biasConfidence: 40,
-        tradeable: false,
-        skipReason: "High-impact news",
+        biasConfidence: 64,
+        tradeable: true,
+        state: "tradeable",
       },
     ],
   };
-  const result = evaluateGamePlanGate(skipPlan as any, "GBP/USD", "long", "hard", 75);
+  const result = evaluateGamePlanGate(gbpCadPlan as unknown as SessionGamePlan, "GBP/CAD", "long", "hard", 75);
   assertEquals(result.passed, false);
-  assert(result.reason.includes("marked skip"));
+  assert(result.reason.includes("authorizes SHORT"));
+  assert(result.reason.includes("Direction Verdict is LONG"));
 });

@@ -157,12 +157,12 @@ export const RUNTIME_DEFAULTS = {
   newsFilterEnabled: true,
   newsFilterPauseMinutes: 30,
 
-  // ── Game Plan Hard Gate (Stopgap — see bot-scanner GP filter section) ──
+  // ── Game Plan + Direction Verdict Alignment Gate ──
   gamePlanEnabled: true,
-  // off = log only, soft = score impact, hard = block at threshold.
+  // off = log only, soft = score impact, hard = require strict alignment.
   gpEnforcementMode: "hard" as "off" | "soft" | "hard",
-  // When GP bias confidence >= this threshold AND signal opposes the bias,
-  // the trade is hard-blocked. Set to 0 to disable. Default: 75.
+  // In hard mode, the aligned Game Plan must meet this minimum confidence.
+  // Set to 0 only for legacy configs; config mapping treats it as mode=off.
   gpHardBlockThreshold: 75,
 
   // ── Entry Behaviour ──
@@ -610,7 +610,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? RUNTIME_DEFAULTS.newsFilterEnabled,
     newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? RUNTIME_DEFAULTS.newsFilterPauseMinutes,
 
-    // ── Game Plan Hard Gate (Stopgap) ──
+    // ── Game Plan + Direction Verdict Alignment Gate ──
     gamePlanEnabled:
       raw.gamePlan?.enabled
       ?? raw.gamePlanEnabled
