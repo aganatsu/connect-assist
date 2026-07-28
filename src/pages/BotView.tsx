@@ -37,7 +37,7 @@ import { GamePlanPanel } from "@/components/GamePlanPanel";
 import SessionStatusPill from "@/components/SessionStatusPill";
 import { ZoneStoryPanel } from "@/components/ZoneStoryPanel";
 import type { CandleSource } from "@/lib/api";
-import { requirePersistedExecutionMode, type ExecutionMode } from "@/lib/executionMode";
+import { verifyExecutionModeChange, type ExecutionMode } from "@/lib/executionMode";
 import { useNavigate } from "react-router-dom";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -166,8 +166,16 @@ export default function BotView() {
   const modeMut = useMutation({
     mutationFn: async (mode: ExecutionMode) => {
       const result = await paperApi.setExecutionMode(mode);
-      requirePersistedExecutionMode(result, mode);
-      return result;
+      const executionMode = await verifyExecutionModeChange(
+        result,
+        mode,
+        async () => {
+          const persistedStatus = await paperApi.status();
+          return persistedStatus?.executionMode
+            || persistedStatus?.account?.execution_mode;
+        },
+      );
+      return { ...result, executionMode };
     },
     onSuccess: (result, mode) => {
       queryClient.setQueryData(["paper-status"], (current: any) => ({
@@ -423,8 +431,12 @@ export default function BotView() {
         {d.executionMode === "live" && (
           <div className="bg-destructive/10 border border-destructive/40 text-destructive px-2 py-1 text-[10px] font-bold uppercase tracking-wider flex items-center justify-between gap-2 mb-1 min-w-0">
             <span className="min-w-0 truncate">⚠ LIVE TRADING — Real Money at Risk</span>
-            <button className="underline hover:no-underline" onClick={() => paperApi.setExecutionMode("paper").then(() => queryClient.invalidateQueries({ queryKey: ["paper-status"] }))}>
-              Switch to Paper
+            <button
+              className="underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={modeMut.isPending}
+              onClick={() => modeMut.mutate("paper")}
+            >
+              {modeMut.isPending ? "Verifying…" : "Switch to Paper"}
             </button>
           </div>
         )}
