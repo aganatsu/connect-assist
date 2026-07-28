@@ -19,6 +19,7 @@ import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.
 import { getCorrelation, getDirectionalCorrelation } from "./portfolioCorrelation.ts";
 import { SMT_PAIRS } from "./smcAnalysis.ts";
 import { parsePairCurrencies } from "./fotsi.ts";
+import { checkCorrelationExposure } from "./gateCorrelation.ts";
 
 // ─── Replicate bot-scanner Gate 22 logic as reference ────────────────────────
 // This is the LITERAL logic from bot-scanner/index.ts lines 1421-1519,
@@ -701,4 +702,24 @@ Deno.test("Default-path agreement — bot-scanner and backtest produce same verd
   assertEquals(botResult.passed, true, "bot-scanner: filter disabled by default → pass");
   assertEquals(btResult.passed, true, "backtest: filter disabled by default → pass");
   assertEquals(botResult.passed, btResult.passed, "Both engines agree with default (unset) config");
+});
+
+Deno.test("Shared final-execution correlation gate matches the scanner reference", () => {
+  const config = {
+    correlationFilterEnabled: true,
+    maxCorrelatedPositions: 1,
+    maxCorrelation: 0.8,
+  };
+  const positions = [{ symbol: "GBP/USD", direction: "long" as const }];
+  const reference = botScannerGate22("EUR/USD", "long", positions, config);
+  const shared = checkCorrelationExposure({
+    enabled: config.correlationFilterEnabled,
+    symbol: "EUR/USD",
+    direction: "long",
+    openPositions: positions,
+    maxCorrelation: config.maxCorrelation,
+    maxCorrelatedPositions: config.maxCorrelatedPositions,
+  });
+  assertEquals(shared.passed, reference.passed);
+  assertStringIncludes(shared.reason, "cap hit");
 });

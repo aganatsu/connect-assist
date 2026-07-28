@@ -1,4 +1,4 @@
--- Phase 2A: durable broker execution state.
+-- Phase 1C: durable broker execution state.
 --
 -- Local position creation and broker execution cannot share one transaction.
 -- This ledger gives every position/connection/action a single durable claim

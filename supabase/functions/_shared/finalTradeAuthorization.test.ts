@@ -37,8 +37,6 @@ function baseInput(): FinalTradeAuthorizationInput {
     maxOpenPositions: 3,
     maxPerSymbol: 2,
     allowSameDirectionStacking: false,
-    portfolioHeatLimit: 6,
-    riskPerTradeFallback: 1,
     maxDailyLoss: 5,
     maxDrawdown: 10,
     minimumRiskReward: 1,
@@ -59,6 +57,24 @@ function baseInput(): FinalTradeAuthorizationInput {
       required: false,
       available: true,
       passed: true,
+    },
+    runtimeGates: {
+      executionMode: { passed: true, reason: "Execution mode is paper" },
+      portfolioHeat: {
+        passed: true,
+        reason: "Portfolio heat is within limit",
+      },
+      correlation: {
+        passed: true,
+        reason: "No correlated conflicts",
+      },
+      cooldown: { passed: true, reason: "Cooldown passed" },
+      news: { passed: true, reason: "No high-impact news" },
+      session: { passed: true, reason: "London session enabled" },
+      freshness: {
+        passed: true,
+        reason: "Current price and candle are fresh",
+      },
     },
     now: new Date("2026-07-28T17:00:00.000Z"),
   };
@@ -234,6 +250,30 @@ Deno.test("final authorization blocks an active prop-firm rejection", () => {
   const result = evaluateFinalTradeAuthorization(input);
   assertEquals(result.code, "prop_firm_blocked");
 });
+
+for (
+  const [gate, code] of [
+    ["executionMode", "execution_mode"],
+    ["portfolioHeat", "portfolio_heat"],
+    ["correlation", "correlation"],
+    ["cooldown", "cooldown"],
+    ["news", "news"],
+    ["session", "session"],
+    ["freshness", "price_or_candle_stale"],
+  ] as const
+) {
+  Deno.test(`final authorization blocks failed ${gate} runtime gate`, () => {
+    const input = baseInput();
+    input.runtimeGates[gate] = {
+      passed: false,
+      reason: `${gate} blocked`,
+    };
+    const result = evaluateFinalTradeAuthorization(input);
+    assertEquals(result.authorized, false);
+    assertEquals(result.code, code);
+    assertStringIncludes(result.reason, "blocked");
+  });
+}
 
 Deno.test("active prop-firm compliance remains authoritative for loss limits", () => {
   const input = baseInput();

@@ -41,6 +41,9 @@ import {
   type DirectionVerdictForAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import {
+  buildFinalRuntimeGateStates,
+} from "../_shared/finalRuntimeGates.ts";
+import {
   validatePendingOrderThesis,
   type ThesisValidationResult,
 } from "../_shared/thesisValidator.ts";
@@ -625,6 +628,31 @@ Deno.serve(async (req) => {
           .sort((a, b) => a.spreadPips - b.spreadPips)[0];
 
         const directionVerdict = findCurrentDirectionVerdict(recentScanLogs, pending.symbol);
+        const runtimeGates = await buildFinalRuntimeGateStates({
+          supabase,
+          userId,
+          accountExecutionMode: account.execution_mode,
+          symbol: pending.symbol,
+          direction: pending.direction as "long" | "short",
+          currentPrice: actualFillPrice,
+          candles: candles5m,
+          interval: "5m",
+          openPositions,
+          accountBalance: account.balance,
+          config: {
+            portfolioHeat: config.portfolioHeat,
+            riskPerTrade: config.riskPerTrade,
+            correlationFilterEnabled: config.correlationFilterEnabled,
+            maxCorrelation: config.maxCorrelation,
+            maxCorrelatedPositions: config.maxCorrelatedPositions,
+            cooldownMinutes: config.cooldownMinutes,
+            newsFilterEnabled: config.newsFilterEnabled,
+            newsFilterPauseMinutes: config.newsFilterPauseMinutes,
+            enabledSessions: config.enabledSessions,
+            enabledDays: config.enabledDays,
+            killZoneOnly: config.killZoneOnly,
+          },
+        });
         const authorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
@@ -660,6 +688,7 @@ Deno.serve(async (req) => {
             spreadPips: bestSpread?.spreadPips,
             maximumPips: bestSpread?.effectiveMax,
           },
+          runtimeGates,
         });
 
         if (!authorization.authorized) {
