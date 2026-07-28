@@ -263,7 +263,15 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "broker_execution_ledger_broker_connection_id_fkey"
+            columns: ["broker_connection_id"]
+            isOneToOne: false
+            referencedRelation: "broker_connections"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       close_audit_log: {
         Row: {
@@ -1690,11 +1698,11 @@ export type Database = {
       }
       complete_broker_execution: {
         Args: {
-          p_broker_order_id: string | null
+          p_broker_order_id: string
           p_claim_token: string
-          p_last_error: string | null
+          p_last_error: string
           p_ledger_id: string
-          p_response_payload: Json | null
+          p_response_payload: Json
           p_status: string
           p_user_id: string
         }
