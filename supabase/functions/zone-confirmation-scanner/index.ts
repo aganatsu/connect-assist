@@ -63,6 +63,10 @@ import {
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
+import {
+  resolvePendingConfirmationMethod,
+  resolvePendingIndicatorMinimum,
+} from "../_shared/setupLifecycle.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -329,7 +333,7 @@ Deno.serve(async (req) => {
 
         if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
           await supabase.from("pending_orders").update({
-            status: "cancelled",
+            status: "invalidated",
             cancel_reason: `[fast-confirm] Impulse broken — price ${currentPrice} exceeded origin`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -381,7 +385,7 @@ Deno.serve(async (req) => {
             : lastCandle.close > rawRefinedHigh;
           if (closedThrough) {
             await supabase.from("pending_orders").update({
-              status: "cancelled",
+              status: "invalidated",
               cancel_reason: `[zone-confirm] Refined zone failed — 5m close ${lastCandle.close} broke through ${dir === "long" ? "low" : "high"} (${dir === "long" ? rawRefinedLow : rawRefinedHigh})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -418,10 +422,14 @@ Deno.serve(async (req) => {
           }
         } catch { /* non-critical */ }
 
-        // Respect the canonical confirmation method saved in Bot Config.
-        // The previous fast scanner always used CHoCH and could therefore fill
-        // an indicators-only or CHoCH+indicators setup without its required leg.
-        const confirmationMethod = config.confirmationMethod || "choch";
+        // Respect the confirmation contract frozen when this setup was created.
+        // Runtime config is only a legacy fallback for pre-Phase 4 rows.
+        const confirmationMethod = resolvePendingConfirmationMethod(
+          pending,
+          config,
+        );
+        const confirmationIndicatorMinimum =
+          resolvePendingIndicatorMinimum(pending, config);
         let confirmationSignal = confirmationMethod === "indicators"
           ? null
           : detectZoneConfirmation(
@@ -439,7 +447,7 @@ Deno.serve(async (req) => {
           : checkIndicatorConfirmation(
             candles5m,
             pending.direction as "long" | "short",
-            { minIndicators: config.indicatorMinCount || 3 },
+            { minIndicators: confirmationIndicatorMinimum },
           );
         const confirmationPassed = confirmationMethod === "choch"
           ? !!confirmationSignal

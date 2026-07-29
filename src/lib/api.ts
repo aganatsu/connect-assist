@@ -443,7 +443,7 @@ export const scannerApi = {
       .from("staged_setups")
       .select("*")
       .eq("bot_id", "smc")
-      .eq("status", "watching")
+      .in("status", ["watching", "qualified"])
       .order("current_score", { ascending: false });
     if (error) throw new Error(error.message);
     return data || [];
@@ -498,7 +498,32 @@ export interface StagedSetup {
   entry_price: number | null;
   sl_level: number | null;
   tp_level: number | null;
-  status: "watching" | "promoted" | "expired" | "invalidated";
+  status:
+    | "watching"
+    | "qualified"
+    | "pending"
+    | "awaiting_confirmation"
+    | "filled"
+    | "blocked_after_qualification"
+    | "invalidated"
+    | "expired"
+    | "cancelled"
+    | "promoted";
+  candidate_id: string;
+  lifecycle_version?: string;
+  lifecycle_reason?: string | null;
+  qualified_at?: string | null;
+  pending_order_id?: string | null;
+  position_id?: string | null;
+  game_plan_id?: string | null;
+  game_plan_version?: string | null;
+  direction_verdict_id?: string | null;
+  direction_verdict?: any;
+  thesis_version?: string | null;
+  originating_zone?: any;
+  confirmation_method?: "choch" | "indicators" | "choch_and_indicators" | null;
+  confirmation_config?: { indicatorMinCount?: number };
+  authorization_result?: any;
   scan_cycles: number;
   min_cycles: number;
   ttl_minutes: number;
@@ -532,7 +557,7 @@ export interface PendingOrder {
   entry_zone_type: string;
   entry_zone_low: number;
   entry_zone_high: number;
-  status: "pending" | "awaiting_confirmation" | "filled" | "expired" | "cancelled";
+  status: "pending" | "awaiting_confirmation" | "filled" | "invalidated" | "expired" | "cancelled";
   expiry_minutes: number;
   expires_at: string;
   fill_reason: string | null;
@@ -544,6 +569,12 @@ export interface PendingOrder {
   setup_type: string | null;
   setup_confidence: string | null;
   from_watchlist: boolean;
+  candidate_id?: string | null;
+  staged_setup_id?: string | null;
+  originating_zone?: any;
+  thesis_version?: string | null;
+  confirmation_method?: "choch" | "indicators" | "choch_and_indicators" | null;
+  confirmation_config?: { indicatorMinCount?: number };
   staged_cycles: number;
   staged_initial_score: number | null;
   exit_flags: any;

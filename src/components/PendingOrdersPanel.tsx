@@ -84,6 +84,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     switch (status) {
       case "filled": return <TrendingUp className="w-3 h-3 text-profit" />;
       case "expired": return <Clock className="w-3 h-3 text-highlight" />;
+      case "invalidated": return <AlertTriangle className="w-3 h-3 text-loss" />;
       case "cancelled": return <X className="w-3 h-3 text-loss" />;
       default: return <Target className="w-3 h-3 text-info-c" />;
     }
@@ -93,6 +94,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
     switch (status) {
       case "filled": return "text-profit";
       case "expired": return "text-highlight";
+      case "invalidated": return "text-loss";
       case "cancelled": return "text-loss";
       default: return "text-info-c";
     }
@@ -118,6 +120,15 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
       signalReason.decisionContext ||
       order.final_authorization?.decisionContext ||
       null;
+    const confirmationMethod = order.confirmation_method ||
+      signalReason.watchlistLifecycle?.confirmationMethod ||
+      signalReason.confirmationMethod ||
+      "choch";
+    const confirmationLabel = confirmationMethod === "indicators"
+      ? "indicator consensus"
+      : confirmationMethod === "choch_and_indicators"
+      ? "CHoCH + indicators"
+      : "CHoCH/BOS";
     return (
       <div
         key={order.order_id}
@@ -171,6 +182,11 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
                 WL
               </Badge>
             )}
+            {order.candidate_id && (
+              <span className="text-[9px] font-mono text-foreground/45">
+                #{order.candidate_id.slice(0, 8)}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -190,7 +206,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
           <div className="flex items-center justify-between text-[12px]">
             <span className="text-warn font-medium">
               <Crosshair className="w-3 h-3 inline mr-1" />
-              Price in zone — awaiting {order.direction === "short" ? "bearish" : "bullish"} confirmation
+              Price in zone — awaiting {order.direction === "short" ? "bearish" : "bullish"} {confirmationLabel}
             </span>
             <span className="text-foreground/60">
               SL: <span className="text-loss font-mono">{Number(order.stop_loss).toFixed(5)}</span>
@@ -226,7 +242,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
         {/* Narrative sentence */}
         <p className="text-[11px] text-foreground/50 italic leading-tight">
           {isHunting
-            ? `Price has entered the ${order.entry_zone_type} zone. Watching for ${order.direction === "short" ? "bearish" : "bullish"} confirmation (CHoCH, displacement, or reversal) before entry.`
+            ? `Price has entered the ${order.entry_zone_type} zone. The saved ${confirmationLabel} rule must pass before entry.`
             : generatePendingOrderNarrative(order)
           }
         </p>
@@ -267,7 +283,7 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
               }>
                 Confirmation {decision.entryConfirmation?.passed
                   ? "PASSED"
-                  : "WAITING"}
+                  : `WAITING (${confirmationLabel})`}
               </span>
             </div>
             <p className="text-[9px] text-muted-foreground">
