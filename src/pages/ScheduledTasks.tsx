@@ -106,7 +106,7 @@ function formatPhase(phase?: string): string {
     skipped: "Skipped",
     failed: "Failed",
   };
-  return labels[phase] || phase.replaceAll("_", " ");
+  return labels[phase] || phase.replace(/_/g, " ");
 }
 
 function errorMessage(error: unknown): string {
