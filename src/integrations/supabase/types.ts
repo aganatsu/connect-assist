@@ -745,8 +745,8 @@ export type Database = {
           symbol: string
           take_profit: number | null
           take_profit_old: string | null
-          thesis_version: string | null
           thesis_validation: Json | null
+          thesis_version: string | null
           trade_overrides: Json | null
           trigger_price: string | null
           user_id: string
@@ -791,8 +791,8 @@ export type Database = {
           symbol: string
           take_profit?: number | null
           take_profit_old?: string | null
-          thesis_version?: string | null
           thesis_validation?: Json | null
+          thesis_version?: string | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id: string
@@ -837,8 +837,8 @@ export type Database = {
           symbol?: string
           take_profit?: number | null
           take_profit_old?: string | null
-          thesis_version?: string | null
           thesis_validation?: Json | null
+          thesis_version?: string | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id?: string
@@ -856,6 +856,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "paper_positions_staged_setup_id_fkey"
+            columns: ["staged_setup_id"]
+            isOneToOne: false
+            referencedRelation: "staged_setups"
             referencedColumns: ["id"]
           },
         ]
@@ -947,8 +954,8 @@ export type Database = {
       pending_orders: {
         Row: {
           bot_id: string
-          candidate_id: string | null
           cancel_reason: string | null
+          candidate_id: string | null
           confirmation_attempts: number | null
           confirmation_config: Json
           confirmation_method: string | null
@@ -993,16 +1000,16 @@ export type Database = {
           symbol: string
           take_profit: number
           thesis_cancel_reason: string | null
-          thesis_version: string | null
           thesis_validation: Json | null
+          thesis_version: string | null
           updated_at: string
           user_id: string
           zone_touch_time: string | null
         }
         Insert: {
           bot_id?: string
-          candidate_id?: string | null
           cancel_reason?: string | null
+          candidate_id?: string | null
           confirmation_attempts?: number | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -1047,16 +1054,16 @@ export type Database = {
           symbol: string
           take_profit: number
           thesis_cancel_reason?: string | null
-          thesis_version?: string | null
           thesis_validation?: Json | null
+          thesis_version?: string | null
           updated_at?: string
           user_id: string
           zone_touch_time?: string | null
         }
         Update: {
           bot_id?: string
-          candidate_id?: string | null
           cancel_reason?: string | null
+          candidate_id?: string | null
           confirmation_attempts?: number | null
           confirmation_config?: Json
           confirmation_method?: string | null
@@ -1101,8 +1108,8 @@ export type Database = {
           symbol?: string
           take_profit?: number
           thesis_cancel_reason?: string | null
-          thesis_version?: string | null
           thesis_validation?: Json | null
+          thesis_version?: string | null
           updated_at?: string
           user_id?: string
           zone_touch_time?: string | null
@@ -1120,6 +1127,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_orders_staged_setup_id_fkey"
+            columns: ["staged_setup_id"]
+            isOneToOne: false
+            referencedRelation: "staged_setups"
             referencedColumns: ["id"]
           },
         ]
@@ -1545,6 +1559,59 @@ export type Database = {
         }
         Relationships: []
       }
+      setup_lifecycle_events: {
+        Row: {
+          bot_id: string
+          candidate_id: string
+          created_at: string
+          direction: string
+          evidence: Json
+          from_status: string | null
+          id: string
+          reason: string | null
+          staged_setup_id: string
+          symbol: string
+          to_status: string
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          candidate_id: string
+          created_at?: string
+          direction: string
+          evidence?: Json
+          from_status?: string | null
+          id?: string
+          reason?: string | null
+          staged_setup_id: string
+          symbol: string
+          to_status: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          candidate_id?: string
+          created_at?: string
+          direction?: string
+          evidence?: Json
+          from_status?: string | null
+          id?: string
+          reason?: string | null
+          staged_setup_id?: string
+          symbol?: string
+          to_status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "setup_lifecycle_events_staged_setup_id_fkey"
+            columns: ["staged_setup_id"]
+            isOneToOne: false
+            referencedRelation: "staged_setups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       staged_setups: {
         Row: {
           analysis_snapshot: Json | null
@@ -1560,12 +1627,12 @@ export type Database = {
           direction_verdict: Json | null
           direction_verdict_id: string | null
           entry_price: number | null
+          game_plan_id: string | null
+          game_plan_version: string | null
           id: string
           initial_factors: Json
           initial_score: number
           invalidation_reason: string | null
-          game_plan_id: string | null
-          game_plan_version: string | null
           last_eval_at: string
           lifecycle_reason: string | null
           lifecycle_version: string
@@ -1607,9 +1674,9 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
-          id?: string
           game_plan_id?: string | null
           game_plan_version?: string | null
+          id?: string
           initial_factors?: Json
           initial_score: number
           invalidation_reason?: string | null
@@ -1654,9 +1721,9 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
-          id?: string
           game_plan_id?: string | null
           game_plan_version?: string | null
+          id?: string
           initial_factors?: Json
           initial_score?: number
           invalidation_reason?: string | null
@@ -1687,7 +1754,36 @@ export type Database = {
           user_id?: string
           watch_threshold?: number
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "staged_setups_direction_verdict_id_fkey"
+            columns: ["direction_verdict_id"]
+            isOneToOne: false
+            referencedRelation: "active_direction_verdicts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staged_setups_game_plan_id_fkey"
+            columns: ["game_plan_id"]
+            isOneToOne: false
+            referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staged_setups_pending_order_id_fkey"
+            columns: ["pending_order_id"]
+            isOneToOne: false
+            referencedRelation: "pending_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staged_setups_position_id_fkey"
+            columns: ["position_id"]
+            isOneToOne: false
+            referencedRelation: "paper_positions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       trade_archive: {
         Row: {
@@ -2101,6 +2197,18 @@ export type Database = {
           p_pending_id: string
           p_position_order_id: string
           p_signal_reason: Json
+          p_user_id: string
+        }
+        Returns: Json
+      }
+      transition_staged_setup: {
+        Args: {
+          p_evidence?: Json
+          p_pending_order_id?: string
+          p_position_id?: string
+          p_reason: string
+          p_setup_id: string
+          p_to_status: string
           p_user_id: string
         }
         Returns: Json
