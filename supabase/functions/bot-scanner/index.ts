@@ -3464,6 +3464,7 @@ async function runScanForUser(
         ...pairConfig,
         slBufferPips: adjustedSlBuffer,
       },
+      baseConfig: config,
       symbol: pair,
       effectiveMinConfluence: adjustedMinConfluence,
     });
@@ -4669,6 +4670,7 @@ async function runScanForUser(
           stylePolicy: pairStylePolicy,
         },
         style_policy_version: pairStylePolicy.contractVersion,
+        style_base_policy_hash: pairStylePolicy.basePolicyHash,
         style_policy_hash: pairStylePolicy.policyHash,
         style_policy: pairStylePolicy,
       };

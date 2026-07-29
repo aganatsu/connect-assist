@@ -4,7 +4,7 @@ import type {
   TradingStyleResolution,
 } from "./tradingStyleConfig.ts";
 
-export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1";
+export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1.1";
 
 export type StylePolicyEnforcement = "observe_only";
 
@@ -45,8 +45,10 @@ export const STYLE_TIMEFRAME_ROLES: Record<
 
 export interface ResolvedStylePolicy {
   contractVersion: typeof STYLE_POLICY_CONTRACT_VERSION;
+  basePolicyHash: string;
   policyHash: string;
   enforcement: StylePolicyEnforcement;
+  scope: "global" | "pair";
   style: TradingStyleMode;
   symbol: string | null;
   resolvedAt: string;
@@ -105,6 +107,7 @@ export interface ResolvedStylePolicy {
 export interface BuildResolvedStylePolicyInput {
   resolution: TradingStyleResolution;
   config?: RuntimeConfig;
+  baseConfig?: RuntimeConfig;
   symbol?: string | null;
   effectiveMinConfluence?: number;
   profileAppliedToRuntime?: boolean;
@@ -135,22 +138,22 @@ async function sha256(value: unknown): Promise<string> {
     .join("");
 }
 
-/**
- * Builds immutable evidence describing the style policy resolved for a scan,
- * setup or trade. Phase 2C starts in observe-only mode: callers persist this
- * snapshot, but authorization and management behavior remain unchanged.
- */
-export async function buildResolvedStylePolicy(
-  input: BuildResolvedStylePolicyInput,
-): Promise<ResolvedStylePolicy> {
-  const config = input.config || input.resolution.config;
-  const style = input.resolution.style;
-  const content = {
+function buildPolicyContent(input: {
+  config: RuntimeConfig;
+  style: TradingStyleMode;
+  symbol: string | null;
+  effectiveMinConfluence: number;
+  resolution: TradingStyleResolution;
+  profileAppliedToRuntime: boolean;
+}) {
+  const { config, style } = input;
+  return {
     contractVersion:
       STYLE_POLICY_CONTRACT_VERSION as typeof STYLE_POLICY_CONTRACT_VERSION,
     enforcement: "observe_only" as const,
+    scope: input.symbol ? "pair" as const : "global" as const,
     style,
-    symbol: input.symbol || null,
+    symbol: input.symbol,
     timeframes: {
       roles: { ...STYLE_TIMEFRAME_ROLES[style] },
       runtimeEntry: config.entryTimeframe,
@@ -161,8 +164,7 @@ export async function buildResolvedStylePolicy(
     },
     qualification: {
       minConfluence: config.minConfluence,
-      effectiveMinConfluence: input.effectiveMinConfluence ??
-        config.minConfluence,
+      effectiveMinConfluence: input.effectiveMinConfluence,
       minRiskReward: config.minRiskReward,
       minTier1Factors: config.minTier1Factors,
       impulseZoneGateMode: config.impulseZoneGateMode,
@@ -198,14 +200,46 @@ export async function buildResolvedStylePolicy(
       maxConfirmationAttempts: config.maxConfirmationAttempts,
     },
     provenance: {
-      profileAppliedToRuntime: input.profileAppliedToRuntime !== false,
+      profileAppliedToRuntime: input.profileAppliedToRuntime,
       styleApplied: [...input.resolution.applied],
       userOverridesPreserved: [...input.resolution.preserved],
     },
   };
+}
+
+/**
+ * Builds immutable evidence describing the style policy resolved for a scan,
+ * setup or trade. Phase 2C starts in observe-only mode: callers persist this
+ * snapshot, but authorization and management behavior remain unchanged.
+ */
+export async function buildResolvedStylePolicy(
+  input: BuildResolvedStylePolicyInput,
+): Promise<ResolvedStylePolicy> {
+  const config = input.config || input.resolution.config;
+  const baseConfig = input.baseConfig || config;
+  const style = input.resolution.style;
+  const profileAppliedToRuntime = input.profileAppliedToRuntime !== false;
+  const content = buildPolicyContent({
+    config,
+    style,
+    symbol: input.symbol || null,
+    effectiveMinConfluence: input.effectiveMinConfluence ??
+      config.minConfluence,
+    resolution: input.resolution,
+    profileAppliedToRuntime,
+  });
+  const baseContent = buildPolicyContent({
+    config: baseConfig,
+    style,
+    symbol: null,
+    effectiveMinConfluence: baseConfig.minConfluence,
+    resolution: input.resolution,
+    profileAppliedToRuntime,
+  });
 
   return {
     ...content,
+    basePolicyHash: await sha256(baseContent),
     policyHash: await sha256(content),
     resolvedAt: input.resolvedAt || new Date().toISOString(),
   };
