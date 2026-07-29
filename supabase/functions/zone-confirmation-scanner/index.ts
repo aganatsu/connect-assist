@@ -39,7 +39,10 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
-import { mapNestedToFlat, type RuntimeConfig } from "../_shared/configMapper.ts";
+import type { RuntimeConfig } from "../_shared/configMapper.ts";
+import {
+  resolveEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigResolver.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import {
   evaluateFinalTradeAuthorization,
@@ -356,13 +359,14 @@ Deno.serve(async (req) => {
       }
 
       const rawConfig = botConfig?.config_json || {};
+      const styleResolution = resolveEffectiveRuntimeConfig(rawConfig);
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
         brokerConn,
         openPositions: openPositions || [],
         account: account || null,
-        config: mapNestedToFlat(rawConfig),
+        config: styleResolution.config,
         gamePlan,
         directionVerdicts,
       };

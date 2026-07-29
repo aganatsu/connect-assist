@@ -24,8 +24,8 @@ the same way. It must finish before Phase 6 begins.
 
 | Slice | Purpose | Status |
 |---|---|---|
-| 1 | Shared resolved style-policy contract and durable observability | Implemented in `codex/style-policy-observability`; review and deployment pending |
-| 2 | One configuration resolution path for every runtime surface | Not started |
+| 1 | Shared resolved style-policy contract and durable observability | Complete and production-verified |
+| 2 | One configuration resolution path for every runtime surface | Implemented in `codex/style-policy-shared-resolution`; review and deployment pending |
 | 3 | Remove duplicate UI presets and show the effective runtime policy | Not started |
 | 4 | Make timeframe roles authoritative for every analysis module | Not started |
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Not started |
@@ -41,6 +41,18 @@ management, lifecycle values and override provenance on active Gameplans,
 Direction Verdicts, Watchlist setups, pending orders and positions. Scan logs
 and backtest results expose the same snapshot. It does not alter authorization,
 position sizing, order placement or management behavior.
+
+Slice 1 was production-verified on 2026-07-29. Automatic Gameplan version
+`1375a448` and all eight matching Direction Verdicts persisted
+`style-policy.v1.1`, the same non-null base-policy hash, the selected `scalper`
+style and matching Gameplan-version references.
+
+Slice 2 introduces one canonical resolution order for server-side runtime
+surfaces: stored/request configuration → canonical field mapping → selected
+trading-style profile. The automatic scanner resolves before its interval gate
+and position-management cycle; the fast confirmation scanner, manual Gameplan
+refresh and backtest engine use that same resolver. Surface-specific backtest
+constraints remain explicit post-resolution overrides.
 
 ## Phase 3 implementation record
 

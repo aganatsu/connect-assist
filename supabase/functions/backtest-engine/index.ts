@@ -82,8 +82,11 @@ import {
   resolveWeightScale,
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
-import { mapNestedToFlat, RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
-import { applyTradingStyleProfile, resolveTradingStyle } from "../_shared/tradingStyleConfig.ts";
+import { RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
+import {
+  resolveEffectiveRuntimeConfig,
+  resolveEffectiveTradingStyle,
+} from "../_shared/runtimeConfigResolver.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import {
   detectSession,
@@ -413,22 +416,6 @@ async function fetchHistoricalCandles(
     return result.candles;
   } catch { return []; }
 }
-
-// ─── Config Mapping (delegates to shared configMapper) ──────────────
-// The shared mapper handles ALL field resolution (current UI + legacy DB).
-// Backtest-specific overrides are applied after the shared mapping.
-function mapConfig(raw: any): any {
-  const config = mapNestedToFlat(raw);
-  // Backtest-specific overrides:
-  // 1. News filter is always disabled in backtests (no historical news data)
-  config.newsFilterEnabled = false;
-  // 2. Scan interval is irrelevant in backtests (we iterate bar-by-bar)
-  config.scanIntervalMinutes = 0;
-  return config;
-}
-
-
-
 
 // ─── Safety Gates (29 gates + 2 pre-gates — mirrors bot-scanner runSafetyGates) ──
 function runBacktestSafetyGates(
@@ -1585,10 +1572,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       maxBlockedStored = 200,
     } = body;
 
-    const config = mapConfig(rawConfig || {});
-    const styleResolution = applyTradingStyleProfile(config, tradingStyle);
+    const styleResolution = resolveEffectiveRuntimeConfig(
+      rawConfig || {},
+      tradingStyle,
+    );
+    const config = styleResolution.config;
     const resolvedTradingStyle = styleResolution.style;
-    Object.assign(config, styleResolution.config);
     const stylePolicy = await buildResolvedStylePolicy({
       resolution: styleResolution,
       config,
@@ -3461,7 +3450,10 @@ Deno.serve(async (req: Request) => {
           startDate: body.startDate,
           endDate: body.endDate,
           startingBalance: body.startingBalance,
-          tradingStyle: resolveTradingStyle(body.tradingStyle, mapNestedToFlat(body.config || {})),
+          tradingStyle: resolveEffectiveTradingStyle(
+            body.config || {},
+            body.tradingStyle,
+          ),
           walkForwardFolds: body.walkForwardFolds ?? 0,
         },
       })

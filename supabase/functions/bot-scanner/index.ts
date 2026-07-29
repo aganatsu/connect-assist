@@ -1,10 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import {
-  mapNestedToFlat,
   applyPairOverrides,
 } from "../_shared/configMapper.ts";
-import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
+import {
+  resolveEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigResolver.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
@@ -446,8 +447,8 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
     const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
     data = res.data;
   }
-  // Delegate to shared mapper (single source of truth for field resolution)
-  return mapNestedToFlat(data?.config_json || null);
+  // Resolve mapping + trading style before any runtime gate reads config.
+  return resolveEffectiveRuntimeConfig(data?.config_json || null);
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
@@ -1313,7 +1314,9 @@ async function runScanForUser(
 
   let account: any = null;
   try {
-  const config = await loadConfig(supabase, userId);
+  const styleResolution = await loadConfig(supabase, userId);
+  const config = styleResolution.config;
+  const resolvedStyle = styleResolution.style;
 
   // ── Scan Interval Gate ──
   // Skip this scan if not enough time has elapsed since the last scan.
@@ -1339,10 +1342,7 @@ async function runScanForUser(
     }
   }
 
-  // ── Resolve Trading Style ──
-  const styleResolution = applyTradingStyleProfile(config, config.tradingStyle?.mode);
-  const resolvedStyle = styleResolution.style;
-  Object.assign(config, styleResolution.config);
+  // ── Report the canonical Trading Style resolution ──
   if (styleResolution.applied.length > 0) {
     console.log(`[config] Style "${resolvedStyle}" applied: ${styleResolution.applied.join(", ")}`);
   }
