@@ -49,6 +49,7 @@ import {
 } from "../_shared/thesisValidator.ts";
 import { runPropFirmGate, type PropFirmGateResult } from "../_shared/propFirmGate.ts";
 import type { SessionGamePlan } from "../_shared/gamePlan.ts";
+import { loadActiveGamePlan } from "../_shared/gamePlanStore.ts";
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
@@ -72,19 +73,6 @@ async function fetchCandles(
     brokerConn,
   });
   return result.candles;
-}
-
-function parseSessionGamePlan(row: any): SessionGamePlan | null {
-  const cached = row?.details_json;
-  if (!cached || cached.type !== "game_plan") return null;
-  return {
-    session: cached.session,
-    generatedAt: cached.generated_at,
-    plans: cached.plans || [],
-    focusPairs: cached.focus_pairs || [],
-    newsEvents: cached.newsEvents || [],
-    summary: cached.summary || "",
-  } as SessionGamePlan;
 }
 
 function findCurrentDirectionVerdict(
@@ -257,17 +245,16 @@ Deno.serve(async (req) => {
         brokerConn = { api_key: authToken, account_id: metaAccountId };
       }
 
-      // Load the latest active Game Plan directly, then recent completed scan
-      // evidence for the current Direction Verdict. Do not rely on the latest
-      // 20 arbitrary rows to contain a Game Plan.
-      const { data: gamePlanRows } = await supabase
-        .from("scan_logs")
-        .select("created_at, details_json")
-        .eq("user_id", userId)
-        .eq("bot_id", BOT_ID)
-        .contains("details_json", { type: "game_plan" })
-        .order("created_at", { ascending: false })
-        .limit(1);
+      // Load the exact dedicated active Gameplan version. scan_logs remains
+      // only the source for current Direction Verdict evidence in Phase 3A.
+      let gamePlan: SessionGamePlan | null = null;
+      try {
+        gamePlan = await loadActiveGamePlan(supabase, userId, BOT_ID);
+      } catch (error: any) {
+        console.warn(
+          `[zone-confirm] Active Gameplan unavailable for ${userId}: ${error?.message}`,
+        );
+      }
       const { data: recentScanLogs } = await supabase
         .from("scan_logs")
         .select("created_at, details_json")
@@ -286,7 +273,7 @@ Deno.serve(async (req) => {
         account: account || null,
         config: mapNestedToFlat(rawConfig),
         rawConfig,
-        gamePlan: parseSessionGamePlan(gamePlanRows?.[0]),
+        gamePlan,
         recentScanLogs: recentScanLogs || [],
       };
     }

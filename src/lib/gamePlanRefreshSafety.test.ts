@@ -16,6 +16,7 @@ describe("manual Game Plan refresh safety", () => {
   it("generates and stores a new plan", () => {
     expect(refreshFunctionSource).toContain("generateInstrumentGamePlan");
     expect(refreshFunctionSource).toContain('source: "manual_refresh"');
+    expect(refreshFunctionSource).toContain("persistActiveGamePlan");
     expect(refreshFunctionSource).toContain('.from("scan_logs")');
   });
 
@@ -29,6 +30,8 @@ describe("manual Game Plan refresh safety", () => {
   it("wires the Game Plan button to regeneration instead of a query-only refresh", () => {
     expect(gamePlanPanelSource).toContain("mutationFn: scannerApi.refreshGamePlan");
     expect(gamePlanPanelSource).toContain('aria-label="Regenerate game plan"');
+    expect(gamePlanPanelSource).toContain('.from("active_game_plans")');
+    expect(gamePlanPanelSource).not.toContain('.from("scan_logs")');
     expect(gamePlanPanelSource).not.toContain("onClick={() => refetch()}");
   });
 });

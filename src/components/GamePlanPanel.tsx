@@ -19,6 +19,10 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { formatPrice } from "@/lib/formatTime";
 import { scannerApi } from "@/lib/api";
+import {
+  activeGamePlanRowsToLogs,
+  type ActiveGamePlanDisplayRow,
+} from "@/lib/activeGamePlans";
 import { toast } from "sonner";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -75,6 +79,8 @@ interface GamePlanConviction {
 }
 
 interface InstrumentPlan {
+  gamePlanId?: string;
+  planVersion?: string;
   symbol: string;
   bias: "bullish" | "bearish" | "neutral";
   biasConfidence: number;
@@ -100,6 +106,9 @@ interface InstrumentPlan {
 
 interface GamePlanData {
   type: "game_plan";
+  plan_version: string;
+  source: "automatic_scan" | "manual_refresh";
+  contract_version: string;
   session: string;
   generated_at: string;
   focus_pairs: string[];
@@ -118,13 +127,15 @@ interface GamePlanLog {
 
 async function fetchGamePlans(): Promise<GamePlanLog[]> {
   const { data, error } = await (supabase as any)
-    .from("scan_logs")
-    .select("id, scanned_at, details_json")
-    .eq("details_json->>type", "game_plan")
-    .order("scanned_at", { ascending: false })
-    .limit(10);
+    .from("active_game_plans")
+    .select("id,plan_version,symbol,session,bias,bias_confidence,v2_conviction,state,state_reason,generated_at,expires_at,invalidation_conditions,source_candle_timestamps,plan_json,focus_pairs,news_events,news_impacts,summary,generation_source,contract_version,is_active")
+    .eq("bot_id", "smc")
+    .order("generated_at", { ascending: false })
+    .limit(300);
   if (error) throw new Error(error.message);
-  return (data || []).filter((d: any) => d.details_json?.type === "game_plan");
+  return activeGamePlanRowsToLogs(
+    (data || []) as ActiveGamePlanDisplayRow[],
+  ) as unknown as GamePlanLog[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -605,7 +616,7 @@ export function GamePlanPanel() {
             Generated: {formatDateTime(currentPlan.generated_at)}
             {currentLog && (
               <span className="text-zinc-600 ml-1">
-                (scan: {formatDateTime(currentLog.scanned_at)})
+                ({currentPlan.source === "manual_refresh" ? "manual" : "automatic"} · version {currentPlan.plan_version.slice(0, 8)})
               </span>
             )}
           </div>

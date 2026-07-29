@@ -65,6 +65,14 @@ import {
   type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
 import {
+  applyGamePlanRefreshWindow,
+  buildGamePlanConfigSnapshot,
+  enrichGamePlanWithDirectionalNews,
+  gamePlanToScanLogDetails,
+  loadActiveGamePlan,
+  persistActiveGamePlan,
+} from "../_shared/gamePlanStore.ts";
+import {
   classifySetupType, manageOpenPositions,
   type SetupClassification, type ManagementAction,
 } from "../_shared/scannerManagement.ts";
@@ -78,8 +86,7 @@ import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
 import {
-  analyzeNewsImpact, checkNewsAlignment, getNewsPairBias,
-  type NewsEvent, type NewsImpactResult,
+  checkNewsAlignment,
 } from "../_shared/newsImpact.ts";
 import {
   runConfluenceAnalysis,
@@ -1814,33 +1821,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     return { price: best.price, zoneType: best.zoneType, zoneLow: best.low, zoneHigh: best.high };
   }
 
-  // ── Thesis Validation: Load last game plan for pending order checks ──
+  // ── Thesis Validation: Load the dedicated active Gameplan version ──
   // This runs BEFORE the game plan generation section (which is after management-only return).
-  // One lightweight DB query to get the most recent game plan for thesis validation.
+  // All later consumers reuse this exact version instead of searching scan_logs.
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
   let _recentScanLogsForFillAuthorization: any[] = [];
   if ((config as any).thesisValidationEnabled !== false || (config as any).gamePlanEnabled !== false) {
     try {
-      const { data: recentGPLogs } = await supabase
-        .from("scan_logs")
-        .select("created_at, details_json")
-        .eq("user_id", userId)
-        .eq("bot_id", BOT_ID)
-        .contains("details_json", { type: "game_plan" })
-        .order("created_at", { ascending: false })
-        .limit(1);
-      const gpLog = recentGPLogs?.[0];
-      if (gpLog?.details_json) {
-        const cached = gpLog.details_json;
-        _lastGamePlanForValidation = {
-          session: cached.session,
-          generatedAt: cached.generated_at,
-          plans: cached.plans || [],
-          focusPairs: cached.focus_pairs || [],
-          newsEvents: cached.newsEvents || [],
-          summary: cached.summary || "",
-        } as SessionGamePlan;
-      }
+      _lastGamePlanForValidation = await loadActiveGamePlan(
+        supabase,
+        userId,
+        BOT_ID,
+      );
     } catch (gpErr: any) {
       // Final authorization fails closed in hard Game Plan mode if this remains unavailable.
       console.warn(`[scan ${scanCycleId}] Thesis validation: failed to load game plan: ${gpErr?.message}`);
@@ -2828,63 +2820,21 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
-      // ── Session dedup: check if a game plan already exists for this session ──
-      // Primary approach: use contains filter on JSONB
-      let lastGP: any = null;
-      const { data: existingGP, error: gpQueryError } = await supabase
-        .from("scan_logs")
-        .select("id, created_at, details_json")
-        .eq("user_id", userId)
-        .eq("bot_id", BOT_ID)
-        .contains("details_json", { type: "game_plan" })
-        .order("created_at", { ascending: false })
-        .limit(1);
-      
-      if (gpQueryError || !existingGP || existingGP.length === 0) {
-        // Fallback: if contains filter fails or returns nothing, fetch recent scan_logs and filter in JS
-        if (gpQueryError) {
-          console.warn(`[scan ${scanCycleId}] Game Plan dedup: contains query failed (${gpQueryError.message}), using fallback`);
-        }
-        const { data: recentLogs } = await supabase
-          .from("scan_logs")
-          .select("id, created_at, details_json")
-          .eq("user_id", userId)
-          .eq("bot_id", BOT_ID)
-          .order("created_at", { ascending: false })
-          .limit(20);
-        // Find the most recent game_plan entry by checking in JS
-        lastGP = (recentLogs || []).find((log: any) => log.details_json?.type === "game_plan") || null;
-        console.log(`[scan ${scanCycleId}] Game Plan dedup fallback: searched ${recentLogs?.length || 0} recent logs, found game_plan: ${!!lastGP}`);
-      } else {
-        lastGP = existingGP[0];
-        console.log(`[scan ${scanCycleId}] Game Plan dedup: found existing plan from ${lastGP?.created_at}`);
-      }
-
-      const lastGPSession = lastGP?.details_json?.session;
-      const lastGPType = lastGP?.details_json?.type;
-      const lastGPTime = lastGP?.created_at ? new Date(lastGP.created_at).getTime() : 0;
+      const lastGP = _lastGamePlanForValidation;
+      const lastGPSession = lastGP?.session;
+      const lastGPTime = lastGP?.generatedAt
+        ? new Date(lastGP.generatedAt).getTime()
+        : 0;
       const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
-      const isSameSession = lastGPType === "game_plan" && lastGPSession === currentSessionName;
+      const isSameSession = !!lastGP && lastGPSession === currentSessionName;
       const isStillFresh = hoursSinceLastGP < gamePlanRefreshHours;
 
       console.log(`[scan ${scanCycleId}] Game Plan dedup check: session=${currentSessionName}, lastSession=${lastGPSession}, sameSession=${isSameSession}, hoursSince=${hoursSinceLastGP.toFixed(2)}, fresh=${isStillFresh}, refreshHours=${gamePlanRefreshHours}`);
 
       if (isSameSession && isStillFresh) {
-        // Reuse existing game plan for trade filtering — don't regenerate or notify
-        try {
-          const cached = lastGP.details_json;
-          activeGamePlan = {
-            session: cached.session,
-            generatedAt: cached.generated_at,
-            plans: cached.plans || [],
-            focusPairs: cached.focus_pairs || [],
-            newsEvents: cached.newsEvents || [],
-            summary: cached.summary || "",
-          } as SessionGamePlan;
-          console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING ${currentSessionName} plan (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h) — NO notification sent`);
-        } catch (e: any) {
-          console.warn(`[scan ${scanCycleId}] Game Plan: failed to parse cached plan, will regenerate: ${e?.message}`);
-        }
+        // Reuse the immutable active version — don't regenerate or notify.
+        activeGamePlan = lastGP;
+        console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING version ${lastGP.planVersion} for ${currentSessionName} (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h) — NO notification sent`);
       } else {
         console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${!lastGP ? 'no existing plan found' : !isSameSession ? `session changed (${lastGPSession} → ${currentSessionName})` : `plan expired (${hoursSinceLastGP.toFixed(1)}h > ${gamePlanRefreshHours}h)`}`);
       }
@@ -2932,86 +2882,52 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
           if (newsEvents.length > 0) {
             activeGamePlan = enrichGamePlanWithNews(activeGamePlan, newsEvents);
+            activeGamePlan = enrichGamePlanWithDirectionalNews(activeGamePlan);
             console.log(`[scan ${scanCycleId}] Game Plan: ${newsEvents.length} news events found (${newsEvents.filter(e => e.impact === "high").length} high-impact)`);
-            // ── News Impact Analysis: understand WHAT the news means ──
-            try {
-              const newsImpacts = analyzeNewsImpact(newsEvents as any);
-              const impactSummaries: string[] = [];
-              for (const impact of newsImpacts) {
-                if (impact.directionalImpact !== "unknown" && impact.directionalImpact !== "neutral") {
-                  impactSummaries.push(impact.reasoning);
-                }
-              }
-              // Enrich each instrument plan with news directional bias
-              for (const plan of activeGamePlan.plans) {
-                const pairBias = getNewsPairBias(plan.symbol, newsImpacts);
-                (plan as any).newsBias = {
-                  pairBias: pairBias.pairBias,
-                  strength: pairBias.netStrength,
-                  summary: pairBias.summary,
-                  baseBias: pairBias.baseBias.bias,
-                  quoteBias: pairBias.quoteBias.bias,
-                };
-                // If news strongly supports or opposes the technical bias, note it
-                if (pairBias.netStrength >= 40) {
-                  const aligned = (plan.bias === "bullish" && pairBias.pairBias === "bullish") ||
-                                  (plan.bias === "bearish" && pairBias.pairBias === "bearish");
-                  if (aligned) {
-                    (plan as any).newsConfirmation = `NEWS CONFIRMS: ${pairBias.summary}`;
-                  } else if (plan.bias !== "neutral" && pairBias.pairBias !== "neutral") {
-                    (plan as any).newsConflict = `⚠ NEWS CONFLICTS: ${pairBias.summary}`;
-                  }
-                }
-              }
-              if (impactSummaries.length > 0) {
-                activeGamePlan.summary += `\n\n📊 News Impact Analysis:\n` + impactSummaries.join("\n");
-              }
-              // Store impacts for the trade filter to use
-              (activeGamePlan as any).newsImpacts = newsImpacts.map(i => ({
-                name: i.event.name, currency: i.event.currency, impact: i.event.impact,
-                directionalImpact: i.directionalImpact, confidence: i.confidence,
-                reasoning: i.reasoning, category: i.category,
-                actual: i.event.actual, forecast: i.event.forecast, previous: i.event.previous,
-              }));
-              console.log(`[scan ${scanCycleId}] News Impact: ${newsImpacts.length} events analyzed, ${impactSummaries.length} with directional signal`);
-            } catch (nie: any) {
-              console.warn(`[scan ${scanCycleId}] News Impact analysis error (non-fatal): ${nie?.message}`);
-            }
+            console.log(`[scan ${scanCycleId}] News Impact: ${((activeGamePlan as any).newsImpacts || []).length} events analyzed`);
           } else {
             console.log(`[scan ${scanCycleId}] Game Plan: no relevant news events today`);
           }
         } catch (e: any) {
           console.warn(`[scan ${scanCycleId}] Game Plan: news fetch error (non-fatal): ${e?.message}`);
         }
-        // Store game plan in scan_logs for dashboard retrieval
+        activeGamePlan = applyGamePlanRefreshWindow(
+          activeGamePlan,
+          gamePlanRefreshHours,
+        );
+        try {
+          activeGamePlan = await persistActiveGamePlan(
+            supabase,
+            activeGamePlan,
+            {
+              userId,
+              botId: BOT_ID,
+              source: "automatic_scan",
+              configSnapshot: buildGamePlanConfigSnapshot(config),
+              marketDataSnapshot: {
+                hierarchy: ["Twelve Data", "Polygon"],
+                scanCycleId,
+              },
+            },
+          );
+        } catch (storeError) {
+          // Never let an unversioned in-memory plan become execution context.
+          activeGamePlan = null;
+          throw storeError;
+        }
+        _lastGamePlanForValidation = activeGamePlan;
+
+        // Keep scan_logs as an observability event, never as active storage.
         await supabase.from("scan_logs").insert({
           user_id: userId,
           bot_id: BOT_ID,
           pairs_scanned: 0,
           signals_found: 0,
           trades_placed: 0,
-          details_json: {
-            type: "game_plan",
-            session: currentSessionName,
-            generated_at: activeGamePlan.generatedAt,
-            focus_pairs: activeGamePlan.focusPairs,
-            plans: activeGamePlan.plans.map(p => ({
-              symbol: p.symbol, bias: p.bias, biasConfidence: p.biasConfidence,
-              biasReasoning: p.biasReasoning, dol: p.dol, regime: p.regime,
-              amdPhase: p.amdPhase, zone: p.zone, htfTrend: p.htfTrend,
-              h4Trend: p.h4Trend, tradeable: p.tradeable, skipReason: p.skipReason,
-              scenarios: p.scenarios, keyLevels: p.keyLevels.slice(0, 10),
-              state: p.state, stateReason: p.stateReason, conviction: p.conviction,
-              evidence: p.evidence, supportingEvidence: p.supportingEvidence,
-              conflictingEvidence: p.conflictingEvidence, expiresAt: p.expiresAt,
-              newsBias: (p as any).newsBias || null,
-              newsConfirmation: (p as any).newsConfirmation || null,
-              newsConflict: (p as any).newsConflict || null,
-            })),
-            newsEvents: activeGamePlan.newsEvents || [],
-            newsImpacts: (activeGamePlan as any).newsImpacts || [],
-            summary: activeGamePlan.summary,
-          },
+          details_json: gamePlanToScanLogDetails(
+            activeGamePlan,
+            "automatic_scan",
+          ),
         });
         // Send Telegram notification with game plan summary (only for NEW plans, respects gamePlanNotify toggle)
         if (gamePlanNotify && telegramChatIds.length > 0 && shouldNotify("game_plan") && activeGamePlan.summary) {
