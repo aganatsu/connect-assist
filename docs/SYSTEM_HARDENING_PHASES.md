@@ -10,7 +10,7 @@ functions and UI have been deployed and verified.
 | 2 | Bot Config contract | Complete |
 | 3 | Unify Gameplan, Direction Verdict and thesis | Complete and production-verified |
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
-| 5 | Operations and scanner reliability | Not started |
+| 5 | Operations and scanner reliability | In progress — Phase 5A in review |
 | 6 | Rejected Setups and shadow evidence | Not started |
 | 7 | Backtest/live parity | Not started |
 | 8 | Strategy validation and controlled activation | Not started |
@@ -56,3 +56,23 @@ Phase 4 becomes operationally complete after the migration is applied, both
 scanners and the frontend are deployed, and a natural paper-mode setup proves
 that one candidate ID and matching decision evidence appear from Watchlist
 qualification through its final outcome.
+
+## Phase 5 implementation record
+
+- Phase 5A introduces a durable per-user, per-bot runtime timeline before
+  background scanner work begins.
+- Full scans record invocation, scan start, live pair progress, pair-processing
+  completion and final completion. Management and confirmation cycles record
+  their own start, heartbeat and completion evidence.
+- Scheduled Tasks reads this runtime evidence instead of treating manual
+  `run_now` updates as proof that cron executed.
+- Full-scan overlap protection moves from the mutable `paper_accounts` timestamp
+  to an atomic user + bot + scope lease. Manual scans cannot clear another
+  invocation's valid lease.
+
+Phase 5A becomes operationally complete after its migration is applied, the
+three Edge Functions and frontend are deployed, and natural cron cycles show
+advancing heartbeats and completion timestamps. Phase 5B will add automatic
+health evaluation and durable alerts for missing/stuck runs, provider
+exhaustion, repeated authorization errors, stale confirmations and migration
+drift.

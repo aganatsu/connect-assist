@@ -24,9 +24,26 @@ interface ScheduledTask {
   interval_minutes: number;
   cron_expression: string;
   last_run_at: string | null;
-  last_status: "success" | "error" | null;
+  last_status: "success" | "error" | "running" | "invoked" | "skipped" | null;
   last_error: string | null;
   run_count: number;
+  runtime?: {
+    run_id: string;
+    trigger_source: "cron" | "manual";
+    status: "invoked" | "running" | "completed" | "failed" | "skipped";
+    phase: string;
+    cron_invoked_at: string;
+    scan_started_at: string | null;
+    pair_processing_completed_at: string | null;
+    scan_completed_at: string | null;
+    position_management_completed_at: string | null;
+    heartbeat_at: string;
+    expected_pairs: number | null;
+    processed_pairs: number | null;
+    error_code: string | null;
+    error_message: string | null;
+    metadata: Record<string, unknown> | null;
+  };
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -72,6 +89,30 @@ function formatInterval(minutes: number): string {
   return `Every ${Math.floor(minutes / 1440)}d`;
 }
 
+function formatPhase(phase?: string): string {
+  if (!phase) return "No runtime evidence";
+  const labels: Record<string, string> = {
+    cron_invoked: "Cron invoked",
+    manual_invoked: "Manual run invoked",
+    scan_started: "Scan started",
+    pair_processing_started: "Pair processing started",
+    pair_processing: "Processing pairs",
+    pair_processing_completed: "Pair processing completed",
+    position_management_started: "Management started",
+    position_management_running: "Managing positions",
+    confirmation_processing_started: "Confirmation scan started",
+    confirmation_processing: "Checking confirmations",
+    completed: "Completed",
+    skipped: "Skipped",
+    failed: "Failed",
+  };
+  return labels[phase] || phase.replaceAll("_", " ");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export default function ScheduledTasks() {
   const queryClient = useQueryClient();
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
@@ -92,8 +133,8 @@ export default function ScheduledTasks() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scheduled-tasks"] });
     },
-    onError: (err: any) => {
-      toast.error("Failed to update task", { description: err.message });
+    onError: (err: unknown) => {
+      toast.error("Failed to update task", { description: errorMessage(err) });
     },
   });
 
@@ -109,8 +150,8 @@ export default function ScheduledTasks() {
       }
       queryClient.invalidateQueries({ queryKey: ["scheduled-tasks"] });
     },
-    onError: (err: any) => {
-      toast.error("Failed to trigger task", { description: err.message });
+    onError: (err: unknown) => {
+      toast.error("Failed to trigger task", { description: errorMessage(err) });
     },
   });
 
@@ -219,12 +260,21 @@ export default function ScheduledTasks() {
                                 {task.last_status === "error" && (
                                   <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
                                 )}
-                                {!task.last_status && (
+                                {(task.last_status === "running" || task.last_status === "invoked") && (
+                                  <RotateCw className="h-3.5 w-3.5 text-cyan-400 shrink-0 animate-spin" />
+                                )}
+                                {(!task.last_status || task.last_status === "skipped") && (
                                   <Minus className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 )}
                               </div>
                               <p className="text-xs text-muted-foreground truncate mt-0.5 hidden md:block">
-                                {task.description}
+                                {task.runtime
+                                  ? `${formatPhase(task.runtime.phase)}${
+                                    task.runtime.expected_pairs !== null
+                                      ? ` · ${task.runtime.processed_pairs ?? 0}/${task.runtime.expected_pairs} pairs`
+                                      : ""
+                                  } · ${task.runtime.trigger_source}`
+                                  : task.description}
                               </p>
                             </div>
 
@@ -305,6 +355,30 @@ export default function ScheduledTasks() {
                                 <span className="text-xs text-muted-foreground">Last run</span>
                                 <span className="text-xs">{formatTimeAgo(task.last_run_at)}</span>
                               </div>
+                              {task.runtime && (
+                                <>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-muted-foreground">Exact stop point</span>
+                                    <span className="text-xs">{formatPhase(task.runtime.phase)}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-muted-foreground">Triggered by</span>
+                                    <span className="text-xs capitalize">{task.runtime.trigger_source}</span>
+                                  </div>
+                                  {task.runtime.expected_pairs !== null && (
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-xs text-muted-foreground">Pair progress</span>
+                                      <span className="text-xs font-mono">
+                                        {task.runtime.processed_pairs ?? 0}/{task.runtime.expected_pairs}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-muted-foreground">Last heartbeat</span>
+                                    <span className="text-xs">{formatTimeAgo(task.runtime.heartbeat_at)}</span>
+                                  </div>
+                                </>
+                              )}
                               {task.last_error && (
                                 <div className="text-xs text-destructive bg-destructive/10 p-2 rounded">
                                   {task.last_error}

@@ -9,6 +9,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  runTaskKey,
+  taskKey,
+  type ScannerRuntimeRun,
+} from "../_shared/scannerRuntime.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -101,6 +106,65 @@ const DEFAULT_TASKS = [
   },
 ];
 
+async function attachRuntimeState(
+  adminClient: any,
+  userId: string,
+  tasks: any[],
+): Promise<any[]> {
+  const { data: runs, error } = await adminClient
+    .from("scanner_operation_runs")
+    .select("*")
+    .eq("user_id", userId)
+    .order("invoked_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    // Migration-first deployment keeps this path available. During rollback or
+    // a partial deployment, preserve the legacy task payload instead of hiding it.
+    console.warn(`[scheduled-tasks] Runtime timeline unavailable: ${error.message}`);
+    return tasks;
+  }
+
+  const latestByTask = new Map<string, ScannerRuntimeRun>();
+  for (const run of (runs || []) as ScannerRuntimeRun[]) {
+    const key = runTaskKey(run);
+    if (!latestByTask.has(key)) latestByTask.set(key, run);
+  }
+
+  return tasks.map((task) => {
+    const run = latestByTask.get(taskKey(task.function_name, task.action));
+    if (!run) return task;
+    const lastStatus = run.status === "completed"
+      ? "success"
+      : run.status === "failed"
+      ? "error"
+      : run.status;
+    return {
+      ...task,
+      last_run_at: run.invoked_at,
+      last_status: lastStatus,
+      last_error: run.error_message,
+      runtime: {
+        run_id: run.id,
+        trigger_source: run.trigger_source,
+        status: run.status,
+        phase: run.phase,
+        cron_invoked_at: run.invoked_at,
+        scan_started_at: run.scan_started_at,
+        pair_processing_completed_at: run.pair_processing_completed_at,
+        scan_completed_at: run.scan_completed_at,
+        position_management_completed_at: run.position_management_completed_at,
+        heartbeat_at: run.heartbeat_at,
+        expected_pairs: run.expected_pairs,
+        processed_pairs: run.processed_pairs,
+        error_code: run.error_code,
+        error_message: run.error_message,
+        metadata: run.metadata,
+      },
+    };
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -147,10 +211,18 @@ Deno.serve(async (req) => {
           .select("*")
           .eq("user_id", user.id)
           .order("category", { ascending: true });
-        return respond({ tasks: freshTasks });
+        return respond({
+          tasks: await attachRuntimeState(
+            adminClient,
+            user.id,
+            freshTasks || [],
+          ),
+        });
       }
 
-      return respond({ tasks });
+      return respond({
+        tasks: await attachRuntimeState(adminClient, user.id, tasks),
+      });
     }
 
     // ── UPDATE: Change interval or enabled state ──
@@ -223,6 +295,7 @@ Deno.serve(async (req) => {
       if (task.function_name === "bot-scanner") {
         functionBody.action = task.action === "manage" ? "manage" : "manual_scan";
       }
+      functionBody.trigger_source = "manual";
 
       try {
         const response = await fetch(`${SUPABASE_URL}/functions/v1/${task.function_name}`, {
