@@ -107,6 +107,17 @@ import {
   type SetupLifecycleEvidence,
 } from "../_shared/setupLifecycle.ts";
 import {
+  beginScannerOperation,
+  claimScannerLock,
+  completeScannerOperation,
+  failScannerOperation,
+  heartbeatScannerLock,
+  markScannerOperation,
+  releaseScannerLock,
+  skipScannerOperation,
+  type ScannerTriggerSource,
+} from "../_shared/scannerRuntime.ts";
+import {
   checkNewsAlignment,
 } from "../_shared/newsImpact.ts";
 import {
@@ -955,11 +966,34 @@ Deno.serve(async (req) => {
 
     if (action === "manual_scan") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const scanCycleId = crypto.randomUUID();
+      const operation = await beginScannerOperation(adminClient, {
+        userId,
+        botId: BOT_ID,
+        functionName: "bot-scanner",
+        operation: "scan",
+        triggerSource: "manual",
+        scanCycleId,
+      });
       EdgeRuntime.waitUntil(
-        runScanForUser(adminClient, userId, { isManualScan: true })
-          .catch((e: any) => console.error("[manual_scan] background error", e))
+        runScanForUser(adminClient, userId, {
+          isManualScan: true,
+          operationRunId: operation.persisted ? operation.runId : undefined,
+          scanCycleId,
+        }).catch(async (e: any) => {
+          console.error("[manual_scan] background error", e);
+          await failScannerOperation(
+            adminClient,
+            operation.persisted ? operation.runId : undefined,
+            e,
+          );
+        })
       );
-      return respond({ started: true, message: "Scan started" });
+      return respond({
+        started: true,
+        run_id: operation.persisted ? operation.runId : null,
+        message: "Scan started",
+      });
     }
 
     // ── Setup Staging: Fetch active staged setups for the UI ──
@@ -1046,6 +1080,20 @@ Deno.serve(async (req) => {
         .eq("is_running", true).eq("kill_switch_active", false);
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", managed: 0 });
+      const triggerSource: ScannerTriggerSource = body.trigger_source === "manual"
+        ? "manual"
+        : "cron";
+      const operationRuns = new Map<string, string>();
+      for (const account of accounts) {
+        const operation = await beginScannerOperation(adminClient, {
+          userId: account.user_id,
+          botId: BOT_ID,
+          functionName: "bot-scanner",
+          operation: "manage",
+          triggerSource,
+        });
+        if (operation.persisted) operationRuns.set(account.user_id, operation.runId);
+      }
 
       // Return HTTP response immediately, run the loop in the background via waitUntil
       // to avoid pg_cron's request timeout (~150s) killing us mid-loop.
@@ -1054,6 +1102,16 @@ Deno.serve(async (req) => {
         const LOOP_INTERVAL_MS = 8_000; // 8 seconds between iterations
         const loopStart = Date.now();
         let iteration = 0;
+        const failedUsers = new Set<string>();
+
+        await Promise.all(accounts.map((account: any) =>
+          markScannerOperation(
+            adminClient,
+            operationRuns.get(account.user_id),
+            "position_management_started",
+            { status: "running" },
+          )
+        ));
 
         while (Date.now() - loopStart < LOOP_BUDGET_MS) {
           iteration++;
@@ -1064,8 +1122,15 @@ Deno.serve(async (req) => {
             try {
               await runScanForUser(adminClient, account.user_id, { isManagementOnly: true });
             } catch (e: any) {
+              failedUsers.add(account.user_id);
               console.error(`[manage-loop] error for ${account.user_id} iter ${iteration}:`, e?.message || e);
             }
+            await markScannerOperation(
+              adminClient,
+              operationRuns.get(account.user_id),
+              "position_management_running",
+              { status: "running", metadata: { iteration } },
+            );
           }
 
           // Check if we have budget for another iteration
@@ -1084,9 +1149,30 @@ Deno.serve(async (req) => {
           }
         }
         console.log(`[manage-loop] complete: ${iteration} iterations in ${Math.round((Date.now() - loopStart) / 1000)}s`);
+        await Promise.all(accounts.map(async (account: any) => {
+          const runId = operationRuns.get(account.user_id);
+          if (failedUsers.has(account.user_id)) {
+            await failScannerOperation(
+              adminClient,
+              runId,
+              "One or more management iterations failed",
+              "management_iteration_failed",
+            );
+            return;
+          }
+          await completeScannerOperation(adminClient, runId, "manage", {
+            iterations: iteration,
+            elapsed_ms: Date.now() - loopStart,
+          });
+        }));
       })());
 
-      return respond({ started: true, accounts: accounts.length, message: "Management loop started in background (~50s, ~8s intervals)" });
+      return respond({
+        started: true,
+        accounts: accounts.length,
+        observable_runs: operationRuns.size,
+        message: "Management loop started in background (~50s, ~8s intervals)",
+      });
     }
 
      if (action === "scan" || action === "cron") {
@@ -1095,19 +1181,47 @@ Deno.serve(async (req) => {
       // Filter to SMC bot accounts only (or legacy accounts without bot_id)
       const accounts = (allAccounts || []).filter((a: any) => !a.bot_id || a.bot_id === BOT_ID);
       if (!accounts || accounts.length === 0) return respond({ message: "No active accounts", scanned: 0 });
+      const operationRuns = new Map<string, { runId: string; scanCycleId: string }>();
+      for (const account of accounts) {
+        const scanCycleId = crypto.randomUUID();
+        const operation = await beginScannerOperation(adminClient, {
+          userId: account.user_id,
+          botId: BOT_ID,
+          functionName: "bot-scanner",
+          operation: "scan",
+          triggerSource: "cron",
+          scanCycleId,
+        });
+        if (operation.persisted) {
+          operationRuns.set(account.user_id, {
+            runId: operation.runId,
+            scanCycleId,
+          });
+        }
+      }
       // Run scans in the background via waitUntil so the HTTP request can return
       // immediately. Without this, the cron caller's request timeout (~150s) was
       // killing the function mid-scan, leaving no scan_logs row written.
       EdgeRuntime.waitUntil((async () => {
         for (const account of accounts) {
+          const operation = operationRuns.get(account.user_id);
           try {
-            await runScanForUser(adminClient, account.user_id);
+            await runScanForUser(adminClient, account.user_id, {
+              operationRunId: operation?.runId,
+              scanCycleId: operation?.scanCycleId,
+            });
           } catch (e: any) {
             console.error(`[scan] background error for ${account.user_id}:`, e?.message || e);
+            await failScannerOperation(adminClient, operation?.runId, e);
           }
         }
       })());
-      return respond({ started: true, accounts: accounts.length, message: "Scan started in background" });
+      return respond({
+        started: true,
+        accounts: accounts.length,
+        observable_runs: operationRuns.size,
+        message: "Scan started in background",
+      });
     }
 
     console.warn("[bot-scanner] Unknown action received:", JSON.stringify(body));
@@ -1119,46 +1233,50 @@ Deno.serve(async (req) => {
   }
 });
 
-async function runScanForUser(supabase: any, userId: string, opts?: { isManualScan?: boolean; isManagementOnly?: boolean }) {
+async function runScanForUser(
+  supabase: any,
+  userId: string,
+  opts?: {
+    isManualScan?: boolean;
+    isManagementOnly?: boolean;
+    operationRunId?: string;
+    scanCycleId?: string;
+  },
+) {
   const specCache: Record<string, { minVolume: number; maxVolume: number; volumeStep: number }> = {};
   const balanceCache: Record<string, number> = {};
   const brokerHealthMap: Record<string, BrokerHealth> = {}; // Circuit breaker state per connection (in-memory, resets each invocation)
   const MAX_BROKER_RISK_PERCENT = 5; // hard safety cap per broker per trade
-  const scanCycleId = crypto.randomUUID();
+  const scanCycleId = opts?.scanCycleId ?? crypto.randomUUID();
 
   // ── Data Cache: fetch candles once per (symbol, interval), reuse across game plan + scan loop ──
   const scanCache = createScanCache(fetchCandles);
   const cachedFetch = (sym: string, interval: string, range: string) => scanCache.get(sym, interval, range);
 
-  // ── Scan overlap lock (90s lease) ──
+  // ── Scan overlap lock (scoped lease) ──
   // Prevents two cron invocations from racing — second cycle would otherwise see the first's
   // in-flight trades as orphans or double-process the same signals.
   // Management-only runs skip the lock entirely — they're lightweight and shouldn't block scans.
   //
-  // For manual scans: force-clear any stale lock first. The user explicitly clicked
-  // "Scan Now" — they should never be blocked by a lock left behind by a crashed cron scan.
+  // Manual scans use the same atomic claim as cron scans. They never clear a valid
+  // lease owned by another run. Expired leases can be reclaimed automatically.
+  let scanLockToken: string | null = null;
   if (!opts?.isManagementOnly) {
-  if (opts?.isManualScan) {
-    await supabase
-      .from("paper_accounts")
-      .update({ scan_lock_until: null })
-      .eq("user_id", userId);
-    console.log(`[scan-lock] manual scan — cleared any existing lock for ${userId}`);
-  }
-
-  const lockHorizon = new Date(Date.now() + 90_000).toISOString();
-  const nowIso = new Date().toISOString();
-  const { data: lockRows, error: lockErr } = await supabase
-    .from("paper_accounts")
-    .update({ scan_lock_until: lockHorizon })
-    .eq("user_id", userId)
-    .or(`scan_lock_until.is.null,scan_lock_until.lt.${nowIso}`)
-    .select("user_id");
-  if (lockErr) console.warn(`[scan-lock] update error for ${userId}: ${lockErr.message}`);
-  if (!lockRows || lockRows.length === 0) {
-    console.log(`[scan-lock] skipped — overlap detected for user ${userId}`);
-    return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
-  }
+    const lock = await claimScannerLock(supabase, {
+      userId,
+      botId: BOT_ID,
+      runId: opts?.operationRunId ?? scanCycleId,
+    });
+    if (!lock.acquired) {
+      console.log(`[scan-lock] skipped — overlap detected for user ${userId}, bot ${BOT_ID}`);
+      await skipScannerOperation(supabase, opts?.operationRunId, "overlap");
+      return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "overlap", scanCycleId };
+    }
+    scanLockToken = lock.token;
+    await markScannerOperation(supabase, opts?.operationRunId, "scan_started", {
+      status: "running",
+      scan_started_at: new Date().toISOString(),
+    });
   } // end scan-lock block (skipped for management-only)
 
   let account: any = null;
@@ -1183,8 +1301,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       const elapsedMin = elapsedMs / 60_000;
       if (elapsedMin < intervalMinutes) {
         console.log(`[scan-interval] Skipping — only ${elapsedMin.toFixed(1)}min since last scan (interval: ${intervalMinutes}min)`);
-        // Release the scan lock before returning
-        await supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
+        await skipScannerOperation(supabase, opts?.operationRunId, "scan_interval");
         return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: `interval (${Math.ceil(intervalMinutes - elapsedMin)}min remaining)`, scanCycleId };
       }
     }
@@ -1213,6 +1330,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   const hasCrypto = config.instruments.some((s: string) => SPECS[s]?.type === "crypto");
   const hasNonCrypto = config.instruments.some((s: string) => SPECS[s]?.type !== "crypto");
   if (!config.enabledDays.includes(effectiveDay) && !hasCrypto && !opts?.isManagementOnly) {
+    await skipScannerOperation(supabase, opts?.operationRunId, "day_not_enabled");
     return { pairsScanned: 0, signalsFound: 0, tradesPlaced: 0, skippedReason: "Day not enabled", activeStyle: resolvedStyle };
   }
 
@@ -1234,7 +1352,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       account = legacyAccount;
     }
   }
-  if (!account) return { error: "No paper account" };
+  if (!account) {
+    await skipScannerOperation(supabase, opts?.operationRunId, "paper_account_missing");
+    return { error: "No paper account" };
+  }
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
   const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
@@ -3099,7 +3220,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // Track which daily/weekly candles were freshly fetched (to persist after scan)
   const freshlyFetchedCandles: Array<{ symbol: string; interval: string; candles: Candle[] }> = [];
 
-  for (const pair of scanOrder) {
+  await markScannerOperation(
+    supabase,
+    opts?.operationRunId,
+    "pair_processing_started",
+    {
+      status: "running",
+      expected_pairs: scanOrder.length,
+      processed_pairs: 0,
+    },
+  );
+
+  for (let pairIndex = 0; pairIndex < scanOrder.length; pairIndex++) {
+    const pair = scanOrder[pairIndex];
+    await markScannerOperation(
+      supabase,
+      opts?.operationRunId,
+      "pair_processing",
+      {
+        status: "running",
+        expected_pairs: scanOrder.length,
+        processed_pairs: pairIndex,
+        metadata: { current_pair: pair },
+      },
+    );
+    if (scanLockToken) {
+      await heartbeatScannerLock(supabase, {
+        userId,
+        botId: BOT_ID,
+        token: scanLockToken,
+      });
+    }
     if (!SUPPORTED_SYMBOLS[pair]) {
       scanDetails.push({ pair, status: "skipped", reason: "No data source" });
       continue;
@@ -7827,6 +7978,18 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     scanDetails.push(detail);
   }
 
+  await markScannerOperation(
+    supabase,
+    opts?.operationRunId,
+    "pair_processing_completed",
+    {
+      status: "running",
+      processed_pairs: scanOrder.length,
+      pair_processing_completed_at: new Date().toISOString(),
+      metadata: { processed_pairs: scanOrder.length },
+    },
+  );
+
   // Update counters — scope to this bot's account
   const counterUpdate = supabase.from("paper_accounts").update({
     scan_count: (account.scan_count || 0) + 1,
@@ -7961,20 +8124,28 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
+  await completeScannerOperation(supabase, opts?.operationRunId, "scan", {
+    scan_cycle_id: scanCycleId,
+    pairs_scanned: config.instruments.length,
+    signals_found: signalsFound,
+    trades_placed: tradesPlaced,
+    rejected: rejectedCount,
+    candle_source: sourceTally.primary,
+  });
+
   return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }
     try { scanCache.clear(); } catch { /* ignore */ }
-    // Only release lock if we acquired one (management-only skips locking)
-    if (!opts?.isManagementOnly) {
-      try {
-        const lockRelease = supabase.from("paper_accounts").update({ scan_lock_until: null }).eq("user_id", userId);
-        if (account?.bot_id) lockRelease.eq("bot_id", BOT_ID);
-        await lockRelease;
-      } catch (e: any) {
-        console.warn(`[scan-lock] release failed for ${userId}: ${e?.message}`);
-      }
+    // Release only the lease owned by this run. A stale/manual invocation cannot
+    // clear another scan's healthy lock.
+    if (scanLockToken) {
+      await releaseScannerLock(supabase, {
+        userId,
+        botId: BOT_ID,
+        token: scanLockToken,
+      });
     }
   }
 }

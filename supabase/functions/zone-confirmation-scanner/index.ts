@@ -67,6 +67,13 @@ import {
   resolvePendingConfirmationMethod,
   resolvePendingIndicatorMinimum,
 } from "../_shared/setupLifecycle.ts";
+import {
+  beginScannerOperation,
+  completeScannerOperation,
+  failScannerOperation,
+  markScannerOperation,
+  type ScannerTriggerSource,
+} from "../_shared/scannerRuntime.ts";
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
 const BOT_ID = "smc";
@@ -145,11 +152,35 @@ Deno.serve(async (req) => {
   if (authError) return authError;
 
   const startTime = Date.now();
+  const operationRuns = new Map<string, string>();
+  let supabase: any = null;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    supabase = createClient(supabaseUrl, supabaseKey);
+    const requestBody = await req.clone().json().catch(() => ({}));
+    const triggerSource: ScannerTriggerSource =
+      requestBody?.trigger_source === "manual" ? "manual" : "cron";
+
+    // Persist one observable run per active bot before doing background work.
+    // This makes an idle confirmation cycle visible instead of looking missing.
+    const { data: activeAccounts } = await supabase
+      .from("paper_accounts")
+      .select("user_id")
+      .eq("is_running", true)
+      .eq("kill_switch_active", false)
+      .or(`bot_id.eq.${BOT_ID},bot_id.is.null`);
+    for (const account of activeAccounts || []) {
+      const operation = await beginScannerOperation(supabase, {
+        userId: account.user_id,
+        botId: BOT_ID,
+        functionName: "zone-confirmation-scanner",
+        operation: "zone_confirmation",
+        triggerSource,
+      });
+      if (operation.persisted) operationRuns.set(account.user_id, operation.runId);
+    }
 
     // ── 1. Query all orders in "awaiting_confirmation" status ──
     const { data: huntingOrders, error: queryErr } = await supabase
@@ -166,6 +197,12 @@ Deno.serve(async (req) => {
 
     if (!huntingOrders || huntingOrders.length === 0) {
       // Nothing to do — no orders are hunting for confirmation
+      await Promise.all([...operationRuns.values()].map((runId) =>
+        completeScannerOperation(supabase, runId, "zone_confirmation", {
+          processed: 0,
+          outcome: "idle",
+        })
+      ));
       return new Response(JSON.stringify({
         status: "idle",
         message: "No orders awaiting confirmation",
@@ -176,7 +213,25 @@ Deno.serve(async (req) => {
     console.log(`[zone-confirm] Processing ${huntingOrders.length} order(s) awaiting confirmation`);
 
     // ── 2. Get unique user IDs to load their configs and broker connections ──
-    const userIds = [...new Set(huntingOrders.map(o => o.user_id))];
+    const userIds: string[] = [
+      ...new Set<string>(
+        huntingOrders.map((order: any) => String(order.user_id)),
+      ),
+    ];
+    await Promise.all(userIds.map((userId) =>
+      markScannerOperation(
+        supabase,
+        operationRuns.get(userId),
+        "confirmation_processing_started",
+        {
+          status: "running",
+          scan_started_at: new Date().toISOString(),
+          expected_pairs: huntingOrders.filter((order: any) =>
+            order.user_id === userId
+          ).length,
+        },
+      )
+    ));
 
     // Load user settings (for telegram) and broker connections per user
     const userDataMap: Record<string, {
@@ -282,9 +337,23 @@ Deno.serve(async (req) => {
     let cancelled = 0;
     let stillHunting = 0;
 
-    for (const pending of huntingOrders) {
+    for (let pendingIndex = 0; pendingIndex < huntingOrders.length; pendingIndex++) {
+      const pending = huntingOrders[pendingIndex];
       try {
         const userId = pending.user_id;
+        await markScannerOperation(
+          supabase,
+          operationRuns.get(userId),
+          "confirmation_processing",
+          {
+            status: "running",
+            processed_pairs: huntingOrders
+              .slice(0, pendingIndex)
+              .filter((order: any) => order.user_id === userId)
+              .length,
+            metadata: { current_order_id: pending.order_id, current_pair: pending.symbol },
+          },
+        );
         const userData = userDataMap[userId];
         if (!userData) { stillHunting++; continue; }
 
@@ -1047,6 +1116,14 @@ Deno.serve(async (req) => {
       elapsed_ms: elapsed,
     };
     console.log(`[zone-confirm] Done in ${elapsed}ms: ${JSON.stringify(summary)}`);
+    await Promise.all([...operationRuns.entries()].map(([userId, runId]) =>
+      completeScannerOperation(supabase, runId, "zone_confirmation", {
+        ...summary,
+        user_processed: huntingOrders.filter((order: any) =>
+          order.user_id === userId
+        ).length,
+      })
+    ));
 
     return new Response(JSON.stringify(summary), {
       status: 200,
@@ -1055,6 +1132,11 @@ Deno.serve(async (req) => {
 
   } catch (e: any) {
     console.error("[zone-confirm] Fatal error:", e?.message, e?.stack);
+    if (supabase) {
+      await Promise.all([...operationRuns.values()].map((runId) =>
+        failScannerOperation(supabase, runId, e)
+      ));
+    }
     return new Response(JSON.stringify({ error: e?.message }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
