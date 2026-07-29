@@ -3,13 +3,16 @@ import { checkDuplicateDirection } from "./gateDuplicateDirection.ts";
 import { checkMaxDrawdown } from "./gateMaxDrawdown.ts";
 import { checkMaxPerSymbol } from "./gateMaxPerSymbol.ts";
 import { checkMaxPositions } from "./gateMaxPositions.ts";
-import {
-  evaluateGamePlanGate,
-  type GamePlanEnforcementMode,
-} from "./gamePlanGate.ts";
+import { type GamePlanEnforcementMode } from "./gamePlanGate.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ThesisValidationResult } from "./thesisValidator.ts";
 import type { FinalRuntimeGateStates } from "./finalRuntimeGates.ts";
+import {
+  type DecisionHierarchyResult,
+  type DirectionVerdictDecision,
+  type EntryConfirmationDecision,
+  evaluateDecisionHierarchy,
+} from "./decisionContract.ts";
 
 export type TradeDirection = "long" | "short";
 
@@ -28,6 +31,8 @@ export type FinalAuthorizationCode =
   | "game_plan_blocked"
   | "thesis_unavailable"
   | "thesis_invalid"
+  | "confirmation_unavailable"
+  | "confirmation_blocked"
   | "prop_firm_unavailable"
   | "prop_firm_blocked"
   | "max_positions"
@@ -74,12 +79,7 @@ export interface OpenPositionForAuthorization {
   size?: string | number | null;
 }
 
-export interface DirectionVerdictForAuthorization {
-  verdict?: "long" | "short" | "neutral" | string | null;
-  shouldBlock?: boolean | null;
-  blockReason?: string | null;
-  confidence?: number | null;
-}
+export type DirectionVerdictForAuthorization = DirectionVerdictDecision;
 
 export interface PropFirmAuthorizationState {
   enabled: boolean;
@@ -118,6 +118,7 @@ export interface FinalTradeAuthorizationInput {
   gamePlanMinimumConfidence: number;
   thesisResult: ThesisValidationResult | null;
   requireThesisValidation: boolean;
+  entryConfirmation?: EntryConfirmationDecision | null;
   propFirm: PropFirmAuthorizationState | null;
   requirePropFirmResult?: boolean;
   spread: SpreadAuthorizationState;
@@ -133,6 +134,7 @@ export interface FinalTradeAuthorizationDecision {
   retryable: boolean;
   checks: AdditionalAuthorizationGate[];
   evaluatedAt: string;
+  decisionHierarchy?: DecisionHierarchyResult;
 }
 
 function asFiniteNumber(value: unknown, fallback = 0): number {
@@ -267,79 +269,34 @@ export function evaluateFinalTradeAuthorization(
     reason: `Risk/reward ${rr.toFixed(2)} meets minimum`,
   });
 
-  if (input.requireDirectionVerdict !== false) {
-    const verdict = input.directionVerdict;
-    if (!verdict || !verdict.verdict) {
-      return deny(
-        "direction_unavailable",
-        "Current Direction Verdict is unavailable",
-        true,
+  const decisionHierarchy = evaluateDecisionHierarchy({
+    symbol: candidate.symbol,
+    direction: candidate.direction,
+    gamePlan: input.gamePlan,
+    gamePlanEnabled: input.gamePlanEnabled,
+    gamePlanMode: input.gamePlanMode,
+    gamePlanMinimumConfidence: input.gamePlanMinimumConfidence,
+    directionVerdict: input.directionVerdict,
+    requireDirectionVerdict: input.requireDirectionVerdict !== false,
+    thesisResult: input.thesisResult,
+    requireThesisValidation: input.requireThesisValidation,
+    entryConfirmation: input.entryConfirmation,
+  });
+  checks.push(...decisionHierarchy.checks.map((check) => ({
+    passed: check.passed,
+    reason: `${check.layer}: ${check.reason}`,
+  })));
+  if (!decisionHierarchy.passed) {
+    return {
+      ...deny(
+        decisionHierarchy.code as FinalAuthorizationCode,
+        decisionHierarchy.reason,
+        decisionHierarchy.retryable,
         checks,
         now,
-      );
-    }
-    if (verdict.shouldBlock === true || verdict.verdict === "neutral") {
-      return deny(
-        "direction_blocked",
-        verdict.blockReason || "Current Direction Verdict blocks execution",
-        true,
-        checks,
-        now,
-      );
-    }
-    if (verdict.verdict !== candidate.direction) {
-      return deny(
-        "direction_conflict",
-        `Current Direction Verdict is ${verdict.verdict}, but the candidate is ${candidate.direction}`,
-        true,
-        checks,
-        now,
-      );
-    }
-    checks.push({
-      passed: true,
-      reason: `Direction Verdict authorizes ${candidate.direction}${
-        Number.isFinite(verdict.confidence)
-          ? ` (${verdict.confidence}% confidence)`
-          : ""
-      }`,
-    });
-  }
-
-  if (input.gamePlanEnabled) {
-    const gpDecision = evaluateGamePlanGate(
-      input.gamePlan,
-      candidate.symbol,
-      candidate.direction,
-      input.gamePlanMode,
-      input.gamePlanMinimumConfidence,
-    );
-    if (!gpDecision.passed) {
-      return deny("game_plan_blocked", gpDecision.reason, true, checks, now);
-    }
-    checks.push({ passed: true, reason: gpDecision.reason });
-  }
-
-  if (input.requireThesisValidation) {
-    if (!input.thesisResult) {
-      return deny(
-        "thesis_unavailable",
-        "Fresh thesis validation is unavailable",
-        true,
-        checks,
-        now,
-      );
-    }
-    if (!input.thesisResult.valid) {
-      return deny(
-        "thesis_invalid",
-        input.thesisResult.reason || "The trade thesis is no longer valid",
-        false,
-        checks,
-        now,
-      );
-    }
-    checks.push({ passed: true, reason: "Fresh thesis validation passed" });
+      ),
+      decisionHierarchy,
+    };
   }
 
   if (input.requirePropFirmResult && !input.propFirm) {
@@ -486,5 +443,6 @@ export function evaluateFinalTradeAuthorization(
     retryable: false,
     checks,
     evaluatedAt: now.toISOString(),
+    decisionHierarchy,
   };
 }

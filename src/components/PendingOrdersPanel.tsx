@@ -105,6 +105,19 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
   const renderOrderCard = (order: PendingOrder, isHunting: boolean) => {
     const expiryPct = getExpiryPercent(order.placed_at, order.expires_at);
     const isExpiringSoon = expiryPct > 75;
+    const signalReason = typeof order.signal_reason === "string"
+      ? (() => {
+        try {
+          return JSON.parse(order.signal_reason);
+        } catch {
+          return {};
+        }
+      })()
+      : (order.signal_reason || {});
+    const decision = order.decision_context ||
+      signalReason.decisionContext ||
+      order.final_authorization?.decisionContext ||
+      null;
     return (
       <div
         key={order.order_id}
@@ -217,6 +230,52 @@ export default function PendingOrdersPanel({ refreshTrigger }: PendingOrdersPane
             : generatePendingOrderNarrative(order)
           }
         </p>
+
+        {decision && (
+          <div className="border border-border/50 bg-background/30 p-2 space-y-1">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+              <span className="text-muted-foreground">
+                GP v{decision.gamePlan?.version?.slice(0, 8) || "none"}
+              </span>
+              <span className={
+                decision.directionVerdict?.shouldBlock
+                  ? "text-loss"
+                  : "text-foreground"
+              }>
+                DV {(decision.directionVerdict?.verdict || "missing").toUpperCase()}
+                {Number.isFinite(Number(decision.directionVerdict?.confidence))
+                  ? ` ${Math.round(Number(decision.directionVerdict.confidence))}%`
+                  : ""}
+              </span>
+              <span className={
+                decision.thesisValidity?.valid === false
+                  ? "text-loss"
+                  : decision.thesisValidity?.valid === true
+                  ? "text-profit"
+                  : "text-highlight"
+              }>
+                Thesis {decision.thesisValidity?.valid === true
+                  ? "VALID"
+                  : decision.thesisValidity?.valid === false
+                  ? "INVALID"
+                  : "PENDING"}
+              </span>
+              <span className={
+                decision.entryConfirmation?.passed
+                  ? "text-profit"
+                  : "text-highlight"
+              }>
+                Confirmation {decision.entryConfirmation?.passed
+                  ? "PASSED"
+                  : "WAITING"}
+              </span>
+            </div>
+            <p className="text-[9px] text-muted-foreground">
+              {decision.hierarchy?.reason ||
+                "Decision evidence will be refreshed before any fill."}
+            </p>
+          </div>
+        )}
 
         {/* Row 4: Expiry bar (only for watching stage) */}
         {!isHunting && (

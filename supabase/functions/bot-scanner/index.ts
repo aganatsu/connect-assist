@@ -12,6 +12,18 @@ import {
   type DirectionVerdictForAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
 import {
+  attachDecisionContext,
+  buildTradeDecisionContext,
+  evaluateDecisionHierarchy,
+  type DirectionVerdictDecision,
+  type EntryConfirmationDecision,
+} from "../_shared/decisionContract.ts";
+import {
+  directionVerdictMatchesGamePlan,
+  loadActiveDirectionVerdicts,
+  persistActiveDirectionVerdict,
+} from "../_shared/directionVerdictStore.ts";
+import {
   buildFinalRuntimeGateStates,
 } from "../_shared/finalRuntimeGates.ts";
 import {
@@ -1825,8 +1837,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // This runs BEFORE the game plan generation section (which is after management-only return).
   // All later consumers reuse this exact version instead of searching scan_logs.
   let _lastGamePlanForValidation: SessionGamePlan | null = null;
-  let _recentScanLogsForFillAuthorization: any[] = [];
-  if ((config as any).thesisValidationEnabled !== false || (config as any).gamePlanEnabled !== false) {
+  let _activeDirectionVerdicts = new Map<
+    string,
+    DirectionVerdictDecision
+  >();
+  if ((config as any).gamePlanEnabled !== false) {
     try {
       _lastGamePlanForValidation = await loadActiveGamePlan(
         supabase,
@@ -1839,33 +1854,34 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
   }
   try {
-    const { data: recentScanLogs } = await supabase
-      .from("scan_logs")
-      .select("created_at, details_json")
-      .eq("user_id", userId)
-      .eq("bot_id", BOT_ID)
-      .gt("pairs_scanned", 0)
-      .order("created_at", { ascending: false })
-      .limit(5);
-    _recentScanLogsForFillAuthorization = recentScanLogs || [];
-  } catch (directionLogErr: any) {
-    console.warn(`[scan ${scanCycleId}] Fill authorization: failed to load recent Direction Verdicts: ${directionLogErr?.message}`);
+    _activeDirectionVerdicts = await loadActiveDirectionVerdicts(
+      supabase,
+      userId,
+      BOT_ID,
+    );
+  } catch (directionLoadErr: any) {
+    console.warn(
+      `[scan ${scanCycleId}] Fill authorization: failed to load active Direction Verdicts: ${directionLoadErr?.message}`,
+    );
   }
 
   const latestDirectionVerdictFor = (symbol: string): DirectionVerdictForAuthorization | null => {
-    for (const log of _recentScanLogsForFillAuthorization) {
-      if (!Array.isArray(log?.details_json)) continue;
-      const pairDetail = log.details_json.find((item: any) => item?.pair === symbol || item?.symbol === symbol);
-      const verdict = pairDetail?.directionVerdict;
-      if (!verdict || typeof verdict !== "object") continue;
-      return {
-        verdict: verdict.effectiveDirection ?? verdict.verdict ?? null,
-        shouldBlock: verdict.shouldBlock ?? verdict.directionSource === "blocked",
-        blockReason: verdict.blockReason ?? verdict.summary ?? null,
-        confidence: verdict.confidence ?? null,
-      };
+    const verdict = _activeDirectionVerdicts.get(symbol) || null;
+    if (
+      verdict &&
+      (config as any).gamePlanEnabled !== false &&
+      !directionVerdictMatchesGamePlan(
+        verdict,
+        _lastGamePlanForValidation,
+        symbol,
+      )
+    ) {
+      console.warn(
+        `[scan ${scanCycleId}] ${symbol}: active Direction Verdict references a different Gameplan version`,
+      );
+      return null;
     }
-    return null;
+    return verdict;
   };
 
   // ── Limit Orders: Monitor active pending orders for fills/expiry ──
@@ -1932,10 +1948,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // ── THESIS VALIDATION: Re-check structural conditions ──
         // Runs on every cycle (including management-only). Cancels pending
         // orders whose original trade thesis has been invalidated.
-        // Fail-open: errors/missing data never cause cancellation.
+        // Errors do not cancel while the order is merely waiting, but the
+        // final fill authority fails closed unless a fresh result exists.
         // ═══════════════════════════════════════════════════════════════════
         let pendingThesisResult: ThesisValidationResult | null = null;
-        if ((config as any).thesisValidationEnabled !== false) {
+        {
           try {
             // Fetch D1/4H/1H candles for direction check (cached if full scan)
             const [tvDaily, tvH4, tvH1] = await Promise.all([
@@ -2335,7 +2352,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             },
             rateMap,
           });
-          const finalAuthorization = evaluateFinalTradeAuthorization({
+          const pendingDirectionVerdict = latestDirectionVerdictFor(
+            pending.symbol,
+          );
+          const pendingEntryConfirmation: EntryConfirmationDecision = {
+            required: true,
+            passed: true,
+            method: config.confirmationMethod || "choch",
+            reason:
+              `Entry timing confirmed by ${confirmedSignal.type} (${config.confirmationMethod || "choch"})`,
+            evidence: {
+              type: confirmedSignal.type,
+              tier: confirmedSignal.tier,
+              price: confirmedSignal.price,
+              displacement: confirmedSignal.displacement,
+              supportingSignals: confirmedSignal.supportingSignals,
+            },
+            evaluatedAt: nowStr,
+          };
+          const rawFinalAuthorization = evaluateFinalTradeAuthorization({
             account,
             candidate: {
               symbol: pending.symbol,
@@ -2351,14 +2386,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             maxDailyLoss: config.maxDailyLoss,
             maxDrawdown: config.maxDrawdown,
             minimumRiskReward: config.minRiskReward,
-            directionVerdict: latestDirectionVerdictFor(pending.symbol),
+            directionVerdict: pendingDirectionVerdict,
             requireDirectionVerdict: true,
             gamePlan: _lastGamePlanForValidation,
             gamePlanEnabled: config.gamePlanEnabled,
             gamePlanMode: config.gpEnforcementMode,
             gamePlanMinimumConfidence: config.gpHardBlockThreshold,
             thesisResult: pendingThesisResult,
-            requireThesisValidation: (config as any).thesisValidationEnabled !== false,
+            requireThesisValidation: true,
+            entryConfirmation: pendingEntryConfirmation,
             propFirm: pendingPropFirmResult
               ? {
                 enabled: pendingPropFirmResult.enabled,
@@ -2376,6 +2412,48 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             },
             runtimeGates: pendingRuntimeGates,
           });
+          const pendingHierarchy = rawFinalAuthorization.decisionHierarchy ||
+            evaluateDecisionHierarchy({
+              symbol: pending.symbol,
+              direction: pending.direction as "long" | "short",
+              gamePlan: _lastGamePlanForValidation,
+              gamePlanEnabled: config.gamePlanEnabled,
+              gamePlanMode: config.gpEnforcementMode,
+              gamePlanMinimumConfidence: config.gpHardBlockThreshold,
+              directionVerdict: pendingDirectionVerdict,
+              requireDirectionVerdict: true,
+              thesisResult: pendingThesisResult,
+              requireThesisValidation: true,
+              entryConfirmation: pendingEntryConfirmation,
+            });
+          let parsedPendingEvidence: any = {};
+          try {
+            parsedPendingEvidence = typeof pending.signal_reason === "string"
+              ? JSON.parse(pending.signal_reason)
+              : (pending.signal_reason || {});
+          } catch {
+            parsedPendingEvidence = {};
+          }
+          const finalAuthorization = attachDecisionContext(
+            rawFinalAuthorization,
+            buildTradeDecisionContext({
+              stage: "fill",
+              symbol: pending.symbol,
+              direction: pending.direction as "long" | "short",
+              gamePlan: _lastGamePlanForValidation,
+              directionVerdict: pendingDirectionVerdict,
+              thesisResult: pendingThesisResult,
+              requireThesisValidation: true,
+              thesisConviction:
+                parsedPendingEvidence?.decisionContext?.thesisConviction
+                  ?.evidence ||
+                parsedPendingEvidence?.thesisConviction ||
+                null,
+              entryConfirmation: pendingEntryConfirmation,
+              hierarchy: pendingHierarchy,
+              evaluatedAt: nowStr,
+            }),
+          );
           if (!finalAuthorization.authorized) {
             const cancelPermanently = !finalAuthorization.retryable;
             await supabase.from("pending_orders").update({
@@ -2392,8 +2470,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           }
 
           // Build signal_reason with limit order provenance + confirmation data
-          let parsedSignalReason: any = {};
-          try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+          const parsedSignalReason = parsedPendingEvidence;
           const signalReason = {
             ...parsedSignalReason,
             filledFromLimitOrder: true,
@@ -2424,6 +2501,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               stagedCycles: pending.staged_cycles,
             },
             finalAuthorization,
+            decisionContext: finalAuthorization.decisionContext,
           };
 
           const fillReason = `Confirmed ${confirmedSignal.type} @ ${actualFillPrice.toFixed(5)}`
@@ -3612,6 +3690,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     // Consolidates confirmedTrend, simpleDirection, regime, weeklyBias, and gamePlan
     // into one verdict. ACTIVE: replaces Gate 1 (HTF Bias), Gate 20 (Regime), and ICT HTF score adj.
     let directionVerdict: DirectionVerdictResult | null = null;
+    let activeDirectionVerdict: DirectionVerdictDecision | null = null;
     let earlyWeeklyBias: { bias: string; confidence: number } | null = null;
     try {
       const gpCtx = (pairConfig as any)._gamePlanContext;
@@ -3650,17 +3729,41 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           confidence: gpCtx.biasConfidence ?? 50,
         } : null,
       });
+      activeDirectionVerdict = await persistActiveDirectionVerdict(
+        supabase,
+        {
+          userId,
+          botId: BOT_ID,
+          symbol: pair,
+          verdict: directionVerdict,
+          gamePlan: activeGamePlan,
+          sourceCandleTimestamp:
+            candles[candles.length - 1]?.datetime || null,
+          scanCycleId,
+        },
+      );
+      _activeDirectionVerdicts.set(pair, activeDirectionVerdict);
       (detail as any).directionVerdict = {
+        id: activeDirectionVerdict.id,
+        verdictVersion: activeDirectionVerdict.verdictVersion,
+        gamePlanId: activeDirectionVerdict.gamePlanId,
+        gamePlanVersion: activeDirectionVerdict.gamePlanVersion,
         verdict: directionVerdict.verdict,
         confidence: directionVerdict.confidence,
         agreement: directionVerdict.agreement,
         shouldBlock: directionVerdict.shouldBlock,
+        blockReason: directionVerdict.blockReason,
         scoreAdjustment: directionVerdict.scoreAdjustment,
         summary: directionVerdict.summary,
+        evaluatedAt: activeDirectionVerdict.evaluatedAt,
+        expiresAt: activeDirectionVerdict.expiresAt,
+        sourceCandleTimestamp:
+          activeDirectionVerdict.sourceCandleTimestamp,
       };
       console.log(`[scan ${scanCycleId}] ${pair} DirectionVerdict (pre-zone): ${directionVerdict.summary}`);
     } catch (dvErr: any) {
-      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict error (non-fatal): ${dvErr?.message}`);
+      activeDirectionVerdict = null;
+      console.warn(`[scan ${scanCycleId}] ${pair} DirectionVerdict authority unavailable: ${dvErr?.message}`);
       (detail as any).directionVerdict = { error: dvErr?.message };
     }
 
@@ -4927,6 +5030,63 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         console.warn(`[conviction] ${pair} error (non-fatal): ${tcErr?.message}`);
       }
     }
+    // Record the four-layer decision context for every directional candidate,
+    // including candidates that are later rejected by operational gates.
+    if (analysis.direction) {
+      const candidateThesis = validatePendingOrderThesis(
+        {
+          order_id: `candidate:${scanCycleId}:${pair}`,
+          symbol: pair,
+          direction: analysis.direction as "long" | "short",
+          entry_price: analysis.lastPrice,
+          signal_reason: {
+            directionVerdict: (detail as any).directionVerdict || null,
+          },
+        },
+        {
+          fotsiResult: _fotsiResult,
+          lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
+          dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
+          h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+          h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
+        },
+      );
+      const candidateConfirmation: EntryConfirmationDecision = {
+        required: false,
+        passed: false,
+        method: pairConfig.confirmationMethod || "choch",
+        reason: "Candidate discovered; entry timing has not been authorized",
+        evidence: null,
+        evaluatedAt: new Date().toISOString(),
+      };
+      const candidateHierarchy = evaluateDecisionHierarchy({
+        symbol: pair,
+        direction: analysis.direction as "long" | "short",
+        gamePlan: activeGamePlan,
+        gamePlanEnabled,
+        gamePlanMode: gpEnforcementMode,
+        gamePlanMinimumConfidence:
+          (pairConfig as any).gpHardBlockThreshold ?? 75,
+        directionVerdict: activeDirectionVerdict,
+        requireDirectionVerdict: true,
+        thesisResult: candidateThesis,
+        requireThesisValidation: true,
+        entryConfirmation: candidateConfirmation,
+      });
+      (detail as any).decisionContext = buildTradeDecisionContext({
+        stage: "candidate",
+        symbol: pair,
+        direction: analysis.direction as "long" | "short",
+        gamePlan: activeGamePlan,
+        directionVerdict: activeDirectionVerdict,
+        thesisResult: candidateThesis,
+        requireThesisValidation: true,
+        thesisConviction: (detail as any).thesisConviction || null,
+        entryConfirmation: candidateConfirmation,
+        hierarchy: candidateHierarchy,
+        evaluatedAt: candidateConfirmation.evaluatedAt,
+      });
+    }
     // ── Bidirectional Conflict Counter Gate (computed early so staging promotion gate can use it) ──
     // When many factors actively oppose the trade, raise the bar or block entirely.
     const opposingCount = opposingFactorCount;
@@ -5718,6 +5878,71 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
           }
 
+          const pendingThesisAtCreation = validatePendingOrderThesis(
+            {
+              order_id: pendingOrderId,
+              symbol: pair,
+              direction: analysis.direction as "long" | "short",
+              entry_price: limitEntry.price,
+              signal_reason: {
+                directionVerdict: (detail as any).directionVerdict || null,
+              },
+            },
+            {
+              fotsiResult: _fotsiResult,
+              lastGamePlan: gamePlanEnabled ? activeGamePlan : null,
+              dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
+              h4Candles: h4Candles.length >= 20 ? h4Candles : null,
+              h1Candles: hourlyCandles.length >= 20
+                ? hourlyCandles
+                : null,
+            },
+          );
+          const pendingConfirmation: EntryConfirmationDecision = {
+            required: false,
+            passed: false,
+            method: pairConfig.confirmationMethod || "choch",
+            reason:
+              "Zone setup is waiting; entry confirmation becomes mandatory at fill time",
+            evidence: null,
+            evaluatedAt: nowStr,
+          };
+          const pendingHierarchy = evaluateDecisionHierarchy({
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            gamePlan: activeGamePlan,
+            gamePlanEnabled,
+            gamePlanMode: gpEnforcementMode,
+            gamePlanMinimumConfidence:
+              (pairConfig as any).gpHardBlockThreshold ?? 75,
+            directionVerdict: activeDirectionVerdict,
+            requireDirectionVerdict: true,
+            thesisResult: pendingThesisAtCreation,
+            requireThesisValidation: true,
+            entryConfirmation: pendingConfirmation,
+          });
+          const pendingDecisionContext = buildTradeDecisionContext({
+            stage: "pending",
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            gamePlan: activeGamePlan,
+            directionVerdict: activeDirectionVerdict,
+            thesisResult: pendingThesisAtCreation,
+            requireThesisValidation: true,
+            thesisConviction: (detail as any).thesisConviction || null,
+            entryConfirmation: pendingConfirmation,
+            hierarchy: pendingHierarchy,
+            evaluatedAt: nowStr,
+          });
+          if (!pendingHierarchy.passed) {
+            detail.status = "zone_setup_blocked_decision_contract";
+            detail.skipReason =
+              `[decision-contract:${pendingHierarchy.code}] ${pendingHierarchy.reason}`;
+            detail.decisionContext = pendingDecisionContext;
+            scanDetails.push(detail);
+            continue;
+          }
+
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
@@ -5740,7 +5965,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -5774,6 +5999,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             currentPrice: analysis.lastPrice,
             distancePips: (Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1),
           };
+          detail.decisionContext = pendingDecisionContext;
           if (isPromotedFromStaging && existingStaged) {
             detail.staging = { action: "promoted_to_limit", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
           }
@@ -5962,7 +6188,25 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           },
           rateMap,
         });
-        const directAuthorization = evaluateFinalTradeAuthorization({
+        const directEntryConfirmation: EntryConfirmationDecision = {
+          required: true,
+          passed: true,
+          method: useMarketFillAtZone
+            ? "validated_zone_market"
+            : "scanner_market_signal",
+          reason: useMarketFillAtZone
+            ? "Price is inside the validated impulse zone and the market-entry timing rule passed"
+            : "The current scanner signal satisfied the configured immediate-entry timing rule",
+          evidence: {
+            signalSource: (detail as any).signalSource || null,
+            impulseZone: (detail as any).impulseZone || null,
+            unifiedZone: (detail as any).unifiedZone || null,
+            sourceCandleTimestamp:
+              candles[candles.length - 1]?.datetime || null,
+          },
+          evaluatedAt: nowStr,
+        };
+        const rawDirectAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
             symbol: pair,
@@ -5979,14 +6223,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           maxDailyLoss: pairConfig.maxDailyLoss,
           maxDrawdown: pairConfig.maxDrawdown,
           minimumRiskReward: pairConfig.minRiskReward,
-          directionVerdict: directionVerdict
-            ? {
-              verdict: directionVerdict.verdict,
-              shouldBlock: directionVerdict.shouldBlock,
-              blockReason: directionVerdict.blockReason,
-              confidence: directionVerdict.confidence,
-            }
-            : null,
+          directionVerdict: activeDirectionVerdict,
           requireDirectionVerdict: true,
           gamePlan: activeGamePlan,
           gamePlanEnabled,
@@ -5995,6 +6232,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             (pairConfig as any).gpHardBlockThreshold ?? 75,
           thesisResult: directThesisResult,
           requireThesisValidation: true,
+          entryConfirmation: directEntryConfirmation,
           propFirm: propFirmGateResult
             ? {
               enabled: propFirmGateResult.enabled,
@@ -6020,6 +6258,37 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           },
           runtimeGates: directRuntimeGates,
         });
+        const directHierarchy = rawDirectAuthorization.decisionHierarchy ||
+          evaluateDecisionHierarchy({
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            gamePlan: activeGamePlan,
+            gamePlanEnabled,
+            gamePlanMode: gpEnforcementMode,
+            gamePlanMinimumConfidence:
+              (pairConfig as any).gpHardBlockThreshold ?? 75,
+            directionVerdict: activeDirectionVerdict,
+            requireDirectionVerdict: true,
+            thesisResult: directThesisResult,
+            requireThesisValidation: true,
+            entryConfirmation: directEntryConfirmation,
+          });
+        const directAuthorization = attachDecisionContext(
+          rawDirectAuthorization,
+          buildTradeDecisionContext({
+            stage: "fill",
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            gamePlan: activeGamePlan,
+            directionVerdict: activeDirectionVerdict,
+            thesisResult: directThesisResult,
+            requireThesisValidation: true,
+            thesisConviction: (detail as any).thesisConviction || null,
+            entryConfirmation: directEntryConfirmation,
+            hierarchy: directHierarchy,
+            evaluatedAt: nowStr,
+          }),
+        );
         if (!directAuthorization.authorized) {
           detail.status = "blocked_final_authorization";
           detail.skipReason =
@@ -6231,6 +6500,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           unifiedZone: (detail as any).unifiedZone || null,
           gamePlanSnapshot,
           finalAuthorization: directAuthorization,
+          decisionContext: directAuthorization.decisionContext,
           confirmationMethod: pairConfig.confirmationMethod || "choch",
           tpMethod: pairConfig.tpMethod || "rr_ratio",
           ...(isPromotedFromStaging && existingStaged
@@ -6908,7 +7178,20 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               },
               rateMap,
             });
-            const breakerAuthorization = evaluateFinalTradeAuthorization({
+            const breakerEvaluatedAt = new Date().toISOString();
+            const breakerConfirmation: EntryConfirmationDecision = {
+              required: false,
+              passed: false,
+              method: pairConfig.confirmationMethod || "choch",
+              reason:
+                "Breaker setup is waiting; entry confirmation becomes mandatory at fill time",
+              evidence: {
+                breakerConfidence: breaker.confidence,
+                retestComplete: breaker.retestComplete,
+              },
+              evaluatedAt: breakerEvaluatedAt,
+            };
+            const rawBreakerAuthorization = evaluateFinalTradeAuthorization({
               account,
               candidate: {
                 symbol: pair,
@@ -6924,14 +7207,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               maxDailyLoss: config.maxDailyLoss,
               maxDrawdown: config.maxDrawdown,
               minimumRiskReward: config.minRiskReward,
-              directionVerdict: directionVerdict
-                ? {
-                  verdict: directionVerdict.verdict,
-                  shouldBlock: directionVerdict.shouldBlock,
-                  blockReason: directionVerdict.blockReason,
-                  confidence: directionVerdict.confidence,
-                }
-                : null,
+              directionVerdict: activeDirectionVerdict,
               requireDirectionVerdict: true,
               gamePlan: activeGamePlan,
               gamePlanEnabled,
@@ -6939,6 +7215,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               gamePlanMinimumConfidence: (config as any).gpHardBlockThreshold ?? 75,
               thesisResult: breakerThesisResult,
               requireThesisValidation: true,
+              entryConfirmation: breakerConfirmation,
               propFirm: propFirmGateResult
                 ? {
                   enabled: propFirmGateResult.enabled,
@@ -6952,6 +7229,38 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               spread: { required: false, available: true, passed: true },
               runtimeGates: breakerRuntimeGates,
             });
+            const breakerHierarchy =
+              rawBreakerAuthorization.decisionHierarchy ||
+              evaluateDecisionHierarchy({
+                symbol: pair,
+                direction: breakerDir,
+                gamePlan: activeGamePlan,
+                gamePlanEnabled,
+                gamePlanMode: gpEnforcementMode,
+                gamePlanMinimumConfidence:
+                  (config as any).gpHardBlockThreshold ?? 75,
+                directionVerdict: activeDirectionVerdict,
+                requireDirectionVerdict: true,
+                thesisResult: breakerThesisResult,
+                requireThesisValidation: true,
+                entryConfirmation: breakerConfirmation,
+              });
+            const breakerAuthorization = attachDecisionContext(
+              rawBreakerAuthorization,
+              buildTradeDecisionContext({
+                stage: "pending",
+                symbol: pair,
+                direction: breakerDir,
+                gamePlan: activeGamePlan,
+                directionVerdict: activeDirectionVerdict,
+                thesisResult: breakerThesisResult,
+                requireThesisValidation: true,
+                thesisConviction: (detail as any).thesisConviction || null,
+                entryConfirmation: breakerConfirmation,
+                hierarchy: breakerHierarchy,
+                evaluatedAt: breakerEvaluatedAt,
+              }),
+            );
             if (!breakerAuthorization.authorized) {
               console.warn(
                 `[breaker] ${pair} ${breakerDir}: FINAL AUTH BLOCKED`
@@ -6994,6 +7303,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 directionVerdict: (detail as any).directionVerdict || null,
                 gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
                 candidateAuthorization: breakerAuthorization,
+                decisionContext: breakerAuthorization.decisionContext,
               }),
               signal_score: breaker.confidence * 100,
               setup_type: "breaker_retest",
