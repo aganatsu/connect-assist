@@ -22,6 +22,10 @@ export interface GamePlanClassificationInput {
   legacyConfidence: number;
   dailyTrend: string;
   h4Trend: string;
+  trendLabels?: {
+    bias: string;
+    structure: string;
+  };
   zone: string;
   regime: string;
   hasDOL: boolean;
@@ -108,7 +112,11 @@ export function classifyGamePlan(input: GamePlanClassificationInput): GamePlanCl
   }
 
   const waitReasons: string[] = [];
-  if (trendsConflict) waitReasons.push("D1 and 4H structure disagree");
+  if (trendsConflict) {
+    const biasLabel = input.trendLabels?.bias || "D1";
+    const structureLabel = input.trendLabels?.structure || "4H";
+    waitReasons.push(`${biasLabel} and ${structureLabel} structure disagree`);
+  }
   if (locationConflicts) waitReasons.push(`${input.bias} bias has poor ${input.zone} location`);
   if (uncertainRegime) waitReasons.push(`${input.regime} regime requires confirmation`);
   if (!input.hasDOL) waitReasons.push("no validated draw on liquidity");

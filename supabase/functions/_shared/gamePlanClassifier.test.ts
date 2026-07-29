@@ -66,6 +66,28 @@ Deno.test("GamePlanClassifier: HTF conflict produces wait state", () => {
   assertGreater(result.stateReason.indexOf("disagree"), -1);
 });
 
+Deno.test("GamePlanClassifier: conflict reason uses active style timeframe labels", () => {
+  const result = classifyGamePlan({
+    bias: "bearish",
+    legacyConfidence: 64,
+    dailyTrend: "bearish",
+    h4Trend: "bullish",
+    trendLabels: {
+      bias: "1H",
+      structure: "15m",
+    },
+    zone: "equilibrium",
+    regime: "transitional",
+    hasDOL: true,
+    legacyTradeable: true,
+    evidence: evidence({ h4_structure: "bullish" }),
+  });
+
+  assertEquals(result.state, "wait");
+  assertEquals(result.stateReason.includes("1H and 15m structure disagree"), true);
+  assertEquals(result.stateReason.includes("D1 and 4H"), false);
+});
+
 Deno.test("GamePlanClassifier: existing skip remains skip", () => {
   const result = classifyGamePlan({
     bias: "neutral",

@@ -28,7 +28,7 @@ the same way. It must finish before Phase 6 begins.
 | 2 | One configuration resolution path for every runtime surface | Complete and production-verified |
 | 3 | Remove duplicate UI presets and show the effective runtime policy | Complete and production-verified |
 | 4 | Make timeframe roles authoritative for every analysis module | Complete and production-verified |
-| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Implemented; review and deployment pending |
+| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Production-verified; completeness follow-up in review |
 | 6 | Make Gameplan validity windows style-aware | Not started |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
@@ -101,6 +101,13 @@ backtesting, manual Gameplan refresh and fast confirmation all construct the
 same contract. Weekly context contributes to Direction Verdict only when
 Weekly is the selected style's bias role. Legacy fields remain as compatibility
 fallbacks, but they no longer override a present style decision snapshot.
+
+Slice 5 was production-verified on 2026-07-29 from main merge `0869c6f`.
+Scalper resolved to the expected 1H bias → 15m structure → 5m setup ladder.
+The follow-up review prevents a transient candle-source failure from activating
+a partial Gameplan, retries missing pairs during manual refresh, preserves the
+previous complete plan when generation remains incomplete, and renders
+conflict reasons with the active style's timeframe labels.
 
 ## Phase 3 implementation record
 
