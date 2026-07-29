@@ -16,9 +16,11 @@ Deno.test("automatic scanner snapshots one global and one pair style policy", ()
   assertStringIncludes(scanner, "const scanStylePolicy = await");
   assertStringIncludes(scanner, "const pairStylePolicy = await");
   assertStringIncludes(scanner, "baseConfig: config");
-  assertStringIncludes(
-    scanner,
-    "buildGamePlanConfigSnapshot(\n                config,\n                scanStylePolicy,",
+  assert(
+    /buildGamePlanConfigSnapshot\(\s*config,\s*scanStylePolicy,\s*\)/.test(
+      scanner,
+    ),
+    "automatic Gameplan must snapshot the resolved scan policy",
   );
   assertStringIncludes(scanner, "stylePolicy: pairStylePolicy");
   assertStringIncludes(
@@ -48,13 +50,30 @@ Deno.test("all automated fill paths preserve style policy evidence", () => {
   );
 });
 
-Deno.test("manual Gameplan and backtest expose their observed style policy", () => {
+Deno.test("manual Gameplan and backtest expose their effective style policy", () => {
   assertStringIncludes(manualGamePlan, "const stylePolicy = await");
   assertStringIncludes(
     manualGamePlan,
     "buildGamePlanConfigSnapshot(config, stylePolicy)",
   );
-  assertStringIncludes(manualGamePlan, "profileAppliedToRuntime: false");
+  assertStringIncludes(manualGamePlan, "const config = styleResolution.config");
   assertStringIncludes(backtest, "const stylePolicy = await");
   assertStringIncludes(backtest, "stylePolicy,");
+});
+
+Deno.test("every runtime surface imports the canonical configuration resolver", () => {
+  for (
+    const [surface, source] of [
+      ["automatic scanner", scanner],
+      ["fast confirmation scanner", fastScanner],
+      ["manual Gameplan refresh", manualGamePlan],
+      ["backtest", backtest],
+    ] as const
+  ) {
+    assertStringIncludes(
+      source,
+      'from "../_shared/runtimeConfigResolver.ts"',
+      `${surface} must use the canonical resolver`,
+    );
+  }
 });

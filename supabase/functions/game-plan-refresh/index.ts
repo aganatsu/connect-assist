@@ -1,8 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
-import { mapNestedToFlat } from "../_shared/configMapper.ts";
-import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
+import {
+  resolveEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigResolver.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally } from "../_shared/candleSource.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
@@ -82,7 +83,7 @@ async function loadConfig(adminClient: any, userId: string) {
     .is("connection_id", null)
     .maybeSingle();
   if (error) throw new Error(`Could not load bot configuration: ${error.message}`);
-  return mapNestedToFlat(data?.config_json || null);
+  return resolveEffectiveRuntimeConfig(data?.config_json || null);
 }
 
 Deno.serve(async (req) => {
@@ -101,16 +102,11 @@ Deno.serve(async (req) => {
     if (!userId) return respond({ error: "Unauthorized" }, 401);
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const config = await loadConfig(adminClient, userId);
-    const styleResolution = applyTradingStyleProfile(
-      config,
-      config.tradingStyle?.mode,
-    );
+    const styleResolution = await loadConfig(adminClient, userId);
+    const config = styleResolution.config;
     const stylePolicy = await buildResolvedStylePolicy({
       resolution: styleResolution,
-      // Observe the actual manual-refresh inputs without changing behavior.
       config,
-      profileAppliedToRuntime: false,
     });
     if (config.gamePlanEnabled === false) {
       return respond({ error: "Game Plan is disabled in bot configuration" }, 409);

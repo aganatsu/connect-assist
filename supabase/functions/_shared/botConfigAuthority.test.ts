@@ -9,7 +9,7 @@ import {
   assertFalse,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
-import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
+import { resolveEffectiveRuntimeConfig } from "./runtimeConfigResolver.ts";
 
 const scannerSource = await Deno.readTextFile(
   "./supabase/functions/bot-scanner/index.ts",
@@ -21,8 +21,8 @@ Deno.test("bot-scanner has no local runtime-default object", () => {
     "Runtime defaults must only be declared in _shared/configMapper.ts",
   );
   assert(
-    scannerSource.includes('from "../_shared/tradingStyleConfig.ts"'),
-    "Scanner must import the shared trading-style authority",
+    scannerSource.includes('from "../_shared/runtimeConfigResolver.ts"'),
+    "Scanner must import the shared runtime-config authority",
   );
 });
 
@@ -37,18 +37,18 @@ Deno.test("bot-scanner has no legacy config mapper", () => {
   );
 });
 
-Deno.test("bot-scanner loadConfig delegates to the canonical mapper", () => {
+Deno.test("bot-scanner loadConfig delegates to the canonical resolver", () => {
   const loadConfigBlock = scannerSource.match(
     /async function loadConfig[\s\S]*?(?=\n\/\/ ─── Safety Gates)/,
   );
   assert(loadConfigBlock, "Could not locate bot-scanner loadConfig");
   assertEquals(
-    (loadConfigBlock[0].match(/mapNestedToFlat\(/g) ?? []).length,
+    (loadConfigBlock[0].match(/resolveEffectiveRuntimeConfig\(/g) ?? []).length,
     1,
   );
   assert(
     loadConfigBlock[0].includes(
-      "return mapNestedToFlat(data?.config_json || null);",
+      "return resolveEffectiveRuntimeConfig(data?.config_json || null);",
     ),
   );
 });
@@ -65,8 +65,8 @@ Deno.test("canonical mapper owns the effective empty-config defaults", () => {
 });
 
 Deno.test("scanner preserves the historical partial-TP style sentinel", () => {
-  const resolved = applyTradingStyleProfile(
-    mapNestedToFlat(null),
+  const resolved = resolveEffectiveRuntimeConfig(
+    null,
     "day_trader",
   );
   assertFalse(

@@ -14,7 +14,9 @@
 
 import { SPECS } from "../_shared/smcAnalysis.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../_shared/configMapper.ts";
-import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
+import {
+  resolveEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigResolver.ts";
 import { normalizeSessionFilter } from "../_shared/sessions.ts";
 import {
   DEFAULT_FACTOR_WEIGHTS,
@@ -137,13 +139,16 @@ Deno.test("Style parity: live and backtest resolve identical effective config", 
     strategy: { confluenceThreshold: 61 },
     exit: { tpRRRatio: 2.7, breakEven: true, partialTP: false },
   };
-  const live = applyTradingStyleProfile(mapConfig(raw));
-  const backtest = applyTradingStyleProfile(mapConfig(raw), raw.tradingStyle.mode);
+  const live = resolveEffectiveRuntimeConfig(raw);
+  const backtest = resolveEffectiveRuntimeConfig(
+    raw,
+    raw.tradingStyle.mode,
+  );
   assertEquals(backtest, live);
 });
 
 Deno.test("Style parity: explicit backtest style uses the canonical profile", () => {
-  const result = applyTradingStyleProfile(mapConfig({}), "scalper");
+  const result = resolveEffectiveRuntimeConfig({}, "scalper");
   assertEquals(result.style, "scalper");
   assertEquals(result.config.entryTimeframe, "5m");
   assertEquals(result.config.htfTimeframe, "1h");

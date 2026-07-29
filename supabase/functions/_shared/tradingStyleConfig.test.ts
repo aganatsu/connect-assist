@@ -87,7 +87,7 @@ Deno.test("identical canonical input produces identical live and backtest style 
   assertEquals(backtest, live);
 });
 
-Deno.test("live and backtest engines both use the shared style authority", async () => {
+Deno.test("live and backtest engines both use the shared runtime-config authority", async () => {
   const [scanner, backtest, analysis] = await Promise.all([
     Deno.readTextFile("./supabase/functions/bot-scanner/index.ts"),
     Deno.readTextFile("./supabase/functions/backtest-engine/index.ts"),
@@ -95,11 +95,11 @@ Deno.test("live and backtest engines both use the shared style authority", async
   ]);
 
   assertEquals(
-    scanner.includes('from "../_shared/tradingStyleConfig.ts"'),
+    scanner.includes('from "../_shared/runtimeConfigResolver.ts"'),
     true,
   );
   assertEquals(
-    backtest.includes('from "../_shared/tradingStyleConfig.ts"'),
+    backtest.includes('from "../_shared/runtimeConfigResolver.ts"'),
     true,
   );
   assertEquals(analysis.includes("export const STYLE_OVERRIDES"), false);
