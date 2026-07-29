@@ -2304,6 +2304,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
               strictATRMult: config.marketFillStrictATRMult,
+              minQualityScore: config.zoneQualityThreshold,
+              maxAgeBars: config.zoneMaxAgeBars,
+              minBodyRatio: config.zoneMinBodyRatio,
+              minDisplacementATR: config.zoneMinDisplacementATR,
               pipSize,
               fibMaxRetracement: config.fibMaxRetracement,
               originOBRetest: config.originOBRetest,

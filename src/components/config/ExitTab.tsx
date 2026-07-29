@@ -146,7 +146,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <span className="text-[11px] font-mono w-8 text-right">{config.exit?.breakEvenTriggerPips ?? 20}p</span>
                 </div>
               </FieldGroup>
-              <FieldGroup label="Offset (pips)">
+              <FieldGroup label="Offset (pips)" status="active">
                 <div className="flex items-center gap-3">
                   <Slider value={[config.exit?.breakEvenOffsetPips ?? 3]} onValueChange={v => updateField('exit', 'breakEvenOffsetPips', v[0])} min={0} max={20} step={1} className="flex-1" />
                   <span className="text-[11px] font-mono w-8 text-right">{config.exit?.breakEvenOffsetPips ?? 3}p</span>

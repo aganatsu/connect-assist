@@ -88,6 +88,11 @@ export interface ZoneEngineResult {
   reason: string;         // Human-readable explanation of outcome
 }
 
+export interface ZoneQualificationResult {
+  accepted: ImpulsePOI[];
+  rejected: Record<"age" | "body_ratio" | "displacement", number>;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Fib levels to check (from deepest to shallowest) */
@@ -410,6 +415,76 @@ export function mapImpulsePOIs(
   }
 
   return pois;
+}
+
+/**
+ * Apply the Bot Config zone-quality controls before Fib scoring.
+ *
+ * - Age is measured from the POI candle to the newest structural candle.
+ * - Body ratio applies to OB candles only; FVGs use their displacement candle.
+ * - Displacement uses the FVG middle candle or the strongest directional candle
+ *   immediately following an OB.
+ */
+export function qualifyImpulsePOIs(
+  candles: Candle[],
+  impulse: ImpulseLeg,
+  pois: ImpulsePOI[],
+  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
+): ZoneQualificationResult {
+  const rejected = { age: 0, body_ratio: 0, displacement: 0 };
+  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
+  const minBodyRatio = Math.max(0, Math.min(1, Number(options?.minBodyRatio ?? 0)));
+  const minDisplacementATR = Math.max(0, Number(options?.minDisplacementATR ?? 0));
+  const atr = minDisplacementATR > 0 ? calculateATR(candles) : 0;
+
+  const accepted = pois.filter((poi) => {
+    const ageBars = Math.max(0, candles.length - 1 - poi.candleIndex);
+    if (maxAgeBars > 0 && ageBars > maxAgeBars) {
+      rejected.age++;
+      return false;
+    }
+
+    const source = candles[poi.candleIndex];
+    if (poi.type === "ob" && minBodyRatio > 0 && source) {
+      const range = Math.max(0, source.high - source.low);
+      const bodyRatio = range > 0 ? Math.abs(source.close - source.open) / range : 0;
+      if (bodyRatio < minBodyRatio) {
+        rejected.body_ratio++;
+        return false;
+      }
+    }
+
+    if (minDisplacementATR > 0 && atr > 0) {
+      let displacement = source;
+      if (poi.type === "ob") {
+        const start = Math.min(candles.length - 1, poi.candleIndex + 1);
+        const end = Math.min(candles.length - 1, impulse.endIndex, poi.candleIndex + 3);
+        const directional = candles.slice(start, end + 1).filter((candle) =>
+          impulse.direction === "bullish"
+            ? candle.close > candle.open
+            : candle.close < candle.open
+        );
+        displacement = directional.sort(
+          (a, b) => (b.high - b.low) - (a.high - a.low),
+        )[0] ?? candles[start];
+      }
+      const displacementRange = displacement
+        ? Math.max(0, displacement.high - displacement.low)
+        : 0;
+      if (displacementRange < atr * minDisplacementATR) {
+        rejected.displacement++;
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  return { accepted, rejected };
+}
+
+export function zoneQualityPercent(zone: RankedPOI): number {
+  return Math.max(0, Math.min(100, (zone.totalScore / 9) * 100));
 }
 
 // ─── 3. overlayFibOnPOIs ──────────────────────────────────────────────────────
@@ -904,16 +979,24 @@ export function findBestEntryZone(
   }
 
   // Step 2: Map POIs within the impulse
-  const pois = mapImpulsePOIs(htfCandles, impulse, {
+  const mappedPOIs = mapImpulsePOIs(htfCandles, impulse, {
     originOBRetest: options?.originOBRetest,
     zoneLifecycleV2: options?.zoneLifecycleV2,
   });
+  const qualification = qualifyImpulsePOIs(htfCandles, impulse, mappedPOIs, options);
+  const pois = qualification.accepted;
   if (pois.length === 0) {
+    const rejected = Object.entries(qualification.rejected)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(", ");
     return {
       bestZone: null,
       impulse,
       allZones: [],
-      reason: `Impulse found but no POIs (FVGs/OBs) detected within it`,
+      reason: mappedPOIs.length === 0
+        ? `Impulse found but no POIs (FVGs/OBs) detected within it`
+        : `POIs found but Bot Config zone qualification rejected all (${rejected})`,
     };
   }
 
@@ -976,6 +1059,16 @@ export function findBestEntryZone(
       impulse,
       allZones: rankedZones,
       reason: `Zones found but none scored high enough (need fibScore >= 1, i.e., at 50% or deeper)`,
+    };
+  }
+  const minQualityScore = Math.max(0, Math.min(100, Number(options?.minQualityScore ?? 0)));
+  const qualityPercent = zoneQualityPercent(bestZonePOI);
+  if (qualityPercent < minQualityScore) {
+    return {
+      bestZone: null,
+      impulse,
+      allZones: rankedZones,
+      reason: `Best zone quality ${qualityPercent.toFixed(1)}% is below Bot Config minimum ${minQualityScore.toFixed(1)}%`,
     };
   }
 
@@ -1080,6 +1173,14 @@ export function findBestEntryZone(
 export interface ZoneEngineOptions {
   /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
   strictATRMult?: number;
+  /** Minimum normalized zone score (0-100). 0 disables this filter. */
+  minQualityScore?: number;
+  /** Maximum POI age in structural-timeframe bars. 0 disables this filter. */
+  maxAgeBars?: number;
+  /** Minimum OB candle body/range ratio (0-1). 0 disables this filter. */
+  minBodyRatio?: number;
+  /** Minimum displacement candle range as an ATR multiple. 0 disables this filter. */
+  minDisplacementATR?: number;
   /**
    * Daily zone bounds filter. When provided, only zones that overlap with these
    * bounds are kept. This integrates the cascade (Daily→4H→1H) approach:
