@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
-import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, ConfigTabProps } from "./ConfigShared";
+import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, StatusBadge, FeatureStateBadge, ConfigTabProps } from "./ConfigShared";
 
 // ─── Instruments Data (derived from canonical marketData.ts) ─────────────────
 const INSTRUMENT_GROUPS = INSTRUMENT_TYPES.map(type => ({
@@ -91,8 +91,7 @@ const SMC_ENHANCEMENT_MODULES: {
     label: "Phase Detection",
     description: "Classifies market as consolidation/expansion/trend using price action. Blocks trades from zones formed during consolidation.",
     configField: "enablePhaseDetection",
-    hasGate: true,
-    gateField: "phaseGateMode",
+    hasGate: false,
     hasParams: true,
   },
   {
@@ -108,15 +107,14 @@ const SMC_ENHANCEMENT_MODULES: {
     label: "Breaker Blocks",
     description: "Detects failed OBs that flip role after sweep → displacement → retest. Creates its own trade signal at half size.",
     configField: "enableBreakerBlocks",
-    hasGate: true,
-    gateField: "breakerGateMode",
+    hasGate: false,
     hasParams: true,
   },
   {
     key: "fib3pt",
     label: "Fib 3-Point TP",
     description: "Measures fib extensions from your ENTRY point (Point C). Adds -27.2%, -61.8%, -100% extension levels for take profit.",
-    configField: "enableFib3PointTP",
+    configField: "enableFibExtension3Point",
     hasGate: false,
     hasParams: true,
   },
@@ -125,8 +123,7 @@ const SMC_ENHANCEMENT_MODULES: {
     label: "Trendline Liquidity",
     description: "Detects multi-touch trendlines. Warns when zones are at trap-prone 4th touches (liquidity grab).",
     configField: "enableTrendlineLiquidity",
-    hasGate: true,
-    gateField: "trendlineGateMode",
+    hasGate: false,
     hasParams: true,
   },
   {
@@ -134,8 +131,7 @@ const SMC_ENHANCEMENT_MODULES: {
     label: "Monthly Containment",
     description: "Adds monthly timeframe structural analysis. Checks if your LTF zone is contained within a monthly OB or key level.",
     configField: "enableMonthlyContainment",
-    hasGate: true,
-    gateField: "monthlyGateMode",
+    hasGate: false,
     hasParams: false,
   },
 ];
@@ -185,7 +181,10 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
       smcEnhancements: { ...(prev.smcEnhancements || {}), [key]: value },
     }));
   };
-  const getSMCEnabled = (field: string) => !!enhancements[field];
+  const getSMCEnabled = (field: string) =>
+    field === "enableFibExtension3Point"
+      ? !!(enhancements.enableFibExtension3Point ?? enhancements.enableFib3PointTP)
+      : !!enhancements[field];
   const getSMCGate = (field: string): "off" | "soft" | "hard" =>
     (enhancements[field] as "off" | "soft" | "hard") || "off";
   const smcEnabledCount = SMC_ENHANCEMENT_MODULES.filter(m => getSMCEnabled(m.configField)).length;
@@ -336,8 +335,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         icon={<TrendingUp className="h-4 w-4" />}
         defaultOpen={false}
       >
-        <FieldGroup label="HTF Bias Timeframe" description="Which timeframe determines overall direction">
-          <Select value={config.strategy?.htfBiasTimeframe ?? "4h"} onValueChange={v => updateField('strategy', 'htfBiasTimeframe', v)}>
+        <FieldGroup label="HTF Bias Timeframe" description="Controlled by the selected Trading Style runtime profile" status="unavailable">
+          <Select value={config.strategy?.htfBiasTimeframe ?? "4h"} onValueChange={v => updateField('strategy', 'htfBiasTimeframe', v)} disabled>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="1week">Weekly</SelectItem>
@@ -372,7 +371,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         </div>
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Structural Conviction</p>
-          <ToggleField label="Structural Conviction Gate" description="Block trades lacking structural evidence" checked={config.strategy?.structuralConvictionGate ?? false} onChange={v => updateField('strategy', 'structuralConvictionGate', v)} />
+          <ToggleField label="Structural Conviction Gate" description="Block trades lacking structural evidence" checked={config.strategy?.structuralConvictionEnabled ?? config.strategy?.structuralConvictionGate ?? true} onChange={v => updateField('strategy', 'structuralConvictionEnabled', v)} status={(config.strategy?.structuralConvictionEnabled ?? config.strategy?.structuralConvictionGate ?? true) ? "active" : "disabled"} />
         </div>
       </CollapsibleSection>
 
@@ -393,10 +392,10 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
           <ToggleField label="Displacement" checked={strat.enableDisplacement !== false} onChange={v => updateField('strategy', 'enableDisplacement', v)} />
           <ToggleField label="Breaker Blocks" checked={strat.enableBreaker ?? false} onChange={v => updateField('strategy', 'enableBreaker', v)} />
           <ToggleField label="Unicorn Model" checked={strat.enableUnicorn ?? false} onChange={v => updateField('strategy', 'enableUnicorn', v)} />
-          <ToggleField label="Session Analysis" checked={strat.enableSession !== false} onChange={v => updateField('strategy', 'enableSession', v)} />
+          <ToggleField label="Session Analysis" description="Always active in the scoring engine; it is not independently configurable yet" checked={true} onChange={() => {}} disabled status="unavailable" />
           <ToggleField label="SMT Divergence" checked={strat.enableSMT ?? false} onChange={v => updateField('strategy', 'enableSMT', v)} />
           <ToggleField label="Volume Profile" checked={strat.enableVolumeProfile ?? false} onChange={v => updateField('strategy', 'enableVolumeProfile', v)} />
-          <ToggleField label="Trend Direction" checked={strat.enableTrendDirection !== false} onChange={v => updateField('strategy', 'enableTrendDirection', v)} />
+          <ToggleField label="Trend Direction" description="Reserved for a later canonical direction-control pass" checked={strat.enableTrendDirection !== false} onChange={() => {}} disabled status="unavailable" />
           <ToggleField label="Daily Bias" checked={strat.enableDailyBias !== false} onChange={v => updateField('strategy', 'enableDailyBias', v)} />
           <ToggleField label="AMD Phase" checked={strat.enableAMD !== false} onChange={v => updateField('strategy', 'enableAMD', v)} />
           <ToggleField label="FOTSI" checked={strat.enableFOTSI ?? false} onChange={v => updateField('strategy', 'enableFOTSI', v)} />
@@ -475,9 +474,9 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <ToggleField label="Auto Key Levels" description="Auto-detect OBs, FVGs, liquidity" checked={config.gamePlan?.autoKeyLevels ?? true} onChange={v => updateField('gamePlan', 'autoKeyLevels', v)} />
-              <ToggleField label="Session Bias" description="Calculate directional bias per session" checked={config.gamePlan?.sessionBias ?? true} onChange={v => updateField('gamePlan', 'sessionBias', v)} />
-              <ToggleField label="PD Levels" description="Include previous day/week levels" checked={config.gamePlan?.pdLevels ?? true} onChange={v => updateField('gamePlan', 'pdLevels', v)} />
+              <ToggleField label="Auto Key Levels" description="Always included by the current Gameplan generator; individual control arrives in Phase 3" checked={true} onChange={() => {}} disabled status="unavailable" />
+              <ToggleField label="Session Bias" description="Always calculated by the current Gameplan generator; individual control arrives in Phase 3" checked={true} onChange={() => {}} disabled status="unavailable" />
+              <ToggleField label="PD Levels" description="Always included by the current Gameplan generator; individual control arrives in Phase 3" checked={true} onChange={() => {}} disabled status="unavailable" />
               <ToggleField label="IPDA Ranges" description="20/40/60-day institutional data ranges" checked={config.ipdaRangesEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, ipdaRangesEnabled: v }))} status={config.ipdaRangesEnabled !== false ? "active" : "disabled"} />
             </div>
           </>
@@ -501,8 +500,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
             </FieldGroup>
             <div className="grid grid-cols-2 gap-3">
               <ToggleField label="OR Bias" description="Use OR for directional bias" checked={config.openingRange?.useBias ?? true} onChange={v => updateField('openingRange', 'useBias', v)} />
-              <ToggleField label="Judas Swing" description="Detect fake breakouts of OR" checked={config.openingRange?.judasSwing ?? true} onChange={v => updateField('openingRange', 'judasSwing', v)} />
-              <ToggleField label="Key Levels" description="Use OR high/low as key levels" checked={config.openingRange?.keyLevels ?? true} onChange={v => updateField('openingRange', 'keyLevels', v)} />
+              <ToggleField label="Judas Swing" description="Detect fake breakouts of OR" checked={config.openingRange?.useJudasSwing ?? config.openingRange?.judasSwing ?? true} onChange={v => updateField('openingRange', 'useJudasSwing', v)} />
+              <ToggleField label="Key Levels" description="Use OR high/low as key levels" checked={config.openingRange?.useKeyLevels ?? config.openingRange?.keyLevels ?? true} onChange={v => updateField('openingRange', 'useKeyLevels', v)} />
               <ToggleField label="Premium/Discount from OR" description="Use OR range for P/D zones" checked={config.openingRange?.usePremiumDiscount ?? false} onChange={v => updateField('openingRange', 'usePremiumDiscount', v)} />
             </div>
             <ToggleField label="Wait for OR Completion" description="Don't trade until OR is fully formed" checked={config.openingRange?.waitForCompletion ?? true} onChange={v => updateField('openingRange', 'waitForCompletion', v)} />
@@ -586,8 +585,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Bias Strength</Label>
-                      <Slider value={[strat.ictHTFMinBias ?? 0.6]} onValueChange={v => updateStrategy('ictHTFMinBias', v[0])} min={0.3} max={1.0} step={0.05} className="flex-1" />
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Bias Strength <FeatureStateBadge state="unavailable" /></Label>
+                      <Slider value={[strat.ictHTFMinBias ?? 0.6]} onValueChange={() => {}} min={0.3} max={1.0} step={0.05} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictHTFMinBias ?? 0.6).toFixed(2)}</span>
                     </div>
                     <p className="text-[9px] text-muted-foreground">Minimum weekly/daily bias confidence (0-1) required to confirm HTF direction. Lower = more permissive.</p>
@@ -598,8 +597,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
                       <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Displacement Ratio</Label>
-                      <Slider value={[strat.ictDisplacementMinRatio ?? 0.6]} onValueChange={v => updateStrategy('ictDisplacementMinRatio', v[0])} min={0.3} max={0.9} step={0.05} className="flex-1" />
-                      <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictDisplacementMinRatio ?? 0.6).toFixed(2)}</span>
+                      <Slider value={[strat.ictDisplacementMSSMinBodyRatio ?? strat.ictDisplacementMinRatio ?? 0.6]} onValueChange={v => updateStrategy('ictDisplacementMSSMinBodyRatio', v[0])} min={0.3} max={0.9} step={0.05} className="flex-1" />
+                      <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictDisplacementMSSMinBodyRatio ?? strat.ictDisplacementMinRatio ?? 0.6).toFixed(2)}</span>
                     </div>
                     <p className="text-[9px] text-muted-foreground">Body/range ratio threshold for displacement candle. Higher = stricter (only strong impulsive breaks count).</p>
                   </div>
@@ -608,8 +607,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Sweep (pips)</Label>
-                      <Input type="number" value={strat.ictJudasMinSweepPips ?? 5} onChange={e => updateStrategy('ictJudasMinSweepPips', parseFloat(e.target.value) || 5)} step={1} min={1} max={30} className="h-7 text-xs w-20" />
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Sweep (pips) <FeatureStateBadge state="unavailable" /></Label>
+                      <Input type="number" value={strat.ictJudasMinSweepPips ?? 5} onChange={() => {}} step={1} min={1} max={30} className="h-7 text-xs w-20" disabled />
                     </div>
                     <p className="text-[9px] text-muted-foreground">Minimum pip distance the Judas sweep must travel past the liquidity level to count as a valid sweep.</p>
                   </div>
@@ -618,8 +617,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Body Ratio</Label>
-                      <Slider value={[strat.ictFVGMinBodyRatio ?? 0.5]} onValueChange={v => updateStrategy('ictFVGMinBodyRatio', v[0])} min={0.2} max={0.9} step={0.05} className="flex-1" />
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">Min Body Ratio <FeatureStateBadge state="unavailable" /></Label>
+                      <Slider value={[strat.ictFVGMinBodyRatio ?? 0.5]} onValueChange={() => {}} min={0.2} max={0.9} step={0.05} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-10 text-right">{(strat.ictFVGMinBodyRatio ?? 0.5).toFixed(2)}</span>
                     </div>
                     <p className="text-[9px] text-muted-foreground">FVG-creating candle must have body/range at least this ratio. Filters doji-created FVGs.</p>
@@ -629,8 +628,8 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">KZ Buffer (min)</Label>
-                      <Input type="number" value={strat.ictKZBufferMinutes ?? 5} onChange={e => updateStrategy('ictKZBufferMinutes', parseInt(e.target.value) || 5)} step={1} min={0} max={30} className="h-7 text-xs w-20" />
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-32">KZ Buffer (min) <FeatureStateBadge state="unavailable" /></Label>
+                      <Input type="number" value={strat.ictKZBufferMinutes ?? 5} onChange={() => {}} step={1} min={0} max={30} className="h-7 text-xs w-20" disabled />
                     </div>
                     <p className="text-[9px] text-muted-foreground">Minutes before/after Kill Zone boundaries that still count as "inside" the zone. 0 = exact boundaries only.</p>
                   </div>
@@ -724,11 +723,11 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                   <div className="pt-2 border-t border-border/30 space-y-2">
                     <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Fine-Tuning</p>
                     <div className="flex items-center gap-4">
-                      <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Consolidation Threshold</Label>
-                      <Slider value={[enhancements.consolidationThreshold ?? 4]} onValueChange={v => updateEnhancement('consolidationThreshold', v[0])} min={2} max={8} step={1} className="flex-1" />
+                      <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Consolidation Threshold <FeatureStateBadge state="unavailable" /></Label>
+                      <Slider value={[enhancements.consolidationThreshold ?? 4]} onValueChange={() => {}} min={2} max={8} step={1} className="flex-1" disabled />
                       <span className="text-[10px] font-mono font-bold w-8 text-right">{enhancements.consolidationThreshold ?? 4}</span>
                     </div>
-                    <p className="text-[9px] text-muted-foreground">Regime score below this = consolidation. Lower = more aggressive (fewer zones blocked). Default: 4.</p>
+                    <p className="text-[9px] text-muted-foreground">Held until its scale is reconciled with the engine's signed regime score.</p>
                     <div className="flex items-center gap-4">
                       <Label className="text-[10px] text-muted-foreground shrink-0 w-36">Trend Threshold</Label>
                       <Slider value={[enhancements.trendThreshold ?? 6]} onValueChange={v => updateEnhancement('trendThreshold', v[0])} min={4} max={12} step={1} className="flex-1" />

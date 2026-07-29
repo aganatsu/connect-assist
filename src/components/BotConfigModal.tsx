@@ -15,6 +15,7 @@ import { ScanTab } from "@/components/config/ScanTab";
 import { EnterTab } from "@/components/config/EnterTab";
 import { ExitTab } from "@/components/config/ExitTab";
 import { RiskTab } from "@/components/config/RiskTab";
+import { normalizeBotConfigForEditor } from "@/lib/botConfigEditor";
 
 // ─── Search Index ─────────────────────────────────────────────────────────────
 // Maps every searchable setting to a tab ID and keywords for the search bar.
@@ -273,31 +274,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
 
   useEffect(() => {
     if (rawConfig && open) {
-      const parsed = JSON.parse(JSON.stringify(rawConfig));
-      // Migrate old allowedInstruments format → enabled array
-      if (parsed.instruments?.allowedInstruments && !parsed.instruments?.enabled) {
-        const allowed = parsed.instruments.allowedInstruments;
-        parsed.instruments.enabled = Object.keys(allowed).filter((k: string) => allowed[k]);
-        delete parsed.instruments.allowedInstruments;
-      }
-      // Migrate the legacy hidden GP threshold into the user-facing Game Plan
-      // settings without breaking old presets/config exports.
-      const legacyGPThreshold =
-        parsed.gamePlan?.hardBlockThreshold
-        ?? parsed.strategy?.gpHardBlockThreshold
-        ?? parsed.gpHardBlockThreshold
-        ?? 75;
-      parsed.gamePlan = {
-        ...(parsed.gamePlan || {}),
-        enabled: parsed.gamePlan?.enabled ?? false,
-        enforcementMode:
-          parsed.gamePlan?.enforcementMode
-          ?? parsed.strategy?.gpEnforcementMode
-          ?? parsed.gpEnforcementMode
-          ?? (legacyGPThreshold === 0 ? "off" : "hard"),
-        hardBlockThreshold: legacyGPThreshold === 0 ? 75 : legacyGPThreshold,
-      };
-      setConfig(parsed);
+      setConfig(normalizeBotConfigForEditor(rawConfig));
     }
   }, [rawConfig, open]);
 
@@ -341,7 +318,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey });
       if (data && typeof data === "object") {
-        setConfig(JSON.parse(JSON.stringify(data)));
+        setConfig(normalizeBotConfigForEditor(data));
       }
       toast.success("Config reset to defaults");
     },
@@ -353,7 +330,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
       const globalConfig = await botConfigApi.get();
       return globalConfig;
     },
-    onSuccess: (data: any) => { setConfig(JSON.parse(JSON.stringify(data))); toast.success("Copied from global config"); },
+    onSuccess: (data: any) => { setConfig(normalizeBotConfigForEditor(data)); toast.success("Copied from global config"); },
   });
 
   const updateField = (section: string, key: string, value: any) => {
@@ -473,7 +450,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         }
         const exportInfo = meta?.exportedAt ? ` (exported ${meta.exportedAt.slice(0, 10)})` : "";
         if (confirm(`Import config${exportInfo}?\n\nThis will load ${foundSections.length} sections into the editor.\nYou still need to click "Save Config" to apply.`)) {
-          setConfig(JSON.parse(JSON.stringify(configPayload)));
+          setConfig(normalizeBotConfigForEditor(configPayload));
           toast.success(`Config loaded from file`, { description: `${foundSections.length} sections imported. Click Save to apply.` });
         }
       } catch {
@@ -487,14 +464,8 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const applyPresetConfig = (presetConfig: any, label: string) => {
     if (!config) return;
     // Handle case where config_json might be a string
-    let parsed = typeof presetConfig === 'string' ? JSON.parse(presetConfig) : JSON.parse(JSON.stringify(presetConfig));
-    // Migrate old allowedInstruments format → enabled array
-    if (parsed.instruments?.allowedInstruments && !parsed.instruments?.enabled) {
-      const allowed = parsed.instruments.allowedInstruments;
-      parsed.instruments.enabled = Object.keys(allowed).filter(k => allowed[k]);
-      delete parsed.instruments.allowedInstruments;
-    }
-    setConfig(parsed);
+    const parsed = typeof presetConfig === 'string' ? JSON.parse(presetConfig) : presetConfig;
+    setConfig(normalizeBotConfigForEditor(parsed));
     toast.info(`Applied preset: ${label}`);
   };
 
