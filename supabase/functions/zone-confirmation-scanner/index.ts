@@ -19,7 +19,12 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
+import {
+  beginScanSourceTally,
+  endScanSourceTally,
+  fetchCandlesWithFallback,
+  type BrokerConn,
+} from "../_shared/candleSource.ts";
 import {
   SPECS,
   type Candle,
@@ -72,6 +77,8 @@ import {
   completeScannerOperation,
   failScannerOperation,
   markScannerOperation,
+  publishCandleSourceAlerts,
+  recordScannerAuthorizationFailure,
   type ScannerTriggerSource,
 } from "../_shared/scannerRuntime.ts";
 
@@ -149,13 +156,41 @@ async function fetchBrokerSpread(
 Deno.serve(async (req) => {
   // Gate 0: Only the cron scheduler may invoke this function.
   const authError = verifyCronCaller(req);
-  if (authError) return authError;
+  if (authError) {
+    const authHeader = req.headers.get("authorization") || "";
+    const likelySchedulerRequest = req.headers.has("x-cron-secret") ||
+      authHeader === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""}`;
+    if (likelySchedulerRequest) {
+      try {
+        const failureClient = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+        const failureBody = await authError.clone().json().catch(() => ({}));
+        await recordScannerAuthorizationFailure(
+          failureClient,
+          "zone-confirmation-scanner",
+          failureBody?.reason || "Rejected scheduler request",
+          {
+            has_cron_header: req.headers.has("x-cron-secret"),
+            has_authorization: authHeader.startsWith("Bearer "),
+          },
+        );
+      } catch (recordError: any) {
+        console.warn(
+          `[zone-confirm] Could not record auth failure: ${recordError?.message}`,
+        );
+      }
+    }
+    return authError;
+  }
 
   const startTime = Date.now();
   const operationRuns = new Map<string, string>();
   let supabase: any = null;
 
   try {
+    beginScanSourceTally();
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     supabase = createClient(supabaseUrl, supabaseKey);
@@ -191,11 +226,13 @@ Deno.serve(async (req) => {
       .order("placed_at", { ascending: true });
 
     if (queryErr) {
+      endScanSourceTally();
       console.error("[zone-confirm] Query error:", queryErr.message);
       return new Response(JSON.stringify({ error: queryErr.message }), { status: 500 });
     }
 
     if (!huntingOrders || huntingOrders.length === 0) {
+      endScanSourceTally();
       // Nothing to do — no orders are hunting for confirmation
       await Promise.all([...operationRuns.values()].map((runId) =>
         completeScannerOperation(supabase, runId, "zone_confirmation", {
@@ -354,6 +391,9 @@ Deno.serve(async (req) => {
             metadata: { current_order_id: pending.order_id, current_pair: pending.symbol },
           },
         );
+        await supabase.from("pending_orders").update({
+          last_confirmation_checked_at: new Date().toISOString(),
+        }).eq("id", pending.id).eq("status", "awaiting_confirmation");
         const userData = userDataMap[userId];
         if (!userData) { stillHunting++; continue; }
 
@@ -1105,6 +1145,31 @@ Deno.serve(async (req) => {
       }
     }
 
+    const sourceTally = endScanSourceTally();
+    const normalizeIssueSymbol = (value: string) =>
+      String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    await Promise.all(userIds.map((userId) => {
+      const userSymbols = new Set<string>(
+        huntingOrders
+          .filter((order: any) => order.user_id === userId)
+          .map((order: any) => normalizeIssueSymbol(order.symbol)),
+      );
+      const userIssues = sourceTally.issues.filter((issue) => {
+        const issueSymbol = normalizeIssueSymbol(issue.symbol);
+        return [...userSymbols].some((symbol) =>
+          issueSymbol === symbol || issueSymbol.startsWith(symbol)
+        );
+      });
+      return publishCandleSourceAlerts(supabase, {
+        userId,
+        botId: BOT_ID,
+        runId: operationRuns.get(userId),
+        issues: userIssues,
+        metaapiAttempted: Boolean(userDataMap[userId]?.brokerConn) &&
+          sourceTally.metaapiAttempted,
+      });
+    }));
+
     const elapsed = Date.now() - startTime;
     const summary = {
       status: "complete",
@@ -1131,6 +1196,7 @@ Deno.serve(async (req) => {
     });
 
   } catch (e: any) {
+    endScanSourceTally();
     console.error("[zone-confirm] Fatal error:", e?.message, e?.stack);
     if (supabase) {
       await Promise.all([...operationRuns.values()].map((runId) =>

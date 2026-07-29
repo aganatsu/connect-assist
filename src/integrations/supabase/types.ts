@@ -980,6 +980,7 @@ export type Database = {
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
+          last_confirmation_checked_at: string | null
           order_id: string
           order_type: string
           originating_zone: Json | null
@@ -1034,6 +1035,7 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          last_confirmation_checked_at?: string | null
           order_id: string
           order_type?: string
           originating_zone?: Json | null
@@ -1088,6 +1090,7 @@ export type Database = {
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
+          last_confirmation_checked_at?: string | null
           order_id?: string
           order_type?: string
           originating_zone?: Json | null
@@ -1499,6 +1502,51 @@ export type Database = {
         }
         Relationships: []
       }
+      scanner_authorization_failures: {
+        Row: {
+          function_name: string
+          id: number
+          occurred_at: string
+          reason: string
+          request_metadata: Json
+        }
+        Insert: {
+          function_name: string
+          id?: never
+          occurred_at?: string
+          reason: string
+          request_metadata?: Json
+        }
+        Update: {
+          function_name?: string
+          id?: never
+          occurred_at?: string
+          reason?: string
+          request_metadata?: Json
+        }
+        Relationships: []
+      }
+      scanner_health_monitor_state: {
+        Row: {
+          bot_id: string
+          first_observed_at: string
+          last_evaluated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          first_observed_at?: string
+          last_evaluated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          first_observed_at?: string
+          last_evaluated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       scanner_operation_runs: {
         Row: {
           bot_id: string
@@ -1569,6 +1617,66 @@ export type Database = {
           scan_started_at?: string | null
           status?: string
           trigger_source?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scanner_operational_alerts: {
+        Row: {
+          alert_type: string
+          bot_id: string
+          created_at: string
+          dedupe_key: string
+          evidence: Json
+          first_detected_at: string
+          id: string
+          last_detected_at: string
+          message: string
+          occurrences: number
+          resolved_at: string | null
+          run_id: string | null
+          severity: string
+          status: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          alert_type: string
+          bot_id?: string
+          created_at?: string
+          dedupe_key?: string
+          evidence?: Json
+          first_detected_at?: string
+          id?: string
+          last_detected_at?: string
+          message: string
+          occurrences?: number
+          resolved_at?: string | null
+          run_id?: string | null
+          severity?: string
+          status?: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          alert_type?: string
+          bot_id?: string
+          created_at?: string
+          dedupe_key?: string
+          evidence?: Json
+          first_detected_at?: string
+          id?: string
+          last_detected_at?: string
+          message?: string
+          occurrences?: number
+          resolved_at?: string | null
+          run_id?: string | null
+          severity?: string
+          status?: string
+          title?: string
           updated_at?: string
           user_id?: string
         }
@@ -2289,6 +2397,10 @@ export type Database = {
         }
         Returns: Json
       }
+      evaluate_scanner_operational_health: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       finalize_market_entry: {
         Args: {
           p_allow_same_direction: boolean
@@ -2339,6 +2451,15 @@ export type Database = {
         }
         Returns: boolean
       }
+      resolve_scanner_operational_alert: {
+        Args: {
+          p_alert_type: string
+          p_bot_id: string
+          p_dedupe_key?: string
+          p_user_id: string
+        }
+        Returns: number
+      }
       transition_staged_setup: {
         Args: {
           p_evidence?: Json
@@ -2350,6 +2471,20 @@ export type Database = {
           p_user_id: string
         }
         Returns: Json
+      }
+      upsert_scanner_operational_alert: {
+        Args: {
+          p_alert_type: string
+          p_bot_id: string
+          p_dedupe_key: string
+          p_evidence?: Json
+          p_message: string
+          p_run_id?: string
+          p_severity: string
+          p_title: string
+          p_user_id: string
+        }
+        Returns: string
       }
     }
     Enums: {

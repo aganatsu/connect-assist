@@ -113,8 +113,12 @@ import {
   failScannerOperation,
   heartbeatScannerLock,
   markScannerOperation,
+  publishCandleSourceAlerts,
+  recordScannerAuthorizationFailure,
   releaseScannerLock,
+  resolveScannerAlert,
   skipScannerOperation,
+  upsertScannerAlert,
   type ScannerTriggerSource,
 } from "../_shared/scannerRuntime.ts";
 import {
@@ -930,7 +934,34 @@ Deno.serve(async (req) => {
 
   // ─── Caller verification: reject requests without valid cron secret OR user JWT ───
   const authError = verifyCronOrUserCaller(req);
-  if (authError) return authError;
+  if (authError) {
+    const authHeader = req.headers.get("authorization") || "";
+    const likelySchedulerRequest = req.headers.has("x-cron-secret") ||
+      authHeader === `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""}`;
+    if (likelySchedulerRequest) {
+      try {
+        const failureClient = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+        const failureBody = await authError.clone().json().catch(() => ({}));
+        await recordScannerAuthorizationFailure(
+          failureClient,
+          "bot-scanner",
+          failureBody?.reason || "Rejected scheduler request",
+          {
+            has_cron_header: req.headers.has("x-cron-secret"),
+            has_authorization: authHeader.startsWith("Bearer "),
+          },
+        );
+      } catch (recordError: any) {
+        console.warn(
+          `[bot-scanner] Could not record auth failure: ${recordError?.message}`,
+        );
+      }
+    }
+    return authError;
+  }
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -2218,6 +2249,10 @@ async function runScanForUser(
         // ── Branch B: Order is awaiting its frozen confirmation contract ──
         if (pending.status === "awaiting_confirmation") {
           pendingConfirmationHunting++;
+          await supabase.from("pending_orders").update({
+            last_confirmation_checked_at: new Date().toISOString(),
+          }).eq("order_id", pending.order_id).eq("user_id", userId)
+            .eq("status", "awaiting_confirmation");
 
           // Check if impulse is broken (zone invalidation)
           if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
@@ -2929,11 +2964,62 @@ async function runScanForUser(
           const eqData = JSON.parse(eqBody);
           brokerEquity = parseFloat(eqData.equity ?? eqData.balance ?? "0");
           console.log(`[prop-firm-gate] Broker equity fetched: $${brokerEquity.toFixed(2)}`);
+          await Promise.all([
+            resolveScannerAlert(supabase, {
+              userId,
+              botId: BOT_ID,
+              alertType: "metaapi_certificate_failure",
+              dedupeKey: "metaapi",
+            }),
+            resolveScannerAlert(supabase, {
+              userId,
+              botId: BOT_ID,
+              alertType: "metaapi_connection_failure",
+              dedupeKey: "metaapi",
+            }),
+          ]);
         } else {
           console.warn(`[prop-firm-gate] Broker equity fetch returned ${eqRes.status}`);
+          await upsertScannerAlert(supabase, {
+            userId,
+            botId: BOT_ID,
+            alertType: "metaapi_connection_failure",
+            dedupeKey: "metaapi",
+            severity: "warning",
+            title: "MetaAPI connection failure",
+            message: `MetaAPI returned HTTP ${eqRes.status} while checking broker equity.`,
+            runId: opts?.operationRunId,
+            evidence: {
+              source: "prop_firm_equity",
+              http_status: eqRes.status,
+            },
+          });
         }
       } catch (e: any) {
-        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${e?.message}`);
+        const brokerError = String(e?.message ?? e);
+        const certificateFailure =
+          /certificate|x509|expired|invalid peer/i.test(brokerError);
+        console.warn(`[prop-firm-gate] Broker equity fetch failed (falling back to paper): ${brokerError}`);
+        await upsertScannerAlert(supabase, {
+          userId,
+          botId: BOT_ID,
+          alertType: certificateFailure
+            ? "metaapi_certificate_failure"
+            : "metaapi_connection_failure",
+          dedupeKey: "metaapi",
+          severity: certificateFailure ? "critical" : "warning",
+          title: certificateFailure
+            ? "MetaAPI certificate failure"
+            : "MetaAPI connection failure",
+          message: certificateFailure
+            ? "MetaAPI certificate validation failed while checking broker equity."
+            : "MetaAPI could not provide broker equity; the prop-firm gate used its safe fallback.",
+          runId: opts?.operationRunId,
+          evidence: {
+            source: "prop_firm_equity",
+            error: brokerError.slice(0, 500),
+          },
+        });
       }
     }
     propFirmGateResult = await runPropFirmGate(
@@ -8002,6 +8088,13 @@ async function runScanForUser(
   // End source tally and prepend a __meta entry so the UI can display
   // which feed served this scan cycle.
   const sourceTally = endScanSourceTally();
+  await publishCandleSourceAlerts(supabase, {
+    userId,
+    botId: BOT_ID,
+    runId: opts?.operationRunId,
+    issues: sourceTally.issues,
+    metaapiAttempted: sourceTally.metaapiAttempted,
+  });
   const throttleStats = resetThrottleStats();
   const cacheStats = scanCache.stats();
   console.log(`[scan ${scanCycleId}] Data cache: ${cacheStats.hits} hits, ${cacheStats.misses} fetches, ${cacheStats.errors} errors, ${cacheStats.seeded} seeded (${scanCache.size()} unique keys)`);
