@@ -32,6 +32,7 @@ export type Database = {
           score_adjustment: number
           should_block: boolean
           source_candle_timestamp: string | null
+          style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
@@ -59,6 +60,7 @@ export type Database = {
           score_adjustment?: number
           should_block: boolean
           source_candle_timestamp?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -86,6 +88,7 @@ export type Database = {
           score_adjustment?: number
           should_block?: boolean
           source_candle_timestamp?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -130,6 +133,7 @@ export type Database = {
           source_candle_timestamps: Json
           state: string
           state_reason: string | null
+          style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
@@ -162,6 +166,7 @@ export type Database = {
           source_candle_timestamps?: Json
           state: string
           state_reason?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -194,6 +199,7 @@ export type Database = {
           source_candle_timestamps?: Json
           state?: string
           state_reason?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -760,6 +766,7 @@ export type Database = {
           staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
+          style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
@@ -809,6 +816,7 @@ export type Database = {
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -858,6 +866,7 @@ export type Database = {
           staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -1025,6 +1034,7 @@ export type Database = {
           staged_setup_id: string | null
           status: string
           stop_loss: number
+          style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
@@ -1083,6 +1093,7 @@ export type Database = {
           staged_setup_id?: string | null
           status?: string
           stop_loss: number
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -1141,6 +1152,7 @@ export type Database = {
           staged_setup_id?: string | null
           status?: string
           stop_loss?: number
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -1901,6 +1913,7 @@ export type Database = {
           sl_level: number | null
           staged_at: string
           status: string
+          style_base_policy_hash: string | null
           style_policy: Json | null
           style_policy_hash: string | null
           style_policy_version: string | null
@@ -1951,6 +1964,7 @@ export type Database = {
           sl_level?: number | null
           staged_at?: string
           status?: string
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
@@ -2001,6 +2015,7 @@ export type Database = {
           sl_level?: number | null
           staged_at?: string
           status?: string
+          style_base_policy_hash?: string | null
           style_policy?: Json | null
           style_policy_hash?: string | null
           style_policy_version?: string | null
