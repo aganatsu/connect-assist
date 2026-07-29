@@ -1,6 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
+import {
+  mapNestedToFlat,
+  applyPairOverrides,
+  RUNTIME_DEFAULTS,
+  type RuntimeConfig,
+} from "../_shared/configMapper.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
@@ -127,7 +132,6 @@ import {
   detectSilverBullet as sharedDetectSilverBullet,
   detectMacroWindow as sharedDetectMacroWindow,
   toNYTime as sharedToNYTime,
-  normalizeSessionFilter,
   isSessionEnabled,
   type SessionResult,
 } from "../_shared/sessions.ts";
@@ -136,208 +140,6 @@ declare const EdgeRuntime: { waitUntil: (promise: Promise<unknown>) => void };
 
 // ─── Bot Identity ────────────────────────────────────────────────────
 const BOT_ID = "smc";
-// ─── Default Config (overridden by bot_configs) ─────────────────────
-const DEFAULTS = {
-  minConfluence: 55,  // Percentage (0-100) — must match normalizedScoring: true
-  htfBiasRequired: true,
-  htfBiasHardVeto: false,
-  onlyBuyInDiscount: false,
-  onlySellInPremium: false,
-  maxDrawdown: 20,
-  maxDailyLoss: 5,
-  riskPerTrade: 1,
-  standaloneMultiplier: 0.5,  // Position size multiplier for standalone entries (0.1–1.0). Unified = 1.0x always.
-  maxOpenPositions: 3,
-  maxPerSymbol: 2,
-  allowSameDirectionStacking: false,
-  portfolioHeat: 10,
-  minRiskReward: 1.5,
-  // ── SL/TP Method Defaults ──
-  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
-  fixedSLPips: 25,
-  slATRMultiple: 1.5,
-  slATRPeriod: 14,
-  slBufferPips: 2,
-  // Per-instrument SL buffer overrides (pips). When set, the override is final — no asset-class multiplier applied.
-  instrumentBuffers: {} as Record<string, { slBufferPips?: number }>,
-  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
-  fixedTPPips: 50,
-  tpRatio: 2.0,
-  tpATRMultiple: 2.0,
-  breakEvenEnabled: true,
-  breakEvenPips: 20,
-  // Offset above/below entry when SL is moved to breakeven (pips). Default 3
-  // covers typical spread + commission so BE exits net ~flat instead of slightly
-  // negative on live brokers.
-  breakEvenOffsetPips: 3,
-  enabledSessions: ["london", "newyork"],
-  enabledDays: [1, 2, 3, 4, 5], // Mon-Fri
-  instruments: [
-    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
-    "XAU/USD", "BTC/USD",
-  ],
-  openingRange: {
-    enabled: false,
-    candleCount: 24,
-    useBias: true,
-    useJudasSwing: true,
-    useKeyLevels: true,
-    usePremiumDiscount: false,
-    waitForCompletion: true,
-  },
-  tradingStyle: {
-    mode: "day_trader" as "scalper" | "day_trader" | "swing_trader",
-  },
-  // ── Spread Filter ──
-  spreadFilterEnabled: true,
-  maxSpreadPips: 0, // 0 = use per-instrument defaults from SPECS.maxSpread
-  // ── ATR Volatility Filter (H2) ──
-  atrFilterEnabled: false,
-  atrFilterMin: 0,   // min ATR in pips (0 = no min)
-  atrFilterMax: 0,   // max ATR in pips (0 = no max)
-  // ── News Event Filter ──
-  newsFilterEnabled: true,
-  newsFilterPauseMinutes: 30,
-  // ── Entry behaviour ──
-  scanIntervalMinutes: 15, // how often to scan (cron runs every 5m, but skips if interval not elapsed)
-  cooldownMinutes: 0,
-  closeOnReverse: false,
-  // ── Exit toggles ──
-  structureInvalidationEnabled: false, // CHoCH-against SL tightening (disabled: fires too often on retracements)
-  trailingStopEnabled: false,
-  trailingStopPips: 15,
-  trailingStopActivation: "after_1r",
-  partialTPEnabled: true,
-  partialTPPercent: 50,
-  partialTPLevel: 1.0,
-  maxHoldEnabled: false,
-  maxHoldHours: 0,
-  // ── Sessions ──
-  killZoneOnly: false,
-  // ── Protection ──
-  maxConsecutiveLosses: 0,
-  protectionMaxDailyLossDollar: 0,
-  // ── Strategy gates ── (collapsed to single percentage threshold: minConfluence)
-  // ── Normalized Scoring (opt-in) ──
-  // When true, raw score is normalized to percentage of enabled factors' max possible score,
-  // then scaled to 0-10. This means disabling factors auto-adjusts the scale so the
-  // minConfluence threshold always means "X% of enabled factors aligned".
-  normalizedScoring: true,  // Percentage-based scoring is now the default
-  useSMT: true,
-  smtOppositeVeto: true,  // When true, block trades where SMT divergence opposes signal direction
-  useFOTSI: true,
-  // ── Impulse Zone Scoring ──
-  impulseZoneEnabled: true,       // When true, apply score penalty/bonus based on zone detection
-  impulseZonePenalty: 2.0,        // Score reduction (percentage points) when no valid zone found
-  impulseZoneBonus: 1.0,          // Score bonus (percentage points) when price IS at a valid zone
-  impulseZoneGateMode: "hard" as "hard" | "soft" | "off", // "hard" = no zone/not at zone → skip pair; "soft" = penalty only; "off" = disabled
-  minZoneScore: 4,              // Minimum zone totalScore (/9) to accept — rejects weak zones below this threshold
-  impulseSlCapMultiplier: 4,    // Max SL distance as multiple of min SL (configurable per pair, e.g. 6 for Gold)
-  originOBRetest: false,        // When true, allow entries at the OB that CAUSED the impulse (fib 1.0 re-test)
-  fibMaxRetracement: 0.786,     // Max Fib retracement to accept a zone (0.5–1.0). Higher = deeper zones qualify
-  // ── Simple Direction Engine ──
-  useSimpleDirection: true,        // ICT top-down direction (Daily→4H→1H) with hysteresis — replaces old P/D logic
-  simpleDirectionH4ChochLookback: 10,  // Recent 4H candles to check for CHoCH
-  simpleDirectionH1BosLookback: 8,     // Recent 1H candles to check for BOS confirmation
-  useConfirmedTrend: true,             // Use fib-extension-filtered MSBs for stable macro-trend (vs legacy swing-pair flip)
-  confirmedTrendFibFactor: 0.25,       // Min extension as fraction of swing range to count as confirmed MSB (0.25 = 25%)
-  confirmedTrendSwingLookback: 5,      // Swing detection lookback for confirmedTrend (coarser than entry-level lookback=3)
-  // ── Structural Conviction Gate (Gate 3) ──
-  // S2F (Structure-to-Fractal) thresholds: block trade when directionRate=0% AND S2F < threshold.
-  // Asymmetric defaults: longs strict (35%), shorts loose (20%) per weekly advisor recommendation.
-  structuralConvictionS2FLong: 0.35,
-  structuralConvictionS2FShort: 0.20,
-  // Opposite-fractal soft-block thresholds (used when directionRate=0% but S2F passes).
-  structuralConvictionOppositeLong: 0.30,
-  structuralConvictionOppositeShort: 0.45,
-  // ── Regime-Adaptive Exit Engine ──
-  regimeAdaptiveTPEnabled: false,  // When true, adjust TP based on market regime (trending → extend, ranging → tighten)
-  trendingRRMultiplier: 1.5,      // R:R multiplier in trending regimes
-  rangingRRMultiplier: 0.75,      // R:R multiplier in ranging regimes
-  adaptiveTrailingEnabled: false, // When true, use momentum-fade trailing instead of fixed-pip trailing
-  baseTrailATRMultiple: 1.5,      // Base trailing distance as ATR multiple
-  momentumFadeThreshold: 0.4,     // Body/range ratio below this = fading momentum
-  trailTightenFactor: 0.6,        // Multiply trail distance by this when momentum fading
-  trailWidenFactor: 1.3,          // Multiply trail distance by this when momentum strong
-  // ── Setup Staging / Watchlist ──
-  stagingEnabled: true,
-  watchThreshold: 25,          // Minimum score to enter the watchlist (percentage)
-  stagingTTLMinutes: 240,      // Time-to-live for staged setups (4h default)
-  minStagingCycles: 1,         // Minimum scan cycles before promotion allowed
-  // ── Limit Orders ──
-  limitOrderEnabled: false,     // When true, place limit orders at zone edges instead of market orders
-  limitOrderExpiryMinutes: 60,  // How long a pending limit order stays active before expiring
-  pendingOrderCooldownMinutes: 0, // 0 = use limitOrderExpiryMinutes as cooldown. Set >0 to override.
-  limitOrderMaxDistancePips: 30, // Max distance from current price to limit price (skip if too far)
-  limitOrderMinDistancePips: 3,  // Min distance — if price is already at the zone, use market order instead
-  limitOrderPreferZone: "ob" as "ob" | "fvg" | "nearest", // Which zone to use for limit price
-  marketFillAtZone: true,        // When true + izGateMode="hard" + price IS at zone → market fill immediately (no CHoCH wait)
-  marketFillStrictATRMult: 0.3,   // ATR multiplier for strict zone proximity (market fill). Range: 0.1-1.0
-  // ── Confirmation Method ──
-  confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",  // "choch" = 5m CHoCH (default), "indicators" = BB+Stoch+MACD+Vol, "choch_and_indicators" = both must pass
-  indicatorMinCount: 3,            // How many of 4 indicators must agree (when using indicator confirmation)
-  // ── Per-pair scratch (set during scan) ──
-  _currentSymbol: "" as string,
-  _smtResult: null as any,
-  // ── Factor Weights (config-driven, AI-tunable) ──
-  factorWeights: {} as Record<string, number>,
-  // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
-  ictHTFEnabled: true,             // Enable ICT HTF analysis (weekly bias + daily impulse + containment)
-  ictHTFGateMode: "off" as "hard" | "soft" | "off",  // "off" = log only (no trade impact); "soft" = score adjust; "hard" = block
-  ictHTFAlignedBonus: 2.0,         // Score bonus when weekly + daily + containment all align
-  ictHTFMisalignedPenalty: 3.0,    // Score penalty when weekly bias opposes trade direction
-  ictHTFMinContainment: 50,        // Min % overlap between LTF zone and Daily OB for containment pass
-  ictWeeklyBiasRequired: true,     // Require weekly bias alignment (when gate != off)
-  ictDailyContainmentRequired: true, // Require LTF zone to be inside Daily OB (when gate != off)
-  // ── ICT Displacement MSS Validation ──
-  ictDisplacementMSSEnabled: true,
-  ictDisplacementMSSGateMode: "off" as "hard" | "soft" | "off",
-  ictDisplacementMSSMinBodyRatio: 0.6,
-  ictDisplacementMSSMinRangeATR: 1.2,
-  ictDisplacementMSSLookback: 3,
-  ictDisplacementMSSPenalty: 2.0,
-  // ── ICT Judas Swing (Liquidity Sweep before MSS) ──
-  ictJudasSwingEnabled: true,
-  ictJudasSwingGateMode: "off" as "hard" | "soft" | "off",
-  ictJudasSwingLookback: 10,
-  ictJudasSwingMinDepthATR: 0.1,
-  ictJudasSwingRequireCloseBack: true,
-  ictJudasSwingPenalty: 1.5,
-  // ── ICT FVG Invalidation ──
-  ictFVGInvalidationEnabled: true,
-  ictFVGInvalidationGateMode: "off" as "hard" | "soft" | "off",
-  ictFVGBodyCloseOnly: true,
-  ictFVGRuleOfTwo: true,
-  ictFVGExhaustedPenalty: 1.5,
-  ictFVGInvalidatedPenalty: 3.0,
-  // ── ICT Kill Zone Time Filter ──
-  ictKillZoneEnabled: true,
-  ictKillZoneGateMode: "off" as "hard" | "soft" | "off",
-  ictKillZoneSilverBullet: true,
-  ictKillZonePMSession: true,
-  ictKillZoneOutsidePenalty: 1.0,
-  ictKillZonePrimeBonus: 1.5,
-  // ── ICT Risk Management ──
-  ictRiskEnabled: true,
-  ictRiskBasePercent: 0.01,
-  ictRiskDrawdownHalving: true,
-  ictRiskMaxConsecLosses: 3,
-  ictRiskDailyLimit: 0.01,
-  ictRiskWeeklyLimit: 0.025,
-  ictRiskMaxTradesPerDay: 3,
-  ictRiskFVGRuleOfTwoExit: true,
-  // ── Entry/HTF timeframes (set by style) ──
-  entryTimeframe: "15min",
-  htfTimeframe: "1day",
-  // ── Thesis Conviction Tracker ──
-  thesisConvictionEnabled: true,       // Enable thesis conviction tracking
-  thesisConvictionMode: "shadow" as "shadow" | "active", // "shadow" = log only; "active" = modulate impulse credit
-  thesisConvictionDecayPerCycle: 8,    // Points lost per cycle when evidence opposes thesis
-  thesisConvictionRecoveryPerCycle: 5, // Points gained per cycle when evidence supports thesis
-  thesisConvictionRevokeThreshold: 50, // Below this → impulse credit revoked (in active mode)
-  thesisConvictionKillThreshold: 30,   // Below this → thesis killed entirely (in active mode)
-};
 // resolveSymbol is now imported from ../_shared/brokerSymbols.ts (single source of truth)
 // metaFetch, metaBaseUrl, META_REGIONS, regionCache are now imported from ../_shared/metaApiClient.ts
 
@@ -435,7 +237,7 @@ function fmtPx(v: number | string | null | undefined, sym: string): string {
 // Key principle: BE and trailing are now R-based (see scannerManagement.ts),
 // so breakEvenPips here acts as a fallback — the actual trigger is max(1R, breakEvenPips/riskPips).
 // trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips).
-const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
+const STYLE_OVERRIDES: Record<string, Partial<RuntimeConfig>> = {
   scalper: {
     scanIntervalMinutes: 5,
     entryTimeframe: "5m",
@@ -501,6 +303,16 @@ const STYLE_OVERRIDES: Record<string, Partial<typeof DEFAULTS>> = {
     maxHoldEnabled: false,
     maxHoldHours: 0,                // no time limit for swings
   },
+};
+
+// Preserve the scanner's established style-inheritance behavior while using
+// the canonical runtime defaults as the single default authority. Historically
+// the scanner treated partial TP as a non-default value unless it was true;
+// retaining that one compatibility sentinel avoids silently enabling partial
+// profit-taking for existing day-trader configs during this cleanup.
+const STYLE_INHERITANCE_BASELINE: RuntimeConfig = {
+  ...RUNTIME_DEFAULTS,
+  partialTPEnabled: true,
 };
 
 function getEntryInterval(entryTf: string): string {
@@ -676,330 +488,6 @@ async function loadConfig(supabase: any, userId: string, connectionId?: string) 
   }
   // Delegate to shared mapper (single source of truth for field resolution)
   return mapNestedToFlat(data?.config_json || null);
-}
-
-// ─── LEGACY loadConfig body preserved as reference (DO NOT USE) ──────
-// The mapping logic below has been extracted to _shared/configMapper.ts.
-// Keeping as dead code for one release cycle to aid debugging if needed.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _legacyLoadConfigMapping(_raw: any) {
-  const raw = _raw;
-  const strategy = raw.strategy || {};
-  const risk = raw.risk || {};
-  const entry = raw.entry || {};
-  const exit = raw.exit || {};
-  const instruments = raw.instruments || {};
-  const sessions = raw.sessions || {};
-  const protection = raw.protection || {};
-
-  const enabledInstrumentMap = instruments.allowedInstruments && typeof instruments.allowedInstruments === "object"
-    ? instruments.allowedInstruments
-    : null;
-  const enabledInstrumentList = enabledInstrumentMap
-    ? Object.entries(enabledInstrumentMap)
-        .filter(([, enabled]) => Boolean(enabled))
-        .map(([symbol]) => symbol)
-    : null;
-
-  const merged = {
-    ...DEFAULTS,
-    // ── Strategy mappings ──
-    // UI writes: confluenceThreshold; legacy DB: minConfluenceScore
-    // Auto-scale legacy 0-10 values to percentage when normalizedScoring is true
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw.minConfluence ?? DEFAULTS.minConfluence;
-      // If value is in legacy 0-10 range and normalizedScoring is on, scale to percentage
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
-      return raw_mc;
-    })(),
-    // Legacy minFactorCount and minStrongFactors removed — single percentage threshold only
-    // UI writes: requireHTFBias; legacy DB: htfBiasRequired
-    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? raw.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
-    // UI writes: htfBiasHardVeto — when true, only allow longs in bullish HTF, shorts in bearish HTF (no ranging exception)
-    htfBiasHardVeto: strategy.htfBiasHardVeto ?? raw.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
-    // UI writes: useOrderBlocks; legacy DB: enableOB
-    enableOB: strategy.useOrderBlocks ?? strategy.enableOB ?? true,
-    // UI writes: useFVG; legacy DB: enableFVG
-    enableFVG: strategy.useFVG ?? strategy.enableFVG ?? true,
-    // UI writes: useLiquiditySweep; legacy DB: enableLiquiditySweep
-    enableLiquiditySweep: strategy.useLiquiditySweep ?? strategy.enableLiquiditySweep ?? true,
-    // UI writes: useStructureBreak; legacy DB: enableBOS + enableCHoCH
-    enableStructureBreak: strategy.useStructureBreak ?? (strategy.enableBOS !== undefined ? strategy.enableBOS : true),
-    // Displacement scoring (defaults true)
-    useDisplacement: strategy.useDisplacement ?? true,
-    // Breaker Blocks + Unicorn Model (defaults true)
-    useBreakerBlocks: strategy.useBreakerBlocks ?? true,
-    useUnicornModel: strategy.useUnicornModel ?? true,
-    // Silver Bullet macro windows (defaults true)
-    useSilverBullet: strategy.useSilverBullet ?? true,
-    // ICT Macro Windows (defaults true)
-    useMacroWindows: strategy.useMacroWindows ?? true,
-    // SMT Divergence (defaults true)
-    useSMT: strategy.useSMT ?? true,
-    // SMT Opposite Veto (defaults true — block trades where SMT opposes signal)
-    smtOppositeVeto: strategy.smtOppositeVeto ?? raw.smtOppositeVeto ?? true,
-    // VWAP confluence (defaults true)
-    useVWAP: strategy.useVWAP ?? true,
-    vwapProximityPips: strategy.vwapProximityPips ?? 15,
-    // AMD Phase (defaults true)
-    useAMD: strategy.useAMD ?? true,
-    // FOTSI Currency Strength (defaults true)
-    useFOTSI: strategy.useFOTSI ?? true,
-    // Impulse Zone Scoring (defaults true)
-    impulseZoneEnabled: strategy.impulseZoneEnabled ?? raw.impulseZoneEnabled ?? true,
-    impulseZonePenalty: strategy.impulseZonePenalty ?? raw.impulseZonePenalty ?? 2.0,
-    impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? 1.0,
-    impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? "hard") as "hard" | "soft" | "off",
-    minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? DEFAULTS.minZoneScore,
-    impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? DEFAULTS.impulseSlCapMultiplier,
-    originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? DEFAULTS.originOBRetest,
-    fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? DEFAULTS.fibMaxRetracement,
-    // Simple Direction Engine
-    useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true,
-    simpleDirectionH4ChochLookback: strategy.simpleDirectionH4ChochLookback ?? raw.simpleDirectionH4ChochLookback ?? 10,
-    simpleDirectionH1BosLookback: strategy.simpleDirectionH1BosLookback ?? raw.simpleDirectionH1BosLookback ?? 8,
-    useConfirmedTrend: strategy.useConfirmedTrend ?? raw.useConfirmedTrend ?? true,
-    confirmedTrendFibFactor: strategy.confirmedTrendFibFactor ?? raw.confirmedTrendFibFactor ?? 0.25,
-    confirmedTrendSwingLookback: strategy.confirmedTrendSwingLookback ?? raw.confirmedTrendSwingLookback ?? 5,
-    // Structural Conviction Gate (Gate 3) — configurable per-direction S2F + opposite thresholds
-    structuralConvictionEnabled: strategy.structuralConvictionEnabled !== false,
-    structuralConvictionS2FLong: strategy.structuralConvictionS2FLong ?? raw.structuralConvictionS2FLong ?? DEFAULTS.structuralConvictionS2FLong,
-    structuralConvictionS2FShort: strategy.structuralConvictionS2FShort ?? raw.structuralConvictionS2FShort ?? DEFAULTS.structuralConvictionS2FShort,
-    structuralConvictionOppositeLong: strategy.structuralConvictionOppositeLong ?? raw.structuralConvictionOppositeLong ?? DEFAULTS.structuralConvictionOppositeLong,
-    structuralConvictionOppositeShort: strategy.structuralConvictionOppositeShort ?? raw.structuralConvictionOppositeShort ?? DEFAULTS.structuralConvictionOppositeShort,
-    // ── Regime-Adaptive Exit Engine ──
-    regimeAdaptiveTPEnabled: strategy.regimeAdaptiveTPEnabled ?? raw.regimeAdaptiveTPEnabled ?? false,
-    trendingRRMultiplier: strategy.trendingRRMultiplier ?? raw.trendingRRMultiplier ?? 1.5,
-    rangingRRMultiplier: strategy.rangingRRMultiplier ?? raw.rangingRRMultiplier ?? 0.75,
-    adaptiveTrailingEnabled: strategy.adaptiveTrailingEnabled ?? raw.adaptiveTrailingEnabled ?? false,
-    baseTrailATRMultiple: strategy.baseTrailATRMultiple ?? raw.baseTrailATRMultiple ?? 1.5,
-    momentumFadeThreshold: strategy.momentumFadeThreshold ?? raw.momentumFadeThreshold ?? 0.4,
-    trailTightenFactor: strategy.trailTightenFactor ?? raw.trailTightenFactor ?? 0.6,
-    trailWidenFactor: strategy.trailWidenFactor ?? raw.trailWidenFactor ?? 1.3,
-    // Volume Profile / Trend Direction / Daily Bias toggles (UI writes, scanner now respects)
-    useVolumeProfile: strategy.useVolumeProfile ?? true,
-    useTrendDirection: strategy.useTrendDirection ?? true,
-    useDailyBias: strategy.useDailyBias ?? true,
-    // Regime scoring (UI writes under strategy.*; scanner reads at top level)
-    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw.regimeScoringEnabled ?? true,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw.regimeScoringStrength ?? 1.0,
-    // Normalized scoring (percentage-based scoring that auto-adjusts when factors are toggled)
-    // Default: true — aligns with DEFAULTS object, UI default, and confluenceScoring output (always percentage)
-    normalizedScoring: strategy.normalizedScoring ?? raw.normalizedScoring ?? true,
-    // ── P1 tuning fields (now wired to scanner) ──
-    obLookbackCandles: strategy.obLookbackCandles ?? raw.obLookbackCandles ?? 50,
-    fvgMinSizePips: strategy.fvgMinSizePips ?? raw.fvgMinSizePips ?? 0,
-    fvgOnlyUnfilled: strategy.fvgOnlyUnfilled ?? raw.fvgOnlyUnfilled ?? true,
-    structureLookback: strategy.structureLookback ?? raw.structureLookback ?? 50,
-    liquidityPoolMinTouches: strategy.liquidityPoolMinTouches ?? raw.liquidityPoolMinTouches ?? 2,
-    // Liquidity detection sensitivity (1-5 scale → ATR multiplier)
-    // 1=tight (0.10×ATR), 2=moderate (0.15×ATR), 3=balanced (0.20×ATR), 4=loose (0.25×ATR), 5=wide (0.30×ATR)
-    equalHighsLowsSensitivity: strategy.equalHighsLowsSensitivity ?? raw.equalHighsLowsSensitivity ?? 3,
-    // Premium/Discount filters (legacy DB keys)
-    onlyBuyInDiscount: strategy.onlyBuyInDiscount ?? DEFAULTS.onlyBuyInDiscount,
-    onlySellInPremium: strategy.onlySellInPremium ?? DEFAULTS.onlySellInPremium,
-
-    // ── Risk mappings ──
-    riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? DEFAULTS.riskPerTrade,
-    standaloneMultiplier: risk.standaloneMultiplier ?? raw.standaloneMultiplier ?? DEFAULTS.standaloneMultiplier,
-    positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? "percent_risk",
-    fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? 0.1,
-    // UI writes: maxDailyDrawdown; legacy DB: maxDailyLoss
-    maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? DEFAULTS.maxDailyLoss,
-    // Canonical: risk.maxConcurrentTrades (UI field). Legacy risk.maxOpenPositions
-    // is intentionally NOT read — removed by the 2026-07-11 dedup migration.
-    maxOpenPositions: risk.maxConcurrentTrades ?? raw.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
-    // UI writes: minRR; legacy DB: minRiskReward
-    minRiskReward: risk.minRR ?? risk.minRiskReward ?? raw.minRiskReward ?? DEFAULTS.minRiskReward,
-    // maxDrawdown is set later (combined with circuitBreakerPct)
-    // tpRatio is set later (in SL/TP method block)
-    // Legacy DB keys
-    maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
-    allowSameDirectionStacking: risk.allowSameDirectionStacking ?? DEFAULTS.allowSameDirectionStacking,
-    portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
-    // Conflict counter thresholds (bidirectional scoring)
-    conflictThresholdRaise: risk.conflictThresholdRaise ?? raw.conflictThresholdRaise ?? 4,
-    conflictBlockAt: risk.conflictBlockAt ?? raw.conflictBlockAt ?? 6,
-
-    // ── Entry mappings ──
-    scanIntervalMinutes: entry.scanIntervalMinutes ?? raw.scanIntervalMinutes ?? DEFAULTS.scanIntervalMinutes,
-    cooldownMinutes: entry.cooldownMinutes ?? 0,
-    closeOnReverse: entry.closeOnReverse ?? false,
-    slBufferPips: entry.slBufferPips ?? raw.slBufferPips ?? DEFAULTS.slBufferPips,
-
-    // ── SL/TP Method mappings ──
-    slMethod: exit.stopLossMethod ?? exit.slMethod ?? raw.slMethod ?? DEFAULTS.slMethod,
-    fixedSLPips: exit.fixedSLPips ?? raw.fixedSLPips ?? DEFAULTS.fixedSLPips,
-    slATRMultiple: exit.slATRMultiple ?? raw.slATRMultiple ?? DEFAULTS.slATRMultiple,
-    slATRPeriod: exit.slATRPeriod ?? raw.slATRPeriod ?? DEFAULTS.slATRPeriod,
-    tpMethod: exit.takeProfitMethod ?? exit.tpMethod ?? raw.tpMethod ?? DEFAULTS.tpMethod,
-    fixedTPPips: exit.fixedTPPips ?? raw.fixedTPPips ?? DEFAULTS.fixedTPPips,
-    tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? risk.minRiskReward ?? raw.tpRatio ?? DEFAULTS.tpRatio,
-    tpATRMultiple: exit.tpATRMultiple ?? raw.tpATRMultiple ?? DEFAULTS.tpATRMultiple,
-
-    // ── Exit mappings ──
-    trailingStopEnabled: exit.trailingStop ?? exit.trailingStopEnabled ?? raw.trailingStopEnabled ?? false,
-    trailingStopPips: exit.trailingStopPips ?? raw.trailingStopPips ?? 15,
-    trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
-    breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? DEFAULTS.breakEvenEnabled,
-    breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? DEFAULTS.breakEvenPips,
-    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? DEFAULTS.breakEvenOffsetPips,
-    partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
-    partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
-    partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
-    maxHoldEnabled: exit.maxHoldEnabled ?? raw.maxHoldEnabled ?? DEFAULTS.maxHoldEnabled,
-    maxHoldHours: exit.timeExitHours ?? exit.maxHoldHours ?? 0,
-
-    // ── Instruments ──
-    // Priority: 1) instruments.enabled array (current UI, including explicit empty array), 2) allowedInstruments map (legacy), 3) defaults
-    instruments: Array.isArray(instruments.enabled)
-      ? instruments.enabled
-      : enabledInstrumentList
-        ? enabledInstrumentList
-        : (Array.isArray(raw.instruments) ? raw.instruments : DEFAULTS.instruments),
-
-    // ── Sessions ──
-    // Session filter: use shared normalizeSessionFilter for consistent parsing.
-    // Handles filter arrays, legacy boolean configs, and "sydney" → "offhours" migration.
-    enabledSessions: (
-      Array.isArray(sessions.filter)
-        ? normalizeSessionFilter(sessions.filter)
-        : sessions.asianEnabled !== undefined
-          ? normalizeSessionFilter([
-              ...(sessions.asianEnabled ? ["asian"] : []),
-              ...(sessions.londonEnabled ? ["london"] : []),
-              ...(sessions.newYorkEnabled || sessions.newyorkEnabled ? ["newyork"] : []),
-              ...(sessions.sydneyEnabled ? ["sydney"] : []),  // migrated to "offhours" by normalizeSessionFilter
-            ])
-          : (Array.isArray(raw.enabledSessions) ? normalizeSessionFilter(raw.enabledSessions) : DEFAULTS.enabledSessions)
-    ),
-    killZoneOnly: sessions.killZoneOnly ?? false,
-    // Sessions block no longer passed through — detectSession() uses fixed DEFAULT_SESSION_WINDOWS.
-    // The UI only toggles sessions on/off via the filter array.
-
-    // ── Active Days (convert {mon:true,...} to day-of-week numbers) ──
-    enabledDays: sessions.activeDays
-      ? [
-          ...(sessions.activeDays.sun ? [0] : []),
-          ...(sessions.activeDays.mon ? [1] : []),
-          ...(sessions.activeDays.tue ? [2] : []),
-          ...(sessions.activeDays.wed ? [3] : []),
-          ...(sessions.activeDays.thu ? [4] : []),
-          ...(sessions.activeDays.fri ? [5] : []),
-          ...(sessions.activeDays.sat ? [6] : []),
-        ]
-      : (Array.isArray(raw.enabledDays) ? raw.enabledDays : DEFAULTS.enabledDays),
-
-    // ── Protection ──
-    maxConsecutiveLosses: protection.maxConsecutiveLosses ?? 0,
-    // UI writes: maxDailyLoss (dollar); legacy DB: dailyLossLimit
-    protectionMaxDailyLossDollar: protection.maxDailyLoss ?? protection.dailyLossLimit ?? 0,
-    // UI writes: circuitBreakerPct; legacy DB may not exist
-    maxDrawdown: Math.min(
-      risk.maxDrawdown ?? raw.maxDrawdown ?? DEFAULTS.maxDrawdown,
-      protection.circuitBreakerPct ?? 100,
-    ),
-
-    // ── Opening Range & Trading Style (already nested, keep as-is) ──
-    openingRange: { ...DEFAULTS.openingRange, ...(raw.openingRange || {}) },
-    tradingStyle: { ...DEFAULTS.tradingStyle, ...(raw.tradingStyle || {}) },
-
-    // ── Factor Weights (config-driven, AI-tunable) ──
-    factorWeights: raw.factorWeights || {},
-    // ── Per-Instrument SL Buffer Overrides ──
-    instrumentBuffers: raw.instrumentBuffers || entry.instrumentBuffers || {},
-
-    // ── Spread Filter ──
-    spreadFilterEnabled: instruments.spreadFilterEnabled ?? raw.spreadFilterEnabled ?? DEFAULTS.spreadFilterEnabled,
-    maxSpreadPips: instruments.maxSpreadPips ?? raw.maxSpreadPips ?? DEFAULTS.maxSpreadPips,
-
-    // ── Correlation Filter (Gate 22) ──
-    correlationFilterEnabled: instruments.correlationFilterEnabled ?? raw.correlationFilterEnabled ?? false,
-    maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? 0.8,
-    maxCorrelatedPositions: instruments.maxCorrelatedPositions ?? raw.maxCorrelatedPositions ?? 1,
-
-    // ── News Event Filter ──
-    newsFilterEnabled: sessions.newsFilterEnabled ?? raw.newsFilterEnabled ?? DEFAULTS.newsFilterEnabled,
-    newsFilterPauseMinutes: sessions.newsFilterPauseMinutes ?? raw.newsFilterPauseMinutes ?? DEFAULTS.newsFilterPauseMinutes,
-
-    // ── ATR Volatility Filter (H2) ──
-    atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? DEFAULTS.atrFilterEnabled,
-    atrFilterMin: instruments.minATR ?? raw.atrFilterMin ?? DEFAULTS.atrFilterMin,
-    atrFilterMax: instruments.maxATR ?? raw.atrFilterMax ?? DEFAULTS.atrFilterMax,
-
-    // ── Setup Staging / Watchlist ──
-    stagingEnabled: strategy.stagingEnabled ?? raw.stagingEnabled ?? DEFAULTS.stagingEnabled,
-    watchThreshold: strategy.watchThreshold ?? raw.watchThreshold ?? DEFAULTS.watchThreshold,
-    stagingTTLMinutes: strategy.stagingTTLMinutes ?? raw.stagingTTLMinutes ?? DEFAULTS.stagingTTLMinutes,
-    minStagingCycles: strategy.minStagingCycles ?? raw.minStagingCycles ?? DEFAULTS.minStagingCycles,
-
-    // ── ICT HTF Framework (Weekly Bias + Daily Impulse + Containment) ──
-    ictHTFEnabled: strategy.ictHTFEnabled ?? raw.ictHTFEnabled ?? DEFAULTS.ictHTFEnabled,
-    ictHTFGateMode: (strategy.ictHTFGateMode ?? raw.ictHTFGateMode ?? DEFAULTS.ictHTFGateMode) as "hard" | "soft" | "off",
-    ictHTFAlignedBonus: strategy.ictHTFAlignedBonus ?? raw.ictHTFAlignedBonus ?? DEFAULTS.ictHTFAlignedBonus,
-    ictHTFMisalignedPenalty: strategy.ictHTFMisalignedPenalty ?? raw.ictHTFMisalignedPenalty ?? DEFAULTS.ictHTFMisalignedPenalty,
-    ictHTFMinContainment: strategy.ictHTFMinContainment ?? raw.ictHTFMinContainment ?? DEFAULTS.ictHTFMinContainment,
-    ictWeeklyBiasRequired: strategy.ictWeeklyBiasRequired ?? raw.ictWeeklyBiasRequired ?? DEFAULTS.ictWeeklyBiasRequired,
-        ictDailyContainmentRequired: strategy.ictDailyContainmentRequired ?? raw.ictDailyContainmentRequired ?? DEFAULTS.ictDailyContainmentRequired,
-    // ── ICT Displacement MSS Validation ──
-    ictDisplacementMSSEnabled: strategy.ictDisplacementMSSEnabled ?? raw.ictDisplacementMSSEnabled ?? DEFAULTS.ictDisplacementMSSEnabled,
-    ictDisplacementMSSGateMode: (strategy.ictDisplacementMSSGateMode ?? raw.ictDisplacementMSSGateMode ?? DEFAULTS.ictDisplacementMSSGateMode) as "hard" | "soft" | "off",
-    ictDisplacementMSSMinBodyRatio: strategy.ictDisplacementMSSMinBodyRatio ?? raw.ictDisplacementMSSMinBodyRatio ?? DEFAULTS.ictDisplacementMSSMinBodyRatio,
-    ictDisplacementMSSMinRangeATR: strategy.ictDisplacementMSSMinRangeATR ?? raw.ictDisplacementMSSMinRangeATR ?? DEFAULTS.ictDisplacementMSSMinRangeATR,
-    ictDisplacementMSSLookback: strategy.ictDisplacementMSSLookback ?? raw.ictDisplacementMSSLookback ?? DEFAULTS.ictDisplacementMSSLookback,
-    ictDisplacementMSSPenalty: strategy.ictDisplacementMSSPenalty ?? raw.ictDisplacementMSSPenalty ?? DEFAULTS.ictDisplacementMSSPenalty,
-    // ── ICT Judas Swing ──
-    ictJudasSwingEnabled: strategy.ictJudasSwingEnabled ?? raw.ictJudasSwingEnabled ?? DEFAULTS.ictJudasSwingEnabled,
-    ictJudasSwingGateMode: (strategy.ictJudasSwingGateMode ?? raw.ictJudasSwingGateMode ?? DEFAULTS.ictJudasSwingGateMode) as "hard" | "soft" | "off",
-    ictJudasSwingLookback: strategy.ictJudasSwingLookback ?? raw.ictJudasSwingLookback ?? DEFAULTS.ictJudasSwingLookback,
-    ictJudasSwingMinDepthATR: strategy.ictJudasSwingMinDepthATR ?? raw.ictJudasSwingMinDepthATR ?? DEFAULTS.ictJudasSwingMinDepthATR,
-    ictJudasSwingRequireCloseBack: strategy.ictJudasSwingRequireCloseBack ?? raw.ictJudasSwingRequireCloseBack ?? DEFAULTS.ictJudasSwingRequireCloseBack,
-    ictJudasSwingPenalty: strategy.ictJudasSwingPenalty ?? raw.ictJudasSwingPenalty ?? DEFAULTS.ictJudasSwingPenalty,
-    // ── ICT FVG Invalidation ──
-    ictFVGInvalidationEnabled: strategy.ictFVGInvalidationEnabled ?? raw.ictFVGInvalidationEnabled ?? DEFAULTS.ictFVGInvalidationEnabled,
-    ictFVGInvalidationGateMode: (strategy.ictFVGInvalidationGateMode ?? raw.ictFVGInvalidationGateMode ?? DEFAULTS.ictFVGInvalidationGateMode) as "hard" | "soft" | "off",
-    ictFVGBodyCloseOnly: strategy.ictFVGBodyCloseOnly ?? raw.ictFVGBodyCloseOnly ?? DEFAULTS.ictFVGBodyCloseOnly,
-    ictFVGRuleOfTwo: strategy.ictFVGRuleOfTwo ?? raw.ictFVGRuleOfTwo ?? DEFAULTS.ictFVGRuleOfTwo,
-    ictFVGExhaustedPenalty: strategy.ictFVGExhaustedPenalty ?? raw.ictFVGExhaustedPenalty ?? DEFAULTS.ictFVGExhaustedPenalty,
-    ictFVGInvalidatedPenalty: strategy.ictFVGInvalidatedPenalty ?? raw.ictFVGInvalidatedPenalty ?? DEFAULTS.ictFVGInvalidatedPenalty,
-    // ── ICT Kill Zone ──
-    ictKillZoneEnabled: strategy.ictKillZoneEnabled ?? raw.ictKillZoneEnabled ?? DEFAULTS.ictKillZoneEnabled,
-    ictKillZoneGateMode: (strategy.ictKillZoneGateMode ?? raw.ictKillZoneGateMode ?? DEFAULTS.ictKillZoneGateMode) as "hard" | "soft" | "off",
-    ictKillZoneSilverBullet: strategy.ictKillZoneSilverBullet ?? raw.ictKillZoneSilverBullet ?? DEFAULTS.ictKillZoneSilverBullet,
-    ictKillZonePMSession: strategy.ictKillZonePMSession ?? raw.ictKillZonePMSession ?? DEFAULTS.ictKillZonePMSession,
-    ictKillZoneOutsidePenalty: strategy.ictKillZoneOutsidePenalty ?? raw.ictKillZoneOutsidePenalty ?? DEFAULTS.ictKillZoneOutsidePenalty,
-    ictKillZonePrimeBonus: strategy.ictKillZonePrimeBonus ?? raw.ictKillZonePrimeBonus ?? DEFAULTS.ictKillZonePrimeBonus,
-    // ── ICT Risk Management ──
-    ictRiskEnabled: strategy.ictRiskEnabled ?? raw.ictRiskEnabled ?? DEFAULTS.ictRiskEnabled,
-    ictRiskBasePercent: strategy.ictRiskBasePercent ?? raw.ictRiskBasePercent ?? DEFAULTS.ictRiskBasePercent,
-    ictRiskDrawdownHalving: strategy.ictRiskDrawdownHalving ?? raw.ictRiskDrawdownHalving ?? DEFAULTS.ictRiskDrawdownHalving,
-    ictRiskMaxConsecLosses: strategy.ictRiskMaxConsecLosses ?? raw.ictRiskMaxConsecLosses ?? DEFAULTS.ictRiskMaxConsecLosses,
-    ictRiskDailyLimit: strategy.ictRiskDailyLimit ?? raw.ictRiskDailyLimit ?? DEFAULTS.ictRiskDailyLimit,
-    ictRiskWeeklyLimit: strategy.ictRiskWeeklyLimit ?? raw.ictRiskWeeklyLimit ?? DEFAULTS.ictRiskWeeklyLimit,
-    ictRiskMaxTradesPerDay: strategy.ictRiskMaxTradesPerDay ?? raw.ictRiskMaxTradesPerDay ?? DEFAULTS.ictRiskMaxTradesPerDay,
-    ictRiskFVGRuleOfTwoExit: strategy.ictRiskFVGRuleOfTwoExit ?? raw.ictRiskFVGRuleOfTwoExit ?? DEFAULTS.ictRiskFVGRuleOfTwoExit,
-    // ── Limit Orders ──
-    limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? DEFAULTS.limitOrderEnabled,
-    limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? DEFAULTS.limitOrderExpiryMinutes,
-    pendingOrderCooldownMinutes: entry.pendingOrderCooldownMinutes ?? raw.pendingOrderCooldownMinutes ?? DEFAULTS.pendingOrderCooldownMinutes,
-    limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? DEFAULTS.limitOrderMaxDistancePips,
-    limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? DEFAULTS.limitOrderMinDistancePips,
-    limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? DEFAULTS.limitOrderPreferZone,
-        marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? DEFAULTS.marketFillAtZone,
-    marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? DEFAULTS.marketFillStrictATRMult,
-    confirmationMethod: (entry.confirmationMethod ?? strategy.confirmationMethod ?? raw.confirmationMethod ?? DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
-    indicatorMinCount: entry.indicatorMinCount ?? strategy.indicatorMinCount ?? raw.indicatorMinCount ?? DEFAULTS.indicatorMinCount,
-    // ── Thesis Conviction Tracker ──
-    thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? DEFAULTS.thesisConvictionEnabled,
-    thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? DEFAULTS.thesisConvictionMode) as "shadow" | "active",
-    thesisConvictionDecayPerCycle: strategy.thesisConvictionDecayPerCycle ?? raw.thesisConvictionDecayPerCycle ?? DEFAULTS.thesisConvictionDecayPerCycle,
-    thesisConvictionRecoveryPerCycle: strategy.thesisConvictionRecoveryPerCycle ?? raw.thesisConvictionRecoveryPerCycle ?? DEFAULTS.thesisConvictionRecoveryPerCycle,
-    thesisConvictionRevokeThreshold: strategy.thesisConvictionRevokeThreshold ?? raw.thesisConvictionRevokeThreshold ?? DEFAULTS.thesisConvictionRevokeThreshold,
-    thesisConvictionKillThreshold: strategy.thesisConvictionKillThreshold ?? raw.thesisConvictionKillThreshold ?? DEFAULTS.thesisConvictionKillThreshold,
-  };
-  return merged;
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
@@ -1758,7 +1246,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   // ── Resolve Trading Style ──
   const resolvedStyle = config.tradingStyle?.mode || "day_trader";
 
-  // Apply style overrides as DEFAULTS — user-explicit values always win.
+  // Apply style overrides as defaults — user-explicit values always win.
   // The management fields (trailing, BE, partial, maxHold) may have been
   // explicitly set by the user to accommodate broker-specific conditions.
   // We only fill in style defaults for fields the user hasn't touched.
@@ -1781,8 +1269,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     for (const [key, val] of Object.entries(styleDefaults)) {
       if (userProtectedFields.has(key)) {
         // Only apply style default if user didn't explicitly set this field
-        // (i.e., the value is still the global DEFAULTS fallback)
-        if ((config as any)[key] === (DEFAULTS as any)[key]) {
+        // (i.e., the value is still the established style-inheritance baseline)
+        if ((config as any)[key] === (STYLE_INHERITANCE_BASELINE as any)[key]) {
           (config as any)[key] = val;
           styleApplied.push(`${key}=${val}`);
         } else {
