@@ -1,6 +1,7 @@
 import type { InstrumentGamePlan, SessionGamePlan } from "./gamePlan.ts";
 import type { DirectionVerdictResult } from "./directionVerdict.ts";
 import type { DirectionVerdictDecision } from "./decisionContract.ts";
+import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 
 export const DIRECTION_VERDICT_CONTRACT_VERSION = "phase3.v2";
 export const DEFAULT_DIRECTION_VERDICT_VALIDITY_MINUTES = 20;
@@ -65,6 +66,7 @@ export async function persistActiveDirectionVerdict(
     scanCycleId?: string | null;
     evaluatedAt?: string;
     validityMinutes?: number;
+    stylePolicy?: ResolvedStylePolicy | null;
   },
 ): Promise<DirectionVerdictDecision> {
   const evaluatedAt = input.evaluatedAt || new Date().toISOString();
@@ -94,7 +96,10 @@ export async function persistActiveDirectionVerdict(
     p_should_block: input.verdict.shouldBlock,
     p_block_reason: input.verdict.blockReason,
     p_score_adjustment: input.verdict.scoreAdjustment,
-    p_verdict_json: input.verdict,
+    p_verdict_json: {
+      ...input.verdict,
+      stylePolicy: input.stylePolicy || null,
+    },
     p_source_candle_timestamp: input.sourceCandleTimestamp || null,
     p_evaluated_at: evaluatedAt,
     p_expires_at: expiresAt,

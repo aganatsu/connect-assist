@@ -857,6 +857,10 @@ Deno.serve(async (req) => {
               null,
             entryConfirmation,
             hierarchy,
+            stylePolicy:
+              parsedPendingEvidence?.decisionContext?.stylePolicy ||
+              parsedPendingEvidence?.stylePolicy ||
+              null,
             evaluatedAt: nowStr,
           }),
         );

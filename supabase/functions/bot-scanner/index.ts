@@ -5,6 +5,7 @@ import {
   applyPairOverrides,
 } from "../_shared/configMapper.ts";
 import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
+import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
@@ -1348,6 +1349,10 @@ async function runScanForUser(
   if (styleResolution.preserved.length > 0) {
     console.log(`[config] User-protected overrides kept: ${styleResolution.preserved.join(", ")}`);
   }
+  const scanStylePolicy = await buildResolvedStylePolicy({
+    resolution: styleResolution,
+    config,
+  });
 
   // Day-of-week check — skip for crypto-only instrument lists.
   // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
@@ -2633,6 +2638,10 @@ async function runScanForUser(
                 null,
               entryConfirmation: pendingEntryConfirmation,
               hierarchy: pendingHierarchy,
+              stylePolicy:
+                parsedPendingEvidence?.decisionContext?.stylePolicy ||
+                parsedPendingEvidence?.stylePolicy ||
+                null,
               evaluatedAt: nowStr,
             }),
           );
@@ -3215,7 +3224,10 @@ async function runScanForUser(
               userId,
               botId: BOT_ID,
               source: "automatic_scan",
-              configSnapshot: buildGamePlanConfigSnapshot(config),
+              configSnapshot: buildGamePlanConfigSnapshot(
+                config,
+                scanStylePolicy,
+              ),
               marketDataSnapshot: {
                 hierarchy: ["Twelve Data", "Polygon"],
                 scanCycleId,
@@ -3446,6 +3458,15 @@ async function runScanForUser(
       ? symbolBufferOverride
       : pairConfig.slBufferPips * pairAssetProfileInner.slBufferMultiplier;
     const adjustedMinConfluence = Math.max(1, pairConfig.minConfluence + pairAssetProfileInner.minConfluenceAdj);
+    const pairStylePolicy = await buildResolvedStylePolicy({
+      resolution: styleResolution,
+      config: {
+        ...pairConfig,
+        slBufferPips: adjustedSlBuffer,
+      },
+      symbol: pair,
+      effectiveMinConfluence: adjustedMinConfluence,
+    });
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
@@ -3783,6 +3804,7 @@ async function runScanForUser(
       },
       status: "analyzed",
       tradingStyle: resolvedStyle,
+      stylePolicy: pairStylePolicy,
       // FIX #10: detectOptimalStyle — suggests the best style based on current market conditions
       suggestedStyle: (() => {
         try {
@@ -4004,6 +4026,7 @@ async function runScanForUser(
           sourceCandleTimestamp:
             candles[candles.length - 1]?.datetime || null,
           scanCycleId,
+          stylePolicy: pairStylePolicy,
         },
       );
       _activeDirectionVerdicts.set(pair, activeDirectionVerdict);
@@ -4643,7 +4666,11 @@ async function runScanForUser(
           stage: "watching",
           authorized: false,
           reason: "Setup is observational until qualification",
+          stylePolicy: pairStylePolicy,
         },
+        style_policy_version: pairStylePolicy.contractVersion,
+        style_policy_hash: pairStylePolicy.policyHash,
+        style_policy: pairStylePolicy,
       };
     };
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
@@ -5403,6 +5430,7 @@ async function runScanForUser(
         thesisConviction: (detail as any).thesisConviction || null,
         entryConfirmation: candidateConfirmation,
         hierarchy: candidateHierarchy,
+        stylePolicy: pairStylePolicy,
         evaluatedAt: candidateConfirmation.evaluatedAt,
       });
     }
@@ -6315,6 +6343,7 @@ async function runScanForUser(
             thesisConviction: (detail as any).thesisConviction || null,
             entryConfirmation: pendingConfirmation,
             hierarchy: pendingHierarchy,
+            stylePolicy: pairStylePolicy,
             evaluatedAt: nowStr,
           });
           const pendingOriginatingZone = {
@@ -6736,6 +6765,7 @@ async function runScanForUser(
             thesisConviction: (detail as any).thesisConviction || null,
             entryConfirmation: directEntryConfirmation,
             hierarchy: directHierarchy,
+            stylePolicy: pairStylePolicy,
             evaluatedAt: nowStr,
           }),
         );
@@ -7772,6 +7802,7 @@ async function runScanForUser(
                 thesisConviction: (detail as any).thesisConviction || null,
                 entryConfirmation: breakerConfirmation,
                 hierarchy: breakerHierarchy,
+                stylePolicy: pairStylePolicy,
                 evaluatedAt: breakerEvaluatedAt,
               }),
             );
@@ -8202,6 +8233,7 @@ async function runScanForUser(
       pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
+      stylePolicy: scanStylePolicy,
     },
     ...scanDetails,
   ];

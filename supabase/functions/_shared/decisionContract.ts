@@ -4,6 +4,7 @@ import {
 } from "./gamePlanGate.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ThesisValidationResult } from "./thesisValidator.ts";
+import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 
 export const TRADE_DECISION_CONTRACT_VERSION = "phase3.v2";
 
@@ -23,6 +24,7 @@ export interface DirectionVerdictDecision {
   evaluatedAt?: string | null;
   expiresAt?: string | null;
   sourceCandleTimestamp?: string | null;
+  stylePolicy?: ResolvedStylePolicy | null;
 }
 
 export interface EntryConfirmationDecision {
@@ -238,6 +240,7 @@ export interface TradeDecisionContext {
   symbol: string;
   direction: "long" | "short";
   evaluatedAt: string;
+  stylePolicy: ResolvedStylePolicy | null;
   gamePlan: {
     id: string | null;
     version: string | null;
@@ -277,6 +280,7 @@ export function buildTradeDecisionContext(input: {
   thesisConviction?: Record<string, unknown> | null;
   entryConfirmation?: EntryConfirmationDecision | null;
   hierarchy: DecisionHierarchyResult;
+  stylePolicy?: ResolvedStylePolicy | null;
   evaluatedAt?: string;
 }): TradeDecisionContext {
   const evaluatedAt = input.evaluatedAt || new Date().toISOString();
@@ -289,6 +293,7 @@ export function buildTradeDecisionContext(input: {
     symbol: input.symbol,
     direction: input.direction,
     evaluatedAt,
+    stylePolicy: input.stylePolicy || null,
     gamePlan: {
       id: pairPlan?.gamePlanId || null,
       version: pairPlan?.planVersion || input.gamePlan?.planVersion || null,
