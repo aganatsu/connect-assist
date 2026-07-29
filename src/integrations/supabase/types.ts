@@ -14,6 +14,179 @@ export type Database = {
   }
   public: {
     Tables: {
+      active_direction_verdicts: {
+        Row: {
+          agreement: number
+          block_reason: string | null
+          bot_id: string
+          confidence: number
+          contract_version: string
+          created_at: string
+          evaluated_at: string
+          expires_at: string
+          game_plan_id: string | null
+          game_plan_version: string | null
+          id: string
+          is_active: boolean
+          scan_cycle_id: string | null
+          score_adjustment: number
+          should_block: boolean
+          source_candle_timestamp: string | null
+          superseded_at: string | null
+          symbol: string
+          user_id: string
+          verdict: string
+          verdict_json: Json
+          verdict_version: string
+        }
+        Insert: {
+          agreement: number
+          block_reason?: string | null
+          bot_id?: string
+          confidence: number
+          contract_version?: string
+          created_at?: string
+          evaluated_at: string
+          expires_at: string
+          game_plan_id?: string | null
+          game_plan_version?: string | null
+          id?: string
+          is_active?: boolean
+          scan_cycle_id?: string | null
+          score_adjustment?: number
+          should_block: boolean
+          source_candle_timestamp?: string | null
+          superseded_at?: string | null
+          symbol: string
+          user_id: string
+          verdict: string
+          verdict_json: Json
+          verdict_version: string
+        }
+        Update: {
+          agreement?: number
+          block_reason?: string | null
+          bot_id?: string
+          confidence?: number
+          contract_version?: string
+          created_at?: string
+          evaluated_at?: string
+          expires_at?: string
+          game_plan_id?: string | null
+          game_plan_version?: string | null
+          id?: string
+          is_active?: boolean
+          scan_cycle_id?: string | null
+          score_adjustment?: number
+          should_block?: boolean
+          source_candle_timestamp?: string | null
+          superseded_at?: string | null
+          symbol?: string
+          user_id?: string
+          verdict?: string
+          verdict_json?: Json
+          verdict_version?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "active_direction_verdicts_game_plan_id_fkey"
+            columns: ["game_plan_id"]
+            isOneToOne: false
+            referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      active_game_plans: {
+        Row: {
+          bias: string
+          bias_confidence: number
+          bot_id: string
+          config_snapshot: Json
+          contract_version: string
+          created_at: string
+          expires_at: string
+          focus_pairs: Json
+          generated_at: string
+          generation_source: string
+          id: string
+          invalidation_conditions: Json
+          is_active: boolean
+          market_data_snapshot: Json
+          news_events: Json
+          news_impacts: Json
+          plan_json: Json
+          plan_version: string
+          session: string
+          source_candle_timestamps: Json
+          state: string
+          state_reason: string | null
+          summary: string
+          superseded_at: string | null
+          symbol: string
+          user_id: string
+          v2_conviction: Json
+        }
+        Insert: {
+          bias: string
+          bias_confidence: number
+          bot_id?: string
+          config_snapshot?: Json
+          contract_version?: string
+          created_at?: string
+          expires_at: string
+          focus_pairs?: Json
+          generated_at: string
+          generation_source: string
+          id?: string
+          invalidation_conditions?: Json
+          is_active?: boolean
+          market_data_snapshot?: Json
+          news_events?: Json
+          news_impacts?: Json
+          plan_json: Json
+          plan_version: string
+          session: string
+          source_candle_timestamps?: Json
+          state: string
+          state_reason?: string | null
+          summary?: string
+          superseded_at?: string | null
+          symbol: string
+          user_id: string
+          v2_conviction?: Json
+        }
+        Update: {
+          bias?: string
+          bias_confidence?: number
+          bot_id?: string
+          config_snapshot?: Json
+          contract_version?: string
+          created_at?: string
+          expires_at?: string
+          focus_pairs?: Json
+          generated_at?: string
+          generation_source?: string
+          id?: string
+          invalidation_conditions?: Json
+          is_active?: boolean
+          market_data_snapshot?: Json
+          news_events?: Json
+          news_impacts?: Json
+          plan_json?: Json
+          plan_version?: string
+          session?: string
+          source_candle_timestamps?: Json
+          state?: string
+          state_reason?: string | null
+          summary?: string
+          superseded_at?: string | null
+          symbol?: string
+          user_id?: string
+          v2_conviction?: Json
+        }
+        Relationships: []
+      }
       backtest_runs: {
         Row: {
           completed_at: string | null
@@ -538,10 +711,16 @@ export type Database = {
           created_at: string
           current_price: number | null
           current_price_old: string | null
+          decision_context: Json | null
           direction: string
+          direction_verdict: Json | null
+          direction_verdict_id: string | null
+          entry_confirmation: Json | null
           entry_price: number | null
           entry_price_old: string | null
           final_authorization: Json | null
+          game_plan_id: string | null
+          game_plan_version: string | null
           id: string
           mirrored_connection_ids: string[]
           open_time: string
@@ -561,6 +740,7 @@ export type Database = {
           symbol: string
           take_profit: number | null
           take_profit_old: string | null
+          thesis_validation: Json | null
           trade_overrides: Json | null
           trigger_price: string | null
           user_id: string
@@ -571,10 +751,16 @@ export type Database = {
           created_at?: string
           current_price?: number | null
           current_price_old?: string | null
+          decision_context?: Json | null
           direction: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
+          entry_confirmation?: Json | null
           entry_price?: number | null
           entry_price_old?: string | null
           final_authorization?: Json | null
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time: string
@@ -594,6 +780,7 @@ export type Database = {
           symbol: string
           take_profit?: number | null
           take_profit_old?: string | null
+          thesis_validation?: Json | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id: string
@@ -604,10 +791,16 @@ export type Database = {
           created_at?: string
           current_price?: number | null
           current_price_old?: string | null
+          decision_context?: Json | null
           direction?: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
+          entry_confirmation?: Json | null
           entry_price?: number | null
           entry_price_old?: string | null
           final_authorization?: Json | null
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           id?: string
           mirrored_connection_ids?: string[]
           open_time?: string
@@ -627,11 +820,27 @@ export type Database = {
           symbol?: string
           take_profit?: number | null
           take_profit_old?: string | null
+          thesis_validation?: Json | null
           trade_overrides?: Json | null
           trigger_price?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "paper_positions_direction_verdict_id_fkey"
+            columns: ["direction_verdict_id"]
+            isOneToOne: false
+            referencedRelation: "active_direction_verdicts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "paper_positions_game_plan_id_fkey"
+            columns: ["game_plan_id"]
+            isOneToOne: false
+            referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       paper_trade_history: {
         Row: {
@@ -724,7 +933,11 @@ export type Database = {
           confirmation_attempts: number | null
           created_at: string
           current_price: number
+          decision_context: Json | null
           direction: string
+          direction_verdict: Json | null
+          direction_verdict_id: string | null
+          entry_confirmation: Json | null
           entry_price: number
           entry_zone_high: number | null
           entry_zone_low: number | null
@@ -736,6 +949,8 @@ export type Database = {
           filled_at: string | null
           final_authorization: Json | null
           from_watchlist: boolean
+          game_plan_id: string | null
+          game_plan_version: string | null
           id: string
           order_id: string
           order_type: string
@@ -755,6 +970,7 @@ export type Database = {
           symbol: string
           take_profit: number
           thesis_cancel_reason: string | null
+          thesis_validation: Json | null
           updated_at: string
           user_id: string
           zone_touch_time: string | null
@@ -765,7 +981,11 @@ export type Database = {
           confirmation_attempts?: number | null
           created_at?: string
           current_price: number
+          decision_context?: Json | null
           direction: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
+          entry_confirmation?: Json | null
           entry_price: number
           entry_zone_high?: number | null
           entry_zone_low?: number | null
@@ -777,6 +997,8 @@ export type Database = {
           filled_at?: string | null
           final_authorization?: Json | null
           from_watchlist?: boolean
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           id?: string
           order_id: string
           order_type?: string
@@ -796,6 +1018,7 @@ export type Database = {
           symbol: string
           take_profit: number
           thesis_cancel_reason?: string | null
+          thesis_validation?: Json | null
           updated_at?: string
           user_id: string
           zone_touch_time?: string | null
@@ -806,7 +1029,11 @@ export type Database = {
           confirmation_attempts?: number | null
           created_at?: string
           current_price?: number
+          decision_context?: Json | null
           direction?: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
+          entry_confirmation?: Json | null
           entry_price?: number
           entry_zone_high?: number | null
           entry_zone_low?: number | null
@@ -818,6 +1045,8 @@ export type Database = {
           filled_at?: string | null
           final_authorization?: Json | null
           from_watchlist?: boolean
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           id?: string
           order_id?: string
           order_type?: string
@@ -837,11 +1066,27 @@ export type Database = {
           symbol?: string
           take_profit?: number
           thesis_cancel_reason?: string | null
+          thesis_validation?: Json | null
           updated_at?: string
           user_id?: string
           zone_touch_time?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "pending_orders_direction_verdict_id_fkey"
+            columns: ["direction_verdict_id"]
+            isOneToOne: false
+            referencedRelation: "active_direction_verdicts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pending_orders_game_plan_id_fkey"
+            columns: ["game_plan_id"]
+            isOneToOne: false
+            referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       prop_firm_config: {
         Row: {
@@ -1690,6 +1935,40 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      activate_direction_verdict: {
+        Args: {
+          p_agreement: number
+          p_block_reason: string
+          p_bot_id: string
+          p_confidence: number
+          p_evaluated_at: string
+          p_expires_at: string
+          p_game_plan_id: string
+          p_game_plan_version: string
+          p_scan_cycle_id: string
+          p_score_adjustment: number
+          p_should_block: boolean
+          p_source_candle_timestamp: string
+          p_symbol: string
+          p_user_id: string
+          p_verdict: string
+          p_verdict_json: Json
+          p_verdict_version: string
+        }
+        Returns: Json
+      }
+      activate_game_plan_version: {
+        Args: {
+          p_bot_id: string
+          p_config_snapshot: Json
+          p_market_data_snapshot: Json
+          p_plan_version: string
+          p_session_plan: Json
+          p_source: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       claim_broker_execution: {
         Args: {
           p_action: string
