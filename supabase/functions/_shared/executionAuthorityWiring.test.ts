@@ -138,12 +138,14 @@ Deno.test("database serializes and deduplicates immediate and pending entries", 
   assertStringIncludes(migration, "WHEN unique_violation");
 });
 
-Deno.test("fast confirmation respects confirmationMethod and user-scoped broker connection", async () => {
+Deno.test("fast confirmation respects the setup's frozen confirmation method and user-scoped broker connection", async () => {
   const source = await Deno.readTextFile(fastScannerUrl.pathname);
   assertStringIncludes(
     source,
-    'const confirmationMethod = config.confirmationMethod || "choch"',
+    "const confirmationMethod = resolvePendingConfirmationMethod(",
   );
+  assertStringIncludes(source, "pending,");
+  assertStringIncludes(source, "config,");
   assertStringIncludes(source, "checkIndicatorConfirmation(");
   assertStringIncludes(source, "brokerConn: BrokerConn | null;");
   assertEquals(

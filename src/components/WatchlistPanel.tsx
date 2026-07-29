@@ -109,6 +109,14 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           {setup.setup_type && (
             <span className="text-[12px] text-foreground/70 truncate">{setup.setup_type}</span>
           )}
+          {setup.status === "qualified" && (
+            <Badge
+              variant="outline"
+              className="text-[9px] h-4 px-1.5 border-emerald-500/40 text-emerald-300"
+            >
+              QUALIFIED
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <span className={`font-mono font-bold text-[13px] ${
@@ -187,6 +195,25 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 
       {expanded && (
         <div className="mt-1.5 space-y-1">
+          <div className="border border-border/40 bg-background/30 p-1.5 text-[10px] font-mono text-foreground/65 space-y-0.5">
+            <div>
+              Candidate {setup.candidate_id?.slice(0, 8) || "legacy"}
+              {" · "}
+              GP v{setup.game_plan_version?.slice(0, 8) || "none"}
+              {" · "}
+              DV {(setup.direction_verdict?.verdict || "missing").toUpperCase()}
+            </div>
+            <div>
+              Thesis {setup.thesis_version || "legacy"}
+              {" · "}
+              Confirmation {(setup.confirmation_method || "legacy").replace(/_/g, " ")}
+            </div>
+            {setup.lifecycle_reason && (
+              <div className="font-sans text-foreground/55">
+                {setup.lifecycle_reason}
+              </div>
+            )}
+          </div>
           {/* Present factors */}
           <div>
             <p className="text-[10px] text-foreground/50 uppercase tracking-wider mb-0.5">Present</p>
@@ -251,7 +278,9 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
   });
 
   const active = activeSetups || [];
-  const history = (allSetups || []).filter(s => s.status !== "watching");
+  const history = (allSetups || []).filter(
+    s => s.status !== "watching" && s.status !== "qualified",
+  );
   const nearGateCount = active.filter(s => s.current_score >= confluenceGate * 0.85).length;
 
   return (
@@ -329,16 +358,18 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                           }
                           <span className="font-medium text-foreground">{s.symbol}</span>
                           <Badge variant="outline" className={`text-[9px] h-3.5 px-1 ${
-                            s.status === "promoted" ? "text-success border-success/30"
+                            s.status === "filled" ? "text-success border-success/30"
                             : s.status === "expired" ? "text-muted-foreground border-border"
+                            : s.status === "cancelled" ? "text-highlight border-highlight/30"
                             : "text-destructive border-destructive/30"
                           }`}>
-                            {s.status === "promoted" ? <Target className="h-2 w-2 mr-0.5" /> : s.status === "invalidated" ? <ShieldX className="h-2 w-2 mr-0.5" /> : <Clock className="h-2 w-2 mr-0.5" />}
-                            {s.status.toUpperCase()}
+                            {s.status === "filled" ? <Target className="h-2 w-2 mr-0.5" /> : s.status === "invalidated" || s.status === "blocked_after_qualification" ? <ShieldX className="h-2 w-2 mr-0.5" /> : <Clock className="h-2 w-2 mr-0.5" />}
+                            {s.status.replace(/_/g, " ").toUpperCase()}
                           </Badge>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span className="font-mono text-[10px] text-foreground/70">{s.initial_score.toFixed(0)}% → {s.current_score.toFixed(0)}%</span>
+                          <span className="font-mono text-[10px] text-foreground/50">#{s.candidate_id?.slice(0, 8) || "legacy"}</span>
                           <span className="text-foreground/50 text-[10px]">{s.scan_cycles} cycles</span>
                           <span className="text-foreground/50 text-[10px]">{timeAgo(s.resolved_at || s.updated_at)}</span>
                         </div>

@@ -707,7 +707,10 @@ export type Database = {
       paper_positions: {
         Row: {
           bot_id: string | null
+          candidate_id: string | null
           close_reason: string | null
+          confirmation_config: Json
+          confirmation_method: string | null
           created_at: string
           current_price: number | null
           current_price_old: string | null
@@ -726,6 +729,7 @@ export type Database = {
           open_time: string
           order_id: string
           order_type: string | null
+          originating_zone: Json | null
           partial_tp_fired: boolean
           position_id: string
           position_status: string
@@ -735,11 +739,13 @@ export type Database = {
           size_old: string | null
           source_candidate_key: string | null
           source_pending_order_id: string | null
+          staged_setup_id: string | null
           stop_loss: number | null
           stop_loss_old: string | null
           symbol: string
           take_profit: number | null
           take_profit_old: string | null
+          thesis_version: string | null
           thesis_validation: Json | null
           trade_overrides: Json | null
           trigger_price: string | null
@@ -747,7 +753,10 @@ export type Database = {
         }
         Insert: {
           bot_id?: string | null
+          candidate_id?: string | null
           close_reason?: string | null
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_price?: number | null
           current_price_old?: string | null
@@ -766,6 +775,7 @@ export type Database = {
           open_time: string
           order_id: string
           order_type?: string | null
+          originating_zone?: Json | null
           partial_tp_fired?: boolean
           position_id: string
           position_status?: string
@@ -775,11 +785,13 @@ export type Database = {
           size_old?: string | null
           source_candidate_key?: string | null
           source_pending_order_id?: string | null
+          staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol: string
           take_profit?: number | null
           take_profit_old?: string | null
+          thesis_version?: string | null
           thesis_validation?: Json | null
           trade_overrides?: Json | null
           trigger_price?: string | null
@@ -787,7 +799,10 @@ export type Database = {
         }
         Update: {
           bot_id?: string | null
+          candidate_id?: string | null
           close_reason?: string | null
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_price?: number | null
           current_price_old?: string | null
@@ -806,6 +821,7 @@ export type Database = {
           open_time?: string
           order_id?: string
           order_type?: string | null
+          originating_zone?: Json | null
           partial_tp_fired?: boolean
           position_id?: string
           position_status?: string
@@ -815,11 +831,13 @@ export type Database = {
           size_old?: string | null
           source_candidate_key?: string | null
           source_pending_order_id?: string | null
+          staged_setup_id?: string | null
           stop_loss?: number | null
           stop_loss_old?: string | null
           symbol?: string
           take_profit?: number | null
           take_profit_old?: string | null
+          thesis_version?: string | null
           thesis_validation?: Json | null
           trade_overrides?: Json | null
           trigger_price?: string | null
@@ -929,8 +947,11 @@ export type Database = {
       pending_orders: {
         Row: {
           bot_id: string
+          candidate_id: string | null
           cancel_reason: string | null
           confirmation_attempts: number | null
+          confirmation_config: Json
+          confirmation_method: string | null
           created_at: string
           current_price: number
           decision_context: Json | null
@@ -954,6 +975,7 @@ export type Database = {
           id: string
           order_id: string
           order_type: string
+          originating_zone: Json | null
           placed_at: string
           refined_zone_high: number | null
           refined_zone_low: number | null
@@ -965,11 +987,13 @@ export type Database = {
           size: number
           staged_cycles: number | null
           staged_initial_score: number | null
+          staged_setup_id: string | null
           status: string
           stop_loss: number
           symbol: string
           take_profit: number
           thesis_cancel_reason: string | null
+          thesis_version: string | null
           thesis_validation: Json | null
           updated_at: string
           user_id: string
@@ -977,8 +1001,11 @@ export type Database = {
         }
         Insert: {
           bot_id?: string
+          candidate_id?: string | null
           cancel_reason?: string | null
           confirmation_attempts?: number | null
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_price: number
           decision_context?: Json | null
@@ -1002,6 +1029,7 @@ export type Database = {
           id?: string
           order_id: string
           order_type?: string
+          originating_zone?: Json | null
           placed_at?: string
           refined_zone_high?: number | null
           refined_zone_low?: number | null
@@ -1013,11 +1041,13 @@ export type Database = {
           size: number
           staged_cycles?: number | null
           staged_initial_score?: number | null
+          staged_setup_id?: string | null
           status?: string
           stop_loss: number
           symbol: string
           take_profit: number
           thesis_cancel_reason?: string | null
+          thesis_version?: string | null
           thesis_validation?: Json | null
           updated_at?: string
           user_id: string
@@ -1025,8 +1055,11 @@ export type Database = {
         }
         Update: {
           bot_id?: string
+          candidate_id?: string | null
           cancel_reason?: string | null
           confirmation_attempts?: number | null
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_price?: number
           decision_context?: Json | null
@@ -1050,6 +1083,7 @@ export type Database = {
           id?: string
           order_id?: string
           order_type?: string
+          originating_zone?: Json | null
           placed_at?: string
           refined_zone_high?: number | null
           refined_zone_low?: number | null
@@ -1061,11 +1095,13 @@ export type Database = {
           size?: number
           staged_cycles?: number | null
           staged_initial_score?: number | null
+          staged_setup_id?: string | null
           status?: string
           stop_loss?: number
           symbol?: string
           take_profit?: number
           thesis_cancel_reason?: string | null
+          thesis_version?: string | null
           thesis_validation?: Json | null
           updated_at?: string
           user_id?: string
@@ -1512,20 +1548,34 @@ export type Database = {
       staged_setups: {
         Row: {
           analysis_snapshot: Json | null
+          authorization_result: Json | null
           bot_id: string
+          candidate_id: string
+          confirmation_config: Json
+          confirmation_method: string | null
           created_at: string
           current_factors: Json
           current_score: number
           direction: string
+          direction_verdict: Json | null
+          direction_verdict_id: string | null
           entry_price: number | null
           id: string
           initial_factors: Json
           initial_score: number
           invalidation_reason: string | null
+          game_plan_id: string | null
+          game_plan_version: string | null
           last_eval_at: string
+          lifecycle_reason: string | null
+          lifecycle_version: string
           min_cycles: number
           missing_factors: Json
+          originating_zone: Json | null
+          pending_order_id: string | null
+          position_id: string | null
           promotion_reason: string | null
+          qualified_at: string | null
           resolved_at: string | null
           scan_cycles: number
           setup_type: string | null
@@ -1533,6 +1583,7 @@ export type Database = {
           staged_at: string
           status: string
           symbol: string
+          thesis_version: string | null
           tier1_count: number
           tier2_count: number
           tier3_count: number
@@ -1544,20 +1595,34 @@ export type Database = {
         }
         Insert: {
           analysis_snapshot?: Json | null
+          authorization_result?: Json | null
           bot_id?: string
+          candidate_id?: string
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_factors?: Json
           current_score: number
           direction: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
           entry_price?: number | null
           id?: string
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           initial_factors?: Json
           initial_score: number
           invalidation_reason?: string | null
           last_eval_at?: string
+          lifecycle_reason?: string | null
+          lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
+          originating_zone?: Json | null
+          pending_order_id?: string | null
+          position_id?: string | null
           promotion_reason?: string | null
+          qualified_at?: string | null
           resolved_at?: string | null
           scan_cycles?: number
           setup_type?: string | null
@@ -1565,6 +1630,7 @@ export type Database = {
           staged_at?: string
           status?: string
           symbol: string
+          thesis_version?: string | null
           tier1_count?: number
           tier2_count?: number
           tier3_count?: number
@@ -1576,20 +1642,34 @@ export type Database = {
         }
         Update: {
           analysis_snapshot?: Json | null
+          authorization_result?: Json | null
           bot_id?: string
+          candidate_id?: string
+          confirmation_config?: Json
+          confirmation_method?: string | null
           created_at?: string
           current_factors?: Json
           current_score?: number
           direction?: string
+          direction_verdict?: Json | null
+          direction_verdict_id?: string | null
           entry_price?: number | null
           id?: string
+          game_plan_id?: string | null
+          game_plan_version?: string | null
           initial_factors?: Json
           initial_score?: number
           invalidation_reason?: string | null
           last_eval_at?: string
+          lifecycle_reason?: string | null
+          lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
+          originating_zone?: Json | null
+          pending_order_id?: string | null
+          position_id?: string | null
           promotion_reason?: string | null
+          qualified_at?: string | null
           resolved_at?: string | null
           scan_cycles?: number
           setup_type?: string | null
@@ -1597,6 +1677,7 @@ export type Database = {
           staged_at?: string
           status?: string
           symbol?: string
+          thesis_version?: string | null
           tier1_count?: number
           tier2_count?: number
           tier3_count?: number

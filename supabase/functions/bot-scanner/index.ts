@@ -15,6 +15,7 @@ import {
   attachDecisionContext,
   buildTradeDecisionContext,
   evaluateDecisionHierarchy,
+  TRADE_DECISION_CONTRACT_VERSION,
   type DirectionVerdictDecision,
   type EntryConfirmationDecision,
 } from "../_shared/decisionContract.ts";
@@ -97,6 +98,14 @@ import {
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
+import {
+  buildSetupLifecycleEvidence,
+  resolvePendingConfirmationMethod,
+  resolvePendingIndicatorMinimum,
+  THESIS_VALIDATION_VERSION,
+  transitionStagedSetup,
+  type SetupLifecycleEvidence,
+} from "../_shared/setupLifecycle.ts";
 import {
   checkNewsAlignment,
 } from "../_shared/newsImpact.ts";
@@ -993,7 +1002,8 @@ Deno.serve(async (req) => {
     if (action === "active_pending") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const { data } = await adminClient.from("pending_orders").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "pending")
+        .eq("user_id", userId).eq("bot_id", BOT_ID)
+        .in("status", ["pending", "awaiting_confirmation"])
         .order("placed_at", { ascending: false });
       return respond(data || []);
     }
@@ -1007,7 +1017,8 @@ Deno.serve(async (req) => {
         status: "cancelled",
         cancel_reason: "Manually cancelled by user",
         resolved_at: new Date().toISOString(),
-      }).eq("order_id", orderId).eq("user_id", userId).eq("status", "pending");
+      }).eq("order_id", orderId).eq("user_id", userId)
+        .in("status", ["pending", "awaiting_confirmation"]);
       if (updateErr) return respond({ error: updateErr.message }, 500);
       return respond({ success: true });
     }
@@ -1016,7 +1027,8 @@ Deno.serve(async (req) => {
     if (action === "active_staged") {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const { data } = await adminClient.from("staged_setups").select("*")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).eq("status", "watching")
+        .eq("user_id", userId).eq("bot_id", BOT_ID)
+        .in("status", ["watching", "qualified"])
         .order("current_score", { ascending: false });
       return respond(data || []);
     }
@@ -1898,6 +1910,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
     for (const pending of activePendingOrders) {
       try {
+        const pendingConfirmationMethod = resolvePendingConfirmationMethod(
+          pending,
+          config,
+        );
+        const pendingConfirmationLabel =
+          pendingConfirmationMethod === "indicators"
+            ? "indicator consensus"
+            : pendingConfirmationMethod === "choch_and_indicators"
+            ? "CHoCH + indicator consensus"
+            : "CHoCH/BOS";
+
         // Check expiry first
         if (pending.expires_at && new Date(pending.expires_at) <= new Date()) {
           await supabase.from("pending_orders").update({
@@ -1925,7 +1948,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         // Check SL invalidation: if price has blown past the SL, cancel the order
         if (pending.direction === "long" && currentPrice < slLevel) {
           await supabase.from("pending_orders").update({
-            status: "cancelled",
+            status: "invalidated",
             cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -1935,7 +1958,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         }
         if (pending.direction === "short" && currentPrice > slLevel) {
           await supabase.from("pending_orders").update({
-            status: "cancelled",
+            status: "invalidated",
             cancel_reason: `Price ${currentPrice} breached SL ${slLevel}`,
             resolved_at: new Date().toISOString(),
           }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -1979,7 +2002,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             pendingThesisResult = thesisResult;
             if (!thesisResult.valid) {
               await supabase.from("pending_orders").update({
-                status: "cancelled",
+                status: "invalidated",
                 cancel_reason: thesisResult.reason,
                 thesis_cancel_reason: thesisResult.cancelReason,
                 resolved_at: new Date().toISOString(),
@@ -2013,10 +2036,11 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
         // ═══════════════════════════════════════════════════════════════════
         // ── ZONE CONFIRMATION ENTRY STATE MACHINE ──
-        // States: "pending" → "awaiting_confirmation" → "filled"/"cancelled"
+        // States: "pending" → "awaiting_confirmation" →
+        // "filled"/"invalidated"/"expired"/"cancelled"
         // When price touches the zone, instead of immediately filling, we
         // transition to "awaiting_confirmation" and wait for a 5m CHoCH
-        // confirming reversal before entering at live price.
+        // applying the setup's frozen confirmation contract before entry.
         // ═══════════════════════════════════════════════════════════════════
 
         // Parse impulse data from signal_reason for invalidation check
@@ -2043,7 +2067,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               confirmation_attempts: 0,
             }).eq("order_id", pending.order_id).eq("user_id", userId);
             pendingConfirmationHunting++;
-            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (5m CHoCH)`);
+            console.log(`[pending] ${pending.symbol} ${pending.direction} — ZONE TOUCHED @ ${entryPrice}, entering confirmation hunt mode (${pendingConfirmationLabel})`);
 
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
@@ -2052,7 +2076,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 `<b>Symbol:</b> ${pending.symbol}\n` +
                 `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
                 `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]\n` +
-                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} CHoCH on 5m\n` +
+                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}\n` +
                 `<b>Entry Level:</b> ${entryPrice}`;
               await Promise.all(telegramChatIds.map(async (chatId: string) => {
                 try {
@@ -2070,14 +2094,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           continue;
         }
 
-        // ── Branch B: Order is in "awaiting_confirmation" — check for CHoCH ──
+        // ── Branch B: Order is awaiting its frozen confirmation contract ──
         if (pending.status === "awaiting_confirmation") {
           pendingConfirmationHunting++;
 
           // Check if impulse is broken (zone invalidation)
           if (impulseData && isImpulseBroken(currentPrice, impulseData.high, impulseData.low, pending.direction as "long" | "short")) {
             await supabase.from("pending_orders").update({
-              status: "cancelled",
+              status: "invalidated",
               cancel_reason: `Impulse broken — price ${currentPrice} exceeded origin (high: ${impulseData.high}, low: ${impulseData.low})`,
               resolved_at: new Date().toISOString(),
             }).eq("order_id", pending.order_id).eq("user_id", userId);
@@ -2118,7 +2142,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             continue;
           }
 
-          // Fetch 5m candles for CHoCH detection
+          // Fetch 5m candles for the configured confirmation checks.
           const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
           if (confirm5mCandles.length < 10) {
             console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
@@ -2137,7 +2161,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
 
                     // ── Confirmation Method Routing ──
           // Supports 3 modes: "choch" (default), "indicators", "choch_and_indicators"
-          const confMethod = config.confirmationMethod || "choch";
+          const confMethod = pendingConfirmationMethod;
+          const confirmationIndicatorMinimum =
+            resolvePendingIndicatorMinimum(pending, config);
           let confirmationSignal: ConfirmationSignal | null = null;
           let indicatorConfResult: { confirmed: boolean; summary: string; passedCount: number } | null = null;
 
@@ -2183,7 +2209,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             indicatorConfResult = checkIndicatorConfirmation(
               confirm5mCandles,
               pending.direction as "long" | "short",
-              { minIndicators: config.indicatorMinCount || 3 },
+              { minIndicators: confirmationIndicatorMinimum },
             );
           }
 
@@ -2358,9 +2384,9 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           const pendingEntryConfirmation: EntryConfirmationDecision = {
             required: true,
             passed: true,
-            method: config.confirmationMethod || "choch",
+            method: confMethod,
             reason:
-              `Entry timing confirmed by ${confirmedSignal.type} (${config.confirmationMethod || "choch"})`,
+              `Entry timing confirmed by ${confirmedSignal.type} (${confMethod})`,
             evidence: {
               type: confirmedSignal.type,
               tier: confirmedSignal.tier,
@@ -2475,7 +2501,8 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             ...parsedSignalReason,
             filledFromLimitOrder: true,
             confirmationEntry: true,
-            confirmationMethod: config.confirmationMethod || "choch",
+            confirmationMethod: confMethod,
+            indicatorMinCount: confirmationIndicatorMinimum,
             tpMethod: config.tpMethod || "rr_ratio",
             confirmation: {
               type: confirmedSignal.type,
@@ -2487,7 +2514,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               supportingSignals: confirmedSignal.supportingSignals,
               zoneTouchTime: pending.zone_touch_time,
               confirmationAttempts: pending.confirmation_attempts || 0,
-              method: config.confirmationMethod || "choch",
+              method: confMethod,
             },
             limitOrderOrigin: {
               orderType: pending.order_type,
@@ -2569,12 +2596,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               ? ` | ${pending.confirmation_attempts} attempt${pending.confirmation_attempts > 1 ? "s" : ""}`
               : "";
             // Build specific confirmation method label
-            const confMethodUsed = config.confirmationMethod || "choch";
+            const confMethodUsed = confMethod;
             const confMethodLabel = confMethodUsed === "choch" ? "CHoCH/BOS" : confMethodUsed === "indicators" ? "Indicator Consensus" : "CHoCH + Indicators";
             const confMethodDetail = confMethodUsed === "indicators"
-              ? `\n<b>Mode:</b> ${confMethodLabel} (${config.indicatorMinCount || 3}/4 indicators required)`
+              ? `\n<b>Mode:</b> ${confMethodLabel} (${confirmationIndicatorMinimum}/4 indicators required)`
               : confMethodUsed === "choch_and_indicators"
-              ? `\n<b>Mode:</b> ${confMethodLabel} (CHoCH + ${config.indicatorMinCount || 3}/4 indicators)`
+              ? `\n<b>Mode:</b> ${confMethodLabel} (CHoCH + ${confirmationIndicatorMinimum}/4 indicators)`
               : `\n<b>Mode:</b> ${confMethodLabel}`;
             // Build TP method label
             const tpMethodUsed = config.tpMethod || "rr_ratio";
@@ -4352,6 +4379,36 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
+    const stagedDecisionFields = (
+      originatingZone: Record<string, unknown> | null,
+    ) => {
+      const pairPlan = activeGamePlan?.plans?.find(
+        (plan: InstrumentGamePlan) => plan.symbol === pair,
+      );
+      return {
+        game_plan_id: pairPlan?.gamePlanId ||
+          activeDirectionVerdict?.gamePlanId ||
+          null,
+        game_plan_version: pairPlan?.planVersion ||
+          activeDirectionVerdict?.gamePlanVersion ||
+          activeGamePlan?.planVersion ||
+          null,
+        direction_verdict_id: activeDirectionVerdict?.id || null,
+        direction_verdict: (detail as any).directionVerdict || null,
+        thesis_version: THESIS_VALIDATION_VERSION,
+        originating_zone: originatingZone,
+        confirmation_method: pairConfig.confirmationMethod || "choch",
+        confirmation_config: {
+          indicatorMinCount: pairConfig.indicatorMinCount || 3,
+        },
+        authorization_result: {
+          contractVersion: TRADE_DECISION_CONTRACT_VERSION,
+          stage: "watching",
+          authorized: false,
+          reason: "Setup is observational until qualification",
+        },
+      };
+    };
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
     // Also check for staged setups in the opposite direction that should be invalidated
@@ -4532,6 +4589,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               entry_price: uzEntry,
               sl_level: uzSL,
               tp_level: analysis.takeProfit,
+              ...stagedDecisionFields({
+                type: "sweep_watch",
+                entry: uzEntry,
+                stopLoss: uzSL,
+                selectedTimeframe: unifiedZoneData.selectedTF || null,
+                liquidityState:
+                  unifiedZoneData.zoneLiquidity?.entryTriggerState || null,
+              }),
               scan_cycles: 1,
               min_cycles: 1,
               ttl_minutes: styleTTL,
@@ -4608,6 +4673,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 entry_price: izData.bestZone.refinedEntry ?? ((izData.bestZone.high + izData.bestZone.low) / 2),
                 sl_level: analysis.direction === "long" ? izData.impulse.low : izData.impulse.high,
                 tp_level: analysis.takeProfit,
+                ...stagedDecisionFields({
+                  type: izData.bestZone.type || "impulse_zone",
+                  low: izData.bestZone.low,
+                  high: izData.bestZone.high,
+                  entry: izData.bestZone.refinedEntry ??
+                    ((izData.bestZone.high + izData.bestZone.low) / 2),
+                  fibDepth: izData.bestZone.fibDepth || null,
+                  selectedTimeframe: izData.selectedTF || null,
+                }),
                 scan_cycles: 1,
                 min_cycles: 1,
                 ttl_minutes: styleTTL,
@@ -4698,6 +4772,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                   entry_price: izData.bestZone?.entry ?? analysis.lastPrice,
                   sl_level: izData.bestZone?.sl ?? (analysis.direction === "long" ? analysis.lastPrice - 0.0050 : analysis.lastPrice + 0.0050),
                   tp_level: analysis.takeProfit,
+                  ...stagedDecisionFields({
+                    type: "standalone_sweep_watch",
+                    low: izData.bestZone?.low || null,
+                    high: izData.bestZone?.high || null,
+                    entry: izData.bestZone?.entry ?? analysis.lastPrice,
+                    nearbyPools: liq.nearbyPools,
+                    liquiditySummary: liq.summary || null,
+                  }),
                   scan_cycles: 1,
                   min_cycles: 1,
                   ttl_minutes: styleTTL,
@@ -5099,33 +5181,32 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       console.log(`[conflict] ${pair}: ${opposingCount} opposing factors (>= ${conflictThresholdRaise}) — threshold raised from ${adjustedMinConfluence}% to ${conflictAdjustedMinConfluence}%`);
     }
 
-    // Determine if this is a staged setup being promoted
+    // Determine whether this staged setup has reached score/cycle eligibility.
+    // The durable "qualified" transition happens only after the remaining
+    // candidate gates have passed and exact decision evidence is available.
     let isPromotedFromStaging = false;
     if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
       const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
-        // Update the staged setup to promoted
+        // Eligibility is not a lifecycle transition. Keep the Watchlist row
+        // watching until the remaining candidate gates pass.
         try {
           const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
           const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
           await supabase.from("staged_setups").update({
-            status: "promoted",
             current_score: analysis.score,
             current_factors: presentFactors,
             missing_factors: missingFactors,
             promotion_reason: `Score reached ${analysis.score.toFixed(1)}% (gate: ${adjustedMinConfluence}%) after ${existingStaged.scan_cycles + 1} cycles`,
-            resolved_at: new Date().toISOString(),
             last_eval_at: new Date().toISOString(),
             scan_cycles: existingStaged.scan_cycles + 1,
           }).eq("id", existingStaged.id);
-          stagedPromoted++;
-          stagedMap.delete(stagedKey!);
-          console.log(`[staging] PROMOTED ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}% after ${existingStaged.scan_cycles + 1} cycles`);
+          console.log(`[staging] ELIGIBLE ${pair} ${analysis.direction} — score ${analysis.score.toFixed(1)}%; evaluating remaining gates`);
         } catch (e: any) {
-          console.warn(`[staging] Failed to promote ${pair}: ${e?.message}`);
+          console.warn(`[staging] Failed to update qualified ${pair}: ${e?.message}`);
         }
-        detail.staging = { action: "promoted", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+        detail.staging = { action: "eligible", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
       } else {
         // Score is above gate but hasn't been staged long enough — update and wait
         try {
@@ -5152,6 +5233,71 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         continue;
       }
     }
+
+    const buildPromotedLifecycleEvidence = (
+      originatingZone: Record<string, unknown> | null,
+      authorizationResult?: Record<string, unknown> | null,
+    ): (SetupLifecycleEvidence & {
+      directionVerdict: unknown;
+      confirmationConfig: { indicatorMinCount: number };
+      authorizationResult: Record<string, unknown> | null;
+    }) | null => {
+      if (!isPromotedFromStaging || !existingStaged?.id) return null;
+      const identity = {
+        setupId: existingStaged.id,
+        candidateId: existingStaged.candidate_id || existingStaged.id,
+      };
+      return {
+        ...buildSetupLifecycleEvidence({
+          identity,
+          symbol: pair,
+          gamePlan: activeGamePlan,
+          directionVerdict: activeDirectionVerdict,
+          confirmationMethod: pairConfig.confirmationMethod || "choch",
+          originatingZone,
+        }),
+        directionVerdict: (detail as any).directionVerdict || null,
+        confirmationConfig: {
+          indicatorMinCount: pairConfig.indicatorMinCount || 3,
+        },
+        authorizationResult: authorizationResult || null,
+      };
+    };
+
+    const qualifyPromotedSetup = async (
+      evidence: ReturnType<typeof buildPromotedLifecycleEvidence>,
+      reason: string,
+    ) => {
+      if (!evidence || !existingStaged) return;
+      await transitionStagedSetup(supabase, {
+        setupId: existingStaged.id,
+        userId,
+        status: "qualified",
+        reason,
+        evidence,
+      });
+    };
+
+    const blockQualifiedSetup = async (
+      evidence: ReturnType<typeof buildPromotedLifecycleEvidence>,
+      reason: string,
+    ) => {
+      if (!evidence || !existingStaged) return;
+      try {
+        await transitionStagedSetup(supabase, {
+          setupId: existingStaged.id,
+          userId,
+          status: "blocked_after_qualification",
+          reason,
+          evidence,
+        });
+        stagedMap.delete(stagedKey!);
+      } catch (error: any) {
+        console.warn(
+          `[staging] Failed to record post-qualification block for ${pair}: ${error?.message}`,
+        );
+      }
+    };
 
     // Apply the conflict hard-block decision computed above
     if (conflictHardBlock) {
@@ -5934,11 +6080,54 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             hierarchy: pendingHierarchy,
             evaluatedAt: nowStr,
           });
+          const pendingOriginatingZone = {
+            type: limitEntry.zoneType,
+            low: limitEntry.zoneLow,
+            high: limitEntry.zoneHigh,
+            entry: limitEntry.price,
+            refinedLow: izData?.bestZone?.ltfRefined
+                ? Math.min(
+                  Number(izData.bestZone.refinedEntry),
+                  Number(izData.bestZone.refinedSL),
+                )
+                : null,
+            refinedHigh: izData?.bestZone?.ltfRefined
+                ? Math.max(
+                  Number(izData.bestZone.refinedEntry),
+                  Number(izData.bestZone.refinedSL),
+                )
+                : null,
+            signalSource: (detail as any).signalSource || null,
+          };
+          const pendingLifecycleEvidence = buildPromotedLifecycleEvidence(
+            pendingOriginatingZone,
+            pendingHierarchy as unknown as Record<string, unknown>,
+          );
+          const pendingCandidateId =
+            pendingLifecycleEvidence?.candidateId || crypto.randomUUID();
+          if (pendingLifecycleEvidence) {
+            try {
+              await qualifyPromotedSetup(
+                pendingLifecycleEvidence,
+                `Qualified for ${pendingLifecycleEvidence.confirmationMethod} zone setup`,
+              );
+            } catch (lifecycleError: any) {
+              detail.status = "zone_setup_lifecycle_claim_failed";
+              detail.skipReason = lifecycleError?.message ||
+                "Watchlist lifecycle qualification failed";
+              scanDetails.push(detail);
+              continue;
+            }
+          }
           if (!pendingHierarchy.passed) {
             detail.status = "zone_setup_blocked_decision_contract";
             detail.skipReason =
               `[decision-contract:${pendingHierarchy.code}] ${pendingHierarchy.reason}`;
             detail.decisionContext = pendingDecisionContext;
+            await blockQualifiedSetup(
+              pendingLifecycleEvidence,
+              detail.skipReason,
+            );
             scanDetails.push(detail);
             continue;
           }
@@ -5965,11 +6154,22 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, confirmationMethod: pairConfig.confirmationMethod || "choch", tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pairConfig.confirmationMethod || "choch", indicatorMinCount: pairConfig.indicatorMinCount || 3, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
             from_watchlist: isPromotedFromStaging || false,
+            staged_setup_id: pendingLifecycleEvidence?.setupId || null,
+            candidate_id: pendingCandidateId,
+            originating_zone: pendingOriginatingZone,
+            thesis_version: THESIS_VALIDATION_VERSION,
+            confirmation_method: pendingLifecycleEvidence
+              ?.confirmationMethod ||
+              pairConfig.confirmationMethod ||
+              "choch",
+            confirmation_config: {
+              indicatorMinCount: pairConfig.indicatorMinCount || 3,
+            },
             staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
             staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
@@ -5983,11 +6183,19 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             detail.skipReason = /duplicate key/i.test(pendingInsertErr.message)
               ? "Zone setup already active (see Zone Setups panel)"
               : `Zone setup insert failed: ${pendingInsertErr.message}`;
+            await blockQualifiedSetup(
+              pendingLifecycleEvidence,
+              detail.skipReason,
+            );
             scanDetails.push(detail);
             continue;
           }
 
           pendingPlaced++;
+          if (pendingLifecycleEvidence) {
+            stagedPromoted++;
+            stagedMap.delete(stagedKey!);
+          }
           detail.status = isPromotedFromStaging ? "zone_setup_from_watchlist" : "zone_setup_active";
           detail.limitOrder = {
             orderId: pendingOrderId,
@@ -6001,7 +6209,12 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           };
           detail.decisionContext = pendingDecisionContext;
           if (isPromotedFromStaging && existingStaged) {
-            detail.staging = { action: "promoted_to_limit", cycles: existingStaged.scan_cycles + 1, initialScore: parseFloat(existingStaged.initial_score) };
+            detail.staging = {
+              action: "pending_created",
+              candidateId: pendingLifecycleEvidence?.candidateId,
+              cycles: existingStaged.scan_cycles + 1,
+              initialScore: parseFloat(existingStaged.initial_score),
+            };
           }
           detail.size = limitSize;
           detail.entryPrice = limitEntry.price;
@@ -6289,6 +6502,41 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             evaluatedAt: nowStr,
           }),
         );
+        const directOriginatingZone = {
+          type: izData?.bestZone?.type ||
+            (detail as any).unifiedZone?.zoneType ||
+            (detail as any).signalSource ||
+            "market_signal",
+          low: izData?.bestZone?.low ||
+            (detail as any).unifiedZone?.zoneLow ||
+            null,
+          high: izData?.bestZone?.high ||
+            (detail as any).unifiedZone?.zoneHigh ||
+            null,
+          entry: marketEntryPrice,
+          signalSource: (detail as any).signalSource || null,
+          marketFillAtZone: useMarketFillAtZone,
+        };
+        const directLifecycleEvidence = buildPromotedLifecycleEvidence(
+          directOriginatingZone,
+          directAuthorization as unknown as Record<string, unknown>,
+        );
+        const directCandidateId =
+          directLifecycleEvidence?.candidateId || crypto.randomUUID();
+        if (directLifecycleEvidence) {
+          try {
+            await qualifyPromotedSetup(
+              directLifecycleEvidence,
+              "Qualified for immediate market-entry authorization",
+            );
+          } catch (lifecycleError: any) {
+            detail.status = "market_entry_lifecycle_claim_failed";
+            detail.skipReason = lifecycleError?.message ||
+              "Watchlist lifecycle qualification failed";
+            scanDetails.push(detail);
+            continue;
+          }
+        }
         if (!directAuthorization.authorized) {
           detail.status = "blocked_final_authorization";
           detail.skipReason =
@@ -6298,6 +6546,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.warn(
             `[market] ${pair} ${analysis.direction}: FINAL AUTH BLOCKED `
             + `${directAuthorization.code} — ${directAuthorization.reason}`,
+          );
+          await blockQualifiedSetup(
+            directLifecycleEvidence,
+            detail.skipReason,
           );
           scanDetails.push(detail);
           continue;
@@ -6415,6 +6667,15 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             : (slNum > entryRef && tpNum < entryRef);
           if (!orientationOk) {
             console.error(`[GUARD] ${pair} ${analysis.direction} REJECTED — SL/TP orientation mismatch. entry=${entryRef} sl=${slNum} tp=${tpNum}`);
+            detail.status = "market_entry_rejected_orientation";
+            detail.skipReason =
+              `SL/TP orientation mismatch for ${analysis.direction} `
+              + `(entry=${entryRef} sl=${slNum} tp=${tpNum})`;
+            await blockQualifiedSetup(
+              directLifecycleEvidence,
+              detail.skipReason,
+            );
+            scanDetails.push(detail);
             continue;
           }
         }
@@ -6455,6 +6716,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
         } : null;
         const directSignalReason = {
           bot: BOT_ID,
+          candidateId: directCandidateId,
           summary: analysis.summary,
           setupType: setupClassification.setupType,
           setupConfidence: setupClassification.confidence,
@@ -6498,10 +6760,16 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             (detail as any).gamePlanShadowAudit || null,
           signalSource: (detail as any).signalSource || null,
           unifiedZone: (detail as any).unifiedZone || null,
+          originatingZone: directOriginatingZone,
           gamePlanSnapshot,
           finalAuthorization: directAuthorization,
           decisionContext: directAuthorization.decisionContext,
           confirmationMethod: pairConfig.confirmationMethod || "choch",
+          indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          thesisVersion: THESIS_VALIDATION_VERSION,
+          ...(directLifecycleEvidence
+            ? { watchlistLifecycle: directLifecycleEvidence }
+            : {}),
           tpMethod: pairConfig.tpMethod || "rr_ratio",
           ...(isPromotedFromStaging && existingStaged
             ? {
@@ -6562,8 +6830,17 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             `[market] ${pair} ${analysis.direction}: atomic entry rejected — `
             + `${directFillError?.message || directFill?.code || "unknown"}`,
           );
+          await blockQualifiedSetup(
+            directLifecycleEvidence,
+            detail.skipReason,
+          );
           scanDetails.push(detail);
           continue;
+        }
+
+        if (directLifecycleEvidence) {
+          stagedPromoted++;
+          stagedMap.delete(stagedKey!);
         }
 
         // Only the scanner that won the atomic market-entry claim may replace
@@ -7270,12 +7547,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             }
 
             const breakerOrderId = `brk-${crypto.randomUUID().slice(0, 6)}`;
+            const breakerCandidateId = crypto.randomUUID();
             const breakerExpiry = config.limitOrderExpiryMinutes || 60;
             const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
 
             const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
               user_id: userId,
               bot_id: BOT_ID,
+              candidate_id: breakerCandidateId,
               order_id: breakerOrderId,
               symbol: pair,
               direction: breakerDir,
@@ -7288,17 +7567,34 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
               entry_zone_type: "breaker_block",
               entry_zone_low: breaker.entryZone.low,
               entry_zone_high: breaker.entryZone.high,
+              originating_zone: {
+                type: "breaker_block",
+                low: breaker.entryZone.low,
+                high: breaker.entryZone.high,
+                entry: breakerEntry,
+              },
+              thesis_version: THESIS_VALIDATION_VERSION,
+              confirmation_method:
+                pairConfig.confirmationMethod || "choch",
+              confirmation_config: {
+                indicatorMinCount: pairConfig.indicatorMinCount || 3,
+              },
               status: "pending",
               expiry_minutes: breakerExpiry,
               expires_at: breakerExpiresAt,
               signal_reason: JSON.stringify({
                 bot: BOT_ID,
+                candidateId: breakerCandidateId,
                 signalSource: "breaker",
                 summary: breaker.detail,
                 breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, sizeMultiplier: breakerSizeMultiplier },
                 entryTimeframe: pairConfig.entryTimeframe,
                 originalSL: breakerSL,
                 originalTP: breakerTP,
+                confirmationMethod:
+                  pairConfig.confirmationMethod || "choch",
+                indicatorMinCount: pairConfig.indicatorMinCount || 3,
+                thesisVersion: THESIS_VALIDATION_VERSION,
                 tpMethod: config.tpMethod || "rr_ratio",
                 directionVerdict: (detail as any).directionVerdict || null,
                 gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
@@ -7447,6 +7743,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 entry_price: analysis.lastPrice,
                 sl_level: analysis.stopLoss,
                 tp_level: analysis.takeProfit,
+                ...stagedDecisionFields({
+                  type: setupClassification.setupType ||
+                    "confluence_watch",
+                  entry: analysis.lastPrice,
+                  stopLoss: analysis.stopLoss,
+                  takeProfit: analysis.takeProfit,
+                  signalSource: (detail as any).signalSource || null,
+                }),
                 scan_cycles: 1,
                 min_cycles: minStagingCycles,
                 ttl_minutes: styleTTL,
