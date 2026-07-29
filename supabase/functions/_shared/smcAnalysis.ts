@@ -19,7 +19,6 @@
  *                detectSession, detectOptimalStyle
  *   Helpers:     toNYTime, calculateSLTP, calculatePositionSize, getQuoteToUSDRate
  *   Constants:   SPECS, SUPPORTED_SYMBOLS, SMT_PAIRS, ASSET_PROFILES,
- *                STYLE_OVERRIDES, DEFAULTS
  */
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -330,81 +329,6 @@ export function getAssetProfile(symbol: string) {
   const type = spec?.type || "forex";
   return ASSET_PROFILES[type] || ASSET_PROFILES.forex;
 }
-
-export const STYLE_OVERRIDES: Record<string, any> = {
-  scalper: { entryTimeframe: "5m", htfTimeframe: "1h", tpRatio: 1.5, slBufferPips: 1, minConfluence: 45 },
-  day_trader: { entryTimeframe: "15min", htfTimeframe: "1day", tpRatio: 2.0, slBufferPips: 2, minConfluence: 55 },
-  swing_trader: { entryTimeframe: "1h", htfTimeframe: "1w", tpRatio: 3.0, slBufferPips: 5, minConfluence: 65 },
-};
-
-export const DEFAULTS = {
-  entryTimeframe: "15min",
-  htfTimeframe: "1day",
-  htfBiasRequired: true,
-  htfBiasHardVeto: false,
-  minConfluence: 55,
-  onlyBuyInDiscount: true,
-  onlySellInPremium: true,
-  riskPerTrade: 1,
-  maxDailyLoss: 5,
-  maxDrawdown: 15,
-  maxOpenPositions: 5,
-  maxPerSymbol: 2,
-  portfolioHeat: 10,
-  minRiskReward: 1.5,
-  slMethod: "structure" as "fixed_pips" | "atr_based" | "structure" | "below_ob",
-  fixedSLPips: 25,
-  slATRMultiple: 1.5,
-  slATRPeriod: 14,
-  slBufferPips: 2,
-  tpMethod: "rr_ratio" as "fixed_pips" | "rr_ratio" | "next_level" | "atr_multiple",
-  fixedTPPips: 50,
-  tpRatio: 2.0,
-  tpATRMultiple: 2.0,
-  breakEvenEnabled: true,
-  breakEvenPips: 20,
-  enabledSessions: ["london", "newyork"],
-  enabledDays: [1, 2, 3, 4, 5],
-  instruments: [
-    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
-    "GBP/JPY", "EUR/JPY", "NZD/USD", "USD/CHF", "EUR/GBP",
-    "XAU/USD", "BTC/USD",
-  ],
-  openingRange: { enabled: false, candleCount: 24, useBias: true, useJudasSwing: true, useKeyLevels: true, usePremiumDiscount: false, waitForCompletion: true },
-  tradingStyle: { mode: "day_trader" as "scalper" | "day_trader" | "swing_trader" },
-  spreadFilterEnabled: true,
-  maxSpreadPips: 3,
-  newsFilterEnabled: true,
-  newsFilterPauseMinutes: 30,
-  cooldownMinutes: 0,
-  closeOnReverse: false,
-  trailingStopEnabled: false,
-  trailingStopPips: 15,
-  trailingStopActivation: "after_1r",
-  partialTPEnabled: false,
-  partialTPPercent: 50,
-  partialTPLevel: 1.0,
-  maxHoldHours: 0,
-  killZoneOnly: false,
-  maxConsecutiveLosses: 0,
-  protectionMaxDailyLossDollar: 0,
-  // Legacy minFactorCount removed — single percentage threshold (minConfluence) only
-  useSMT: true,
-  useVolumeProfile: true,
-  useTrendDirection: true,
-  useDailyBias: true,
-  useAMD: true,
-  useFOTSI: true,
-  regimeScoringEnabled: true,
-  regimeScoringStrength: 1.0,
-  obLookbackCandles: 50,
-  fvgMinSizePips: 0,
-  fvgOnlyUnfilled: true,
-  structureLookback: 50,
-  liquidityPoolMinTouches: 2,
-  _currentSymbol: "" as string,
-  _smtResult: null as any,
-};
 
 // ─── DST-Aware New York Time (re-exported from sessions.ts — single source of truth) ──
 import {

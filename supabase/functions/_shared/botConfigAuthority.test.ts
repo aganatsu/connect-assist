@@ -9,6 +9,7 @@ import {
   assertFalse,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
+import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
 
 const scannerSource = await Deno.readTextFile(
   "./supabase/functions/bot-scanner/index.ts",
@@ -20,8 +21,8 @@ Deno.test("bot-scanner has no local runtime-default object", () => {
     "Runtime defaults must only be declared in _shared/configMapper.ts",
   );
   assert(
-    scannerSource.includes("RUNTIME_DEFAULTS"),
-    "Scanner must import the canonical runtime defaults",
+    scannerSource.includes('from "../_shared/tradingStyleConfig.ts"'),
+    "Scanner must import the shared trading-style authority",
   );
 });
 
@@ -64,17 +65,12 @@ Deno.test("canonical mapper owns the effective empty-config defaults", () => {
 });
 
 Deno.test("scanner preserves the historical partial-TP style sentinel", () => {
-  assert(
-    /const STYLE_INHERITANCE_BASELINE:[\s\S]*?\.\.\.RUNTIME_DEFAULTS,[\s\S]*?partialTPEnabled:\s*true/
-      .test(
-        scannerSource,
-      ),
-    "Removing duplicate defaults must not silently enable partial TP",
+  const resolved = applyTradingStyleProfile(
+    mapNestedToFlat(null),
+    "day_trader",
   );
-  assert(
-    scannerSource.includes(
-      "(STYLE_INHERITANCE_BASELINE as any)[key]",
-    ),
-    "Style inheritance must compare against the compatibility baseline",
+  assertFalse(
+    resolved.config.partialTPEnabled,
+    "Removing duplicate defaults must not silently enable partial TP",
   );
 });

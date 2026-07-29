@@ -348,7 +348,7 @@ export async function manageOpenPositions(
   // Read trading style for style-aware management decisions
   const tradingStyle: string = config.tradingStyle?.mode ?? "day_trader";
 
-  // Read management params from user config (set via STYLE_OVERRIDES + user overrides)
+  // Read management params from user config (resolved by the shared style profile and user overrides)
   const trailingEnabled = config.trailingStopEnabled ?? false;
   const trailingPips = config.trailingStopPips ?? 15;
   const trailingActivation = config.trailingStopActivation ?? "after_1r";
