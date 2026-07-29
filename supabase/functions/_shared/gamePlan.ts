@@ -1038,8 +1038,7 @@ export function generateInstrumentGamePlan(
       ...regimeResult,
       regime: options.decisionEvidence.biasRegime.regime,
       confidence: options.decisionEvidence.biasRegime.confidence,
-      directionalBias:
-        options.decisionEvidence.biasRegime.directionalBias,
+      directionalBias: options.decisionEvidence.biasRegime.directionalBias,
     }
     : regimeResult;
 
@@ -1149,6 +1148,10 @@ export function generateInstrumentGamePlan(
     legacyConfidence: confidence,
     dailyTrend: htfTrend,
     h4Trend,
+    trendLabels: {
+      bias: options?.decisionEvidence?.labels.bias || "D1",
+      structure: options?.decisionEvidence?.labels.structure || "4H",
+    },
     zone: pd.currentZone,
     regime: effectiveRegime.regime,
     hasDOL: !!dol,

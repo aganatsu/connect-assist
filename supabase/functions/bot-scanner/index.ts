@@ -3309,7 +3309,13 @@ async function runScanForUser(
         }
         if (i + GP_BATCH_SIZE < config.instruments.length) await new Promise(r => setTimeout(r, GP_BATCH_DELAY));
       }
-      if (instrumentPlans.length > 0) {
+      const generatedGamePlanSymbols = new Set(
+        instrumentPlans.map((plan) => plan.symbol),
+      );
+      const missingGamePlanSymbols = config.instruments.filter(
+        (symbol: string) => !generatedGamePlanSymbols.has(symbol),
+      );
+      if (missingGamePlanSymbols.length === 0) {
         activeGamePlan = buildSessionGamePlan(currentSessionName, instrumentPlans);
         console.log(`[scan ${scanCycleId}] Game Plan: ${currentSessionName} — ${activeGamePlan.focusPairs.length} focus pairs: [${activeGamePlan.focusPairs.join(", ")}]`);
         for (const plan of instrumentPlans) {
@@ -3390,7 +3396,9 @@ async function runScanForUser(
           console.log(`[scan ${scanCycleId}] Game Plan: Telegram notifications disabled by config`);
         }
       } else {
-        console.warn(`[scan ${scanCycleId}] Game Plan: no valid plans generated (insufficient data)`);
+        console.error(
+          `[scan ${scanCycleId}] Game Plan: incomplete generation (${instrumentPlans.length}/${config.instruments.length}); missing [${missingGamePlanSymbols.join(", ")}]. Previous complete plan remains authoritative; partial plan was not activated.`,
+        );
       }
       } // close if (!activeGamePlan) — new plan generation block
     }
