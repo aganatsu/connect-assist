@@ -84,6 +84,7 @@ import {
 } from "../_shared/confluenceScoring.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
 import { applyTradingStyleProfile, resolveTradingStyle } from "../_shared/tradingStyleConfig.ts";
+import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import {
   detectSession,
   normalizeSessionFilter,
@@ -1588,6 +1589,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     const styleResolution = applyTradingStyleProfile(config, tradingStyle);
     const resolvedTradingStyle = styleResolution.style;
     Object.assign(config, styleResolution.config);
+    const stylePolicy = await buildResolvedStylePolicy({
+      resolution: styleResolution,
+      config,
+    });
     // Backtest-specific overrides are applied after the common style profile.
     config.newsFilterEnabled = false;
     config.scanIntervalMinutes = 0;
@@ -3177,6 +3182,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       gateBreakdown: Object.fromEntries(
         Object.entries(diagnostics.gateBlockReasons).map(([reason, blocked]) => [reason, { blocked, wouldHaveWon: 0, wouldHaveLost: 0 }]),
       ),
+      stylePolicy,
       config: { ...config, _fotsiResult: undefined, _smtResult: undefined, _htfPOIs: undefined, _htfFibLevels: undefined, _htfPD: undefined, _h4Candles: undefined },
       walkForward,
       researchAnalytics: researchAnalytics ? {

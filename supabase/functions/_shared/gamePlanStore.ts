@@ -4,6 +4,7 @@ import type {
   SessionName,
 } from "./gamePlan.ts";
 import { analyzeNewsImpact, getNewsPairBias } from "./newsImpact.ts";
+import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 
 export const GAME_PLAN_CONTRACT_VERSION = "phase3.v1";
 
@@ -54,6 +55,7 @@ function asNumber(value: number | string | null | undefined): number {
 
 export function buildGamePlanConfigSnapshot(
   config: any,
+  stylePolicy?: ResolvedStylePolicy | null,
 ): Record<string, unknown> {
   return {
     instruments: Array.isArray(config?.instruments)
@@ -64,6 +66,7 @@ export function buildGamePlanConfigSnapshot(
     ipdaRangesEnabled: config?.ipdaRangesEnabled !== false,
     equalHighsLowsSensitivity: config?.equalHighsLowsSensitivity,
     liquidityPoolMinTouches: config?.liquidityPoolMinTouches,
+    stylePolicy: stylePolicy || null,
   };
 }
 

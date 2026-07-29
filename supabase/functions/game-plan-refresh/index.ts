@@ -2,6 +2,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { mapNestedToFlat } from "../_shared/configMapper.ts";
+import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
+import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally } from "../_shared/candleSource.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -100,6 +102,16 @@ Deno.serve(async (req) => {
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
     const config = await loadConfig(adminClient, userId);
+    const styleResolution = applyTradingStyleProfile(
+      config,
+      config.tradingStyle?.mode,
+    );
+    const stylePolicy = await buildResolvedStylePolicy({
+      resolution: styleResolution,
+      // Observe the actual manual-refresh inputs without changing behavior.
+      config,
+      profileAppliedToRuntime: false,
+    });
     if (config.gamePlanEnabled === false) {
       return respond({ error: "Game Plan is disabled in bot configuration" }, 409);
     }
@@ -184,7 +196,7 @@ Deno.serve(async (req) => {
       userId,
       botId: BOT_ID,
       source: "manual_refresh",
-      configSnapshot: buildGamePlanConfigSnapshot(config),
+      configSnapshot: buildGamePlanConfigSnapshot(config, stylePolicy),
       marketDataSnapshot: {
         hierarchy: ["Twelve Data", "Polygon"],
         source: sourceSummary,

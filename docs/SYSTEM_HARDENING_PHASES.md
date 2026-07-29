@@ -15,6 +15,31 @@ functions and UI have been deployed and verified.
 | 7 | Backtest/live parity | Not started |
 | 8 | Strategy validation and controlled activation | Not started |
 
+## Corrective Phase 2C / 3C — style-aware policy consistency
+
+This workstream was added after the full critical-path audit found that the UI,
+full scanner, fast confirmation scanner, manual Gameplan refresh, position
+management and backtest engine do not all interpret the selected trading style
+the same way. It must finish before Phase 6 begins.
+
+| Slice | Purpose | Status |
+|---|---|---|
+| 1 | Shared resolved style-policy contract and durable observability | Implemented in `codex/style-policy-observability`; review and deployment pending |
+| 2 | One configuration resolution path for every runtime surface | Not started |
+| 3 | Remove duplicate UI presets and show the effective runtime policy | Not started |
+| 4 | Make timeframe roles authoritative for every analysis module | Not started |
+| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Not started |
+| 6 | Make Gameplan validity windows style-aware | Not started |
+| 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
+| 8 | Use one style-frozen management engine in live and backtest paths | Not started |
+
+Slice 1 is observe-only. It assigns a stable policy fingerprint and records the
+effective style, timeframe roles, cadence, qualification thresholds, risk,
+management, lifecycle values and override provenance on active Gameplans,
+Direction Verdicts, Watchlist setups, pending orders and positions. Scan logs
+and backtest results expose the same snapshot. It does not alter authorization,
+position sizing, order placement or management behavior.
+
 ## Phase 3 implementation record
 
 - Phase 3A moved active Gameplans into dedicated immutable versioned storage
