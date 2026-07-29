@@ -137,6 +137,13 @@ export function evaluateGamePlanReuse(
       .filter((value): value is string => !!value)
       .sort()[0] ||
     null;
+  if (!gamePlan.validityPolicy) {
+    return {
+      reusable: false,
+      reason: "plan validity policy is unavailable",
+      expiresAt,
+    };
+  }
   if (gamePlan.session !== input.session) {
     return {
       reusable: false,
@@ -144,10 +151,8 @@ export function evaluateGamePlanReuse(
       expiresAt,
     };
   }
-  const planStyle = gamePlan.validityPolicy?.style ||
-    gamePlan.plans[0]?.decisionEvidence?.style ||
-    null;
-  if (planStyle && planStyle !== input.style) {
+  const planStyle = gamePlan.validityPolicy.style;
+  if (planStyle !== input.style) {
     return {
       reusable: false,
       reason: `style changed (${planStyle} → ${input.style})`,

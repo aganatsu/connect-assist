@@ -116,7 +116,8 @@ The scanner reuses a plan only while its saved style, session and expiry still
 match the current runtime policy; a saved style change therefore regenerates
 the plan before it can become candidate context. The selected duration, style,
 valid-from time and expiry are stored on the immutable plan version and exposed
-in the Gameplan UI. Existing `style-policy.v1.1` evidence remains readable.
+in the Gameplan UI. Existing `style-policy.v1.1` evidence remains readable,
+while a legacy Gameplan without a validity contract is regenerated once.
 
 Slice 6 does not change entry authorization or make narrative scenarios
 executable. It only makes the lifetime of their owning Gameplan explicit and

@@ -146,6 +146,17 @@ Deno.test("Gameplan reuse requires matching style, session and unexpired policy"
     },
   });
   assertEquals(
+    evaluateGamePlanReuse(
+      { ...plan, validityPolicy: undefined },
+      {
+        session: "London",
+        style: "day_trader",
+        now: new Date("2026-07-29T11:00:00.000Z"),
+      },
+    ).reason,
+    "plan validity policy is unavailable",
+  );
+  assertEquals(
     evaluateGamePlanReuse(plan, {
       session: "London",
       style: "day_trader",
