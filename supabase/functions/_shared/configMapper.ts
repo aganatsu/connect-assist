@@ -97,8 +97,10 @@ export const RUNTIME_DEFAULTS = {
   maxDrawdown: 20,
   maxDailyLoss: 5,
   riskPerTrade: 1,
-  positionSizingMethod: "percent_risk" as "percent_risk" | "fixed_lot" | "atr_volatility",
+  standaloneMultiplier: 0.5,
+  positionSizingMethod: "percent_risk" as "percent_risk" | "fixed_lot" | "volatility_adjusted",
   fixedLotSize: 0.1,
+  atrVolatilityMultiplier: 1.5,
   maxOpenPositions: 3,
   maxPerSymbol: 2,
   allowSameDirectionStacking: false,
@@ -122,6 +124,7 @@ export const RUNTIME_DEFAULTS = {
   // ── Exit Management ──
   breakEvenEnabled: true,
   breakEvenPips: 20,
+  breakEvenOffsetPips: 3,
   trailingStopEnabled: false,
   trailingStopPips: 15,
   trailingStopActivation: "after_1r",
@@ -183,6 +186,10 @@ export const RUNTIME_DEFAULTS = {
   impulseZoneBonus: 1.0,
   impulseZoneGateMode: "hard" as "hard" | "soft" | "off",
   minZoneScore: 4,
+  zoneQualityThreshold: 40,
+  zoneMaxAgeBars: 200,
+  zoneMinBodyRatio: 0.5,
+  zoneMinDisplacementATR: 1.5,
   impulseSlCapMultiplier: 4,
   /** Origin OB re-test: allow entries when price returns to the block that caused the impulse (fib 1.0). Default off. */
   originOBRetest: false,
@@ -237,6 +244,15 @@ export const RUNTIME_DEFAULTS = {
   confirmationMethod: "choch" as "choch" | "indicators" | "choch_and_indicators",
   maxConfirmationAttempts: 3,
   indicatorMinCount: 3,
+
+  // ── Gameplan / Thesis Inputs ──
+  ipdaRangesEnabled: true,
+  thesisConvictionEnabled: true,
+  thesisConvictionMode: "shadow" as "shadow" | "active",
+  thesisConvictionDecayPerCycle: 8,
+  thesisConvictionRecoveryPerCycle: 5,
+  thesisConvictionRevokeThreshold: 50,
+  thesisConvictionKillThreshold: 30,
 
   // ── Opening Range ──
   openingRange: {
@@ -466,6 +482,10 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     impulseZoneBonus: strategy.impulseZoneBonus ?? raw.impulseZoneBonus ?? RUNTIME_DEFAULTS.impulseZoneBonus,
     impulseZoneGateMode: (strategy.impulseZoneGateMode ?? raw.impulseZoneGateMode ?? RUNTIME_DEFAULTS.impulseZoneGateMode) as "hard" | "soft" | "off",
     minZoneScore: strategy.minZoneScore ?? raw.minZoneScore ?? RUNTIME_DEFAULTS.minZoneScore,
+    zoneQualityThreshold: strategy.zoneQualityThreshold ?? raw.zoneQualityThreshold ?? RUNTIME_DEFAULTS.zoneQualityThreshold,
+    zoneMaxAgeBars: strategy.zoneMaxAgeBars ?? raw.zoneMaxAgeBars ?? RUNTIME_DEFAULTS.zoneMaxAgeBars,
+    zoneMinBodyRatio: strategy.zoneMinBodyRatio ?? raw.zoneMinBodyRatio ?? RUNTIME_DEFAULTS.zoneMinBodyRatio,
+    zoneMinDisplacementATR: strategy.zoneMinDisplacementATR ?? raw.zoneMinDisplacementATR ?? RUNTIME_DEFAULTS.zoneMinDisplacementATR,
     impulseSlCapMultiplier: strategy.impulseSlCapMultiplier ?? raw.impulseSlCapMultiplier ?? RUNTIME_DEFAULTS.impulseSlCapMultiplier,
     originOBRetest: strategy.originOBRetest ?? raw.originOBRetest ?? RUNTIME_DEFAULTS.originOBRetest,
     fibMaxRetracement: strategy.fibMaxRetracement ?? raw.fibMaxRetracement ?? RUNTIME_DEFAULTS.fibMaxRetracement,
@@ -508,8 +528,13 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
 
     // ── Risk Mappings ──
     riskPerTrade: risk.riskPerTrade ?? raw.riskPerTrade ?? RUNTIME_DEFAULTS.riskPerTrade,
-    positionSizingMethod: risk.positionSizingMethod ?? raw.positionSizingMethod ?? RUNTIME_DEFAULTS.positionSizingMethod,
+    standaloneMultiplier: risk.standaloneMultiplier ?? raw.standaloneMultiplier ?? RUNTIME_DEFAULTS.standaloneMultiplier,
+    positionSizingMethod: (() => {
+      const method = risk.positionSizingMethod ?? raw.positionSizingMethod ?? RUNTIME_DEFAULTS.positionSizingMethod;
+      return method === "atr_volatility" ? "volatility_adjusted" : method;
+    })() as RuntimeConfig["positionSizingMethod"],
     fixedLotSize: risk.fixedLotSize ?? raw.fixedLotSize ?? RUNTIME_DEFAULTS.fixedLotSize,
+    atrVolatilityMultiplier: risk.atrVolatilityMultiplier ?? raw.atrVolatilityMultiplier ?? RUNTIME_DEFAULTS.atrVolatilityMultiplier,
     maxDailyLoss: risk.maxDailyDrawdown ?? risk.maxDailyLoss ?? raw.maxDailyLoss ?? RUNTIME_DEFAULTS.maxDailyLoss,
     // Canonical: risk.maxConcurrentTrades (UI field). Legacy risk.maxOpenPositions is ignored
     // after the 2026-07-11 migration removed it from DB configs.
@@ -543,6 +568,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     trailingStopActivation: exit.trailingStopActivation ?? raw.trailingStopActivation ?? "after_1r",
     breakEvenEnabled: exit.breakEven ?? exit.breakEvenEnabled ?? raw.breakEvenEnabled ?? RUNTIME_DEFAULTS.breakEvenEnabled,
     breakEvenPips: exit.breakEvenTriggerPips ?? exit.breakEvenPips ?? raw.breakEvenPips ?? RUNTIME_DEFAULTS.breakEvenPips,
+    breakEvenOffsetPips: exit.breakEvenOffsetPips ?? raw.breakEvenOffsetPips ?? RUNTIME_DEFAULTS.breakEvenOffsetPips,
     partialTPEnabled: exit.partialTP ?? exit.partialTPEnabled ?? false,
     partialTPPercent: exit.partialTPPercent ?? raw.partialTPPercent ?? 50,
     partialTPLevel: exit.partialTPLevel ?? raw.partialTPLevel ?? 1.0,
@@ -630,6 +656,7 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       ?? strategy.gpHardBlockThreshold
       ?? raw.gpHardBlockThreshold
       ?? RUNTIME_DEFAULTS.gpHardBlockThreshold,
+    ipdaRangesEnabled: raw.ipdaRangesEnabled ?? raw.gamePlan?.ipdaRangesEnabled ?? RUNTIME_DEFAULTS.ipdaRangesEnabled,
 
     // ── ATR Volatility Filter ──
     atrFilterEnabled: instruments.volatilityFilterEnabled ?? raw.atrFilterEnabled ?? RUNTIME_DEFAULTS.atrFilterEnabled,
@@ -693,17 +720,27 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     maxCorrelation: instruments.maxCorrelation ?? raw.maxCorrelation ?? RUNTIME_DEFAULTS.maxCorrelation,
 
     // ── Limit Orders ──
-    limitOrderEnabled: entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,
-    limitOrderExpiryMinutes: entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? RUNTIME_DEFAULTS.limitOrderExpiryMinutes,
+    limitOrderEnabled: entry.pendingZoneOrders ?? entry.limitOrderEnabled ?? raw.limitOrderEnabled ?? RUNTIME_DEFAULTS.limitOrderEnabled,
+    limitOrderExpiryMinutes: entry.zoneWatchExpiry !== undefined
+      ? Math.max(1, Number(entry.zoneWatchExpiry)) * 60
+      : entry.limitOrderExpiryMinutes ?? raw.limitOrderExpiryMinutes ?? RUNTIME_DEFAULTS.limitOrderExpiryMinutes,
     pendingOrderCooldownMinutes: entry.pendingOrderCooldownMinutes ?? raw.pendingOrderCooldownMinutes ?? RUNTIME_DEFAULTS.pendingOrderCooldownMinutes,
     limitOrderMaxDistancePips: entry.limitOrderMaxDistancePips ?? raw.limitOrderMaxDistancePips ?? RUNTIME_DEFAULTS.limitOrderMaxDistancePips,
     limitOrderMinDistancePips: entry.limitOrderMinDistancePips ?? raw.limitOrderMinDistancePips ?? RUNTIME_DEFAULTS.limitOrderMinDistancePips,
     limitOrderPreferZone: entry.limitOrderPreferZone ?? raw.limitOrderPreferZone ?? RUNTIME_DEFAULTS.limitOrderPreferZone,
     marketFillAtZone: entry.marketFillAtZone ?? raw.marketFillAtZone ?? RUNTIME_DEFAULTS.marketFillAtZone,
-    marketFillStrictATRMult: entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
+    marketFillStrictATRMult: entry.zoneProximityATR ?? entry.marketFillStrictATRMult ?? raw.marketFillStrictATRMult ?? RUNTIME_DEFAULTS.marketFillStrictATRMult,
     confirmationMethod: (entry.confirmationMethod ?? raw.confirmationMethod ?? RUNTIME_DEFAULTS.confirmationMethod) as "choch" | "indicators" | "choch_and_indicators",
     maxConfirmationAttempts: entry.maxConfirmationAttempts ?? raw.maxConfirmationAttempts ?? RUNTIME_DEFAULTS.maxConfirmationAttempts,
     indicatorMinCount: entry.indicatorMinCount ?? raw.indicatorMinCount ?? RUNTIME_DEFAULTS.indicatorMinCount,
+
+    // ── Thesis Conviction ──
+    thesisConvictionEnabled: strategy.thesisConvictionEnabled ?? raw.thesisConvictionEnabled ?? RUNTIME_DEFAULTS.thesisConvictionEnabled,
+    thesisConvictionMode: (strategy.thesisConvictionMode ?? raw.thesisConvictionMode ?? RUNTIME_DEFAULTS.thesisConvictionMode) as "shadow" | "active",
+    thesisConvictionDecayPerCycle: strategy.thesisConvictionDecayPerCycle ?? raw.thesisConvictionDecayPerCycle ?? RUNTIME_DEFAULTS.thesisConvictionDecayPerCycle,
+    thesisConvictionRecoveryPerCycle: strategy.thesisConvictionRecoveryPerCycle ?? raw.thesisConvictionRecoveryPerCycle ?? RUNTIME_DEFAULTS.thesisConvictionRecoveryPerCycle,
+    thesisConvictionRevokeThreshold: strategy.thesisConvictionRevokeThreshold ?? raw.thesisConvictionRevokeThreshold ?? RUNTIME_DEFAULTS.thesisConvictionRevokeThreshold,
+    thesisConvictionKillThreshold: strategy.thesisConvictionKillThreshold ?? raw.thesisConvictionKillThreshold ?? RUNTIME_DEFAULTS.thesisConvictionKillThreshold,
 
     // ── Per-Pair Gate Overrides ──
     pairGateOverrides: raw.pairGateOverrides ?? RUNTIME_DEFAULTS.pairGateOverrides,

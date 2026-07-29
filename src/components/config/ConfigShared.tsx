@@ -13,6 +13,23 @@ export interface ConfigTabProps {
   highlightedLabels?: Set<string>;
 }
 
+export type FeatureState = "active" | "log-only" | "disabled" | "unavailable";
+
+export function FeatureStateBadge({ state }: { state: FeatureState }) {
+  const style = {
+    active: "border-success/40 bg-success/10 text-success",
+    "log-only": "border-warning/40 bg-warning/10 text-warning",
+    disabled: "border-border bg-muted text-muted-foreground",
+    unavailable: "border-destructive/30 bg-destructive/10 text-destructive",
+  }[state];
+
+  return (
+    <span className={`ml-2 inline-flex rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide ${style}`}>
+      {state}
+    </span>
+  );
+}
+
 // ─── Collapsible Section ────────────────────────────────────────────────────
 interface CollapsibleSectionProps {
   id: string;
@@ -78,10 +95,12 @@ export function SectionHeader({ title, description }: { title: string; descripti
 export function FieldGroup({
   label,
   description,
+  status,
   children,
 }: {
   label: string;
   description?: string;
+  status?: FeatureState;
   children: React.ReactNode;
 }) {
   const highlighted = useContext(HighlightContext);
@@ -90,7 +109,10 @@ export function FieldGroup({
   return (
     <div className={`space-y-1.5 ${isHighlighted ? "ring-1 ring-primary/50 rounded-md p-2 -m-2 bg-primary/5" : ""}`}>
       <div>
-        <label className="text-xs font-medium text-foreground">{label}</label>
+        <label className="text-xs font-medium text-foreground">
+          {label}
+          {status && <FeatureStateBadge state={status} />}
+        </label>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>
       {children}
@@ -105,12 +127,14 @@ export function ToggleField({
   checked,
   onChange,
   disabled,
+  status,
 }: {
   label: string;
   description?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
+  status?: FeatureState;
 }) {
   const highlighted = useContext(HighlightContext);
   const isHighlighted = highlighted.has(label.toLowerCase());
@@ -118,7 +142,10 @@ export function ToggleField({
   return (
     <div className={`flex items-center justify-between gap-4 py-1.5 ${isHighlighted ? "ring-1 ring-primary/50 rounded-md p-2 -m-1 bg-primary/5" : ""}`}>
       <div className="min-w-0">
-        <span className="text-xs font-medium text-foreground">{label}</span>
+        <span className="text-xs font-medium text-foreground">
+          {label}
+          {status && <FeatureStateBadge state={status} />}
+        </span>
         {description && <p className="text-[10px] text-muted-foreground">{description}</p>}
       </div>
       <Switch checked={checked} onCheckedChange={onChange} disabled={disabled} className="shrink-0" />

@@ -60,7 +60,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
         {config.risk?.positionSizingMethod === "volatility_adjusted" && (
           <>
             <p className="text-[10px] text-muted-foreground italic">Lot size scales inversely with ATR — smaller positions in volatile markets, larger in calm markets. Uses Risk% as the base.</p>
-            <FieldGroup label={`ATR Multiplier: ${config.risk?.atrVolatilityMultiplier ?? 1.5}×`} description="ATR is multiplied by this factor to set the volatility-based risk distance. Lower = larger lots (more aggressive), higher = smaller lots (more conservative)">
+            <FieldGroup label={`ATR Multiplier: ${config.risk?.atrVolatilityMultiplier ?? 1.5}×`} description="ATR is multiplied by this factor to set the volatility-based risk distance. Lower = larger lots (more aggressive), higher = smaller lots (more conservative)" status="active">
               <Slider
                 value={[config.risk?.atrVolatilityMultiplier ?? 1.5]}
                 onValueChange={([v]) => updateField('risk', 'atrVolatilityMultiplier', Math.round(v * 10) / 10)}
@@ -85,7 +85,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
           </FieldGroup>
         )}
 
-        <FieldGroup label="Standalone Size Multiplier" description="Position size multiplier for standalone entries (unified gate not passed). 1.0 = full size, 0.5 = half size.">
+        <FieldGroup label="Standalone Size Multiplier" description="Position size multiplier for standalone entries (unified gate not passed). 1.0 = full size, 0.5 = half size." status={config.strategy?.requireUnifiedZone ? "unavailable" : "active"}>
           <div className="flex items-center gap-2">
             <Input type="number" value={config.risk?.standaloneMultiplier ?? 0.5} onChange={e => updateField('risk', 'standaloneMultiplier', Math.max(0.1, Math.min(1.0, parseFloat(e.target.value) || 0.5)))} step={0.1} min={0.1} max={1.0} className="h-9 text-sm" />
             <span className="text-[11px] text-muted-foreground font-mono">×{(config.risk?.standaloneMultiplier ?? 0.5).toFixed(1)}</span>
@@ -112,7 +112,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
           <FieldGroup label="Max Portfolio Heat (%)" description="Max total risk exposure across all open positions">
             <Input type="number" value={config.risk?.maxPortfolioHeat ?? 10} onChange={e => updateField('risk', 'maxPortfolioHeat', parseFloat(e.target.value) || 0)} step={1} min={1} max={100} className="h-9 text-sm" />
           </FieldGroup>
-          <FieldGroup label="Max Per Symbol" description="Max open positions allowed on the same instrument">
+          <FieldGroup label="Max Per Symbol" description="Max open positions allowed on the same instrument" status="active">
             <Input type="number" value={config.risk?.maxPositionsPerSymbol ?? 2} onChange={e => updateField('risk', 'maxPositionsPerSymbol', parseFloat(e.target.value) || 0)} min={1} max={10} className="h-9 text-sm" />
           </FieldGroup>
         </div>

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { mapNestedToFlat, applyPairOverrides } from "../_shared/configMapper.ts";
+import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
   evaluateFinalTradeAuthorization,
@@ -4545,6 +4546,10 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           htfConfluenceData ?? undefined,
           {
             strictATRMult: pairConfig.marketFillStrictATRMult,
+            minQualityScore: pairConfig.zoneQualityThreshold,
+            maxAgeBars: pairConfig.zoneMaxAgeBars,
+            minBodyRatio: pairConfig.zoneMinBodyRatio,
+            minDisplacementATR: pairConfig.zoneMinDisplacementATR,
             pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
             fibMaxRetracement: pairConfig.fibMaxRetracement,
             originOBRetest: pairConfig.originOBRetest,
@@ -6315,9 +6320,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
           console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE at zone — routing to CHoCH confirmation path (market fill reserved for unified/cascade).`);
         }
 
-        // Auto-enable limit orders ONLY when price is NOT at zone (watching path)
-        // or when marketFillAtZone is explicitly disabled.
-        const effectiveLimitEnabled = !useMarketFillAtZone && (config.limitOrderEnabled || (izGateMode === "hard" && !!limitEntry));
+        // Pending Zone Orders is the sole authority for creating a limit order.
+        // A hard impulse-zone gate must not silently override the visible Bot Config toggle.
+        const effectiveLimitEnabled = shouldCreatePendingZoneOrder({
+          pendingZoneOrdersEnabled: config.limitOrderEnabled,
+          useMarketFillAtZone,
+          hasLimitEntry: !!limitEntry,
+        });
         if (effectiveLimitEnabled && limitEntry) {
           // ── Anti-Cycling Fix Part 2 (RELAXED): Log standalone signals but allow pending orders ──
           // Previously this blocked standalone signals with confirmation.type="none" from
@@ -8030,7 +8039,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
       fotsiStrengths: _fotsiResult?.strengths ?? null,  // Currency strength values for UI meter
       dataCache: { hits: cacheStats.hits, fetches: cacheStats.misses, errors: cacheStats.errors, seeded: cacheStats.seeded },
       staging: stagingEnabled ? { enabled: true, watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : { enabled: false },
-      pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { enabled: true, autoEnabled: !config.limitOrderEnabled && config.impulseZoneGateMode === "hard", active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
+      pendingOrders: config.limitOrderEnabled ? { enabled: true, autoEnabled: false, active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : { enabled: false },
       rejectionSummary,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
     },
@@ -8048,7 +8057,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
     details_json: detailsWithMeta,
   });
 
-  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: (config.limitOrderEnabled || config.impulseZoneGateMode === "hard") ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
+  return { pairsScanned: config.instruments.length, signalsFound, tradesPlaced, rejected: rejectedCount, details: scanDetails, activeStyle: resolvedStyle, resolvedMinConfluence: config.minConfluence, scanCycleId, managementActions: managementActions.filter(a => a.action !== "no_change"), staging: stagingEnabled ? { watching: activeStagedSetups.length - stagedPromoted - stagedInvalidated, promoted: stagedPromoted, expired: stagedExpired, invalidated: stagedInvalidated, newlyStaged: stagedNew } : null, pendingOrders: config.limitOrderEnabled ? { active: (activePendingOrders?.length || 0) - pendingFilled - pendingExpired - pendingCancelled, filled: pendingFilled, expired: pendingExpired, cancelled: pendingCancelled, placed: pendingPlaced, awaitingConfirmation: pendingConfirmationHunting } : null };
   } finally {
     // Always release the scan lock and clear the source tally, even on error.
     try { endScanSourceTally(); } catch { /* ignore */ }

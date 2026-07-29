@@ -21,6 +21,8 @@ import {
   refineLowerTF,
   rankAndSelectBestZone,
   findBestEntryZone,
+  qualifyImpulsePOIs,
+  zoneQualityPercent,
   type ImpulseLeg,
   type ImpulsePOI,
   type RankedPOI,
@@ -1239,4 +1241,71 @@ Deno.test("findBestEntryZone — pipSize option correctly scales distancePips fo
     // Gold pips should be reasonable (not millions)
     assert(resultGold.bestZone.distancePips < 50000, `Gold distancePips should be < 50000, got ${resultGold.bestZone.distancePips}`);
   }
+});
+
+// ─── Bot Config zone qualification contract ─────────────────────────────────
+
+Deno.test("qualifyImpulsePOIs — max age removes stale zones and keeps recent zones", () => {
+  const candles = Array.from({ length: 20 }, (_, i) => makeCandle(10, 11, 10, 10.8, i));
+  const impulse: ImpulseLeg = {
+    high: 12, low: 9, direction: "bullish", startIndex: 0, endIndex: 19, isValid: true, bosPrice: 11,
+  };
+  const pois: ImpulsePOI[] = [
+    { type: "fvg", high: 10.5, low: 10.2, candleIndex: 2, direction: "bullish" },
+    { type: "fvg", high: 10.7, low: 10.4, candleIndex: 18, direction: "bullish" },
+  ];
+
+  const result = qualifyImpulsePOIs(candles, impulse, pois, { maxAgeBars: 5 });
+  assertEquals(result.accepted.map((poi) => poi.candleIndex), [18]);
+  assertEquals(result.rejected.age, 1);
+});
+
+Deno.test("qualifyImpulsePOIs — body ratio filters doji-like OB candles", () => {
+  const candles = Array.from({ length: 20 }, (_, i) => makeCandle(10, 11, 10, 10.8, i));
+  candles[10] = makeCandle(10.45, 11, 10, 10.5, 10);
+  const impulse: ImpulseLeg = {
+    high: 12, low: 9, direction: "bullish", startIndex: 0, endIndex: 19, isValid: true, bosPrice: 11,
+  };
+  const poi: ImpulsePOI = {
+    type: "ob", high: 11, low: 10, candleIndex: 10, direction: "bullish",
+  };
+
+  const result = qualifyImpulsePOIs(candles, impulse, [poi], { minBodyRatio: 0.5 });
+  assertEquals(result.accepted.length, 0);
+  assertEquals(result.rejected.body_ratio, 1);
+});
+
+Deno.test("qualifyImpulsePOIs — displacement ATR threshold controls qualification", () => {
+  const candles = Array.from({ length: 20 }, (_, i) => makeCandle(10, 11, 10, 10.8, i));
+  candles[18] = makeCandle(10, 12.5, 9.5, 12, 18);
+  const impulse: ImpulseLeg = {
+    high: 13, low: 9, direction: "bullish", startIndex: 0, endIndex: 19, isValid: true, bosPrice: 12,
+  };
+  const poi: ImpulsePOI = {
+    type: "fvg", high: 11, low: 10, candleIndex: 18, direction: "bullish",
+  };
+
+  assertEquals(
+    qualifyImpulsePOIs(candles, impulse, [poi], { minDisplacementATR: 1.5 }).accepted.length,
+    1,
+  );
+  assertEquals(
+    qualifyImpulsePOIs(candles, impulse, [poi], { minDisplacementATR: 3 }).accepted.length,
+    0,
+  );
+});
+
+Deno.test("zoneQualityPercent — converts the 0-9 engine score to the UI 0-100 scale", () => {
+  const zone: RankedPOI = {
+    poi: { type: "fvg", high: 11, low: 10, candleIndex: 18, direction: "bullish" },
+    fibLevel: 0.618,
+    fibDepth: 0.618,
+    fibScore: 1.5,
+    srConfirmed: true,
+    ltfRefined: true,
+    htfConfluenceScore: 1,
+    htfLayers: [],
+    totalScore: 4.5,
+  };
+  assertEquals(zoneQualityPercent(zone), 50);
 });

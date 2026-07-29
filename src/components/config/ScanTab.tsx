@@ -478,7 +478,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
               <ToggleField label="Auto Key Levels" description="Auto-detect OBs, FVGs, liquidity" checked={config.gamePlan?.autoKeyLevels ?? true} onChange={v => updateField('gamePlan', 'autoKeyLevels', v)} />
               <ToggleField label="Session Bias" description="Calculate directional bias per session" checked={config.gamePlan?.sessionBias ?? true} onChange={v => updateField('gamePlan', 'sessionBias', v)} />
               <ToggleField label="PD Levels" description="Include previous day/week levels" checked={config.gamePlan?.pdLevels ?? true} onChange={v => updateField('gamePlan', 'pdLevels', v)} />
-              <ToggleField label="IPDA Ranges" description="20/40/60-day institutional data ranges" checked={config.ipdaRangesEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, ipdaRangesEnabled: v }))} />
+              <ToggleField label="IPDA Ranges" description="20/40/60-day institutional data ranges" checked={config.ipdaRangesEnabled !== false} onChange={v => setConfig((prev: any) => ({ ...prev, ipdaRangesEnabled: v }))} status={config.ipdaRangesEnabled !== false ? "active" : "disabled"} />
             </div>
           </>
         )}

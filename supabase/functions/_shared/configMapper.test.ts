@@ -350,6 +350,70 @@ Deno.test("mapNestedToFlat: limit order fields from entry section", () => {
   assertAlmostEquals(result.marketFillStrictATRMult, 0.5);
 });
 
+Deno.test("mapNestedToFlat: visible Pending Zone controls map to their runtime behavior", () => {
+  const result = mapNestedToFlat({
+    entry: {
+      pendingZoneOrders: true,
+      zoneProximityATR: 0.45,
+      zoneWatchExpiry: 6,
+      confirmationMethod: "choch_and_indicators",
+    },
+  });
+  assertEquals(result.limitOrderEnabled, true);
+  assertAlmostEquals(result.marketFillStrictATRMult, 0.45);
+  assertEquals(result.limitOrderExpiryMinutes, 360);
+  assertEquals(result.confirmationMethod, "choch_and_indicators");
+});
+
+Deno.test("mapNestedToFlat: visible zone-quality controls map exactly", () => {
+  const result = mapNestedToFlat({
+    strategy: {
+      zoneQualityThreshold: 65,
+      zoneMaxAgeBars: 80,
+      zoneMinBodyRatio: 0.7,
+      zoneMinDisplacementATR: 2.25,
+    },
+  });
+  assertEquals(result.zoneQualityThreshold, 65);
+  assertEquals(result.zoneMaxAgeBars, 80);
+  assertAlmostEquals(result.zoneMinBodyRatio, 0.7);
+  assertAlmostEquals(result.zoneMinDisplacementATR, 2.25);
+});
+
+Deno.test("mapNestedToFlat: visible risk, exit, Gameplan and thesis controls map exactly", () => {
+  const result = mapNestedToFlat({
+    risk: {
+      standaloneMultiplier: 0.35,
+      atrVolatilityMultiplier: 2.2,
+      maxPositionsPerSymbol: 1,
+    },
+    exit: { breakEvenOffsetPips: 5 },
+    ipdaRangesEnabled: false,
+    strategy: {
+      thesisConvictionEnabled: true,
+      thesisConvictionMode: "active",
+    },
+  });
+  assertAlmostEquals(result.standaloneMultiplier, 0.35);
+  assertAlmostEquals(result.atrVolatilityMultiplier, 2.2);
+  assertEquals(result.maxPerSymbol, 1);
+  assertEquals(result.breakEvenOffsetPips, 5);
+  assertEquals(result.ipdaRangesEnabled, false);
+  assertEquals(result.thesisConvictionEnabled, true);
+  assertEquals(result.thesisConvictionMode, "active");
+});
+
+Deno.test("mapNestedToFlat: UI and legacy ATR sizing names resolve to the executable method", () => {
+  assertEquals(
+    mapNestedToFlat({ risk: { positionSizingMethod: "volatility_adjusted" } }).positionSizingMethod,
+    "volatility_adjusted",
+  );
+  assertEquals(
+    mapNestedToFlat({ positionSizingMethod: "atr_volatility" }).positionSizingMethod,
+    "volatility_adjusted",
+  );
+});
+
 // ─── Test 9: Regime-adaptive fields ─────────────────────────────────
 
 Deno.test("mapNestedToFlat: regime-adaptive exit fields from strategy section", () => {
