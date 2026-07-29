@@ -91,6 +91,17 @@ interface InstrumentPlan {
   zone: string;
   htfTrend: string;
   h4Trend: string;
+  decisionEvidence?: {
+    version: string;
+    style: string;
+    labels: {
+      bias: string;
+      structure: string;
+      setup: string;
+      confirmation: string;
+      refinement: string;
+    };
+  };
   tradeable: boolean;
   state?: GamePlanState;
   stateReason?: string;
@@ -266,6 +277,10 @@ function formatDateTime(isoStr: string) {
 function BiasCard({ plan }: { plan: InstrumentPlan }) {
   const [expanded, setExpanded] = useState(false);
   const state = getPlanState(plan);
+  const biasLabel = plan.decisionEvidence?.labels.bias || "D1";
+  const structureLabel =
+    plan.decisionEvidence?.labels.structure || "4H";
+  const setupLabel = plan.decisionEvidence?.labels.setup || "1H";
 
   return (
     <div
@@ -297,9 +312,11 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
 
       {/* Quick info row */}
       <div className="flex items-center gap-3 mt-1.5 text-[10px] text-muted-foreground font-mono">
-        <span>D1: {plan.htfTrend}</span>
+        <span>{biasLabel}: {plan.htfTrend}</span>
         <span className="text-zinc-600">|</span>
-        <span>4H: {plan.h4Trend}</span>
+        <span>{structureLabel}: {plan.h4Trend}</span>
+        <span className="text-zinc-600">|</span>
+        <span>Setup: {setupLabel}</span>
         <span className="text-zinc-600">|</span>
         <span>{plan.zone}</span>
         <span className="text-zinc-600">|</span>

@@ -11,23 +11,26 @@
  * Run: deno test --allow-all supabase/functions/_shared/thesisValidator.test.ts
  */
 import {
-  assertEquals,
   assert,
+  assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  validatePendingOrderThesis,
   estimateDirectionConfidence,
-  type ThesisValidationResult,
   type PendingOrderForValidation,
   type ThesisValidationOpts,
+  type ThesisValidationResult,
+  validatePendingOrderThesis,
 } from "./thesisValidator.ts";
 import type { FOTSIResult } from "./fotsi.ts";
-import type { SessionGamePlan, InstrumentGamePlan } from "./gamePlan.ts";
+import type { InstrumentGamePlan, SessionGamePlan } from "./gamePlan.ts";
 import type { Candle } from "./smcAnalysis.ts";
+import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
 
 // ── Helpers ──
 
-function makePendingOrder(overrides: Partial<PendingOrderForValidation> = {}): PendingOrderForValidation {
+function makePendingOrder(
+  overrides: Partial<PendingOrderForValidation> = {},
+): PendingOrderForValidation {
   return {
     order_id: "test-order-1",
     symbol: "EUR/USD",
@@ -37,7 +40,9 @@ function makePendingOrder(overrides: Partial<PendingOrderForValidation> = {}): P
   };
 }
 
-function makeDefaultOpts(overrides: Partial<ThesisValidationOpts> = {}): ThesisValidationOpts {
+function makeDefaultOpts(
+  overrides: Partial<ThesisValidationOpts> = {},
+): ThesisValidationOpts {
   return {
     fotsiResult: null,
     lastGamePlan: null,
@@ -49,7 +54,10 @@ function makeDefaultOpts(overrides: Partial<ThesisValidationOpts> = {}): ThesisV
 }
 
 /** Generate N synthetic candles with a bullish trend */
-function makeBullishCandles(count: number, startPrice: number = 1.0800): Candle[] {
+function makeBullishCandles(
+  count: number,
+  startPrice: number = 1.0800,
+): Candle[] {
   const candles: Candle[] = [];
   let price = startPrice;
   for (let i = 0; i < count; i++) {
@@ -69,7 +77,10 @@ function makeBullishCandles(count: number, startPrice: number = 1.0800): Candle[
 }
 
 /** Generate N synthetic candles with a bearish trend */
-function makeBearishCandles(count: number, startPrice: number = 1.1200): Candle[] {
+function makeBearishCandles(
+  count: number,
+  startPrice: number = 1.1200,
+): Candle[] {
   const candles: Candle[] = [];
   let price = startPrice;
   for (let i = 0; i < count; i++) {
@@ -102,7 +113,7 @@ function makeGamePlan(plans: Partial<InstrumentGamePlan>[]): SessionGamePlan {
   return {
     session: "London",
     generatedAt: new Date().toISOString(),
-    plans: plans.map(p => ({
+    plans: plans.map((p) => ({
       symbol: p.symbol || "EUR/USD",
       bias: p.bias || "neutral",
       biasConfidence: p.biasConfidence ?? 50,
@@ -148,10 +159,45 @@ Deno.test("Fail-open: candles below minimum count → valid", () => {
     makePendingOrder(),
     makeDefaultOpts({
       dailyCandles: makeBearishCandles(5), // Only 5, need 20
-      h4Candles: makeBearishCandles(10),   // Only 10, need 20
+      h4Candles: makeBearishCandles(10), // Only 10, need 20
     }),
   );
   assertEquals(result.valid, true);
+});
+
+Deno.test("Direction flip prefers the style-aware evidence contract", () => {
+  const decisionEvidence = {
+    version: "style-decision-evidence.v1",
+    style: "scalper",
+    labels: {
+      bias: "1H",
+      structure: "15m",
+      setup: "5m",
+      confirmation: "5m",
+      refinement: "1m",
+    },
+    simpleDirection: {
+      direction: "short",
+      bias: "bearish",
+      biasSource: "1H",
+      h4Retrace: true,
+      h4ChochAgainst: false,
+      h1Confirmed: true,
+      reason: "1H→15m→5m bearish",
+    },
+  } as unknown as StyleDecisionEvidence;
+  const result = validatePendingOrderThesis(
+    makePendingOrder({ direction: "long" }),
+    makeDefaultOpts({ decisionEvidence }),
+  );
+
+  assertEquals(result.valid, false);
+  assertEquals(result.checkType, "direction_flip");
+  assert(result.reason?.includes("[1H→15m→5m]"));
+  assertEquals(
+    result.decisionEvidenceVersion,
+    "style-decision-evidence.v1",
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -182,7 +228,10 @@ Deno.test("FOTSI veto: EUR overbought blocks long EUR/USD", () => {
   // The actual veto depends on the checkOverboughtOversoldVeto implementation
   // If EUR is at 85 TSI, it should be considered overbought for a BUY
   // This test verifies the integration path works
-  assertEquals(result.checkType === "fotsi_veto" || result.valid === true, true);
+  assertEquals(
+    result.checkType === "fotsi_veto" || result.valid === true,
+    true,
+  );
 });
 
 Deno.test("FOTSI: non-exhausted currencies → valid", () => {
@@ -363,7 +412,10 @@ Deno.test("Check ordering: FOTSI veto fires before GP bias check", () => {
   // If FOTSI actually vetoes, it should be the check type
   // If FOTSI doesn't veto (depends on exact thresholds), GP should fire
   if (!result.valid) {
-    assert(result.checkType === "fotsi_veto" || result.checkType === "gp_bias_reversal");
+    assert(
+      result.checkType === "fotsi_veto" ||
+        result.checkType === "gp_bias_reversal",
+    );
   }
 });
 

@@ -14,18 +14,18 @@
  */
 
 import {
-  type Candle,
-  SPECS,
   analyzeMarketStructure,
-  detectOrderBlocks,
-  detectFVGs,
-  detectLiquidityPools,
+  calculateATR,
   calculatePDLevels,
   calculatePremiumDiscount,
-  calculateATR,
-  detectAMDPhase,
+  type Candle,
   classifyInstrumentRegime,
+  detectAMDPhase,
+  detectFVGs,
+  detectLiquidityPools,
+  detectOrderBlocks,
   detectSwingPoints,
+  SPECS,
   toNYTime,
 } from "./smcAnalysis.ts";
 import { calculateIPDARanges, ipdaRangesToKeyLevels } from "./ipdaRanges.ts";
@@ -35,13 +35,18 @@ import {
   SESSION_WINDOWS,
 } from "./sessions.ts";
 import {
-  classifyGamePlan,
   type BiasEvidence,
+  classifyGamePlan,
   type GamePlanConviction,
   type GamePlanState,
 } from "./gamePlanClassifier.ts";
+import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
 
-export type { BiasEvidence, GamePlanConviction, GamePlanState } from "./gamePlanClassifier.ts";
+export type {
+  BiasEvidence,
+  GamePlanConviction,
+  GamePlanState,
+} from "./gamePlanClassifier.ts";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -103,6 +108,8 @@ export interface InstrumentGamePlan {
   htfTrend: string;
   /** 4H trend */
   h4Trend: string;
+  /** Style-authoritative structural evidence used to produce this plan. */
+  decisionEvidence?: StyleDecisionEvidence;
   /** ATR for volatility context */
   atr: number;
   /** IPDA 20/40/60-day data ranges (institutional reference levels) */
@@ -137,6 +144,9 @@ export interface InstrumentGamePlan {
     h4: string | null;
     entry: string | null;
     hourly: string | null;
+    bias?: string | null;
+    structure?: string | null;
+    setup?: string | null;
   };
 }
 
@@ -174,8 +184,10 @@ export interface NewsEvent {
 // themselves come from sessions.ts's SESSION_WINDOWS (single source of truth).
 const PRE_MARKET_LEAD_HOURS = 0.5;
 
-function getSessionWindow(name: SessionName): { startNY: number; endNY: number } {
-  const w = SESSION_WINDOWS.find(w => w.name === name);
+function getSessionWindow(
+  name: SessionName,
+): { startNY: number; endNY: number } {
+  const w = SESSION_WINDOWS.find((w) => w.name === name);
   if (!w) throw new Error(`No session window found for ${name}`);
   return { startNY: w.startNY, endNY: w.endNY };
 }
@@ -218,9 +230,19 @@ export function getCurrentSession(): SessionName {
  */
 function identifyDOL(
   lastPrice: number,
-  liquidityPools: Array<{ price: number; type: "buy-side" | "sell-side"; strength: number; swept: boolean; state: string }>,
+  liquidityPools: Array<
+    {
+      price: number;
+      type: "buy-side" | "sell-side";
+      strength: number;
+      swept: boolean;
+      state: string;
+    }
+  >,
   pdLevels: ReturnType<typeof calculatePDLevels>,
-  swingPoints: Array<{ type: "high" | "low"; price: number; significance?: string }>,
+  swingPoints: Array<
+    { type: "high" | "low"; price: number; significance?: string }
+  >,
   htfTrend: string,
   pipSize: number,
 ): DOLTarget | null {
@@ -234,7 +256,9 @@ function identifyDOL(
     candidates.push({
       price: pool.price,
       type: pool.type,
-      description: `${pool.type === "buy-side" ? "Buy-side" : "Sell-side"} liquidity (${pool.strength} touches)`,
+      description: `${
+        pool.type === "buy-side" ? "Buy-side" : "Sell-side"
+      } liquidity (${pool.strength} touches)`,
       distancePips: dist,
       strength: pool.strength * 2, // liquidity pools are high priority
     });
@@ -243,10 +267,26 @@ function identifyDOL(
   // 2. PD levels as DOL targets (PDH, PDL, PWH, PWL)
   if (pdLevels) {
     const pdTargets = [
-      { price: pdLevels.pdh, type: "buy-side" as const, label: "Previous Day High" },
-      { price: pdLevels.pdl, type: "sell-side" as const, label: "Previous Day Low" },
-      { price: pdLevels.pwh, type: "buy-side" as const, label: "Previous Week High" },
-      { price: pdLevels.pwl, type: "sell-side" as const, label: "Previous Week Low" },
+      {
+        price: pdLevels.pdh,
+        type: "buy-side" as const,
+        label: "Previous Day High",
+      },
+      {
+        price: pdLevels.pdl,
+        type: "sell-side" as const,
+        label: "Previous Day Low",
+      },
+      {
+        price: pdLevels.pwh,
+        type: "buy-side" as const,
+        label: "Previous Week High",
+      },
+      {
+        price: pdLevels.pwl,
+        type: "sell-side" as const,
+        label: "Previous Week Low",
+      },
     ];
     for (const t of pdTargets) {
       const dist = Math.abs(t.price - lastPrice) / pipSize;
@@ -254,7 +294,10 @@ function identifyDOL(
       // Only add if price hasn't already swept past this level
       const isAbove = lastPrice > t.price;
       const isBelow = lastPrice < t.price;
-      if ((t.type === "buy-side" && isAbove) || (t.type === "sell-side" && isBelow)) continue;
+      if (
+        (t.type === "buy-side" && isAbove) ||
+        (t.type === "sell-side" && isBelow)
+      ) continue;
       candidates.push({
         price: t.price,
         type: t.type,
@@ -266,7 +309,9 @@ function identifyDOL(
   }
 
   // 3. External swing highs/lows as DOL
-  const externalSwings = swingPoints.filter(s => s.significance === "external");
+  const externalSwings = swingPoints.filter((s) =>
+    s.significance === "external"
+  );
   for (const sw of externalSwings.slice(-6)) {
     const dist = Math.abs(sw.price - lastPrice) / pipSize;
     if (dist < 10) continue;
@@ -313,15 +358,24 @@ function identifyDOL(
  * - Regime classification
  */
 function determineBias(
-  dailyTrend: string,
-  h4Trend: string,
+  biasTrend: string,
+  structureTrend: string,
   zone: string,
   zonePercent: number,
   amd: { phase: string; bias: string | null },
   dol: DOLTarget | null,
   regime: { regime: string; directionalBias: string; confidence: number },
-  availability: { daily: boolean; h4: boolean; location: boolean },
-): { bias: BiasDirection; confidence: number; reasoning: string[]; evidence: BiasEvidence[] } {
+  availability: { bias: boolean; structure: boolean; location: boolean },
+  labels: { bias: string; structure: string } = {
+    bias: "Daily",
+    structure: "4H",
+  },
+): {
+  bias: BiasDirection;
+  confidence: number;
+  reasoning: string[];
+  evidence: BiasEvidence[];
+} {
   let bullishVotes = 0;
   let bearishVotes = 0;
   const reasoning: string[] = [];
@@ -341,80 +395,203 @@ function determineBias(
       direction,
       weight,
       available,
-      contribution: direction === "bullish" ? weight : direction === "bearish" ? -weight : 0,
+      contribution: direction === "bullish"
+        ? weight
+        : direction === "bearish"
+        ? -weight
+        : 0,
       reason,
     });
   };
 
-  // 1. Daily trend (weight: 3)
-  if (dailyTrend === "bullish") {
+  // 1. Style-authoritative bias trend (weight: 3)
+  if (biasTrend === "bullish") {
     bullishVotes += 3;
-    reasoning.push("D1 structure: bullish (HH/HL)");
-    addEvidence("daily_structure", "Daily structure", "bullish", 3, true, "D1 structure is bullish (HH/HL)");
-  } else if (dailyTrend === "bearish") {
+    reasoning.push(`${labels.bias} bias structure: bullish (HH/HL)`);
+    addEvidence(
+      "daily_structure",
+      `${labels.bias} bias structure`,
+      "bullish",
+      3,
+      true,
+      `${labels.bias} structure is bullish (HH/HL)`,
+    );
+  } else if (biasTrend === "bearish") {
     bearishVotes += 3;
-    reasoning.push("D1 structure: bearish (LH/LL)");
-    addEvidence("daily_structure", "Daily structure", "bearish", 3, true, "D1 structure is bearish (LH/LL)");
+    reasoning.push(`${labels.bias} bias structure: bearish (LH/LL)`);
+    addEvidence(
+      "daily_structure",
+      `${labels.bias} bias structure`,
+      "bearish",
+      3,
+      true,
+      `${labels.bias} structure is bearish (LH/LL)`,
+    );
   } else {
-    reasoning.push("D1 structure: ranging — no clear trend");
-    addEvidence("daily_structure", "Daily structure", "neutral", 3, availability.daily, availability.daily ? "D1 structure is ranging" : "D1 structure unavailable");
+    reasoning.push(`${labels.bias} bias structure: ranging — no clear trend`);
+    addEvidence(
+      "daily_structure",
+      `${labels.bias} bias structure`,
+      "neutral",
+      3,
+      availability.bias,
+      availability.bias
+        ? `${labels.bias} structure is ranging`
+        : `${labels.bias} structure unavailable`,
+    );
   }
 
-  // 2. 4H trend (weight: 2)
-  if (h4Trend === "bullish") {
+  // 2. Style-authoritative structure trend (weight: 2)
+  if (structureTrend === "bullish") {
     bullishVotes += 2;
-    reasoning.push("4H structure: bullish");
-    addEvidence("h4_structure", "4H structure", "bullish", 2, true, "4H structure is bullish");
-  } else if (h4Trend === "bearish") {
+    reasoning.push(`${labels.structure} structure: bullish`);
+    addEvidence(
+      "h4_structure",
+      `${labels.structure} structure`,
+      "bullish",
+      2,
+      true,
+      `${labels.structure} structure is bullish`,
+    );
+  } else if (structureTrend === "bearish") {
     bearishVotes += 2;
-    reasoning.push("4H structure: bearish");
-    addEvidence("h4_structure", "4H structure", "bearish", 2, true, "4H structure is bearish");
+    reasoning.push(`${labels.structure} structure: bearish`);
+    addEvidence(
+      "h4_structure",
+      `${labels.structure} structure`,
+      "bearish",
+      2,
+      true,
+      `${labels.structure} structure is bearish`,
+    );
   } else {
-    reasoning.push("4H structure: ranging");
-    addEvidence("h4_structure", "4H structure", "neutral", 2, availability.h4, availability.h4 ? "4H structure is ranging" : "4H structure unavailable");
+    reasoning.push(`${labels.structure} structure: ranging`);
+    addEvidence(
+      "h4_structure",
+      `${labels.structure} structure`,
+      "neutral",
+      2,
+      availability.structure,
+      availability.structure
+        ? `${labels.structure} structure is ranging`
+        : `${labels.structure} structure unavailable`,
+    );
   }
 
   // 3. Premium/Discount zone (weight: 2)
   if (zone === "discount" && zonePercent < 40) {
     bullishVotes += 2;
-    reasoning.push(`Price in discount zone (${zonePercent.toFixed(0)}%) — look for longs`);
-    addEvidence("market_location", "Premium/discount", "bullish", 2, true, `Price is in discount (${zonePercent.toFixed(0)}%)`);
+    reasoning.push(
+      `Price in discount zone (${zonePercent.toFixed(0)}%) — look for longs`,
+    );
+    addEvidence(
+      "market_location",
+      "Premium/discount",
+      "bullish",
+      2,
+      true,
+      `Price is in discount (${zonePercent.toFixed(0)}%)`,
+    );
   } else if (zone === "premium" && zonePercent > 60) {
     bearishVotes += 2;
-    reasoning.push(`Price in premium zone (${zonePercent.toFixed(0)}%) — look for shorts`);
-    addEvidence("market_location", "Premium/discount", "bearish", 2, true, `Price is in premium (${zonePercent.toFixed(0)}%)`);
+    reasoning.push(
+      `Price in premium zone (${zonePercent.toFixed(0)}%) — look for shorts`,
+    );
+    addEvidence(
+      "market_location",
+      "Premium/discount",
+      "bearish",
+      2,
+      true,
+      `Price is in premium (${zonePercent.toFixed(0)}%)`,
+    );
   } else {
     reasoning.push(`Price in equilibrium (${zonePercent.toFixed(0)}%)`);
-    addEvidence("market_location", "Premium/discount", "neutral", 2, availability.location && Number.isFinite(zonePercent), availability.location ? `Price is near equilibrium (${zonePercent.toFixed(0)}%)` : "Premium/discount location unavailable");
+    addEvidence(
+      "market_location",
+      "Premium/discount",
+      "neutral",
+      2,
+      availability.location && Number.isFinite(zonePercent),
+      availability.location
+        ? `Price is near equilibrium (${zonePercent.toFixed(0)}%)`
+        : "Premium/discount location unavailable",
+    );
   }
 
   // 4. AMD phase (weight: 2)
   if (amd.bias === "bullish") {
     bullishVotes += 2;
     reasoning.push(`AMD: ${amd.phase} — bullish bias (sell-side swept)`);
-    addEvidence("amd_phase", "AMD phase", "bullish", 2, true, `${amd.phase}: sell-side liquidity swept`);
+    addEvidence(
+      "amd_phase",
+      "AMD phase",
+      "bullish",
+      2,
+      true,
+      `${amd.phase}: sell-side liquidity swept`,
+    );
   } else if (amd.bias === "bearish") {
     bearishVotes += 2;
     reasoning.push(`AMD: ${amd.phase} — bearish bias (buy-side swept)`);
-    addEvidence("amd_phase", "AMD phase", "bearish", 2, true, `${amd.phase}: buy-side liquidity swept`);
+    addEvidence(
+      "amd_phase",
+      "AMD phase",
+      "bearish",
+      2,
+      true,
+      `${amd.phase}: buy-side liquidity swept`,
+    );
   } else {
     reasoning.push(`AMD: ${amd.phase} — no clear sweep bias`);
-    addEvidence("amd_phase", "AMD phase", "neutral", 2, amd.phase !== "unknown", `${amd.phase}: no clear sweep bias`);
+    addEvidence(
+      "amd_phase",
+      "AMD phase",
+      "neutral",
+      2,
+      amd.phase !== "unknown",
+      `${amd.phase}: no clear sweep bias`,
+    );
   }
 
   // 5. DOL direction (weight: 1)
   if (dol) {
     if (dol.type === "buy-side") {
       bullishVotes += 1;
-      reasoning.push(`DOL: buy-side at ${dol.price.toFixed(5)} (${dol.description})`);
-      addEvidence("draw_on_liquidity", "Draw on liquidity", "bullish", 1, true, `${dol.description} above price`);
+      reasoning.push(
+        `DOL: buy-side at ${dol.price.toFixed(5)} (${dol.description})`,
+      );
+      addEvidence(
+        "draw_on_liquidity",
+        "Draw on liquidity",
+        "bullish",
+        1,
+        true,
+        `${dol.description} above price`,
+      );
     } else {
       bearishVotes += 1;
-      reasoning.push(`DOL: sell-side at ${dol.price.toFixed(5)} (${dol.description})`);
-      addEvidence("draw_on_liquidity", "Draw on liquidity", "bearish", 1, true, `${dol.description} below price`);
+      reasoning.push(
+        `DOL: sell-side at ${dol.price.toFixed(5)} (${dol.description})`,
+      );
+      addEvidence(
+        "draw_on_liquidity",
+        "Draw on liquidity",
+        "bearish",
+        1,
+        true,
+        `${dol.description} below price`,
+      );
     }
   } else {
-    addEvidence("draw_on_liquidity", "Draw on liquidity", "neutral", 1, false, "No validated liquidity target");
+    addEvidence(
+      "draw_on_liquidity",
+      "Draw on liquidity",
+      "neutral",
+      1,
+      false,
+      "No validated liquidity target",
+    );
   }
 
   // 6. Regime directional bias (weight: 1)
@@ -425,15 +602,40 @@ function determineBias(
   );
   if (regime.directionalBias === "bullish") {
     bullishVotes += 1;
-    reasoning.push(`Regime: ${regime.regime} (bullish bias, ${regimeConfidencePercent}% conf)`);
-    addEvidence("market_regime", "Market regime", "bullish", 1, true, `${regime.regime} regime has bullish bias`);
+    reasoning.push(
+      `Regime: ${regime.regime} (bullish bias, ${regimeConfidencePercent}% conf)`,
+    );
+    addEvidence(
+      "market_regime",
+      "Market regime",
+      "bullish",
+      1,
+      true,
+      `${regime.regime} regime has bullish bias`,
+    );
   } else if (regime.directionalBias === "bearish") {
     bearishVotes += 1;
-    reasoning.push(`Regime: ${regime.regime} (bearish bias, ${regimeConfidencePercent}% conf)`);
-    addEvidence("market_regime", "Market regime", "bearish", 1, true, `${regime.regime} regime has bearish bias`);
+    reasoning.push(
+      `Regime: ${regime.regime} (bearish bias, ${regimeConfidencePercent}% conf)`,
+    );
+    addEvidence(
+      "market_regime",
+      "Market regime",
+      "bearish",
+      1,
+      true,
+      `${regime.regime} regime has bearish bias`,
+    );
   } else {
     reasoning.push(`Regime: ${regime.regime} (neutral)`);
-    addEvidence("market_regime", "Market regime", "neutral", 1, regime.regime !== "unknown", `${regime.regime} regime is neutral`);
+    addEvidence(
+      "market_regime",
+      "Market regime",
+      "neutral",
+      1,
+      regime.regime !== "unknown",
+      `${regime.regime} regime is neutral`,
+    );
   }
 
   // Calculate final bias
@@ -465,9 +667,33 @@ function determineBias(
 function extractKeyLevels(
   lastPrice: number,
   pdLevels: ReturnType<typeof calculatePDLevels>,
-  orderBlocks: Array<{ type: string; high: number; low: number; state?: string; mitigated?: boolean }>,
-  fvgs: Array<{ type: string; high: number; low: number; state?: string; mitigated?: boolean }>,
-  liquidityPools: Array<{ price: number; type: string; swept: boolean; state: string; strength: number }>,
+  orderBlocks: Array<
+    {
+      type: string;
+      high: number;
+      low: number;
+      state?: string;
+      mitigated?: boolean;
+    }
+  >,
+  fvgs: Array<
+    {
+      type: string;
+      high: number;
+      low: number;
+      state?: string;
+      mitigated?: boolean;
+    }
+  >,
+  liquidityPools: Array<
+    {
+      price: number;
+      type: string;
+      swept: boolean;
+      state: string;
+      strength: number;
+    }
+  >,
   pipSize: number,
 ): KeyLevel[] {
   const levels: KeyLevel[] = [];
@@ -475,7 +701,9 @@ function extractKeyLevels(
 
   // PD levels
   if (pdLevels) {
-    const pdEntries: Array<{ price: number; label: string; sig: "high" | "medium" }> = [
+    const pdEntries: Array<
+      { price: number; label: string; sig: "high" | "medium" }
+    > = [
       { price: pdLevels.pdh, label: "PDH", sig: "high" },
       { price: pdLevels.pdl, label: "PDL", sig: "high" },
       { price: pdLevels.pwh, label: "PWH", sig: "high" },
@@ -497,15 +725,24 @@ function extractKeyLevels(
   }
 
   // Active Order Blocks (nearest 3 above + 3 below)
-  const activeOBs = orderBlocks.filter(ob => ob.state === "fresh" || ob.state === "tested" || (!ob.state && !ob.mitigated));
-  const obAbove = activeOBs.filter(ob => ob.low > lastPrice).sort((a, b) => a.low - b.low).slice(0, 3);
-  const obBelow = activeOBs.filter(ob => ob.high < lastPrice).sort((a, b) => b.high - a.high).slice(0, 3);
+  const activeOBs = orderBlocks.filter((ob) =>
+    ob.state === "fresh" || ob.state === "tested" ||
+    (!ob.state && !ob.mitigated)
+  );
+  const obAbove = activeOBs.filter((ob) => ob.low > lastPrice).sort((a, b) =>
+    a.low - b.low
+  ).slice(0, 3);
+  const obBelow = activeOBs.filter((ob) => ob.high < lastPrice).sort((a, b) =>
+    b.high - a.high
+  ).slice(0, 3);
   for (const ob of [...obAbove, ...obBelow]) {
     const mid = (ob.high + ob.low) / 2;
     if (Math.abs(mid - lastPrice) / pipSize <= maxDistPips) {
       levels.push({
         price: mid,
-        label: `${ob.type === "bullish" ? "Bullish" : "Bearish"} OB (${ob.low.toFixed(5)}-${ob.high.toFixed(5)})`,
+        label: `${ob.type === "bullish" ? "Bullish" : "Bearish"} OB (${
+          ob.low.toFixed(5)
+        }-${ob.high.toFixed(5)})`,
         type: "ob",
         significance: "high",
       });
@@ -513,15 +750,21 @@ function extractKeyLevels(
   }
 
   // Unfilled FVGs (nearest 2 above + 2 below)
-  const activeFVGs = fvgs.filter(f => f.state !== "filled" && !f.mitigated);
-  const fvgAbove = activeFVGs.filter(f => f.low > lastPrice).sort((a, b) => a.low - b.low).slice(0, 2);
-  const fvgBelow = activeFVGs.filter(f => f.high < lastPrice).sort((a, b) => b.high - a.high).slice(0, 2);
+  const activeFVGs = fvgs.filter((f) => f.state !== "filled" && !f.mitigated);
+  const fvgAbove = activeFVGs.filter((f) => f.low > lastPrice).sort((a, b) =>
+    a.low - b.low
+  ).slice(0, 2);
+  const fvgBelow = activeFVGs.filter((f) => f.high < lastPrice).sort((a, b) =>
+    b.high - a.high
+  ).slice(0, 2);
   for (const f of [...fvgAbove, ...fvgBelow]) {
     const mid = (f.high + f.low) / 2;
     if (Math.abs(mid - lastPrice) / pipSize <= maxDistPips) {
       levels.push({
         price: mid,
-        label: `${f.type === "bullish" ? "Bullish" : "Bearish"} FVG (${f.low.toFixed(5)}-${f.high.toFixed(5)})`,
+        label: `${f.type === "bullish" ? "Bullish" : "Bearish"} FVG (${
+          f.low.toFixed(5)
+        }-${f.high.toFixed(5)})`,
         type: "fvg",
         significance: "medium",
       });
@@ -534,7 +777,9 @@ function extractKeyLevels(
     if (Math.abs(pool.price - lastPrice) / pipSize <= maxDistPips) {
       levels.push({
         price: pool.price,
-        label: `${pool.type === "buy-side" ? "Buy-side" : "Sell-side"} liquidity (${pool.strength}x)`,
+        label: `${
+          pool.type === "buy-side" ? "Buy-side" : "Sell-side"
+        } liquidity (${pool.strength}x)`,
         type: "liquidity",
         significance: pool.strength >= 3 ? "high" : "medium",
       });
@@ -542,7 +787,9 @@ function extractKeyLevels(
   }
 
   // Sort by distance from current price
-  levels.sort((a, b) => Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice));
+  levels.sort((a, b) =>
+    Math.abs(a.price - lastPrice) - Math.abs(b.price - lastPrice)
+  );
   return levels;
 }
 
@@ -554,17 +801,25 @@ function generateScenarios(
   dol: DOLTarget | null,
   keyLevels: KeyLevel[],
   lastPrice: number,
-  amd: { phase: string; bias: string | null; asianHigh: number | null; asianLow: number | null },
+  amd: {
+    phase: string;
+    bias: string | null;
+    asianHigh: number | null;
+    asianLow: number | null;
+  },
   pipSize: number,
+  structureLabel = "4H",
 ): Scenario[] {
   const scenarios: Scenario[] = [];
 
   if (bias === "neutral") {
     scenarios.push({
       condition: "No clear directional bias — wait for structure to develop",
-      action: "Sit out or reduce size. Only trade clear setups with high confluence.",
+      action:
+        "Sit out or reduce size. Only trade clear setups with high confluence.",
       direction: "long",
-      invalidation: "If price breaks above or below the range with displacement, reassess bias",
+      invalidation:
+        "If price breaks above or below the range with displacement, reassess bias",
     });
     return scenarios;
   }
@@ -572,29 +827,39 @@ function generateScenarios(
   // Primary scenario: aligned with bias
   if (bias === "bullish") {
     // Look for longs from discount/OB/FVG
-    const supportLevels = keyLevels.filter(l =>
-      l.price < lastPrice && (l.type === "ob" || l.type === "fvg" || l.type === "pd_level")
+    const supportLevels = keyLevels.filter((l) =>
+      l.price < lastPrice &&
+      (l.type === "ob" || l.type === "fvg" || l.type === "pd_level")
     ).slice(0, 2);
 
     if (supportLevels.length > 0) {
       const entryZone = supportLevels[0];
       scenarios.push({
-        condition: `Price pulls back to ${entryZone.label} at ${entryZone.price.toFixed(5)}`,
-        action: `Look for bullish reaction (OB/FVG entry, displacement candle) for long entry`,
+        condition: `Price pulls back to ${entryZone.label} at ${
+          entryZone.price.toFixed(5)
+        }`,
+        action:
+          `Look for bullish reaction (OB/FVG entry, displacement candle) for long entry`,
         direction: "long",
         targetLevel: dol?.type === "buy-side" ? dol.price : undefined,
-        invalidation: `Close below ${entryZone.price.toFixed(5)} with displacement`,
+        invalidation: `Close below ${
+          entryZone.price.toFixed(5)
+        } with displacement`,
       });
     }
 
     // AMD-based scenario
     if (amd.asianLow != null) {
       scenarios.push({
-        condition: `Price sweeps Asian low (${amd.asianLow.toFixed(5)}) during London`,
-        action: "Wait for reclaim above Asian low, then enter long targeting Asian high and beyond",
+        condition: `Price sweeps Asian low (${
+          amd.asianLow.toFixed(5)
+        }) during London`,
+        action:
+          "Wait for reclaim above Asian low, then enter long targeting Asian high and beyond",
         direction: "long",
         targetLevel: amd.asianHigh ?? undefined,
-        invalidation: "Price fails to reclaim Asian low within 30 minutes of sweep",
+        invalidation:
+          "Price fails to reclaim Asian low within 30 minutes of sweep",
       });
     }
 
@@ -603,33 +868,43 @@ function generateScenarios(
       condition: `Price breaks below key support with strong displacement`,
       action: "Bias invalidated — switch to neutral, do not force longs",
       direction: "short",
-      invalidation: "Bullish CHoCH on 4H restores bullish bias",
+      invalidation: `Bullish CHoCH on ${structureLabel} restores bullish bias`,
     });
   } else {
     // Bearish bias — look for shorts from premium/OB/FVG
-    const resistanceLevels = keyLevels.filter(l =>
-      l.price > lastPrice && (l.type === "ob" || l.type === "fvg" || l.type === "pd_level")
+    const resistanceLevels = keyLevels.filter((l) =>
+      l.price > lastPrice &&
+      (l.type === "ob" || l.type === "fvg" || l.type === "pd_level")
     ).slice(0, 2);
 
     if (resistanceLevels.length > 0) {
       const entryZone = resistanceLevels[0];
       scenarios.push({
-        condition: `Price rallies to ${entryZone.label} at ${entryZone.price.toFixed(5)}`,
-        action: `Look for bearish reaction (OB/FVG rejection, displacement candle) for short entry`,
+        condition: `Price rallies to ${entryZone.label} at ${
+          entryZone.price.toFixed(5)
+        }`,
+        action:
+          `Look for bearish reaction (OB/FVG rejection, displacement candle) for short entry`,
         direction: "short",
         targetLevel: dol?.type === "sell-side" ? dol.price : undefined,
-        invalidation: `Close above ${entryZone.price.toFixed(5)} with displacement`,
+        invalidation: `Close above ${
+          entryZone.price.toFixed(5)
+        } with displacement`,
       });
     }
 
     // AMD-based scenario
     if (amd.asianHigh != null) {
       scenarios.push({
-        condition: `Price sweeps Asian high (${amd.asianHigh.toFixed(5)}) during London`,
-        action: "Wait for rejection below Asian high, then enter short targeting Asian low and beyond",
+        condition: `Price sweeps Asian high (${
+          amd.asianHigh.toFixed(5)
+        }) during London`,
+        action:
+          "Wait for rejection below Asian high, then enter short targeting Asian low and beyond",
         direction: "short",
         targetLevel: amd.asianLow ?? undefined,
-        invalidation: "Price holds above Asian high for 30+ minutes after sweep",
+        invalidation:
+          "Price holds above Asian high for 30+ minutes after sweep",
       });
     }
 
@@ -638,7 +913,7 @@ function generateScenarios(
       condition: `Price breaks above key resistance with strong displacement`,
       action: "Bias invalidated — switch to neutral, do not force shorts",
       direction: "long",
-      invalidation: "Bearish CHoCH on 4H restores bearish bias",
+      invalidation: `Bearish CHoCH on ${structureLabel} restores bearish bias`,
     });
   }
 
@@ -657,6 +932,13 @@ function generateScenarios(
  * @param hourlyCandles - 1H candles for AMD detection
  * @param session - Which session this plan is for
  */
+export interface GamePlanGenerationOptions {
+  ipdaRangesEnabled?: boolean;
+  equalHighsLowsSensitivity?: number;
+  liquidityPoolMinTouches?: number;
+  decisionEvidence?: StyleDecisionEvidence | null;
+}
+
 export function generateInstrumentGamePlan(
   symbol: string,
   dailyCandles: Candle[],
@@ -664,13 +946,15 @@ export function generateInstrumentGamePlan(
   entryCandles: Candle[],
   hourlyCandles: Candle[],
   session: SessionName,
-  options?: { ipdaRangesEnabled?: boolean; equalHighsLowsSensitivity?: number; liquidityPoolMinTouches?: number },
+  options?: GamePlanGenerationOptions,
 ): InstrumentGamePlan {
   const ipdaEnabled = options?.ipdaRangesEnabled !== false; // ON by default
   const spec = SPECS[symbol] || SPECS["EUR/USD"];
   const lastPrice = entryCandles.length > 0
     ? entryCandles[entryCandles.length - 1].close
-    : (dailyCandles.length > 0 ? dailyCandles[dailyCandles.length - 1].close : 0);
+    : (dailyCandles.length > 0
+      ? dailyCandles[dailyCandles.length - 1].close
+      : 0);
 
   // ── HTF Analysis ──
   const dailyStructure = dailyCandles.length >= 10
@@ -680,14 +964,20 @@ export function generateInstrumentGamePlan(
     ? analyzeMarketStructure(h4Candles.slice(-50))
     : null;
 
-  const htfTrend = dailyStructure?.trend || "ranging";
-  const h4Trend = h4Structure?.trend || "ranging";
+  const htfTrend = options?.decisionEvidence?.layers.bias.trend ||
+    dailyStructure?.trend || "ranging";
+  const h4Trend = options?.decisionEvidence?.layers.structure.trend ||
+    h4Structure?.trend || "ranging";
 
   // ── Premium/Discount ──
-  const pd = calculatePremiumDiscount(entryCandles.length > 0 ? entryCandles : dailyCandles);
+  const pd = calculatePremiumDiscount(
+    entryCandles.length > 0 ? entryCandles : dailyCandles,
+  );
 
   // ── PD Levels ──
-  const pdLevels = dailyCandles.length >= 10 ? calculatePDLevels(dailyCandles) : null;
+  const pdLevels = dailyCandles.length >= 10
+    ? calculatePDLevels(dailyCandles)
+    : null;
 
   // ── Order Blocks & FVGs (from 4H for game plan — bigger picture) ──
   const h4StructureBreaks = h4Structure
@@ -702,11 +992,18 @@ export function generateInstrumentGamePlan(
 
   // ── Liquidity Pools (from daily for bigger targets) ──
   // Sensitivity-driven: base from config + 0.10 bump for daily TF
-  const _gpSens = Math.min(Math.max(options?.equalHighsLowsSensitivity ?? 3, 1), 5);
+  const _gpSens = Math.min(
+    Math.max(options?.equalHighsLowsSensitivity ?? 3, 1),
+    5,
+  );
   const _gpTolBase = [0.10, 0.15, 0.20, 0.25, 0.30][_gpSens - 1];
   const _gpMinTouches = options?.liquidityPoolMinTouches ?? 2;
   const liquidityPools = dailyCandles.length >= 10
-    ? detectLiquidityPools(dailyCandles, Math.min(_gpTolBase + 0.10, 0.40), _gpMinTouches)
+    ? detectLiquidityPools(
+      dailyCandles,
+      Math.min(_gpTolBase + 0.10, 0.40),
+      _gpMinTouches,
+    )
     : [];
 
   // ── Swing Points ──
@@ -715,19 +1012,39 @@ export function generateInstrumentGamePlan(
     : [];
 
   // ── AMD Phase ──
-  const amd = hourlyCandles.length >= 5
-    ? detectAMDPhase(hourlyCandles)
-    : { phase: "unknown" as const, bias: null, asianHigh: null, asianLow: null, sweptSide: null, detail: "" };
+  const amd = hourlyCandles.length >= 5 ? detectAMDPhase(hourlyCandles) : {
+    phase: "unknown" as const,
+    bias: null,
+    asianHigh: null,
+    asianLow: null,
+    sweptSide: null,
+    detail: "",
+  };
 
   // ── Regime Classification ──
   const regimeResult = dailyCandles.length >= 20
     ? classifyInstrumentRegime(dailyCandles)
-    : { regime: "unknown", confidence: 0, directionalBias: "neutral", atrTrend: "stable", indicators: [], atr14: 0, rangePercent: 0 };
+    : {
+      regime: "unknown",
+      confidence: 0,
+      directionalBias: "neutral",
+      atrTrend: "stable",
+      indicators: [],
+      atr14: 0,
+      rangePercent: 0,
+    };
+  const effectiveRegime = options?.decisionEvidence?.biasRegime
+    ? {
+      ...regimeResult,
+      regime: options.decisionEvidence.biasRegime.regime,
+      confidence: options.decisionEvidence.biasRegime.confidence,
+      directionalBias:
+        options.decisionEvidence.biasRegime.directionalBias,
+    }
+    : regimeResult;
 
   // ── ATR ──
-  const atr = dailyCandles.length >= 15
-    ? calculateATR(dailyCandles, 14)
-    : 0;
+  const atr = dailyCandles.length >= 15 ? calculateATR(dailyCandles, 14) : 0;
 
   // ── IPDA Data Ranges (20/40/60-day institutional reference levels) ──
   // Gated by ipdaRangesEnabled toggle (default: ON)
@@ -758,11 +1075,17 @@ export function generateInstrumentGamePlan(
     pd.zonePercent,
     amd,
     dol,
-    regimeResult,
+    effectiveRegime,
     {
-      daily: !!dailyStructure,
-      h4: !!h4Structure,
+      bias: options?.decisionEvidence?.layers.bias.available ??
+        !!dailyStructure,
+      structure: options?.decisionEvidence?.layers.structure.available ??
+        !!h4Structure,
       location: entryCandles.length > 0 || dailyCandles.length > 0,
+    },
+    {
+      bias: options?.decisionEvidence?.labels.bias || "Daily",
+      structure: options?.decisionEvidence?.labels.structure || "4H",
     },
   );
 
@@ -778,7 +1101,11 @@ export function generateInstrumentGamePlan(
 
   // ── Merge IPDA levels into key levels (only when IPDA enabled) ──
   if (ipdaEnabled && ipdaRanges) {
-    const ipdaLevels = ipdaRangesToKeyLevels(ipdaRanges, lastPrice, spec.pipSize);
+    const ipdaLevels = ipdaRangesToKeyLevels(
+      ipdaRanges,
+      lastPrice,
+      spec.pipSize,
+    );
     keyLevels.push(...ipdaLevels);
   }
 
@@ -791,6 +1118,7 @@ export function generateInstrumentGamePlan(
     lastPrice,
     amd,
     spec.pipSize,
+    options?.decisionEvidence?.labels.structure || "4H",
   );
 
   // ── Tradeable Assessment ──
@@ -798,14 +1126,18 @@ export function generateInstrumentGamePlan(
   let skipReason: string | undefined;
 
   // Skip if regime is too volatile or quiet
-  if (regimeResult.regime === "volatile" && regimeResult.confidence > 70) {
+  if (
+    effectiveRegime.regime === "volatile" &&
+    effectiveRegime.confidence > 70
+  ) {
     tradeable = false;
     skipReason = "High volatility regime — increased risk of whipsaws";
   }
   // Skip if no clear bias and regime is ranging
-  if (bias === "neutral" && regimeResult.regime === "ranging") {
+  if (bias === "neutral" && effectiveRegime.regime === "ranging") {
     tradeable = false;
-    skipReason = "No clear bias in ranging market — wait for structure development";
+    skipReason =
+      "No clear bias in ranging market — wait for structure development";
   }
   // Skip crypto during FX sessions (unless it's the Asian session)
   if (spec.type === "crypto" && session !== "Asian" && session !== "New York") {
@@ -818,7 +1150,7 @@ export function generateInstrumentGamePlan(
     dailyTrend: htfTrend,
     h4Trend,
     zone: pd.currentZone,
-    regime: regimeResult.regime,
+    regime: effectiveRegime.regime,
     hasDOL: !!dol,
     legacyTradeable: tradeable,
     legacySkipReason: skipReason,
@@ -837,12 +1169,13 @@ export function generateInstrumentGamePlan(
     dol,
     keyLevels,
     scenarios,
-    regime: regimeResult.regime,
+    regime: effectiveRegime.regime,
     amdPhase: amd.phase,
     zone: pd.currentZone,
     zonePercent: pd.zonePercent,
     htfTrend,
     h4Trend,
+    decisionEvidence: options?.decisionEvidence || undefined,
     atr,
     ipdaRanges: ipdaRanges ?? undefined,
     weeklyProfile,
@@ -856,7 +1189,8 @@ export function generateInstrumentGamePlan(
     skipReason,
     lastPrice,
     generatedAt: generatedAt.toISOString(),
-    expiresAt: new Date(generatedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+    expiresAt: new Date(generatedAt.getTime() + 4 * 60 * 60 * 1000)
+      .toISOString(),
     invalidationConditions: scenarios
       .map((scenario) => scenario.invalidation)
       .filter((condition): condition is string => !!condition),
@@ -865,6 +1199,10 @@ export function generateInstrumentGamePlan(
       h4: lastTimestamp(h4Candles),
       entry: lastTimestamp(entryCandles),
       hourly: lastTimestamp(hourlyCandles),
+      bias: options?.decisionEvidence?.layers.bias.sourceCandleTimestamp,
+      structure: options?.decisionEvidence?.layers.structure
+        .sourceCandleTimestamp,
+      setup: options?.decisionEvidence?.layers.setup.sourceCandleTimestamp,
     },
   };
 }
@@ -880,28 +1218,40 @@ export function buildSessionGamePlan(
   instrumentPlans: InstrumentGamePlan[],
 ): SessionGamePlan {
   const focusPairs = instrumentPlans
-    .filter(p => p.state ? p.state === "tradeable" : (p.tradeable && p.bias !== "neutral" && p.biasConfidence >= 30))
+    .filter((p) =>
+      p.state
+        ? p.state === "tradeable"
+        : (p.tradeable && p.bias !== "neutral" && p.biasConfidence >= 30)
+    )
     .sort((a, b) => b.biasConfidence - a.biasConfidence)
-    .map(p => p.symbol);
+    .map((p) => p.symbol);
 
   // Build summary
   const summaryLines: string[] = [];
   summaryLines.push(`📋 <b>Game Plan — ${session} Session</b>\n`);
 
   if (focusPairs.length === 0) {
-    summaryLines.push("⚠️ No high-confidence setups — reduced exposure recommended\n");
+    summaryLines.push(
+      "⚠️ No high-confidence setups — reduced exposure recommended\n",
+    );
   } else {
     summaryLines.push(`<b>Focus:</b> ${focusPairs.length} pair(s)\n`);
   }
 
   for (const plan of instrumentPlans) {
-    const emoji = plan.bias === "bullish" ? "🟢" : plan.bias === "bearish" ? "🔴" : "⚪";
+    const emoji = plan.bias === "bullish"
+      ? "🟢"
+      : plan.bias === "bearish"
+      ? "🔴"
+      : "⚪";
     const tradeLabel = plan.tradeable ? "" : " [SKIP]";
     summaryLines.push(
-      `${emoji} <b>${plan.symbol}:</b> ${plan.bias.toUpperCase()} (${plan.biasConfidence}%)${tradeLabel}`
+      `${emoji} <b>${plan.symbol}:</b> ${plan.bias.toUpperCase()} (${plan.biasConfidence}%)${tradeLabel}`,
     );
     if (plan.dol) {
-      summaryLines.push(`   DOL: ${plan.dol.description} @ ${plan.dol.price.toFixed(5)}`);
+      summaryLines.push(
+        `   DOL: ${plan.dol.description} @ ${plan.dol.price.toFixed(5)}`,
+      );
     }
     if (plan.scenarios.length > 0 && plan.tradeable) {
       summaryLines.push(`   Plan: ${plan.scenarios[0].condition}`);
@@ -915,12 +1265,26 @@ export function buildSessionGamePlan(
       const pip = SPECS[plan.symbol]?.pipSize ?? 0.0001;
       const dec = pip < 0.01 ? 5 : pip < 1 ? 3 : 1;
       if (ipda.range60) {
-        const posStr = ipda.positionPercent60 !== null ? ` (${ipda.positionPercent60.toFixed(0)}%)` : "";
-        const biasEmoji = ipda.institutionalBias === "bullish" ? "↑" : ipda.institutionalBias === "bearish" ? "↓" : "↔";
-        summaryLines.push(`   IPDA 60d: ${ipda.range60.low.toFixed(dec)}–${ipda.range60.high.toFixed(dec)} ${biasEmoji}${posStr}`);
+        const posStr = ipda.positionPercent60 !== null
+          ? ` (${ipda.positionPercent60.toFixed(0)}%)`
+          : "";
+        const biasEmoji = ipda.institutionalBias === "bullish"
+          ? "↑"
+          : ipda.institutionalBias === "bearish"
+          ? "↓"
+          : "↔";
+        summaryLines.push(
+          `   IPDA 60d: ${ipda.range60.low.toFixed(dec)}–${
+            ipda.range60.high.toFixed(dec)
+          } ${biasEmoji}${posStr}`,
+        );
       }
       if (ipda.range20) {
-        summaryLines.push(`   IPDA 20d: ${ipda.range20.low.toFixed(dec)}–${ipda.range20.high.toFixed(dec)}`);
+        summaryLines.push(
+          `   IPDA 20d: ${ipda.range20.low.toFixed(dec)}–${
+            ipda.range20.high.toFixed(dec)
+          }`,
+        );
       }
     }
     // Weekly profile — show pattern and day tendency
@@ -928,7 +1292,9 @@ export function buildSessionGamePlan(
       const wp = plan.weeklyProfile;
       const profileLabel = wp.profile.replace(/_/g, " ");
       const entryEmoji = wp.favorableForEntry ? "✅" : "⏳";
-      summaryLines.push(`   Week: ${profileLabel} (${wp.confidence}%) ${entryEmoji} ${wp.dayTendency.aggressiveness}`);
+      summaryLines.push(
+        `   Week: ${profileLabel} (${wp.confidence}%) ${entryEmoji} ${wp.dayTendency.aggressiveness}`,
+      );
     }
   }
 
@@ -938,7 +1304,7 @@ export function buildSessionGamePlan(
     focusPairs,
     plans: instrumentPlans,
     newsEvents: [], // populated separately by economic calendar
-     summary: summaryLines.join("\n"),
+    summary: summaryLines.join("\n"),
   };
 }
 
@@ -984,7 +1350,8 @@ export async function fetchNewsForGamePlan(
     return todayEvents
       .filter((e: any) => {
         const impact = e.impact || "low";
-        return (impact === "high" || impact === "medium") && currencies.has(e.currency);
+        return (impact === "high" || impact === "medium") &&
+          currencies.has(e.currency);
       })
       .map((e: any) => ({
         time: e.scheduledTime || e.date || "",
@@ -994,7 +1361,9 @@ export async function fetchNewsForGamePlan(
         forecast: e.forecast || undefined,
         previous: e.previous || undefined,
       }))
-      .sort((a: NewsEvent, b: NewsEvent) => new Date(a.time).getTime() - new Date(b.time).getTime());
+      .sort((a: NewsEvent, b: NewsEvent) =>
+        new Date(a.time).getTime() - new Date(b.time).getTime()
+      );
   } catch {
     return [];
   }
@@ -1014,10 +1383,16 @@ export function enrichGamePlanWithNews(
     const newsLines: string[] = ["\n\n\ud83d\udcf0 <b>Today's Events:</b>"];
     for (const ev of newsEvents.slice(0, 8)) {
       const timeStr = new Date(ev.time).toLocaleTimeString("en-US", {
-        hour: "2-digit", minute: "2-digit", timeZone: "America/New_York",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "America/New_York",
       });
-      const impactEmoji = ev.impact === "high" ? "\ud83d\udfe5" : "\ud83d\udfe7";
-      newsLines.push(`${impactEmoji} ${timeStr} ET — ${ev.currency}: ${ev.event}`);
+      const impactEmoji = ev.impact === "high"
+        ? "\ud83d\udfe5"
+        : "\ud83d\udfe7";
+      newsLines.push(
+        `${impactEmoji} ${timeStr} ET — ${ev.currency}: ${ev.event}`,
+      );
     }
     gamePlan.summary += newsLines.join("\n");
   }
@@ -1051,34 +1426,66 @@ export function filterTradeByGamePlan(
 ): GamePlanFilterResult {
   // No game plan — allow all trades (backward compatible)
   if (!gamePlan) {
-    return { allowed: true, reason: "No game plan active — using confluence scoring only", gamePlanBias: "neutral", signalDirection, biasConfidence: 0 };
+    return {
+      allowed: true,
+      reason: "No game plan active — using confluence scoring only",
+      gamePlanBias: "neutral",
+      signalDirection,
+      biasConfidence: 0,
+    };
   }
 
-  const plan = gamePlan.plans.find(p => p.symbol === symbol);
+  const plan = gamePlan.plans.find((p) => p.symbol === symbol);
   if (!plan) {
-    return { allowed: true, reason: `No game plan for ${symbol} — using confluence scoring only`, gamePlanBias: "neutral", signalDirection, biasConfidence: 0 };
+    return {
+      allowed: true,
+      reason: `No game plan for ${symbol} — using confluence scoring only`,
+      gamePlanBias: "neutral",
+      signalDirection,
+      biasConfidence: 0,
+    };
   }
 
   // If instrument is marked as not tradeable, reject
   if (!plan.tradeable) {
-    return { allowed: false, reason: `Game plan: ${symbol} marked as skip — ${plan.skipReason}`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence };
+    return {
+      allowed: false,
+      reason: `Game plan: ${symbol} marked as skip — ${plan.skipReason}`,
+      gamePlanBias: plan.bias,
+      signalDirection,
+      biasConfidence: plan.biasConfidence,
+    };
   }
 
   // Neutral bias — allow but with reduced confidence
   if (plan.bias === "neutral") {
-    return { allowed: true, reason: `Game plan: neutral bias — trade allowed but with caution`, gamePlanBias: "neutral", signalDirection, biasConfidence: plan.biasConfidence };
+    return {
+      allowed: true,
+      reason: `Game plan: neutral bias — trade allowed but with caution`,
+      gamePlanBias: "neutral",
+      signalDirection,
+      biasConfidence: plan.biasConfidence,
+    };
   }
 
   // Check alignment
   const biasDirection = plan.bias === "bullish" ? "long" : "short";
   if (signalDirection === biasDirection) {
-    return { allowed: true, reason: `Game plan: ${signalDirection} aligns with ${plan.bias} bias (${plan.biasConfidence}%)`, gamePlanBias: plan.bias, signalDirection, biasConfidence: plan.biasConfidence };
+    return {
+      allowed: true,
+      reason:
+        `Game plan: ${signalDirection} aligns with ${plan.bias} bias (${plan.biasConfidence}%)`,
+      gamePlanBias: plan.bias,
+      signalDirection,
+      biasConfidence: plan.biasConfidence,
+    };
   }
 
   // Misaligned — reject
   return {
     allowed: false,
-    reason: `Game plan: ${signalDirection} REJECTED — bias is ${plan.bias} (${plan.biasConfidence}%), signal is ${signalDirection}`,
+    reason:
+      `Game plan: ${signalDirection} REJECTED — bias is ${plan.bias} (${plan.biasConfidence}%), signal is ${signalDirection}`,
     gamePlanBias: plan.bias,
     signalDirection,
     biasConfidence: plan.biasConfidence,

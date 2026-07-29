@@ -43,6 +43,16 @@ import type { RuntimeConfig } from "../_shared/configMapper.ts";
 import {
   resolveEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigResolver.ts";
+import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
+import {
+  bindTimeframeCandles,
+  buildTimeframeCandleMap,
+  resolveTimeframeAuthority,
+} from "../_shared/timeframeAuthority.ts";
+import type { TimeframeAuthority } from "../_shared/timeframeAuthority.ts";
+import {
+  buildStyleDecisionEvidence,
+} from "../_shared/styleDecisionEvidence.ts";
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import {
   evaluateFinalTradeAuthorization,
@@ -281,6 +291,7 @@ Deno.serve(async (req) => {
       openPositions: any[];
       account: any | null;
       config: RuntimeConfig;
+      timeframeAuthority: TimeframeAuthority;
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
     }> = {};
@@ -360,6 +371,10 @@ Deno.serve(async (req) => {
 
       const rawConfig = botConfig?.config_json || {};
       const styleResolution = resolveEffectiveRuntimeConfig(rawConfig);
+      const stylePolicy = await buildResolvedStylePolicy({
+        resolution: styleResolution,
+        config: styleResolution.config,
+      });
       userDataMap[userId] = {
         telegramChatIds,
         brokerConnections: connections || [],
@@ -367,6 +382,7 @@ Deno.serve(async (req) => {
         openPositions: openPositions || [],
         account: account || null,
         config: styleResolution.config,
+        timeframeAuthority: resolveTimeframeAuthority(stylePolicy),
         gamePlan,
         directionVerdicts,
       };
@@ -408,6 +424,7 @@ Deno.serve(async (req) => {
           openPositions,
           account,
           config,
+          timeframeAuthority,
           gamePlan,
           directionVerdicts,
         } = userData;
@@ -625,11 +642,55 @@ Deno.serve(async (req) => {
         let thesisResult: ThesisValidationResult | null = null;
         if (requireThesisValidation) {
           try {
-            const [dailyCandles, h4Candles, h1Candles] = await Promise.all([
-              fetchCandles(pending.symbol, "1d", brokerConn, 120),
-              fetchCandles(pending.symbol, "4h", brokerConn, 120),
-              fetchCandles(pending.symbol, "1h", brokerConn, 120),
+            const [biasCandles, structureCandles, setupCandles] =
+              await Promise.all([
+              fetchCandles(
+                pending.symbol,
+                timeframeAuthority.roles.bias,
+                brokerConn,
+                120,
+              ),
+              fetchCandles(
+                pending.symbol,
+                timeframeAuthority.roles.structure,
+                brokerConn,
+                120,
+              ),
+              fetchCandles(
+                pending.symbol,
+                timeframeAuthority.roles.setup,
+                brokerConn,
+                120,
+              ),
             ]);
+            const decisionEvidence = buildStyleDecisionEvidence(
+              timeframeAuthority,
+              bindTimeframeCandles(
+                timeframeAuthority,
+                buildTimeframeCandleMap([
+                  {
+                    timeframe: timeframeAuthority.roles.bias,
+                    candles: biasCandles,
+                  },
+                  {
+                    timeframe: timeframeAuthority.roles.structure,
+                    candles: structureCandles,
+                  },
+                  {
+                    timeframe: timeframeAuthority.roles.setup,
+                    candles: setupCandles,
+                  },
+                ]),
+              ),
+              {
+                h4ChochLookback: config.simpleDirectionH4ChochLookback,
+                h1BosLookback: config.simpleDirectionH1BosLookback,
+                confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+                confirmedTrendSwingLookback:
+                  config.confirmedTrendSwingLookback,
+                useConfirmedTrend: config.useConfirmedTrend,
+              },
+            );
             thesisResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -641,9 +702,10 @@ Deno.serve(async (req) => {
               {
                 fotsiResult: null,
                 lastGamePlan: gamePlan,
-                dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
-                h4Candles: h4Candles.length >= 20 ? h4Candles : null,
-                h1Candles: h1Candles.length >= 20 ? h1Candles : null,
+                dailyCandles: null,
+                h4Candles: null,
+                h1Candles: null,
+                decisionEvidence,
               },
             );
           } catch (e: any) {

@@ -3,7 +3,7 @@
  * ─────────────────────────────────────────────────────
  * Re-checks structural conditions for active pending orders each scan cycle.
  * Three checks:
- *   1. Direction Flip (HARD cancel) — D1/4H/1H structure reversed
+ *   1. Direction Flip (HARD cancel) — style bias/structure/setup reversed
  *   2. FOTSI Veto (HARD cancel) — currency exhaustion would block entry now
  *   3. Game Plan Bias Reversal (SOFT cancel) — session bias flipped with high confidence
  *
@@ -16,16 +16,20 @@
 import { determineDirection, type DirectionResult } from "./directionEngine.ts";
 import {
   checkOverboughtOversoldVeto,
-  parsePairCurrencies,
   type FOTSIResult,
+  parsePairCurrencies,
   type VetoResult,
 } from "./fotsi.ts";
 import type { Candle } from "./smcAnalysis.ts";
-import type { SessionGamePlan, InstrumentGamePlan } from "./gamePlan.ts";
+import type { InstrumentGamePlan, SessionGamePlan } from "./gamePlan.ts";
+import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
 
 // ── Public types ──
 
-export type ThesisCheckType = "direction_flip" | "fotsi_veto" | "gp_bias_reversal";
+export type ThesisCheckType =
+  | "direction_flip"
+  | "fotsi_veto"
+  | "gp_bias_reversal";
 
 export interface ThesisValidationResult {
   /** Whether the pending order thesis is still valid */
@@ -36,6 +40,10 @@ export interface ThesisValidationResult {
   checkType: ThesisCheckType | null;
   /** Structured cancel reason string for DB storage */
   cancelReason: string | null;
+  /** Shared structural evidence version used for this decision. */
+  decisionEvidenceVersion?: string | null;
+  /** Style-aware bias → structure → setup labels used for this decision. */
+  timeframeLabels?: StyleDecisionEvidence["labels"] | null;
 }
 
 export interface PendingOrderForValidation {
@@ -52,6 +60,8 @@ export interface ThesisValidationOpts {
   dailyCandles: Candle[] | null;
   h4Candles: Candle[] | null;
   h1Candles: Candle[] | null;
+  /** Preferred style-aware structural evidence. Legacy candles are fallback. */
+  decisionEvidence?: StyleDecisionEvidence | null;
   /** Minimum confidence for direction flip to trigger cancel (default: 0.6) */
   directionFlipMinConfidence?: number;
   /** Minimum GP bias confidence to trigger cancel (default: 60) */
@@ -113,15 +123,29 @@ export function validatePendingOrderThesis(
   pending: PendingOrderForValidation,
   opts: ThesisValidationOpts,
 ): ThesisValidationResult {
-  const dirFlipMinConf = opts.directionFlipMinConfidence ?? DEFAULT_DIRECTION_FLIP_MIN_CONFIDENCE;
-  const gpBiasMinConf = opts.gpBiasMinConfidence ?? DEFAULT_GP_BIAS_MIN_CONFIDENCE;
+  const dirFlipMinConf = opts.directionFlipMinConfidence ??
+    DEFAULT_DIRECTION_FLIP_MIN_CONFIDENCE;
+  const gpBiasMinConf = opts.gpBiasMinConfidence ??
+    DEFAULT_GP_BIAS_MIN_CONFIDENCE;
 
   const validResult: ThesisValidationResult = {
     valid: true,
     reason: null,
     checkType: null,
     cancelReason: null,
+    decisionEvidenceVersion: opts.decisionEvidence?.version || null,
+    timeframeLabels: opts.decisionEvidence?.labels || null,
   };
+  const invalidResult = (
+    result: Omit<
+      ThesisValidationResult,
+      "decisionEvidenceVersion" | "timeframeLabels"
+    >,
+  ): ThesisValidationResult => ({
+    ...result,
+    decisionEvidenceVersion: opts.decisionEvidence?.version || null,
+    timeframeLabels: opts.decisionEvidence?.labels || null,
+  });
 
   // ── Check 1: FOTSI Veto ──
   // Cheapest check — uses pre-computed FOTSI result, zero API cost
@@ -140,18 +164,27 @@ export function validatePendingOrderThesis(
         );
         if (vetoResult.vetoed) {
           const baseTSI = opts.fotsiResult.strengths[base] ?? 0;
-          const exhaustionType = pending.direction === "long" ? "overbought" : "oversold";
-          return {
+          const exhaustionType = pending.direction === "long"
+            ? "overbought"
+            : "oversold";
+          return invalidResult({
             valid: false,
             reason: `FOTSI thesis invalidation: ${vetoResult.reason}`,
             checkType: "fotsi_veto",
-            cancelReason: `thesis_invalid:fotsi_veto:${base}_${exhaustionType}_${baseTSI.toFixed(0)}`,
-          };
+            cancelReason:
+              `thesis_invalid:fotsi_veto:${base}_${exhaustionType}_${
+                baseTSI.toFixed(0)
+              }`,
+          });
         }
       }
     } catch (e) {
       // Fail-open: FOTSI check errored, keep order alive
-      console.warn(`[thesis-validator] FOTSI check error for ${pending.symbol}: ${(e as Error)?.message}`);
+      console.warn(
+        `[thesis-validator] FOTSI check error for ${pending.symbol}: ${
+          (e as Error)?.message
+        }`,
+      );
     }
   }
 
@@ -159,55 +192,83 @@ export function validatePendingOrderThesis(
   // Uses pre-loaded game plan — zero API cost
   if (opts.lastGamePlan && opts.lastGamePlan.plans) {
     try {
-      const pairPlan: InstrumentGamePlan | undefined = opts.lastGamePlan.plans.find(
-        (p) => p.symbol === pending.symbol,
-      );
+      const pairPlan: InstrumentGamePlan | undefined = opts.lastGamePlan.plans
+        .find(
+          (p) => p.symbol === pending.symbol,
+        );
       if (pairPlan && pairPlan.biasConfidence >= gpBiasMinConf) {
         if (biasOpposesDirection(pairPlan.bias, pending.direction)) {
-          return {
+          return invalidResult({
             valid: false,
-            reason: `Game plan bias reversal: ${opts.lastGamePlan.session} session bias is ${pairPlan.bias} (confidence ${pairPlan.biasConfidence}%) — opposes ${pending.direction} order`,
+            reason:
+              `Game plan bias reversal: ${opts.lastGamePlan.session} session bias is ${pairPlan.bias} (confidence ${pairPlan.biasConfidence}%) — opposes ${pending.direction} order`,
             checkType: "gp_bias_reversal",
-            cancelReason: `thesis_invalid:gp_bias_reversal:${opts.lastGamePlan.session}:${pairPlan.bias}:${pairPlan.biasConfidence}`,
-          };
+            cancelReason:
+              `thesis_invalid:gp_bias_reversal:${opts.lastGamePlan.session}:${pairPlan.bias}:${pairPlan.biasConfidence}`,
+          });
         }
       }
     } catch (e) {
       // Fail-open: GP check errored, keep order alive
-      console.warn(`[thesis-validator] GP bias check error for ${pending.symbol}: ${(e as Error)?.message}`);
+      console.warn(
+        `[thesis-validator] GP bias check error for ${pending.symbol}: ${
+          (e as Error)?.message
+        }`,
+      );
     }
   }
 
   // ── Check 3: Direction Flip ──
-  // Most expensive check — requires candle data (but may be cached)
-  const hasDaily = opts.dailyCandles && opts.dailyCandles.length >= MIN_CANDLES_FOR_DIRECTION;
-  const hasH4 = opts.h4Candles && opts.h4Candles.length >= MIN_CANDLES_FOR_DIRECTION;
-  const hasH1 = opts.h1Candles && opts.h1Candles.length >= MIN_CANDLES_FOR_DIRECTION;
+  // Prefer the shared style-aware evidence. Legacy D1/4H/1H candles remain a
+  // fail-open compatibility path for older callers.
+  const hasDaily = opts.dailyCandles &&
+    opts.dailyCandles.length >= MIN_CANDLES_FOR_DIRECTION;
+  const hasH4 = opts.h4Candles &&
+    opts.h4Candles.length >= MIN_CANDLES_FOR_DIRECTION;
+  const hasH1 = opts.h1Candles &&
+    opts.h1Candles.length >= MIN_CANDLES_FOR_DIRECTION;
 
-  // Need at least daily or h4 candles to run direction check
-  if (hasDaily || hasH4) {
+  if (opts.decisionEvidence?.simpleDirection || hasDaily || hasH4) {
     try {
-      const dirResult = determineDirection(
-        hasDaily ? opts.dailyCandles : null,
-        hasH4 ? opts.h4Candles : null,
-        hasH1 ? opts.h1Candles : null,
-      );
+      const dirResult = opts.decisionEvidence?.simpleDirection ||
+        determineDirection(
+          hasDaily ? opts.dailyCandles : null,
+          hasH4 ? opts.h4Candles : null,
+          hasH1 ? opts.h1Candles : null,
+        );
 
       // Only invalidate if direction is determined AND it's opposite AND confidence is high enough
-      if (dirResult.direction !== null && dirResult.direction !== pending.direction) {
+      if (
+        dirResult.direction !== null &&
+        dirResult.direction !== pending.direction
+      ) {
         const confidence = estimateDirectionConfidence(dirResult);
         if (confidence >= dirFlipMinConf) {
-          return {
+          const labels = opts.decisionEvidence?.labels;
+          const ladder = labels
+            ? ` [${labels.bias}→${labels.structure}→${labels.setup}]`
+            : "";
+          return invalidResult({
             valid: false,
-            reason: `Direction flip: structure now indicates ${dirResult.direction} (confidence ${(confidence * 100).toFixed(0)}%) — opposes ${pending.direction} order. ${dirResult.reason}`,
+            reason:
+              `Direction flip${ladder}: structure now indicates ${dirResult.direction} (confidence ${
+                (confidence * 100).toFixed(0)
+              }%) — opposes ${pending.direction} order. ${dirResult.reason}`,
             checkType: "direction_flip",
-            cancelReason: `thesis_invalid:direction_flip:${dirResult.direction}:${(confidence * 100).toFixed(0)}`,
-          };
+            cancelReason:
+              `thesis_invalid:direction_flip:${dirResult.direction}:${
+                (confidence * 100).toFixed(0)
+              }`,
+          });
         }
       }
     } catch (e) {
       // Fail-open: direction check errored, keep order alive
-      console.warn(`[thesis-validator] Direction check error for ${pending.symbol}: ${(e as Error)?.message}`);
+      console.warn(
+        `[thesis-validator] Direction check error for ${pending.symbol}: ${
+          (e as Error)?.message
+        }`,
+      );
     }
   }
 

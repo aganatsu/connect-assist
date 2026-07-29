@@ -10,15 +10,18 @@
  *   6. The XAU scenario that triggered this feature (regression test)
  *   7. Edge cases: null inputs, first cycle, max history cap
  */
-import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  evaluateEvidence,
-  updateConviction,
+  assertAlmostEquals,
+  assertEquals,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
   buildConvictionKey,
-  DEFAULT_CONVICTION_CONFIG,
-  type ConvictionInput,
-  type ThesisConvictionState,
   type ConvictionConfig,
+  type ConvictionInput,
+  DEFAULT_CONVICTION_CONFIG,
+  evaluateEvidence,
+  type ThesisConvictionState,
+  updateConviction,
 } from "./thesisConviction.ts";
 
 // ─── Helper: build a ConvictionInput with defaults ───────────────────
@@ -61,12 +64,41 @@ Deno.test("updateConviction: first cycle with all aligned evidence → convictio
   const input = makeInput(); // All sources aligned with "short"
   const { state, result } = updateConviction(null, input);
 
-  assertEquals(state.conviction >= 90, true, `Expected conviction >= 90, got ${state.conviction}`);
+  assertEquals(
+    state.conviction >= 90,
+    true,
+    `Expected conviction >= 90, got ${state.conviction}`,
+  );
   assertEquals(result.impulseCreditDecision, "granted");
   assertEquals(result.cycleCount, 1);
   assertEquals(result.consecutiveDeclines, 0);
   assertEquals(result.thesisDegrading, false);
   assertEquals(result.scoreAdjustment, 0); // Only 1 cycle, minCyclesForRevoke not met
+});
+
+Deno.test("style structure context overrides the legacy 4H regime", () => {
+  const input = makeInput({
+    direction: "short",
+    regime4H: {
+      regime: "strong_trend",
+      confidence: 0.9,
+      bias: "bullish",
+    },
+    structureContext: {
+      regime: "mild_trend",
+      confidence: 0.8,
+      bias: "bearish",
+      timeframeLabel: "15m",
+    },
+  });
+  const { snapshot, details } = evaluateEvidence(input);
+
+  assertEquals(snapshot.regime4HAligned, true);
+  assertEquals(snapshot.structureTimeframeLabel, "15m");
+  assertEquals(
+    details.some((detail) => detail.includes("15m structure regime bearish")),
+    true,
+  );
 });
 
 // ─── Test 2: Opposing evidence decays conviction ─────────────────────
@@ -104,11 +136,17 @@ Deno.test("updateConviction: opposing regime + verdict decays conviction", () =>
     },
   });
 
-  const { state: decayedState, result } = updateConviction(initialState, opposingInput);
+  const { state: decayedState, result } = updateConviction(
+    initialState,
+    opposingInput,
+  );
 
   // Conviction should have dropped significantly
-  assertEquals(decayedState.conviction < initialState.conviction, true,
-    `Expected conviction to drop from ${initialState.conviction}, got ${decayedState.conviction}`);
+  assertEquals(
+    decayedState.conviction < initialState.conviction,
+    true,
+    `Expected conviction to drop from ${initialState.conviction}, got ${decayedState.conviction}`,
+  );
   assertEquals(result.consecutiveDeclines, 1);
 });
 
@@ -150,8 +188,13 @@ Deno.test("updateConviction: 4 cycles of opposing evidence → impulse credit re
   }
 
   // After 5 total cycles (1 aligned + 4 opposing), conviction should be very low
-  assertEquals(state!.conviction <= DEFAULT_CONVICTION_CONFIG.revokeThreshold, true,
-    `Expected conviction <= ${DEFAULT_CONVICTION_CONFIG.revokeThreshold}, got ${state!.conviction}`);
+  assertEquals(
+    state!.conviction <= DEFAULT_CONVICTION_CONFIG.revokeThreshold,
+    true,
+    `Expected conviction <= ${DEFAULT_CONVICTION_CONFIG.revokeThreshold}, got ${
+      state!.conviction
+    }`,
+  );
 
   // The result should show revoked
   const finalResult = updateConviction(state, opposingInput);
@@ -170,8 +213,14 @@ Deno.test("updateConviction: conviction recovers when evidence flips back to sup
   // Cycles 2-3: opposing (decay)
   const opposing = makeInput({
     directionVerdict: {
-      verdict: "long", confidence: 70, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.3, summary: "opp",
+      verdict: "long",
+      confidence: 70,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.3,
+      summary: "opp",
     },
     regime4H: { regime: "mild_trend", confidence: 0.7, bias: "bullish" },
     opposingFactorCount: 3,
@@ -186,8 +235,11 @@ Deno.test("updateConviction: conviction recovers when evidence flips back to sup
   state = updateConviction(state, makeInput()).state;
   state = updateConviction(state, makeInput()).state;
 
-  assertEquals(state.conviction > lowPoint, true,
-    `Expected conviction to recover from ${lowPoint}, got ${state.conviction}`);
+  assertEquals(
+    state.conviction > lowPoint,
+    true,
+    `Expected conviction to recover from ${lowPoint}, got ${state.conviction}`,
+  );
   assertEquals(state.consecutiveDeclines, 0);
 });
 
@@ -197,8 +249,14 @@ Deno.test("updateConviction: accelerated decay after 3 consecutive declines", ()
   let state: ThesisConvictionState | null = null;
   const opposing = makeInput({
     directionVerdict: {
-      verdict: "long", confidence: 65, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.4, summary: "opp",
+      verdict: "long",
+      confidence: 65,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.4,
+      summary: "opp",
     },
     regime4H: { regime: "mild_trend", confidence: 0.6, bias: "bullish" },
     opposingFactorCount: 2,
@@ -208,9 +266,9 @@ Deno.test("updateConviction: accelerated decay after 3 consecutive declines", ()
 
   // Build up 3 cycles of decline
   state = updateConviction(null, makeInput()).state; // cycle 1: aligned
-  state = updateConviction(state, opposing).state;   // cycle 2: decline 1
-  state = updateConviction(state, opposing).state;   // cycle 3: decline 2
-  state = updateConviction(state, opposing).state;   // cycle 4: decline 3
+  state = updateConviction(state, opposing).state; // cycle 2: decline 1
+  state = updateConviction(state, opposing).state; // cycle 3: decline 2
+  state = updateConviction(state, opposing).state; // cycle 4: decline 3
   const preAccelConviction = state.conviction;
   assertEquals(state.consecutiveDeclines, 3);
 
@@ -234,8 +292,14 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
     symbol: "XAU/USD",
     direction: "short",
     directionVerdict: {
-      verdict: "short", confidence: 72, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.75, summary: "short aligned",
+      verdict: "short",
+      confidence: 72,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.75,
+      summary: "short aligned",
     },
     regime4H: { regime: "mild_trend", confidence: 0.65, bias: "bearish" },
     opposingFactorCount: 0,
@@ -250,8 +314,14 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
     symbol: "XAU/USD",
     direction: "short",
     directionVerdict: {
-      verdict: "short", confidence: 60, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.6, summary: "weakening",
+      verdict: "short",
+      confidence: 60,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.6,
+      summary: "weakening",
     },
     regime4H: { regime: "transitional", confidence: 0.5, bias: "neutral" },
     opposingFactorCount: 1,
@@ -265,8 +335,14 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
     symbol: "XAU/USD",
     direction: "short",
     directionVerdict: {
-      verdict: "long", confidence: 65, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.5, summary: "flipping",
+      verdict: "long",
+      confidence: 65,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.5,
+      summary: "flipping",
     },
     regime4H: { regime: "mild_trend", confidence: 0.7, bias: "bullish" },
     opposingFactorCount: 2,
@@ -280,8 +356,14 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
     symbol: "XAU/USD",
     direction: "short",
     directionVerdict: {
-      verdict: "long", confidence: 78, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.35, summary: "opposing",
+      verdict: "long",
+      confidence: 78,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.35,
+      summary: "opposing",
     },
     regime4H: { regime: "strong_trend", confidence: 0.85, bias: "bullish" },
     opposingFactorCount: 4,
@@ -292,14 +374,22 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
 
   // By 11:00 (4 cycles of degrading evidence), conviction should be low enough
   // to either revoke or reduce impulse credit
-  assertEquals(finalState.conviction <= DEFAULT_CONVICTION_CONFIG.reduceThreshold, true,
-    `Expected conviction <= ${DEFAULT_CONVICTION_CONFIG.reduceThreshold} by cycle 4, got ${finalState.conviction}`);
   assertEquals(
-    result.impulseCreditDecision === "revoked" || result.impulseCreditDecision === "reduced",
+    finalState.conviction <= DEFAULT_CONVICTION_CONFIG.reduceThreshold,
+    true,
+    `Expected conviction <= ${DEFAULT_CONVICTION_CONFIG.reduceThreshold} by cycle 4, got ${finalState.conviction}`,
+  );
+  assertEquals(
+    result.impulseCreditDecision === "revoked" ||
+      result.impulseCreditDecision === "reduced",
     true,
     `Expected credit revoked or reduced, got ${result.impulseCreditDecision}`,
   );
-  assertEquals(result.thesisDegrading, true, "Thesis should be flagged as degrading");
+  assertEquals(
+    result.thesisDegrading,
+    true,
+    "Thesis should be flagged as degrading",
+  );
 });
 
 // ─── Test 7: minCyclesForRevoke prevents premature revocation ────────
@@ -307,8 +397,14 @@ Deno.test("XAU regression: short thesis degrades as bullish evidence accumulates
 Deno.test("updateConviction: first cycle cannot revoke even with all opposing evidence", () => {
   const opposingInput = makeInput({
     directionVerdict: {
-      verdict: "long", confidence: 90, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.2, summary: "opp",
+      verdict: "long",
+      confidence: 90,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.2,
+      summary: "opp",
     },
     regime4H: { regime: "strong_trend", confidence: 0.9, bias: "bullish" },
     opposingFactorCount: 5,
@@ -319,8 +415,11 @@ Deno.test("updateConviction: first cycle cannot revoke even with all opposing ev
   const { result } = updateConviction(null, opposingInput);
 
   // Even with all opposing, first cycle can't revoke (minCyclesForRevoke = 2)
-  assertEquals(result.impulseCreditDecision, "granted",
-    "First cycle should always grant credit regardless of evidence");
+  assertEquals(
+    result.impulseCreditDecision,
+    "granted",
+    "First cycle should always grant credit regardless of evidence",
+  );
 });
 
 // ─── Test 8: Null/missing inputs handled gracefully ──────────────────
@@ -344,7 +443,7 @@ Deno.test("evaluateEvidence: handles null directionVerdict, regime, fotsi, gameP
   assertEquals(snapshot.fotsiAligned, null);
   assertEquals(snapshot.gamePlanAligned, null);
   // Only the "0 opposing factors" source should fire as supporting
-  assertEquals(details.some(d => d.includes("clean signal")), true);
+  assertEquals(details.some((d) => d.includes("clean signal")), true);
 });
 
 // ─── Test 9: History cap at maxHistory ───────────────────────────────
@@ -386,8 +485,14 @@ Deno.test("updateConviction: score adjustment reflects conviction level", () => 
   // Now decay conviction into "reduced" zone
   const opposing = makeInput({
     directionVerdict: {
-      verdict: "long", confidence: 75, scoreAdjustment: 0,
-      shouldBlock: false, blockReason: null, sources: [], agreement: 0.3, summary: "opp",
+      verdict: "long",
+      confidence: 75,
+      scoreAdjustment: 0,
+      shouldBlock: false,
+      blockReason: null,
+      sources: [],
+      agreement: 0.3,
+      summary: "opp",
     },
     regime4H: { regime: "strong_trend", confidence: 0.8, bias: "bullish" },
     opposingFactorCount: 4,
@@ -400,11 +505,17 @@ Deno.test("updateConviction: score adjustment reflects conviction level", () => 
     const { state: s, result: r } = updateConviction(state, opposing);
     state = s;
     if (r.impulseCreditDecision === "reduced") {
-      assertEquals(r.scoreAdjustment, -DEFAULT_CONVICTION_CONFIG.reducedScorePenalty);
+      assertEquals(
+        r.scoreAdjustment,
+        -DEFAULT_CONVICTION_CONFIG.reducedScorePenalty,
+      );
       break;
     }
     if (r.impulseCreditDecision === "revoked") {
-      assertEquals(r.scoreAdjustment, -DEFAULT_CONVICTION_CONFIG.revokedScorePenalty);
+      assertEquals(
+        r.scoreAdjustment,
+        -DEFAULT_CONVICTION_CONFIG.revokedScorePenalty,
+      );
       break;
     }
   }
@@ -429,6 +540,9 @@ Deno.test("evaluateEvidence: neutral verdict direction doesn't oppose thesis", (
   const { details } = evaluateEvidence(input);
 
   // "neutral" verdict should NOT appear as opposing
-  assertEquals(details.some(d => d.includes("OPPOSING thesis")), false,
-    "Neutral verdict should not be counted as opposing");
+  assertEquals(
+    details.some((d) => d.includes("OPPOSING thesis")),
+    false,
+    "Neutral verdict should not be counted as opposing",
+  );
 });

@@ -209,7 +209,7 @@ export function confirmedTrend(
 export interface DirectionResult {
   direction: "long" | "short" | null;
   bias: "bullish" | "bearish" | null;       // the HTF bias that set the direction
-  biasSource: "daily" | "4h" | null;        // which TF provided the bias
+  biasSource: string | null;                // policy timeframe label that provided the bias
   h4Retrace: boolean;                       // true = 4H is pulling back without CHoCH
   h4ChochAgainst: boolean;                  // true = 4H CHoCH against bias → hard block
   h1Confirmed: boolean;                     // true = 1H BOS in bias direction
