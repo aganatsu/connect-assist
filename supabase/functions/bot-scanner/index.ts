@@ -140,15 +140,18 @@ import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZon
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
-import { determineDirectionStyleAware, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
+import { type DirectionResult } from "../_shared/directionEngine.ts";
 import {
   bindTimeframeCandles,
   buildTimeframeCandleMap,
-  directionTimeframeLabels,
   resolveTimeframeAuthority,
   timeframeFetchRange,
   zoneTimeframeLabels,
 } from "../_shared/timeframeAuthority.ts";
+import {
+  buildStyleDecisionEvidence,
+  type StyleDecisionEvidence,
+} from "../_shared/styleDecisionEvidence.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { validatePendingOrderThesis, type ThesisValidationResult } from "../_shared/thesisValidator.ts";
 import { logRejectedSetup, shouldLogBelowThreshold, type RejectedSetupParams } from "../_shared/rejectedSetupLogger.ts";
@@ -467,6 +470,7 @@ async function runSafetyGates(
   dailyCandles: Candle[] | null,
   rateMap?: Record<string, number>,
   convictionCandles?: Candle[] | null,
+  convictionTimeframeLabel = "entry",
   directionVerdict?: DirectionVerdictResult | null,
   propFirmActive?: boolean,
 ): Promise<GateResult[]> {
@@ -545,13 +549,10 @@ async function runSafetyGates(
   } else {
     // Use conviction-TF candles if provided, otherwise fall back to entry-TF analysis
     let s2f: { overallRate: number; bullishRate: number; bearishRate: number } | undefined;
-    let convictionTFLabel = "entry";
+    let convictionTFLabel = convictionTimeframeLabel;
     if (convictionCandles && convictionCandles.length >= 20) {
       const convictionStructure = analyzeMarketStructure(convictionCandles);
       s2f = convictionStructure.structureToFractal;
-      // Determine label based on style for logging
-      const style = config.tradingStyle?.mode || "day_trader";
-      convictionTFLabel = style === "scalper" ? "15m" : style === "swing_trader" ? "4H" : "1H";
     } else {
       // Fallback: use entry-TF structure (original behavior)
       s2f = analysis.structure?.structureToFractal;
@@ -1362,6 +1363,49 @@ async function runScanForUser(
     config,
   });
   const timeframeAuthority = resolveTimeframeAuthority(scanStylePolicy);
+  const loadCurrentDecisionEvidence = async (
+    symbol: string,
+  ): Promise<StyleDecisionEvidence> => {
+    const [bias, structure, setup] = await Promise.all([
+      cachedFetch(
+        symbol,
+        timeframeAuthority.roles.bias,
+        timeframeFetchRange(timeframeAuthority.roles.bias),
+      ),
+      cachedFetch(
+        symbol,
+        timeframeAuthority.roles.structure,
+        timeframeFetchRange(timeframeAuthority.roles.structure),
+      ),
+      cachedFetch(
+        symbol,
+        timeframeAuthority.roles.setup,
+        timeframeFetchRange(timeframeAuthority.roles.setup),
+      ),
+    ]);
+    return buildStyleDecisionEvidence(
+      timeframeAuthority,
+      bindTimeframeCandles(
+        timeframeAuthority,
+        buildTimeframeCandleMap([
+          { timeframe: timeframeAuthority.roles.bias, candles: bias },
+          {
+            timeframe: timeframeAuthority.roles.structure,
+            candles: structure,
+          },
+          { timeframe: timeframeAuthority.roles.setup, candles: setup },
+        ]),
+      ),
+      {
+        h4ChochLookback: config.simpleDirectionH4ChochLookback,
+        h1BosLookback: config.simpleDirectionH1BosLookback,
+        confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+        confirmedTrendSwingLookback:
+          config.confirmedTrendSwingLookback,
+        useConfirmedTrend: config.useConfirmedTrend,
+      },
+    );
+  };
 
   // Day-of-week check — skip for crypto-only instrument lists.
   // FX special case: market reopens Sunday 17:00 ET (Sydney open). Treat that window as Monday for gating.
@@ -2143,12 +2187,8 @@ async function runScanForUser(
         let pendingThesisResult: ThesisValidationResult | null = null;
         {
           try {
-            // Fetch D1/4H/1H candles for direction check (cached if full scan)
-            const [tvDaily, tvH4, tvH1] = await Promise.all([
-              cachedFetch(pending.symbol, "1d", "1y"),
-              cachedFetch(pending.symbol, "4h", "1mo"),
-              cachedFetch(pending.symbol, "1h", "5d"),
-            ]);
+            const pendingDecisionEvidence =
+              await loadCurrentDecisionEvidence(pending.symbol);
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -2160,9 +2200,10 @@ async function runScanForUser(
               {
                 fotsiResult: _fotsiResult,
                 lastGamePlan: _lastGamePlanForValidation,
-                dailyCandles: tvDaily.length >= 20 ? tvDaily : null,
-                h4Candles: tvH4.length >= 20 ? tvH4 : null,
-                h1Candles: tvH1.length >= 20 ? tvH1 : null,
+                dailyCandles: null,
+                h4Candles: null,
+                h1Candles: null,
+                decisionEvidence: pendingDecisionEvidence,
               },
             );
             pendingThesisResult = thesisResult;
@@ -3179,15 +3220,85 @@ async function runScanForUser(
         const batch = config.instruments.slice(i, i + GP_BATCH_SIZE);
         const batchPlans = await Promise.all(batch.map(async (sym: string) => {
           try {
-            // Fetch D1, 4H, entry TF, and 1H candles for game plan analysis
-            const [gpDaily, gpH4, gpEntry, gpHourly] = await Promise.all([
+            // Fetch legacy session/level datasets plus the exact structural
+            // role candles required by the active style policy.
+            const [
+              gpDaily,
+              gpH4,
+              gpEntry,
+              gpHourly,
+              gpBias,
+              gpStructure,
+              gpSetup,
+            ] = await Promise.all([
               cachedFetch(sym, "1d", "1y"),
               cachedFetch(sym, "4h", "1mo"),
               cachedFetch(sym, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
               cachedFetch(sym, "1h", "5d"),
+              cachedFetch(
+                sym,
+                timeframeAuthority.roles.bias,
+                timeframeFetchRange(timeframeAuthority.roles.bias),
+              ),
+              cachedFetch(
+                sym,
+                timeframeAuthority.roles.structure,
+                timeframeFetchRange(timeframeAuthority.roles.structure),
+              ),
+              cachedFetch(
+                sym,
+                timeframeAuthority.roles.setup,
+                timeframeFetchRange(timeframeAuthority.roles.setup),
+              ),
             ]);
             if (gpDaily.length < 10 || gpEntry.length < 10) return null;
-            return generateInstrumentGamePlan(sym, gpDaily, gpH4, gpEntry, gpHourly, currentSessionName, { ipdaRangesEnabled, equalHighsLowsSensitivity: config.equalHighsLowsSensitivity, liquidityPoolMinTouches: config.liquidityPoolMinTouches });
+            const decisionEvidence = buildStyleDecisionEvidence(
+              timeframeAuthority,
+              bindTimeframeCandles(
+                timeframeAuthority,
+                buildTimeframeCandleMap([
+                  {
+                    timeframe: timeframeAuthority.roles.bias,
+                    candles: gpBias,
+                  },
+                  {
+                    timeframe: timeframeAuthority.roles.structure,
+                    candles: gpStructure,
+                  },
+                  {
+                    timeframe: timeframeAuthority.roles.setup,
+                    candles: gpSetup,
+                  },
+                  {
+                    timeframe: getEntryInterval(config.entryTimeframe),
+                    candles: gpEntry,
+                  },
+                ]),
+              ),
+              {
+                h4ChochLookback: config.simpleDirectionH4ChochLookback,
+                h1BosLookback: config.simpleDirectionH1BosLookback,
+                confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+                confirmedTrendSwingLookback:
+                  config.confirmedTrendSwingLookback,
+                useConfirmedTrend: config.useConfirmedTrend,
+              },
+            );
+            return generateInstrumentGamePlan(
+              sym,
+              gpDaily,
+              gpH4,
+              gpEntry,
+              gpHourly,
+              currentSessionName,
+              {
+                ipdaRangesEnabled,
+                equalHighsLowsSensitivity:
+                  config.equalHighsLowsSensitivity,
+                liquidityPoolMinTouches: config.liquidityPoolMinTouches,
+                decisionEvidence,
+              },
+            );
           } catch (e: any) {
             console.warn(`[game-plan] Error generating plan for ${sym}: ${e?.message}`);
             return null;
@@ -3501,6 +3612,15 @@ async function runScanForUser(
         { timeframe: "1w", candles: weeklyCandles },
       ]),
     );
+    const pairDecisionEvidence: StyleDecisionEvidence =
+      buildStyleDecisionEvidence(timeframeAuthority, roleCandles, {
+        h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback,
+        h1BosLookback: pairConfig.simpleDirectionH1BosLookback,
+        confirmedTrendFibFactor: pairConfig.confirmedTrendFibFactor,
+        confirmedTrendSwingLookback:
+          pairConfig.confirmedTrendSwingLookback,
+        useConfirmedTrend: pairConfig.useConfirmedTrend,
+      });
 
     // Pass current symbol so SL calc uses correct pip size (Fix #3)
     pairConfig._currentSymbol = pair;
@@ -3654,44 +3774,17 @@ async function runScanForUser(
     (pairConfig as any)._htfLiquidityPools = { d: htfLiquidityPoolsD, h4: htfLiquidityPools4H, h1: htfLiquidityPools1H };
 
     // ── Simple Direction Engine (opt-in via useSimpleDirection toggle) ──
-    // Style-aware: scalper uses 1H/15m/5m, swing uses Weekly/Daily/4H, day_trader uses Daily/4H/1H (original)
+    // Uses the same immutable evidence snapshot as GP, DV and thesis.
     let simpleDirectionResult: DirectionResult | null = null;
-    let styleDirectionResult: StyleDirectionResult | null = null;
     if (pairConfig.useSimpleDirection) {
       try {
-        const dirConfig = {
-          h4ChochLookback: pairConfig.simpleDirectionH4ChochLookback ?? 10,
-          h1BosLookback: pairConfig.simpleDirectionH1BosLookback ?? 8,
-          useConfirmedTrend: pairConfig.useConfirmedTrend ?? true,
-          fibFactor: pairConfig.confirmedTrendFibFactor ?? 0.25,
-          trendSwingLookback: pairConfig.confirmedTrendSwingLookback ?? 5,
-        };
+        const evidenceDirection = pairDecisionEvidence.simpleDirection;
+        simpleDirectionResult = evidenceDirection;
 
-        const tfLabels = directionTimeframeLabels(timeframeAuthority);
-        styleDirectionResult = determineDirectionStyleAware(
-          roleCandles.bias.length >= 20 ? roleCandles.bias : null,
-          roleCandles.structure.length >= 20
-            ? roleCandles.structure
-            : null,
-          roleCandles.setup.length >= 20 ? roleCandles.setup : null,
-          { ...dirConfig, ...tfLabels },
-        );
-        // Preserve the legacy result shape while retaining policy-derived
-        // labels and exact candle roles in the reason/evidence.
-        simpleDirectionResult = {
-          direction: styleDirectionResult.direction,
-          bias: styleDirectionResult.bias,
-          biasSource: styleDirectionResult.biasSource as "daily" | "4h" | null,
-          h4Retrace: styleDirectionResult.structureRetrace,
-          h4ChochAgainst: styleDirectionResult.structureChochAgainst,
-          h1Confirmed: styleDirectionResult.confirmBOS,
-          reason: `[${resolvedStyle}] ${styleDirectionResult.reason}`,
-        };
-
-        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${simpleDirectionResult.direction ?? "null"} | bias=${simpleDirectionResult.bias}(${simpleDirectionResult.biasSource}) | struct-retrace=${simpleDirectionResult.h4Retrace} | struct-choch-against=${simpleDirectionResult.h4ChochAgainst} | confirm-bos=${simpleDirectionResult.h1Confirmed} | ${simpleDirectionResult.reason}`);
+        console.log(`[scan ${scanCycleId}] ${pair} SimpleDirection(${resolvedStyle}): ${evidenceDirection.direction ?? "null"} | bias=${evidenceDirection.bias}(${evidenceDirection.biasSource}) | struct-retrace=${evidenceDirection.h4Retrace} | struct-choch-against=${evidenceDirection.h4ChochAgainst} | confirm-bos=${evidenceDirection.h1Confirmed} | ${evidenceDirection.reason}`);
         // Pass override direction to confluenceScoring
-        if (simpleDirectionResult.direction !== null) {
-          (pairConfig as any)._overrideDirection = simpleDirectionResult.direction;
+        if (evidenceDirection.direction !== null) {
+          (pairConfig as any)._overrideDirection = evidenceDirection.direction;
         } else {
           // No direction = skip this pair (direction engine says no trade)
           (pairConfig as any)._overrideDirection = null; // explicit null = force no-direction
@@ -3987,17 +4080,22 @@ async function runScanForUser(
     let earlyWeeklyBias: { bias: string; confidence: number } | null = null;
     try {
       const gpCtx = (pairConfig as any)._gamePlanContext;
-      const ctResult = dailyCandles.length >= 20 && (pairConfig as any).useConfirmedTrend !== false
-        ? computeConfirmedTrend(dailyCandles, pairConfig.confirmedTrendFibFactor ?? 0.25, pairConfig.confirmedTrendSwingLookback ?? 5)
+      const ctResult = (pairConfig as any).useConfirmedTrend !== false
+        ? pairDecisionEvidence.confirmedTrend
         : null;
-      // Compute weekly bias directly (previously depended on ictHTFResult which runs after zone engine)
-      const _earlyWeeklyBiasResult = weeklyCandles && weeklyCandles.length >= 12
+      // Weekly context belongs to the decision only when Weekly is the
+      // active style's bias role (Swing). Scalper/Day Trader no longer receive
+      // an unrelated weekly vote.
+      const _earlyWeeklyBiasResult =
+        timeframeAuthority.roles.bias === "1w" &&
+          weeklyCandles && weeklyCandles.length >= 12
         ? analyzeWeeklyBiasAndDOL(weeklyCandles, analysis.lastPrice)
         : null;
       if (_earlyWeeklyBiasResult) {
         earlyWeeklyBias = { bias: _earlyWeeklyBiasResult.bias, confidence: _earlyWeeklyBiasResult.confidence };
       }
       directionVerdict = computeDirectionVerdict({
+        decisionEvidence: pairDecisionEvidence,
         confirmedTrend: ctResult,
         simpleDirection: simpleDirectionResult ? {
           direction: simpleDirectionResult.direction,
@@ -4008,10 +4106,11 @@ async function runScanForUser(
           h1Confirmed: simpleDirectionResult.h1Confirmed,
           reason: simpleDirectionResult.reason,
         } : null,
-        regime: analysis.regimeInfo ? {
-          regime: analysis.regimeInfo.regime,
-          confidence: analysis.regimeInfo.confidence,
-          directionalBias: analysis.regimeInfo.bias,
+        regime: pairDecisionEvidence.biasRegime ? {
+          regime: pairDecisionEvidence.biasRegime.regime,
+          confidence: pairDecisionEvidence.biasRegime.confidence,
+          directionalBias:
+            pairDecisionEvidence.biasRegime.directionalBias,
         } : null,
         weeklyBias: earlyWeeklyBias ? {
           bias: earlyWeeklyBias.bias as "bullish" | "bearish" | "neutral",
@@ -5321,6 +5420,17 @@ async function runScanForUser(
             bias: analysis.regime4HInfo.bias,
             confidence: analysis.regime4HInfo.confidence,
           } : null,
+          structureContext: pairDecisionEvidence.structureRegime
+            ? {
+              regime: pairDecisionEvidence.structureRegime.regime,
+              bias:
+                pairDecisionEvidence.structureRegime.directionalBias,
+              confidence:
+                pairDecisionEvidence.structureRegime.confidence,
+              timeframeLabel:
+                pairDecisionEvidence.structureRegime.label,
+            }
+            : null,
           fotsiAlignment: analysis.fotsiAlignment ? {
             label: analysis.fotsiAlignment.label,
             score: analysis.fotsiAlignment.score,
@@ -5378,6 +5488,7 @@ async function runScanForUser(
           dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
           h4Candles: h4Candles.length >= 20 ? h4Candles : null,
           h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
+          decisionEvidence: pairDecisionEvidence,
         },
       );
       const candidateConfirmation: EntryConfirmationDecision = {
@@ -5618,17 +5729,16 @@ async function runScanForUser(
       signalsFound++;
 
       // Run safety gates
-      // Conviction-TF candles: one timeframe above entry for structural conviction gate.
-      // scalper (entry 5m) → conviction 15m (entry candles are 5m, but we use hourly as closest available above)
-      // day_trader (entry 15m) → conviction 1H (hourlyCandles)
-      // swing_trader (entry 1H) → conviction 4H (h4Candles)
-      const convictionCandles = resolvedStyle === "swing_trader"
-        ? (h4Candles.length >= 20 ? h4Candles : null)
-        : (hourlyCandles.length >= 20 ? hourlyCandles : null);
+      // Structural conviction uses the exact policy structure role:
+      // Scalper=15m, Day Trader=4H, Swing=Daily.
+      const convictionCandles = roleCandles.structure.length >= 20
+        ? roleCandles.structure
+        : null;
       const gates = await runSafetyGates(
         supabase, userId, pair, analysis.direction,
         analysis, pairConfig, account, openPosArr, dailyCandles.length >= 10 ? dailyCandles : null,
-        rateMap, convictionCandles, directionVerdict,
+        rateMap, convictionCandles, pairDecisionEvidence.labels.structure,
+        directionVerdict,
         propFirmGateResult?.enabled || false,
       );
       // ── Game Plan + Direction Verdict Alignment Gate ──
@@ -6290,6 +6400,7 @@ async function runScanForUser(
               h1Candles: hourlyCandles.length >= 20
                 ? hourlyCandles
                 : null,
+              decisionEvidence: pairDecisionEvidence,
             },
           );
           const pendingConfirmation: EntryConfirmationDecision = {
@@ -6572,6 +6683,7 @@ async function runScanForUser(
             dailyCandles: dailyCandles.length >= 20 ? dailyCandles : null,
             h4Candles: h4Candles.length >= 20 ? h4Candles : null,
             h1Candles: hourlyCandles.length >= 20 ? hourlyCandles : null,
+            decisionEvidence: pairDecisionEvidence,
           },
         );
         const { data: directConnections } =
@@ -7674,6 +7786,7 @@ async function runScanForUser(
                 h1Candles: hourlyCandles.length >= 20
                   ? hourlyCandles
                   : null,
+                decisionEvidence: pairDecisionEvidence,
               },
             );
             const breakerRuntimeGates = await buildFinalRuntimeGateStates({

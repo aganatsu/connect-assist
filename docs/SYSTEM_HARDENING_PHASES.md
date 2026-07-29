@@ -27,8 +27,8 @@ the same way. It must finish before Phase 6 begins.
 | 1 | Shared resolved style-policy contract and durable observability | Complete and production-verified |
 | 2 | One configuration resolution path for every runtime surface | Complete and production-verified |
 | 3 | Remove duplicate UI presets and show the effective runtime policy | Complete and production-verified |
-| 4 | Make timeframe roles authoritative for every analysis module | Implemented; review and deployment pending |
-| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Not started |
+| 4 | Make timeframe roles authoritative for every analysis module | Complete and production-verified |
+| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Implemented; review and deployment pending |
 | 6 | Make Gameplan validity windows style-aware | Not started |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
@@ -84,6 +84,23 @@ actual 15-minute structure candles for Scalper instead of substituting 1-hour
 candles, closing a material live/backtest parity gap. The separate
 confirmation and refinement roles remain explicit for the next decision-layer
 slice; they are not silently repurposed as structural inputs.
+
+Slice 4 was production-verified on 2026-07-29 from main merge `0d5d061`.
+The redeployed scanner resolved Scalper with the persisted
+`style-policy.v1.1` ladder 1H bias → 15m structure → 5m setup, retained the
+user's protected overrides and completed a natural cycle without boot, import
+or runtime errors.
+
+Slice 5 introduces `style-decision-evidence.v1`, one auditable structural
+snapshot built from the Slice 4 authority. Automatic and manual Gameplans now
+use its bias and structure layers for their two primary structural votes;
+Direction Verdict uses its confirmed trend and style-bias regime; thesis
+revalidation uses its current structural direction; and both structural and
+rolling thesis conviction use its style structure layer. Live scanning,
+backtesting, manual Gameplan refresh and fast confirmation all construct the
+same contract. Weekly context contributes to Direction Verdict only when
+Weekly is the selected style's bias role. Legacy fields remain as compatibility
+fallbacks, but they no longer override a present style decision snapshot.
 
 ## Phase 3 implementation record
 

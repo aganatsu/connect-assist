@@ -5,6 +5,15 @@ import {
   resolveEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigResolver.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
+import {
+  bindTimeframeCandles,
+  buildTimeframeCandleMap,
+  resolveTimeframeAuthority,
+  timeframeFetchRange,
+} from "../_shared/timeframeAuthority.ts";
+import {
+  buildStyleDecisionEvidence,
+} from "../_shared/styleDecisionEvidence.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally } from "../_shared/candleSource.ts";
 import { createScanCache } from "../_shared/dataCache.ts";
 import {
@@ -108,6 +117,7 @@ Deno.serve(async (req) => {
       resolution: styleResolution,
       config,
     });
+    const timeframeAuthority = resolveTimeframeAuthority(stylePolicy);
     if (config.gamePlanEnabled === false) {
       return respond({ error: "Game Plan is disabled in bot configuration" }, 409);
     }
@@ -133,16 +143,57 @@ Deno.serve(async (req) => {
       const batch = config.instruments.slice(i, i + batchSize);
       const batchPlans = await Promise.all(batch.map(async (symbol: string) => {
         try {
-          const [daily, h4, entry, hourly] = await Promise.all([
+          const [daily, h4, entry, hourly, bias, structure, setup] = await Promise.all([
             scanCache.get(symbol, "1d", "1y"),
             scanCache.get(symbol, "4h", "1mo"),
             scanCache.get(symbol, getEntryInterval(config.entryTimeframe), getEntryRange(config.entryTimeframe)),
             scanCache.get(symbol, "1h", "5d"),
+            scanCache.get(
+              symbol,
+              timeframeAuthority.roles.bias,
+              timeframeFetchRange(timeframeAuthority.roles.bias),
+            ),
+            scanCache.get(
+              symbol,
+              timeframeAuthority.roles.structure,
+              timeframeFetchRange(timeframeAuthority.roles.structure),
+            ),
+            scanCache.get(
+              symbol,
+              timeframeAuthority.roles.setup,
+              timeframeFetchRange(timeframeAuthority.roles.setup),
+            ),
           ]);
           if (daily.length < 10 || entry.length < 10) {
             errors.push({ symbol, error: "Insufficient candle history" });
             return null;
           }
+          const decisionEvidence = buildStyleDecisionEvidence(
+            timeframeAuthority,
+            bindTimeframeCandles(
+              timeframeAuthority,
+              buildTimeframeCandleMap([
+                { timeframe: timeframeAuthority.roles.bias, candles: bias },
+                {
+                  timeframe: timeframeAuthority.roles.structure,
+                  candles: structure,
+                },
+                { timeframe: timeframeAuthority.roles.setup, candles: setup },
+                {
+                  timeframe: getEntryInterval(config.entryTimeframe),
+                  candles: entry,
+                },
+              ]),
+            ),
+            {
+              h4ChochLookback: config.simpleDirectionH4ChochLookback,
+              h1BosLookback: config.simpleDirectionH1BosLookback,
+              confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+              confirmedTrendSwingLookback:
+                config.confirmedTrendSwingLookback,
+              useConfirmedTrend: config.useConfirmedTrend,
+            },
+          );
           return generateInstrumentGamePlan(
             symbol,
             daily,
@@ -154,6 +205,7 @@ Deno.serve(async (req) => {
               ipdaRangesEnabled: config.ipdaRangesEnabled !== false,
               equalHighsLowsSensitivity: config.equalHighsLowsSensitivity,
               liquidityPoolMinTouches: config.liquidityPoolMinTouches,
+              decisionEvidence,
             },
           );
         } catch (error: any) {

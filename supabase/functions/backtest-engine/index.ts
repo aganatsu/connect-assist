@@ -105,14 +105,16 @@ import {
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
-import { determineDirectionStyleAware, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import { type DirectionResult } from "../_shared/directionEngine.ts";
 import {
   bindTimeframeCandles,
   buildTimeframeCandleMap,
-  directionTimeframeLabels,
   resolveTimeframeAuthority,
   zoneTimeframeLabels,
 } from "../_shared/timeframeAuthority.ts";
+import {
+  buildStyleDecisionEvidence,
+} from "../_shared/styleDecisionEvidence.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
@@ -440,6 +442,8 @@ function runBacktestSafetyGates(
   fotsiResult: FOTSIResult | null,
   smtResult: any,
   session: SessionResult,
+  structuralConvictionCandles: Candle[] | null = null,
+  structuralConvictionLabel = "entry",
   directionVerdict: DirectionVerdictResult | null = null,
   ictHTFResult: ICTHTFResult | null = null,
   ictMSSResult: MSSValidationResult | null = null,
@@ -779,8 +783,10 @@ function runBacktestSafetyGates(
   if (!config.structuralConvictionEnabled) {
     gates.push({ passed: true, reason: `Structural Conviction: DISABLED by config` });
   } else {
-    // Use entry-TF structure (conviction-TF candles not separately fetched in backtest)
-    const s2f = analysis.structure?.structureToFractal;
+    const s2f = structuralConvictionCandles &&
+        structuralConvictionCandles.length >= 20
+      ? analyzeMarketStructure(structuralConvictionCandles).structureToFractal
+      : analysis.structure?.structureToFractal;
     const s2fOverall = s2f?.overallRate ?? 1;
     const bullRate = s2f?.bullishRate ?? 0.5;
     const bearRate = s2f?.bearishRate ?? 0.5;
@@ -794,13 +800,13 @@ function runBacktestSafetyGates(
       : (config.structuralConvictionOppositeLong ?? 0.4);
 
     if (directionRate === 0 && s2fOverall < s2fBlockThreshold && oppositeRate > 0) {
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${structuralConvictionLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0%, S2F ${(s2fOverall * 100).toFixed(0)}%, opposite ${(oppositeRate * 100).toFixed(0)}% — no structural support for ${direction}` });
     } else if (directionRate === 0 && oppositeRate > oppositeBlockThreshold) {
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${structuralConvictionLabel}]: ${direction === "long" ? "Bull" : "Bear"} fractals 0% vs opposite ${(oppositeRate * 100).toFixed(0)}% — structure opposes ${direction}` });
     } else if (directionRate > 0 && oppositeRate > 0 && oppositeRate / directionRate >= 2.5) {
-      gates.push({ passed: false, reason: `Structural Conviction BLOCKED: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
+      gates.push({ passed: false, reason: `Structural Conviction BLOCKED [${structuralConvictionLabel}]: opposing ${(oppositeRate * 100).toFixed(0)}% is ${(oppositeRate / directionRate).toFixed(1)}× supporting ${(directionRate * 100).toFixed(0)}% — structure overwhelmingly opposes ${direction}` });
     } else {
-      gates.push({ passed: true, reason: `Structural Conviction: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
+      gates.push({ passed: true, reason: `Structural Conviction [${structuralConvictionLabel}]: ${direction === "long" ? "Bull" : "Bear"} ${(directionRate * 100).toFixed(0)}% / ${direction === "long" ? "Bear" : "Bull"} ${(oppositeRate * 100).toFixed(0)}% (S2F ${(s2fOverall * 100).toFixed(0)}%)` });
     }
   }
 
@@ -2039,8 +2045,45 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             const gpH4 = h4Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
             const gpEntry = entryCandles.slice(Math.max(0, i - 200), i);
             const gpH1 = h1Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            const gpM15 = m15Candles.filter(c =>
+              new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs
+            );
+            const gpWeekly = weeklyCandles.filter(c =>
+              new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs
+            );
             if (gpDaily.length >= 10 && gpEntry.length >= 10) {
-              const plan = generateInstrumentGamePlan(symbol, gpDaily, gpH4, gpEntry, gpH1, gpSession);
+              const gpRoleCandles = bindTimeframeCandles(
+                timeframeAuthority,
+                buildTimeframeCandleMap<Candle>([
+                  { timeframe: entryInterval, candles: gpEntry },
+                  { timeframe: "15m", candles: gpM15.slice(-200) },
+                  { timeframe: "1h", candles: gpH1.slice(-200) },
+                  { timeframe: "4h", candles: gpH4.slice(-120) },
+                  { timeframe: "1d", candles: gpDaily.slice(-120) },
+                  { timeframe: "1w", candles: gpWeekly.slice(-60) },
+                ]),
+              );
+              const gpDecisionEvidence = buildStyleDecisionEvidence(
+                timeframeAuthority,
+                gpRoleCandles,
+                {
+                  h4ChochLookback: config.simpleDirectionH4ChochLookback,
+                  h1BosLookback: config.simpleDirectionH1BosLookback,
+                  confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+                  confirmedTrendSwingLookback:
+                    config.confirmedTrendSwingLookback,
+                  useConfirmedTrend: config.useConfirmedTrend,
+                },
+              );
+              const plan = generateInstrumentGamePlan(
+                symbol,
+                gpDaily,
+                gpH4,
+                gpEntry,
+                gpH1,
+                gpSession,
+                { decisionEvidence: gpDecisionEvidence },
+              );
               activeGamePlan = buildSessionGamePlan(gpSession, [plan]);
             }
           } catch { /* game plan generation is best-effort */ }
@@ -2129,34 +2172,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             { timeframe: "1w", candles: relevantWeekly.slice(-60) },
           ]),
         );
-        // ── Direction Engine (style-aware: swing=W→D→4H, day=D→4H→1H, scalp=1H→15m→5m) ──
+        const barDecisionEvidence = buildStyleDecisionEvidence(
+          timeframeAuthority,
+          roleCandles,
+          {
+            h4ChochLookback: config.simpleDirectionH4ChochLookback,
+            h1BosLookback: config.simpleDirectionH1BosLookback,
+            confirmedTrendFibFactor: config.confirmedTrendFibFactor,
+            confirmedTrendSwingLookback:
+              config.confirmedTrendSwingLookback,
+            useConfirmedTrend: config.useConfirmedTrend,
+          },
+        );
+        // ── Direction Engine: same evidence contract as live scanning ──
         let directionResult: DirectionResult | null = null;
         if (config.useSimpleDirection) {
           try {
-            const dirConfig = {
-              h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
-              h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
-            };
-            const styleResult = determineDirectionStyleAware(
-              roleCandles.bias.length >= 20 ? roleCandles.bias : null,
-              roleCandles.structure.length >= 20
-                ? roleCandles.structure
-                : null,
-              roleCandles.setup.length >= 20 ? roleCandles.setup : null,
-              {
-                ...dirConfig,
-                ...directionTimeframeLabels(timeframeAuthority),
-              },
-            );
-            directionResult = {
-              direction: styleResult.direction,
-              bias: styleResult.bias,
-              biasSource: styleResult.biasSource as "daily" | "4h" | null,
-              h4Retrace: styleResult.structureRetrace,
-              h4ChochAgainst: styleResult.structureChochAgainst,
-              h1Confirmed: styleResult.confirmBOS,
-              reason: `[${resolvedTradingStyle}] ${styleResult.reason}`,
-            };
+            directionResult = barDecisionEvidence.simpleDirection;
           } catch { directionResult = null; }
         }
 
@@ -2617,10 +2649,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // ── Direction Verdict (mirrors bot-scanner pre-zone direction consensus) ──
         let directionVerdict: DirectionVerdictResult | null = null;
         try {
-          const ctResult = relevantDaily.length >= 20 && config.useConfirmedTrend !== false
-            ? computeConfirmedTrend(relevantDaily, config.confirmedTrendFibFactor ?? 0.25, config.confirmedTrendSwingLookback ?? 5)
+          const ctResult = config.useConfirmedTrend !== false
+            ? barDecisionEvidence.confirmedTrend
             : null;
           directionVerdict = computeDirectionVerdict({
+            decisionEvidence: barDecisionEvidence,
             confirmedTrend: ctResult,
             simpleDirection: directionResult ? {
               direction: directionResult.direction,
@@ -2631,12 +2664,19 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               h1Confirmed: directionResult.h1Confirmed,
               reason: directionResult.reason,
             } : null,
-            regime: analysis.regimeInfo ? {
-              regime: analysis.regimeInfo.regime,
-              confidence: analysis.regimeInfo.confidence,
-              directionalBias: analysis.regimeInfo.bias,
+            regime: barDecisionEvidence.biasRegime ? {
+              regime: barDecisionEvidence.biasRegime.regime,
+              confidence: barDecisionEvidence.biasRegime.confidence,
+              directionalBias:
+                barDecisionEvidence.biasRegime.directionalBias,
             } : null,
-            weeklyBias: weeklyBiasResult ? { bias: weeklyBiasResult.bias, confidence: weeklyBiasResult.confidence } : null,
+            weeklyBias:
+              timeframeAuthority.roles.bias === "1w" && weeklyBiasResult
+                ? {
+                  bias: weeklyBiasResult.bias,
+                  confidence: weeklyBiasResult.confidence,
+                }
+                : null,
             gamePlanBias: (() => {
               if (!activeGamePlan) return null;
               const pairPlan = activeGamePlan.plans.find(p => p.symbol === symbol);
@@ -2778,6 +2818,17 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               bias: analysis.regime4HInfo.bias,
               confidence: analysis.regime4HInfo.confidence,
             } : null,
+            structureContext: barDecisionEvidence.structureRegime
+              ? {
+                regime: barDecisionEvidence.structureRegime.regime,
+                bias:
+                  barDecisionEvidence.structureRegime.directionalBias,
+                confidence:
+                  barDecisionEvidence.structureRegime.confidence,
+                timeframeLabel:
+                  barDecisionEvidence.structureRegime.label,
+              }
+              : null,
             opposingFactorCount: analysis.tieredScoring?.opposingFactorCount ?? 0,
             fotsiAlignment: analysis.fotsiAlignment ? {
               label: analysis.fotsiAlignment.label,
@@ -2898,6 +2949,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           symbol, analysis.direction, analysis, config, balance,
           openPositions, relevantDaily.length >= 10 ? relevantDaily : null,
           allTrades, candleMs, peakBalance, spreadPips, fotsiForDate, smtResult, session,
+          roleCandles.structure.length >= 20 ? roleCandles.structure : null,
+          barDecisionEvidence.labels.structure,
           directionVerdict, ictHTFResult, ictMSSResult, ictJudasResult, ictFVGCounts, ictKZResult,
         );
 
