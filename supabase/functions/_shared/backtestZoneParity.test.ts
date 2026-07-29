@@ -16,6 +16,12 @@
  * unifiedGateWiring.test.ts.
  */
 import { assertEquals, assert, assertAlmostEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { STYLE_TIMEFRAME_ROLES } from "./stylePolicy.ts";
+import {
+  resolveTimeframeAuthority,
+  zoneTimeframeLabels,
+} from "./timeframeAuthority.ts";
+import type { TradingStyleMode } from "./tradingStyleConfig.ts";
 
 // ─── Extracted: Three-Tier Gate Decision (mirrors backtest-engine inline) ───
 interface UnifiedResult {
@@ -95,9 +101,19 @@ function evaluateThreeTierGate(
 interface TFSlotLabels { top: string; mid: string; low: string; }
 
 function getStyleTFLabels(tradingStyle: string | undefined): TFSlotLabels {
-  if (tradingStyle === "scalper") return { top: "1H", mid: "15m", low: "5m" };
-  if (tradingStyle === "swing_trader") return { top: "W", mid: "D", low: "4H" };
-  return { top: "D", mid: "4H", low: "1H" }; // day_trader default
+  const style: TradingStyleMode = tradingStyle === "scalper" ||
+      tradingStyle === "swing_trader"
+    ? tradingStyle
+    : "day_trader";
+  const roles = STYLE_TIMEFRAME_ROLES[style];
+  return zoneTimeframeLabels(resolveTimeframeAuthority({
+    style,
+    timeframes: {
+      roles,
+      runtimeEntry: roles.confirmation,
+      runtimeHTF: roles.bias,
+    },
+  }));
 }
 
 // ─── Tests: Three-Tier Gate Logic ───

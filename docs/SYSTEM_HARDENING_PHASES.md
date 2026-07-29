@@ -26,8 +26,8 @@ the same way. It must finish before Phase 6 begins.
 |---|---|---|
 | 1 | Shared resolved style-policy contract and durable observability | Complete and production-verified |
 | 2 | One configuration resolution path for every runtime surface | Complete and production-verified |
-| 3 | Remove duplicate UI presets and show the effective runtime policy | Implemented; review and deployment pending |
-| 4 | Make timeframe roles authoritative for every analysis module | Not started |
+| 3 | Remove duplicate UI presets and show the effective runtime policy | Complete and production-verified |
+| 4 | Make timeframe roles authoritative for every analysis module | Implemented; review and deployment pending |
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Not started |
 | 6 | Make Gameplan validity windows style-aware | Not started |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
@@ -67,6 +67,23 @@ Config and the scan header display the persisted effective policy—including
 cadence, timeframes, confluence gate, target ratio, risk, management behavior,
 contract version and base-policy hash—rather than recreating those values in
 the browser. User-saved custom full-config presets remain available.
+
+Slice 3 was production-verified on 2026-07-29 from main merge `f11e4d3`.
+The live Bot Config displayed `style-policy.v1.1`, base hash
+`a538f6b1f46d`, Scalper, five-minute cadence, 5m/1H runtime timeframes, a
+20% effective gate, 2:1 target, 0.5% risk, trailing management and four
+preserved overrides. An unsaved Day Trader selection changed only the pending
+selection and left the effective live policy unchanged.
+
+Slice 4 introduces one policy-derived timeframe authority for structural
+analysis. Direction and unified-zone engines in both the automatic scanner and
+backtest now bind candles by the immutable bias → structure → setup roles
+instead of maintaining separate style switches. Direction labels and zone
+labels are generated from the same role contract. The backtest now fetches
+actual 15-minute structure candles for Scalper instead of substituting 1-hour
+candles, closing a material live/backtest parity gap. The separate
+confirmation and refinement roles remain explicit for the next decision-layer
+slice; they are not silently repurposed as structural inputs.
 
 ## Phase 3 implementation record
 

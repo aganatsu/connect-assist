@@ -105,7 +105,14 @@ import {
 } from "../_shared/fotsi.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { type Currency, parsePairCurrencies } from "../_shared/fotsi.ts";
-import { determineDirection, determineDirectionStyleAware, STYLE_TF_LABELS, confirmedTrend as computeConfirmedTrend, type DirectionResult, type StyleDirectionResult } from "../_shared/directionEngine.ts";
+import { determineDirectionStyleAware, confirmedTrend as computeConfirmedTrend, type DirectionResult } from "../_shared/directionEngine.ts";
+import {
+  bindTimeframeCandles,
+  buildTimeframeCandleMap,
+  directionTimeframeLabels,
+  resolveTimeframeAuthority,
+  zoneTimeframeLabels,
+} from "../_shared/timeframeAuthority.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
@@ -1582,6 +1589,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       resolution: styleResolution,
       config,
     });
+    const timeframeAuthority = resolveTimeframeAuthority(stylePolicy);
     // Backtest-specific overrides are applied after the common style profile.
     config.newsFilterEnabled = false;
     config.scanIntervalMinutes = 0;
@@ -1607,7 +1615,15 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       "30m": "30m", "30min": "30m", "1h": "1h", "4h": "4h",
     };
     const entryInterval = tfMap[config.entryTimeframe] || "15m";
-    const candleData: Record<string, { entry: Candle[]; daily: Candle[]; h4: Candle[]; h1: Candle[]; weekly: Candle[]; smt?: Candle[] }> = {};
+    const candleData: Record<string, {
+      entry: Candle[];
+      daily: Candle[];
+      h4: Candle[];
+      h1: Candle[];
+      m15: Candle[];
+      weekly: Candle[];
+      smt?: Candle[];
+    }> = {};
 
     // Diagnostic counters
     const diagnostics = {
@@ -1677,14 +1693,36 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         10 + Math.round((chunkIndex / totalChunks) * 80),
         `Chunk ${chunkIndex + 1}/${totalChunks}: fetching candles for ${symbol} (${_ci + 1}/${chunkSymbols.length})...`
       );
-      const [entryCandles, dailyCandles, h4Candles, h1Candles, weeklyCandles] = await Promise.all([
+      const needsDedicatedM15 =
+        timeframeAuthority.requiredStructuralTimeframes.includes("15m") &&
+        entryInterval !== "15m";
+      const [
+        entryCandles,
+        dailyCandles,
+        h4Candles,
+        h1Candles,
+        weeklyCandles,
+        dedicatedM15Candles,
+      ] = await Promise.all([
         fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
         fetchHistoricalCandles(symbol, "4h", range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1h", range, startDate, endDate),
         fetchHistoricalCandles(symbol, "1w", "2y", startDate, endDate),
+        needsDedicatedM15
+          ? fetchHistoricalCandles(
+            symbol,
+            "15m",
+            range,
+            startDate,
+            endDate,
+          )
+          : Promise.resolve([] as Candle[]),
       ]);
-      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H, ${weeklyCandles.length} W`);
+      const m15Candles = entryInterval === "15m"
+        ? entryCandles
+        : dedicatedM15Candles;
+      console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H, ${m15Candles.length} 15m, ${weeklyCandles.length} W`);
       // Heartbeat after candle fetch completes
       await updateProgress(
         10 + Math.round((chunkIndex / totalChunks) * 80),
@@ -1696,8 +1734,18 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       if (smtPair && SUPPORTED_SYMBOLS[smtPair] && config.useSMT) {
         smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, startDate, endDate);
       }
-      candleData[symbol] = { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, weekly: weeklyCandles, smt: smtCandles };
-      diagnostics.totalCandlesFetched += entryCandles.length + dailyCandles.length + h4Candles.length + h1Candles.length + weeklyCandles.length;
+      candleData[symbol] = {
+        entry: entryCandles,
+        daily: dailyCandles,
+        h4: h4Candles,
+        h1: h1Candles,
+        m15: m15Candles,
+        weekly: weeklyCandles,
+        smt: smtCandles,
+      };
+      diagnostics.totalCandlesFetched += entryCandles.length +
+        dailyCandles.length + h4Candles.length + h1Candles.length +
+        dedicatedM15Candles.length + weeklyCandles.length;
       await new Promise(r => setTimeout(r, 300));
     }
 
@@ -1865,7 +1913,15 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       }
 
       try { // Per-symbol error isolation
-      const { entry: entryCandles, daily: dailyCandles, h4: h4Candles, h1: h1Candles, weekly: weeklyCandles, smt: smtCandles } = candleData[symbol];
+      const {
+        entry: entryCandles,
+        daily: dailyCandles,
+        h4: h4Candles,
+        h1: h1Candles,
+        m15: m15Candles,
+        weekly: weeklyCandles,
+        smt: smtCandles,
+      } = candleData[symbol];
       if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; completedSymbols++; continue; }
 
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
@@ -2056,6 +2112,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
           return cMs < candleMs;
         });
+        const relevantM15 = m15Candles.filter(c => {
+          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
+          return cMs < candleMs;
+        });
+        const windowStart = Math.max(0, i - lookback);
+        const analysisCandles = entryCandles.slice(windowStart, i + 1);
+        const roleCandles = bindTimeframeCandles(
+          timeframeAuthority,
+          buildTimeframeCandleMap<Candle>([
+            { timeframe: entryInterval, candles: analysisCandles },
+            { timeframe: "15m", candles: relevantM15.slice(-200) },
+            { timeframe: "1h", candles: relevantH1.slice(-200) },
+            { timeframe: "4h", candles: relevantH4.slice(-120) },
+            { timeframe: "1d", candles: relevantDaily.slice(-120) },
+            { timeframe: "1w", candles: relevantWeekly.slice(-60) },
+          ]),
+        );
         // ── Direction Engine (style-aware: swing=W→D→4H, day=D→4H→1H, scalp=1H→15m→5m) ──
         let directionResult: DirectionResult | null = null;
         if (config.useSimpleDirection) {
@@ -2064,58 +2137,30 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
               h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
             };
-            if (resolvedTradingStyle === "swing_trader") {
-              // Swing: bias=Weekly, structure=Daily, confirm=4H
-              const tfLabels = STYLE_TF_LABELS.swing_trader;
-              const styleResult = determineDirectionStyleAware(
-                relevantWeekly.length >= 20 ? relevantWeekly : null,
-                relevantDaily.length >= 20 ? relevantDaily : null,
-                relevantH4.length >= 20 ? relevantH4 : null,
-                { ...dirConfig, ...tfLabels },
-              );
-              directionResult = {
-                direction: styleResult.direction,
-                bias: styleResult.bias,
-                biasSource: styleResult.biasSource as "daily" | "4h" | null,
-                h4Retrace: styleResult.structureRetrace,
-                h4ChochAgainst: styleResult.structureChochAgainst,
-                h1Confirmed: styleResult.confirmBOS,
-                reason: `[swing] ${styleResult.reason}`,
-              };
-            } else if (resolvedTradingStyle === "scalper") {
-              // Scalper: bias=1H, structure=15m(entry candles window proxy), confirm=entry
-              const tfLabels = STYLE_TF_LABELS.scalper;
-              const scalperWindow = entryCandles.slice(Math.max(0, i - lookback), i + 1);
-              const styleResult = determineDirectionStyleAware(
-                relevantH1.length >= 20 ? relevantH1 : null,
-                scalperWindow.length >= 20 ? scalperWindow : null,
-                scalperWindow.length >= 20 ? scalperWindow.slice(-20) : null,
-                { ...dirConfig, ...tfLabels },
-              );
-              directionResult = {
-                direction: styleResult.direction,
-                bias: styleResult.bias,
-                biasSource: styleResult.biasSource as "daily" | "4h" | null,
-                h4Retrace: styleResult.structureRetrace,
-                h4ChochAgainst: styleResult.structureChochAgainst,
-                h1Confirmed: styleResult.confirmBOS,
-                reason: `[scalper] ${styleResult.reason}`,
-              };
-            } else {
-              // Day trader (default): Daily → 4H → 1H
-              directionResult = determineDirection(
-                relevantDaily.length >= 20 ? relevantDaily : null,
-                relevantH4.length >= 20 ? relevantH4 : null,
-                relevantH1.length >= 20 ? relevantH1 : null,
-                dirConfig,
-              );
-            }
+            const styleResult = determineDirectionStyleAware(
+              roleCandles.bias.length >= 20 ? roleCandles.bias : null,
+              roleCandles.structure.length >= 20
+                ? roleCandles.structure
+                : null,
+              roleCandles.setup.length >= 20 ? roleCandles.setup : null,
+              {
+                ...dirConfig,
+                ...directionTimeframeLabels(timeframeAuthority),
+              },
+            );
+            directionResult = {
+              direction: styleResult.direction,
+              bias: styleResult.bias,
+              biasSource: styleResult.biasSource as "daily" | "4h" | null,
+              h4Retrace: styleResult.structureRetrace,
+              h4ChochAgainst: styleResult.structureChochAgainst,
+              h1Confirmed: styleResult.confirmBOS,
+              reason: `[${resolvedTradingStyle}] ${styleResult.reason}`,
+            };
           } catch { directionResult = null; }
         }
 
         // ── Build analysis window ──
-        const windowStart = Math.max(0, i - lookback);
-        const analysisCandles = entryCandles.slice(windowStart, i + 1);
         if (analysisCandles.length < 50) continue;
 
         // ── HTF POI Detection (4H OBs, FVGs, Breakers) ──
@@ -2258,43 +2303,26 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               : [];
             const combinedLiqPools: LiquidityPool[] = [...htfLiqPoolsD, ...htfLiqPools4H, ...htfLiqPools1H];
 
-            // ── Style-aware candle slot mapping (mirrors bot-scanner exactly) ──
-            let zoneH1Candles: Candle[];
-            let zoneH4Candles: Candle[];
-            let zoneEntryCandles: Candle[];
-            let zoneDailyCandles: Candle[] | undefined;
-            let zoneConfirmCandles: Candle[];
-            let zoneLtfConfirmCandles: Candle[];
-            let zoneTFLabels: TFSlotLabels;
-
-            if (resolvedTradingStyle === "scalper") {
-              zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
-              // Scalper: h1=entry(5m), h4=h1(proxy for 15m), entry=entry(5m), daily=h4(proxy for 1H)
-              zoneH1Candles = analysisCandles;
-              zoneH4Candles = relevantH1.slice(-120); // 1H as mid-TF proxy
-              zoneEntryCandles = analysisCandles;
-              zoneDailyCandles = relevantH4.length >= 20 ? relevantH4.slice(-60) : undefined;
-              zoneConfirmCandles = relevantH1.length >= 15 ? relevantH1.slice(-60) : analysisCandles;
-              zoneLtfConfirmCandles = analysisCandles;
-            } else if (resolvedTradingStyle === "swing_trader") {
-              zoneTFLabels = { top: "W", mid: "D", low: "4H" };
-              // Swing waterfall: Weekly → Daily → 4H (entry=1H)
-              zoneH1Candles = relevantH4.slice(-60);            // 4H = lowest structural TF slot
-              zoneH4Candles = relevantDaily.slice(-60);         // Daily = mid structural TF slot
-              zoneEntryCandles = relevantH1.slice(-120);        // 1H entry
-              zoneDailyCandles = relevantWeekly.length >= 20 ? relevantWeekly.slice(-52) : undefined; // Weekly = highest TF slot
-              zoneConfirmCandles = relevantDaily.length >= 15 ? relevantDaily.slice(-30) : relevantH4.slice(-60);
-              zoneLtfConfirmCandles = relevantH4.slice(-60);
-            } else {
-              zoneTFLabels = { top: "D", mid: "4H", low: "1H" };
-              // Day trader (default): h1=1H, h4=4H, entry=analysisCandles(15m), daily=Daily
-              zoneH1Candles = relevantH1.slice(-120);
-              zoneH4Candles = relevantH4.slice(-60);
-              zoneEntryCandles = analysisCandles;
-              zoneDailyCandles = relevantDaily.length >= 30 ? relevantDaily.slice(-60) : undefined;
-              zoneConfirmCandles = relevantDaily.length >= 30 ? relevantH4.slice(-60) : relevantH1.slice(-60);
-              zoneLtfConfirmCandles = relevantDaily.length >= 30 ? relevantH1.slice(-60) : analysisCandles;
-            }
+            // ── Policy-authoritative candle slot mapping ──
+            // Legacy engine slots are positional:
+            // h1=setup, h4=structure, daily=bias.
+            const zoneH1Candles = roleCandles.setup;
+            const zoneH4Candles = roleCandles.structure;
+            const zoneEntryCandles = analysisCandles;
+            const topMinCandles =
+              timeframeAuthority.zone.top === "1d" ? 30 : 20;
+            const zoneDailyCandles =
+              roleCandles.bias.length >= topMinCandles
+                ? roleCandles.bias
+                : undefined;
+            const zoneConfirmCandles =
+              roleCandles.structure.length >= 15
+                ? roleCandles.structure
+                : roleCandles.setup;
+            const zoneLtfConfirmCandles = roleCandles.setup;
+            const zoneTFLabels: TFSlotLabels = zoneTimeframeLabels(
+              timeframeAuthority,
+            );
 
             // ── Zone Engine Options ──
             const zoneOpts: ZoneEngineOptions = {
