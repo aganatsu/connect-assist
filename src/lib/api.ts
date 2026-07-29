@@ -547,6 +547,14 @@ export interface PendingOrder {
   staged_cycles: number;
   staged_initial_score: number | null;
   exit_flags: any;
+  final_authorization?: any;
+  decision_context?: any;
+  game_plan_id?: string | null;
+  game_plan_version?: string | null;
+  direction_verdict_id?: string | null;
+  direction_verdict?: any;
+  thesis_validation?: any;
+  entry_confirmation?: any;
   placed_at: string;
   created_at: string;
   updated_at: string;

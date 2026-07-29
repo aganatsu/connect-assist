@@ -38,8 +38,14 @@ import { mapNestedToFlat, type RuntimeConfig } from "../_shared/configMapper.ts"
 import { checkIndicatorConfirmation } from "../_shared/indicatorConfirmation.ts";
 import {
   evaluateFinalTradeAuthorization,
-  type DirectionVerdictForAuthorization,
 } from "../_shared/finalTradeAuthorization.ts";
+import {
+  attachDecisionContext,
+  buildTradeDecisionContext,
+  evaluateDecisionHierarchy,
+  type DirectionVerdictDecision,
+  type EntryConfirmationDecision,
+} from "../_shared/decisionContract.ts";
 import {
   buildFinalRuntimeGateStates,
 } from "../_shared/finalRuntimeGates.ts";
@@ -50,6 +56,10 @@ import {
 import { runPropFirmGate, type PropFirmGateResult } from "../_shared/propFirmGate.ts";
 import type { SessionGamePlan } from "../_shared/gamePlan.ts";
 import { loadActiveGamePlan } from "../_shared/gamePlanStore.ts";
+import {
+  directionVerdictMatchesGamePlan,
+  loadActiveDirectionVerdicts,
+} from "../_shared/directionVerdictStore.ts";
 import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
@@ -73,27 +83,6 @@ async function fetchCandles(
     brokerConn,
   });
   return result.candles;
-}
-
-function findCurrentDirectionVerdict(
-  recentScanLogs: any[],
-  symbol: string,
-): DirectionVerdictForAuthorization | null {
-  for (const log of recentScanLogs || []) {
-    const details = log?.details_json;
-    if (!Array.isArray(details)) continue;
-    const pairDetail = details.find((detail: any) => detail?.pair === symbol || detail?.symbol === symbol);
-    const verdict = pairDetail?.directionVerdict;
-    if (verdict && typeof verdict === "object") {
-      return {
-        verdict: verdict.effectiveDirection ?? verdict.verdict ?? null,
-        shouldBlock: verdict.shouldBlock ?? verdict.directionSource === "blocked",
-        blockReason: verdict.blockReason ?? verdict.summary ?? null,
-        confidence: verdict.confidence ?? null,
-      };
-    }
-  }
-  return null;
 }
 
 // ─── Spread Check (for broker mirroring) ────────────────────────────────────
@@ -193,9 +182,8 @@ Deno.serve(async (req) => {
       openPositions: any[];
       account: any | null;
       config: RuntimeConfig;
-      rawConfig: any;
       gamePlan: SessionGamePlan | null;
-      recentScanLogs: any[];
+      directionVerdicts: Map<string, DirectionVerdictDecision>;
     }> = {};
 
     for (const userId of userIds) {
@@ -245,9 +233,13 @@ Deno.serve(async (req) => {
         brokerConn = { api_key: authToken, account_id: metaAccountId };
       }
 
-      // Load the exact dedicated active Gameplan version. scan_logs remains
-      // only the source for current Direction Verdict evidence in Phase 3A.
+      // Load both dedicated, versioned strategy authorities. General scan logs
+      // are observability only and are never used to authorize a fill.
       let gamePlan: SessionGamePlan | null = null;
+      let directionVerdicts = new Map<
+        string,
+        DirectionVerdictDecision
+      >();
       try {
         gamePlan = await loadActiveGamePlan(supabase, userId, BOT_ID);
       } catch (error: any) {
@@ -255,14 +247,17 @@ Deno.serve(async (req) => {
           `[zone-confirm] Active Gameplan unavailable for ${userId}: ${error?.message}`,
         );
       }
-      const { data: recentScanLogs } = await supabase
-        .from("scan_logs")
-        .select("created_at, details_json")
-        .eq("user_id", userId)
-        .eq("bot_id", BOT_ID)
-        .gt("pairs_scanned", 0)
-        .order("created_at", { ascending: false })
-        .limit(5);
+      try {
+        directionVerdicts = await loadActiveDirectionVerdicts(
+          supabase,
+          userId,
+          BOT_ID,
+        );
+      } catch (error: any) {
+        console.warn(
+          `[zone-confirm] Active Direction Verdicts unavailable for ${userId}: ${error?.message}`,
+        );
+      }
 
       const rawConfig = botConfig?.config_json || {};
       userDataMap[userId] = {
@@ -272,9 +267,8 @@ Deno.serve(async (req) => {
         openPositions: openPositions || [],
         account: account || null,
         config: mapNestedToFlat(rawConfig),
-        rawConfig,
         gamePlan,
-        recentScanLogs: recentScanLogs || [],
+        directionVerdicts,
       };
     }
 
@@ -297,9 +291,8 @@ Deno.serve(async (req) => {
           openPositions,
           account,
           config,
-          rawConfig,
           gamePlan,
-          recentScanLogs,
+          directionVerdicts,
         } = userData;
 
         // Avoid market-data work when execution is administratively disabled.
@@ -504,9 +497,10 @@ Deno.serve(async (req) => {
         const nowStr = new Date().toISOString();
 
         // ── Fresh thesis, account, direction, Game Plan, prop-firm and spread checks ──
-        const requireThesisValidation = rawConfig?.strategy?.thesisValidationEnabled
-          ?? rawConfig?.thesisValidationEnabled
-          ?? true;
+        // Thesis validity is a fill-time safety decision. It is deliberately
+        // separate from the observational Thesis Conviction score and cannot
+        // be disabled by the latter.
+        const requireThesisValidation = true;
         let thesisResult: ThesisValidationResult | null = null;
         if (requireThesisValidation) {
           try {
@@ -614,7 +608,21 @@ Deno.serve(async (req) => {
           .map((item) => item.result!)
           .sort((a, b) => a.spreadPips - b.spreadPips)[0];
 
-        const directionVerdict = findCurrentDirectionVerdict(recentScanLogs, pending.symbol);
+        let directionVerdict = directionVerdicts.get(pending.symbol) || null;
+        if (
+          directionVerdict &&
+          config.gamePlanEnabled &&
+          !directionVerdictMatchesGamePlan(
+            directionVerdict,
+            gamePlan,
+            pending.symbol,
+          )
+        ) {
+          console.warn(
+            `[zone-confirm] ${pending.symbol}: Direction Verdict and Gameplan versions do not match`,
+          );
+          directionVerdict = null;
+        }
         const runtimeGates = await buildFinalRuntimeGateStates({
           supabase,
           userId,
@@ -640,7 +648,22 @@ Deno.serve(async (req) => {
             killZoneOnly: config.killZoneOnly,
           },
         });
-        const authorization = evaluateFinalTradeAuthorization({
+        const entryConfirmation: EntryConfirmationDecision = {
+          required: true,
+          passed: true,
+          method: confirmationMethod,
+          reason:
+            `Entry timing confirmed by ${confirmedSignal.type} (${confirmationMethod})`,
+          evidence: {
+            type: confirmedSignal.type,
+            tier: confirmedSignal.tier,
+            price: confirmedSignal.price,
+            displacement: confirmedSignal.displacement,
+            supportingSignals: confirmedSignal.supportingSignals,
+          },
+          evaluatedAt: nowStr,
+        };
+        const rawAuthorization = evaluateFinalTradeAuthorization({
           account,
           candidate: {
             symbol: pending.symbol,
@@ -664,6 +687,7 @@ Deno.serve(async (req) => {
           gamePlanMinimumConfidence: config.gpHardBlockThreshold,
           thesisResult,
           requireThesisValidation,
+          entryConfirmation,
           propFirm: propFirmResult
             ? { enabled: propFirmResult.enabled, allowed: propFirmResult.allowed, reason: propFirmResult.reason }
             : null,
@@ -677,6 +701,48 @@ Deno.serve(async (req) => {
           },
           runtimeGates,
         });
+        const hierarchy = rawAuthorization.decisionHierarchy ||
+          evaluateDecisionHierarchy({
+            symbol: pending.symbol,
+            direction: pending.direction as "long" | "short",
+            gamePlan,
+            gamePlanEnabled: config.gamePlanEnabled,
+            gamePlanMode: config.gpEnforcementMode,
+            gamePlanMinimumConfidence: config.gpHardBlockThreshold,
+            directionVerdict,
+            requireDirectionVerdict: true,
+            thesisResult,
+            requireThesisValidation,
+            entryConfirmation,
+          });
+        let parsedPendingEvidence: any = {};
+        try {
+          parsedPendingEvidence = typeof pending.signal_reason === "string"
+            ? JSON.parse(pending.signal_reason)
+            : (pending.signal_reason || {});
+        } catch {
+          parsedPendingEvidence = {};
+        }
+        const authorization = attachDecisionContext(
+          rawAuthorization,
+          buildTradeDecisionContext({
+            stage: "fill",
+            symbol: pending.symbol,
+            direction: pending.direction as "long" | "short",
+            gamePlan,
+            directionVerdict,
+            thesisResult,
+            requireThesisValidation,
+            thesisConviction:
+              parsedPendingEvidence?.decisionContext?.thesisConviction
+                ?.evidence ||
+              parsedPendingEvidence?.thesisConviction ||
+              null,
+            entryConfirmation,
+            hierarchy,
+            evaluatedAt: nowStr,
+          }),
+        );
 
         if (!authorization.authorized) {
           const cancelPermanently = !authorization.retryable;
@@ -695,8 +761,7 @@ Deno.serve(async (req) => {
         }
 
         // Build signal_reason with confirmation and final authorization data.
-        let parsedSignalReason: any = {};
-        try { parsedSignalReason = typeof pending.signal_reason === "string" ? JSON.parse(pending.signal_reason) : (pending.signal_reason || {}); } catch {}
+        const parsedSignalReason = parsedPendingEvidence;
         const signalReason = {
           ...parsedSignalReason,
           filledFromLimitOrder: true,
@@ -726,6 +791,7 @@ Deno.serve(async (req) => {
             stagedCycles: pending.staged_cycles,
           },
           finalAuthorization: authorization,
+          decisionContext: authorization.decisionContext,
         };
 
         // One database transaction claims the pending order, rechecks account

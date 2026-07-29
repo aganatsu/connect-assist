@@ -218,6 +218,19 @@ Deno.test("final authorization blocks a freshly invalidated thesis", () => {
   assertEquals(result.code, "thesis_invalid");
 });
 
+Deno.test("final authorization requires configured entry confirmation after thesis passes", () => {
+  const input = baseInput();
+  input.entryConfirmation = {
+    required: true,
+    passed: false,
+    method: "choch",
+    reason: "No bearish CHoCH yet",
+    evaluatedAt: "2026-07-28T17:00:00.000Z",
+  };
+  const result = evaluateFinalTradeAuthorization(input);
+  assertEquals(result.code, "confirmation_blocked");
+});
+
 Deno.test("final authorization blocks invalid SL/TP orientation", () => {
   const input = baseInput();
   input.candidate.stopLoss = 1.87;

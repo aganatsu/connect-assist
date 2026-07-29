@@ -102,6 +102,16 @@ interface InstrumentPlan {
   skipReason?: string;
   scenarios: Scenario[];
   keyLevels: KeyLevel[];
+  directionVerdict?: {
+    id: string;
+    verdictVersion: string;
+    verdict: "long" | "short" | "neutral";
+    confidence: number;
+    shouldBlock: boolean;
+    blockReason?: string | null;
+    evaluatedAt: string;
+    gamePlanVersion?: string | null;
+  } | null;
 }
 
 interface GamePlanData {
@@ -126,16 +136,52 @@ interface GamePlanLog {
 // ─── API ────────────────────────────────────────────────────────────
 
 async function fetchGamePlans(): Promise<GamePlanLog[]> {
-  const { data, error } = await (supabase as any)
-    .from("active_game_plans")
-    .select("id,plan_version,symbol,session,bias,bias_confidence,v2_conviction,state,state_reason,generated_at,expires_at,invalidation_conditions,source_candle_timestamps,plan_json,focus_pairs,news_events,news_impacts,summary,generation_source,contract_version,is_active")
-    .eq("bot_id", "smc")
-    .order("generated_at", { ascending: false })
-    .limit(300);
-  if (error) throw new Error(error.message);
-  return activeGamePlanRowsToLogs(
-    (data || []) as ActiveGamePlanDisplayRow[],
+  const [plansResult, verdictsResult] = await Promise.all([
+    (supabase as any)
+      .from("active_game_plans")
+      .select("id,plan_version,symbol,session,bias,bias_confidence,v2_conviction,state,state_reason,generated_at,expires_at,invalidation_conditions,source_candle_timestamps,plan_json,focus_pairs,news_events,news_impacts,summary,generation_source,contract_version,is_active")
+      .eq("bot_id", "smc")
+      .order("generated_at", { ascending: false })
+      .limit(300),
+    (supabase as any)
+      .from("active_direction_verdicts")
+      .select("id,verdict_version,symbol,game_plan_version,verdict,confidence,should_block,block_reason,evaluated_at,is_active")
+      .eq("bot_id", "smc")
+      .eq("is_active", true),
+  ]);
+  if (plansResult.error) throw new Error(plansResult.error.message);
+  if (verdictsResult.error) throw new Error(verdictsResult.error.message);
+  const logs = activeGamePlanRowsToLogs(
+    (plansResult.data || []) as ActiveGamePlanDisplayRow[],
   ) as unknown as GamePlanLog[];
+  const verdicts = verdictsResult.data || [];
+  return logs.map((log) => ({
+    ...log,
+    details_json: {
+      ...log.details_json,
+      plans: log.details_json.plans.map((plan) => {
+        const verdict = verdicts.find((item: any) =>
+          item.symbol === plan.symbol &&
+          item.game_plan_version === plan.planVersion
+        );
+        return {
+          ...plan,
+          directionVerdict: verdict
+            ? {
+              id: verdict.id,
+              verdictVersion: verdict.verdict_version,
+              verdict: verdict.verdict,
+              confidence: Number(verdict.confidence),
+              shouldBlock: verdict.should_block,
+              blockReason: verdict.block_reason,
+              evaluatedAt: verdict.evaluated_at,
+              gamePlanVersion: verdict.game_plan_version,
+            }
+            : null,
+        };
+      }),
+    },
+  }));
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -258,6 +304,33 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
         <span>{plan.zone}</span>
         <span className="text-zinc-600">|</span>
         <span>{plan.regime}</span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[9px] font-mono">
+        <span className="text-muted-foreground">
+          GP v{plan.planVersion?.slice(0, 8) || "unversioned"}
+        </span>
+        {plan.directionVerdict ? (
+          <span className={
+            plan.directionVerdict.shouldBlock ||
+              plan.directionVerdict.verdict === "neutral"
+              ? "text-loss"
+              : plan.directionVerdict.verdict === "long"
+              ? "text-profit"
+              : "text-loss"
+          }>
+            DV {plan.directionVerdict.verdict.toUpperCase()}{" "}
+            {Math.round(plan.directionVerdict.confidence)}% · v
+            {plan.directionVerdict.verdictVersion.slice(0, 8)}
+          </span>
+        ) : (
+          <span className="text-highlight">
+            Direction Verdict pending next scan
+          </span>
+        )}
+        <span className="text-muted-foreground">
+          Thesis validity: checked per candidate and again at fill
+        </span>
       </div>
 
       {/* DOL row */}

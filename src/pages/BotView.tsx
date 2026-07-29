@@ -1509,7 +1509,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot || sr.decisionContext);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
@@ -1552,6 +1552,42 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
                           <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} />
+                          {sr.decisionContext && (
+                            <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">
+                              <p className="text-[8px] text-primary uppercase tracking-wider font-bold">
+                                Unified Entry Decision · {sr.decisionContext.contractVersion}
+                              </p>
+                              <div className="flex flex-wrap gap-2 text-[9px] font-mono">
+                                <span>
+                                  GP v{sr.decisionContext.gamePlan?.version?.slice(0, 8) || "none"}
+                                </span>
+                                <span>
+                                  DV {(sr.decisionContext.directionVerdict?.verdict || "missing").toUpperCase()}{" "}
+                                  {Math.round(Number(sr.decisionContext.directionVerdict?.confidence || 0))}%
+                                </span>
+                                <span className={
+                                  sr.decisionContext.thesisValidity?.valid
+                                    ? "text-success"
+                                    : "text-destructive"
+                                }>
+                                  Thesis {sr.decisionContext.thesisValidity?.valid ? "VALID" : "INVALID"}
+                                </span>
+                                <span className={
+                                  sr.decisionContext.entryConfirmation?.passed
+                                    ? "text-success"
+                                    : "text-warning"
+                                }>
+                                  Confirmation {sr.decisionContext.entryConfirmation?.passed ? "PASSED" : "WAITING"}
+                                </span>
+                              </div>
+                              <p className="text-[8px] text-muted-foreground">
+                                {sr.decisionContext.hierarchy?.reason}
+                              </p>
+                              <p className="text-[8px] text-muted-foreground">
+                                Thesis Conviction is observational and did not authorize this trade.
+                              </p>
+                            </div>
+                          )}
                           {/* ── Direction Verdict ── */}
                           {sr.directionVerdict && !sr.directionVerdict.error && (
                             <div className="flex items-center gap-1.5 flex-wrap">
