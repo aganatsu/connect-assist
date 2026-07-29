@@ -1,100 +1,155 @@
-// Trading style classification — pure function, no backend needed
+// UI metadata and readers for the canonical runtime style-policy snapshot.
+// Executable profile values live only in the Edge Function shared resolver.
 
-export type TradingStyleMode = "scalper" | "day_trader" | "swing_trader";
+export const TRADING_STYLE_MODES = [
+  "scalper",
+  "day_trader",
+  "swing_trader",
+] as const;
 
-export interface StyleOverrides {
-  entryTimeframe: string;
-  htfTimeframe: string;
-  tpRatio: number;
-  slBufferPips: number;
-  confluenceThreshold: number; // percentage (0-100%)
-  // Management defaults (user can override per-broker):
-  trailingStopEnabled: boolean;
-  trailingStopPips: number;
-  trailingStopActivation: string;
-  breakEvenEnabled: boolean;
-  breakEvenPips: number;
-  partialTPEnabled: boolean;
-  partialTPPercent: number;
-  partialTPLevel: number;
-  maxHoldHours: number;
-}
-
-// NOTE: breakEvenPips is now a fallback — actual BE trigger is R-based: max(1R, breakEvenPips/riskPips)
-// trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips)
-export const STYLE_PARAMS: Record<TradingStyleMode, StyleOverrides> = {
-  scalper: {
-    entryTimeframe: "5m",
-    htfTimeframe: "1h",
-    tpRatio: 2.0,
-    slBufferPips: 1,
-    confluenceThreshold: 40,
-    trailingStopEnabled: false,        // validated: 5m noise cuts winners short
-    trailingStopPips: 8,
-    trailingStopActivation: "after_1r",
-    breakEvenEnabled: false,           // validated: let trades run to TP/SL
-    breakEvenPips: 8,
-    partialTPEnabled: false,
-    partialTPPercent: 50,
-    partialTPLevel: 1.0,
-    maxHoldHours: 4,
-  },
-  day_trader: {
-    entryTimeframe: "15m",
-    htfTimeframe: "1d",
-    tpRatio: 2.0,
-    slBufferPips: 2,
-    confluenceThreshold: 55,
-    trailingStopEnabled: true,        // trailing AFTER partial TP
-    trailingStopPips: 15,             // minimum trail; proportional (0.5× SL) may be larger
-    trailingStopActivation: "after_1.5r", // activates after partial TP at 1R + buffer
-    breakEvenEnabled: true,
-    breakEvenPips: 20,                // fallback; R-based trigger (min 1R) takes precedence
-    partialTPEnabled: true,
-    partialTPPercent: 50,
-    partialTPLevel: 1.0,
-    maxHoldHours: 24,
-  },
-  swing_trader: {
-    entryTimeframe: "1h",
-    htfTimeframe: "1w",
-    tpRatio: 3.0,
-    slBufferPips: 5,
-    confluenceThreshold: 40,          // validated: cascade selectivity is the real filter
-    trailingStopEnabled: false,        // validated: BE/trailing killed XAU/USD wins
-    trailingStopPips: 25,
-    trailingStopActivation: "after_2r",
-    breakEvenEnabled: false,           // validated: 75% WR without BE, 0% with BE on XAU
-    breakEvenPips: 40,
-    partialTPEnabled: false,           // validated: let full position run to 3R TP
-    partialTPPercent: 33,
-    partialTPLevel: 1.0,
-    maxHoldHours: 0,  // no limit for swings
-  },
-};
+export type TradingStyleMode = (typeof TRADING_STYLE_MODES)[number];
 
 export const STYLE_META: Record<TradingStyleMode, { label: string; icon: string; color: string; description: string }> = {
   scalper: {
     label: "Scalper",
     icon: "⚡",
     color: "text-warning bg-warning/10 border-warning/30",
-    description: "Quick in-and-out trades on 5m charts. Tight stops, fast exits.",
+    description: "Short-horizon setups with frequent scanning and fast exits.",
   },
   day_trader: {
     label: "Day Trader",
     icon: "📊",
     color: "text-primary bg-primary/10 border-primary/30",
-    description: "Intraday trades on 15m charts. Balanced risk/reward, closes by end of session.",
+    description: "Intraday setups with balanced qualification and management.",
   },
   swing_trader: {
     label: "Swing Trader",
     icon: "📈",
     color: "text-success bg-success/10 border-success/30",
-    description: "Multi-day holds on 1h charts. Wider stops, larger targets.",
+    description: "Multi-day setups with wider risk and larger targets.",
   },
 };
 
-export function getActiveStyle(config: any): TradingStyleMode {
-  const mode = config?.tradingStyle?.mode || "day_trader";
-  return mode as TradingStyleMode;
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : {};
+}
+
+export function getActiveStyle(config: unknown): TradingStyleMode {
+  const tradingStyle = asRecord(asRecord(config).tradingStyle);
+  const mode = tradingStyle.mode || "day_trader";
+  return isTradingStyleMode(mode) ? mode : "day_trader";
+}
+
+export function isTradingStyleMode(value: unknown): value is TradingStyleMode {
+  return TRADING_STYLE_MODES.includes(value as TradingStyleMode);
+}
+
+/**
+ * Selecting a style records intent only. It deliberately preserves every
+ * explicit config override; the backend resolver owns executable profile
+ * values and records the resulting effective policy on the next scan.
+ */
+export function selectTradingStyle(
+  config: unknown,
+  mode: TradingStyleMode,
+): Record<string, unknown> {
+  const current = asRecord(config);
+  const tradingStyle = asRecord(current.tradingStyle);
+  return {
+    ...current,
+    tradingStyle: {
+      ...tradingStyle,
+      mode,
+    },
+  };
+}
+
+export interface RuntimeStylePolicy {
+  contractVersion: string;
+  basePolicyHash: string;
+  policyHash: string;
+  enforcement: string;
+  scope: "global" | "pair";
+  style: TradingStyleMode;
+  symbol: string | null;
+  resolvedAt: string;
+  timeframes: {
+    roles: {
+      bias: string;
+      structure: string;
+      setup: string;
+      confirmation: string;
+      refinement: string;
+    };
+    runtimeEntry: string;
+    runtimeHTF: string;
+  };
+  cadence: {
+    scanIntervalMinutes: number;
+  };
+  qualification: {
+    minConfluence: number;
+    effectiveMinConfluence: number;
+    minRiskReward: number;
+    minTier1Factors: number;
+    impulseZoneGateMode: string;
+    minZoneScore: number;
+  };
+  risk: {
+    riskPerTrade: number;
+    tpRatio: number;
+  };
+  management: {
+    breakEvenEnabled: boolean;
+    trailingStopEnabled: boolean;
+    partialTPEnabled: boolean;
+    maxHoldEnabled: boolean;
+    maxHoldHours: number;
+  };
+  provenance: {
+    profileAppliedToRuntime: boolean;
+    styleApplied: string[];
+    userOverridesPreserved: string[];
+  };
+}
+
+export function readRuntimeStylePolicy(
+  value: unknown,
+): RuntimeStylePolicy | null {
+  if (!value || typeof value !== "object") return null;
+  const policy = value as Partial<RuntimeStylePolicy>;
+  if (
+    !isTradingStyleMode(policy.style) ||
+    typeof policy.contractVersion !== "string" ||
+    typeof policy.basePolicyHash !== "string" ||
+    typeof policy.policyHash !== "string" ||
+    !policy.timeframes ||
+    !policy.cadence ||
+    !policy.qualification ||
+    !policy.risk ||
+    !policy.management ||
+    !policy.provenance ||
+    !Array.isArray(policy.provenance.userOverridesPreserved)
+  ) {
+    return null;
+  }
+  return policy as RuntimeStylePolicy;
+}
+
+export function getScanLogMeta(
+  scanLog: unknown,
+): Record<string, unknown> | null {
+  let details = asRecord(scanLog).details_json;
+  if (typeof details === "string") {
+    try {
+      details = JSON.parse(details);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(details)) return null;
+  const meta = details.find((detail: unknown) => asRecord(detail).__meta);
+  return meta && typeof meta === "object" ? meta : null;
 }
