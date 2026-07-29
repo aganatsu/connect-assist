@@ -1499,6 +1499,114 @@ export type Database = {
         }
         Relationships: []
       }
+      scanner_operation_runs: {
+        Row: {
+          bot_id: string
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          expected_pairs: number | null
+          function_name: string
+          heartbeat_at: string
+          id: string
+          invoked_at: string
+          metadata: Json
+          operation: string
+          pair_processing_completed_at: string | null
+          phase: string
+          position_management_completed_at: string | null
+          processed_pairs: number
+          scan_completed_at: string | null
+          scan_cycle_id: string | null
+          scan_started_at: string | null
+          status: string
+          trigger_source: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id?: string
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          expected_pairs?: number | null
+          function_name: string
+          heartbeat_at?: string
+          id?: string
+          invoked_at?: string
+          metadata?: Json
+          operation: string
+          pair_processing_completed_at?: string | null
+          phase?: string
+          position_management_completed_at?: string | null
+          processed_pairs?: number
+          scan_completed_at?: string | null
+          scan_cycle_id?: string | null
+          scan_started_at?: string | null
+          status?: string
+          trigger_source: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          expected_pairs?: number | null
+          function_name?: string
+          heartbeat_at?: string
+          id?: string
+          invoked_at?: string
+          metadata?: Json
+          operation?: string
+          pair_processing_completed_at?: string | null
+          phase?: string
+          position_management_completed_at?: string | null
+          processed_pairs?: number
+          scan_completed_at?: string | null
+          scan_cycle_id?: string | null
+          scan_started_at?: string | null
+          status?: string
+          trigger_source?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scanner_runtime_locks: {
+        Row: {
+          acquired_at: string
+          bot_id: string
+          heartbeat_at: string
+          lease_token: string
+          lease_until: string
+          lock_scope: string
+          run_id: string | null
+          user_id: string
+        }
+        Insert: {
+          acquired_at?: string
+          bot_id: string
+          heartbeat_at?: string
+          lease_token: string
+          lease_until: string
+          lock_scope: string
+          run_id?: string | null
+          user_id: string
+        }
+        Update: {
+          acquired_at?: string
+          bot_id?: string
+          heartbeat_at?: string
+          lease_token?: string
+          lease_until?: string
+          lock_scope?: string
+          run_id?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       scheduled_tasks: {
         Row: {
           action: string
@@ -2158,6 +2266,17 @@ export type Database = {
         }
         Returns: Json
       }
+      claim_scanner_runtime_lock: {
+        Args: {
+          p_bot_id: string
+          p_lease_seconds?: number
+          p_lease_token: string
+          p_lock_scope: string
+          p_run_id: string
+          p_user_id: string
+        }
+        Returns: boolean
+      }
       complete_broker_execution: {
         Args: {
           p_broker_order_id: string
@@ -2200,6 +2319,25 @@ export type Database = {
           p_user_id: string
         }
         Returns: Json
+      }
+      heartbeat_scanner_runtime_lock: {
+        Args: {
+          p_bot_id: string
+          p_lease_seconds?: number
+          p_lease_token: string
+          p_lock_scope: string
+          p_user_id: string
+        }
+        Returns: boolean
+      }
+      release_scanner_runtime_lock: {
+        Args: {
+          p_bot_id: string
+          p_lease_token: string
+          p_lock_scope: string
+          p_user_id: string
+        }
+        Returns: boolean
       }
       transition_staged_setup: {
         Args: {
