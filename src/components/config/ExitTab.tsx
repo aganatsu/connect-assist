@@ -41,17 +41,17 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             <Input type="number" value={config.exit?.fixedSLPips ?? 25} onChange={e => updateField('exit', 'fixedSLPips', parseFloat(e.target.value) || 25)} min={5} max={200} step={5} className="h-9 text-sm" />
           </FieldGroup>
         )}
-        <FieldGroup label="SL Buffer (pips)" description="Extra buffer beyond the calculated SL level">
+        <FieldGroup label="SL Buffer (pips)" description="Extra buffer beyond the calculated SL level" status="active">
           <div className="flex items-center gap-4">
             <Slider value={[config.exit?.slBufferPips ?? 2]} onValueChange={v => updateField('exit', 'slBufferPips', v[0])} min={0} max={10} step={0.5} className="flex-1" />
             <span className="text-sm font-mono font-bold w-12 text-right">{config.exit?.slBufferPips ?? 2}</span>
           </div>
         </FieldGroup>
-        <FieldGroup label="Max SL (pips)" description="Hard cap on SL distance — skip trade if SL would exceed this">
-          <Input type="number" value={config.exit?.maxSLPips ?? 50} onChange={e => updateField('exit', 'maxSLPips', parseFloat(e.target.value) || 50)} min={5} max={500} step={5} className="h-9 text-sm" />
+        <FieldGroup label="Max SL (pips)" description="Not yet enforced by the shared execution engine" status="unavailable">
+          <Input type="number" value={config.exit?.maxSLPips ?? 50} onChange={() => {}} min={5} max={500} step={5} className="h-9 text-sm" disabled />
         </FieldGroup>
-        <FieldGroup label="Min SL (pips)" description="Minimum SL distance — prevents unrealistically tight stops">
-          <Input type="number" value={config.exit?.minSLPips ?? 5} onChange={e => updateField('exit', 'minSLPips', parseFloat(e.target.value) || 5)} min={1} max={50} step={1} className="h-9 text-sm" />
+        <FieldGroup label="Min SL (pips)" description="Not yet enforced by the shared execution engine" status="unavailable">
+          <Input type="number" value={config.exit?.minSLPips ?? 5} onChange={() => {}} min={1} max={50} step={1} className="h-9 text-sm" disabled />
         </FieldGroup>
       </CollapsibleSection>
 
@@ -68,11 +68,12 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="rr_ratio">R:R Ratio — Fixed risk/reward</SelectItem>
+              <SelectItem value="fixed_pips">Fixed Pips — Exact distance</SelectItem>
               <SelectItem value="next_level">Next Level — Zone-to-zone TP</SelectItem>
-              <SelectItem value="fib_extension">Fib Extension — From impulse swing</SelectItem>
+              <SelectItem value="fib_extension" disabled>Fib Extension — Unavailable</SelectItem>
               <SelectItem value="fib_extension_3pt">Fib Extension 3-Point — From entry</SelectItem>
               <SelectItem value="atr_multiple">ATR Multiple</SelectItem>
-              <SelectItem value="structure">Structure — Next HTF level</SelectItem>
+              <SelectItem value="structure" disabled>Structure — Use Next Level instead</SelectItem>
             </SelectContent>
           </Select>
         </FieldGroup>
@@ -84,9 +85,14 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
             </div>
           </FieldGroup>
         )}
+        {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod) === "fixed_pips" && (
+          <FieldGroup label="Fixed TP (pips)" status="active">
+            <Input type="number" value={config.exit?.fixedTPPips ?? 50} onChange={e => updateField('exit', 'fixedTPPips', parseFloat(e.target.value) || 50)} min={5} max={500} step={5} className="h-9 text-sm" />
+          </FieldGroup>
+        )}
         {(config.exit?.takeProfitMethod ?? config.exit?.tpMethod) === "fib_extension_3pt" && (
-          <FieldGroup label="Primary TP Level" description="Which fib extension to target">
-            <Select value={String(config.exit?.fib3ptLevel ?? -0.272)} onValueChange={v => updateField('exit', 'fib3ptLevel', parseFloat(v))}>
+          <FieldGroup label="Primary TP Level" description="Controlled in Scan → SMC Enhancements" status="unavailable">
+            <Select value={String(config.exit?.fib3ptLevel ?? -0.272)} onValueChange={() => {}} disabled>
               <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="-0.272">-27.2% — Conservative</SelectItem>
@@ -186,7 +192,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
         {/* Structure Invalidation */}
         <div className="border-t border-border pt-3 space-y-3">
           <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Structure Invalidation</p>
-          <ToggleField label="Structure Invalidation" description="Tighten SL by 50% when market structure breaks against your trade (CHoCH detected)" checked={config.exit?.structureInvalidationEnabled ?? false} onChange={v => updateField('exit', 'structureInvalidationEnabled', v)} />
+          <ToggleField label="Structure Invalidation" description="Tighten SL by 50% when market structure breaks against your trade (CHoCH detected)" checked={config.exit?.structureInvalidationEnabled ?? false} onChange={v => updateField('exit', 'structureInvalidationEnabled', v)} status={(config.exit?.structureInvalidationEnabled ?? false) ? "active" : "disabled"} />
         </div>
 
         {/* Time-Based Exits */}
@@ -201,7 +207,7 @@ export function ExitTab({ config, setConfig, updateField }: ConfigTabProps) {
               </div>
             </FieldGroup>
           )}
-          <ToggleField label="End-of-Session Close" description="Close all positions at end of trading session" checked={config.exit?.endOfSessionClose ?? false} onChange={v => updateField('exit', 'endOfSessionClose', v)} />
+          <ToggleField label="End-of-Session Close" description="Not yet implemented by the shared position-management engine" checked={false} onChange={() => {}} disabled status="unavailable" />
         </div>
       </CollapsibleSection>
     </div>

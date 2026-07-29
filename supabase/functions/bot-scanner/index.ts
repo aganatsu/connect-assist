@@ -6930,9 +6930,13 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
             const breakerRR = Math.abs(breakerTP - breakerEntry) / breakerRisk;
             if (breakerRR < (config.minRiskReward ?? 1.0)) continue;
 
-            // Size calculation (breaker uses half risk, no vol/prop-firm context)
+            // Size calculation (default remains the historical half-risk behavior).
+            const breakerSizeMultiplier = Math.max(
+              0.1,
+              Math.min(1, Number((pairConfig as any).smcEnhancements?.breakerSizeMultiplier ?? 0.5)),
+            );
             const breakerSizing = computePositionSize(
-              { balance, riskPercent: pairConfig.riskPerTrade * 0.5, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
+              { balance, riskPercent: pairConfig.riskPerTrade * breakerSizeMultiplier, entryPrice: breakerEntry, stopLoss: breakerSL, symbol: pair, method: (pairConfig as any).positionSizingMethod || "percent_risk", fixedLotSize: (pairConfig as any).fixedLotSize, atrValue: (analysis as any).atrValue, atrVolatilityMultiplier: (pairConfig as any).atrVolatilityMultiplier, rateMap, commissionPerLot: avgCommissionPerLot },
               undefined, undefined, undefined,
             );
             let breakerSize = Math.max(breakerSizing.lots * propFirmSizeMultiplier, 0.01);
@@ -7066,7 +7070,7 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
                 bot: BOT_ID,
                 signalSource: "breaker",
                 summary: breaker.detail,
-                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB },
+                breakerData: { direction: breaker.direction, confidence: breaker.confidence, displacementStrength: breaker.displacementStrength, hadLiquiditySweep: breaker.hadLiquiditySweep, originalOB: breaker.originalOB, sizeMultiplier: breakerSizeMultiplier },
                 entryTimeframe: pairConfig.entryTimeframe,
                 originalSL: breakerSL,
                 originalTP: breakerTP,

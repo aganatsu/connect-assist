@@ -843,3 +843,105 @@ Deno.test("game plan enforcement: supports legacy strategy mode", () => {
   assertEquals(config.gpEnforcementMode, "off");
   assertEquals(config.gpHardBlockThreshold, 75);
 });
+
+Deno.test("visible analysis-module toggles map to executable runtime fields", () => {
+  const config = mapNestedToFlat({
+    strategy: {
+      enableLiquidity: false,
+      enableStructure: false,
+      enableDisplacement: false,
+      enableBreaker: false,
+      enableUnicorn: false,
+      enableSMT: false,
+      enableVolumeProfile: false,
+      enableDailyBias: false,
+      enableAMD: false,
+      enableFOTSI: false,
+    },
+  });
+
+  assertEquals(config.enableLiquiditySweep, false);
+  assertEquals(config.enableStructureBreak, false);
+  assertEquals(config.useDisplacement, false);
+  assertEquals(config.useBreakerBlocks, false);
+  assertEquals(config.useUnicornModel, false);
+  assertEquals(config.useSMT, false);
+  assertEquals(config.useVolumeProfile, false);
+  assertEquals(config.useDailyBias, false);
+  assertEquals(config.useAMD, false);
+  assertEquals(config.useFOTSI, false);
+});
+
+Deno.test("visible filter and news controls map to scanner gate inputs", () => {
+  const config = mapNestedToFlat({
+    instruments: {
+      atrFilterEnabled: true,
+      atrFilterMinPips: 8,
+      atrFilterMaxPips: 42,
+    },
+    sessions: { newsBufferMinutes: 55 },
+  });
+
+  assertEquals(config.atrFilterEnabled, true);
+  assertEquals(config.atrFilterMin, 8);
+  assertEquals(config.atrFilterMax, 42);
+  assertEquals(config.newsFilterPauseMinutes, 55);
+});
+
+Deno.test("visible opening-range and exit controls map to management behavior", () => {
+  const config = mapNestedToFlat({
+    openingRange: {
+      enabled: true,
+      judasSwing: false,
+      keyLevels: false,
+    },
+    entry: { slBufferPips: 2 },
+    exit: {
+      slBufferPips: 6,
+      structureInvalidationEnabled: true,
+    },
+  });
+
+  assertEquals(config.openingRange.useJudasSwing, false);
+  assertEquals(config.openingRange.useKeyLevels, false);
+  assertEquals(config.slBufferPips, 6);
+  assertEquals(config.structureInvalidationEnabled, true);
+});
+
+Deno.test("visible precision and SMC enhancement tuning maps to engine sub-configs", () => {
+  const config = mapNestedToFlat({
+    strategy: {
+      structuralConvictionGate: false,
+      ictDisplacementMinRatio: 0.72,
+    },
+    smcEnhancements: {
+      enableFib3PointTP: true,
+      trendThreshold: 8,
+      maxRetests: 2,
+      confidenceDecay: 0.2,
+      breakerMinDisplacement: 2.1,
+      breakerSizeMultiplier: 0.35,
+      primaryFibLevel: -0.618,
+      trendlineMinTouches: 4,
+      trendlineTrapTouch: 5,
+    },
+  });
+
+  assertEquals(config.structuralConvictionEnabled, false);
+  assertAlmostEquals(config.ictDisplacementMSSMinBodyRatio, 0.72);
+  assert(config.smcEnhancements);
+  const enhancements = config.smcEnhancements as any;
+  assertEquals(enhancements.enableFibExtension3Point, true);
+  assertEquals(enhancements.phaseConfig?.trendThreshold, 8);
+  assertEquals(enhancements.zoneLifecycleConfig?.maxRetests, 2);
+  assertEquals(enhancements.zoneLifecycleConfig?.confidenceByRetest.length, 4);
+  assertAlmostEquals(
+    enhancements.zoneLifecycleConfig?.confidenceByRetest[3],
+    0.4,
+  );
+  assertEquals(enhancements.breakerConfig?.minDisplacementATR, 2.1);
+  assertEquals(enhancements.breakerSizeMultiplier, 0.35);
+  assertEquals(enhancements.fibExtensionConfig?.extensionRatios?.[0], 0.618);
+  assertEquals(enhancements.trendlineConfig?.minTouches, 4);
+  assertEquals(enhancements.trendlineConfig?.trapTouchThreshold, 5);
+});
