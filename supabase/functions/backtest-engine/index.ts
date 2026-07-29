@@ -45,7 +45,6 @@ import {
   ATR_SL_FLOOR_MULTIPLIER,
   SUPPORTED_SYMBOLS,
   SMT_PAIRS,
-  STYLE_OVERRIDES,
   ASSET_PROFILES,
   getAssetProfile,
   detectSwingPoints,
@@ -84,6 +83,7 @@ import {
   applyWeightScale,
 } from "../_shared/confluenceScoring.ts";
 import { mapNestedToFlat, RUNTIME_DEFAULTS, applyPairOverrides } from "../_shared/configMapper.ts";
+import { applyTradingStyleProfile, resolveTradingStyle } from "../_shared/tradingStyleConfig.ts";
 import {
   detectSession,
   normalizeSessionFilter,
@@ -1585,11 +1585,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     } = body;
 
     const config = mapConfig(rawConfig || {});
-    if (tradingStyle && STYLE_OVERRIDES[tradingStyle]) {
-      const userMinConf = config.minConfluence;
-      Object.assign(config, STYLE_OVERRIDES[tradingStyle]);
-      config.minConfluence = userMinConf;
-    }
+    const styleResolution = applyTradingStyleProfile(config, tradingStyle);
+    const resolvedTradingStyle = styleResolution.style;
+    Object.assign(config, styleResolution.config);
+    // Backtest-specific overrides are applied after the common style profile.
+    config.newsFilterEnabled = false;
+    config.scanIntervalMinutes = 0;
 
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
@@ -2069,7 +2070,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               h4ChochLookback: config.simpleDirectionH4ChochLookback ?? 10,
               h1BosLookback: config.simpleDirectionH1BosLookback ?? 8,
             };
-            if (tradingStyle === "swing_trader") {
+            if (resolvedTradingStyle === "swing_trader") {
               // Swing: bias=Weekly, structure=Daily, confirm=4H
               const tfLabels = STYLE_TF_LABELS.swing_trader;
               const styleResult = determineDirectionStyleAware(
@@ -2087,7 +2088,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 h1Confirmed: styleResult.confirmBOS,
                 reason: `[swing] ${styleResult.reason}`,
               };
-            } else if (tradingStyle === "scalper") {
+            } else if (resolvedTradingStyle === "scalper") {
               // Scalper: bias=1H, structure=15m(entry candles window proxy), confirm=entry
               const tfLabels = STYLE_TF_LABELS.scalper;
               const scalperWindow = entryCandles.slice(Math.max(0, i - lookback), i + 1);
@@ -2272,7 +2273,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             let zoneLtfConfirmCandles: Candle[];
             let zoneTFLabels: TFSlotLabels;
 
-            if (tradingStyle === "scalper") {
+            if (resolvedTradingStyle === "scalper") {
               zoneTFLabels = { top: "1H", mid: "15m", low: "5m" };
               // Scalper: h1=entry(5m), h4=h1(proxy for 15m), entry=entry(5m), daily=h4(proxy for 1H)
               zoneH1Candles = analysisCandles;
@@ -2281,7 +2282,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               zoneDailyCandles = relevantH4.length >= 20 ? relevantH4.slice(-60) : undefined;
               zoneConfirmCandles = relevantH1.length >= 15 ? relevantH1.slice(-60) : analysisCandles;
               zoneLtfConfirmCandles = analysisCandles;
-            } else if (tradingStyle === "swing_trader") {
+            } else if (resolvedTradingStyle === "swing_trader") {
               zoneTFLabels = { top: "W", mid: "D", low: "4H" };
               // Swing waterfall: Weekly → Daily → 4H (entry=1H)
               zoneH1Candles = relevantH4.slice(-60);            // 4H = lowest structural TF slot
@@ -2369,7 +2370,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             };
 
             // ── Cascade Zone Engine (swing_trader only — priority entry path) ──
-            if (tradingStyle === "swing_trader" && relevantDaily.length >= 30 && relevantH4.length >= 20) {
+            if (resolvedTradingStyle === "swing_trader" && relevantDaily.length >= 30 && relevantH4.length >= 20) {
               try {
                 cascadeResult = findCascadeZone(
                   relevantDaily.slice(-60),
@@ -2396,7 +2397,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         let unifiedGatePassed = false;
 
         // Tier 1: Cascade (swing_trader only)
-        if (tradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry) {
+        if (resolvedTradingStyle === "swing_trader" && cascadeResult?.state === "triggered" && cascadeResult.priceAtEntry) {
           unifiedGatePassed = true;
           signalSource = "cascade";
         }
@@ -2769,7 +2770,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           // TF-aware decay scaling: scale decay/recovery so conviction decays at real-time rate
           // 5min = 1.0 (baseline), 15min = 0.33, 1h = 0.083, 4h = 0.021
           const tfScaleMap: Record<string, number> = { "scalper": 1.0, "day_trader": 0.33, "swing_trader": 0.021 };
-          const tfScale = tfScaleMap[tradingStyle || "day_trader"] ?? 0.33;
+          const tfScale = tfScaleMap[resolvedTradingStyle] ?? 0.33;
           const scaledConfig: ConvictionConfig = {
             ...DEFAULT_CONVICTION_CONFIG,
             decayPerOpposingSource: DEFAULT_CONVICTION_CONFIG.decayPerOpposingSource * tfScale,
@@ -3454,7 +3455,7 @@ Deno.serve(async (req: Request) => {
           startDate: body.startDate,
           endDate: body.endDate,
           startingBalance: body.startingBalance,
-          tradingStyle: body.tradingStyle,
+          tradingStyle: resolveTradingStyle(body.tradingStyle, mapNestedToFlat(body.config || {})),
           walkForwardFolds: body.walkForwardFolds ?? 0,
         },
       })

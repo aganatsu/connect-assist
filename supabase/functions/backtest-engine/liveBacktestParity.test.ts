@@ -12,10 +12,9 @@
  * Run: deno test --no-check --allow-all supabase/functions/backtest-engine/liveBacktestParity.test.ts
  */
 
-import {
-  SPECS,
-  DEFAULTS,
-} from "../_shared/smcAnalysis.ts";
+import { SPECS } from "../_shared/smcAnalysis.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "../_shared/configMapper.ts";
+import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
 import { normalizeSessionFilter } from "../_shared/sessions.ts";
 import {
   DEFAULT_FACTOR_WEIGHTS,
@@ -30,79 +29,21 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-/**
- * Simplified mapConfig (mirrors the backtest's internal function).
- * We re-implement the key logic here to test it in isolation.
- */
-function mapConfig(raw: any): any {
-  const strategy = raw?.strategy || {};
-  const risk = raw?.risk || {};
-  const entry = raw?.entry || {};
-  const exit = raw?.exit || {};
-  const instruments = raw?.instruments || {};
-  const sessions = raw?.sessions || {};
-  const protection = raw?.protection || {};
-  return {
-    ...DEFAULTS,
-    minConfluence: (() => {
-      const raw_mc = strategy.confluenceThreshold ?? strategy.minConfluenceScore ?? raw?.minConfluence ?? DEFAULTS.minConfluence;
-      if (raw_mc > 0 && raw_mc <= 10 && (strategy.normalizedScoring ?? raw?.normalizedScoring ?? true)) {
-        return raw_mc * 10;
-      }
-      return raw_mc;
-    })(),
-    htfBiasRequired: strategy.requireHTFBias ?? strategy.htfBiasRequired ?? DEFAULTS.htfBiasRequired,
-    htfBiasHardVeto: strategy.htfBiasHardVeto ?? DEFAULTS.htfBiasHardVeto,
-    enableOB: strategy.useOrderBlocks ?? true,
-    enableFVG: strategy.useFVG ?? true,
-    enableLiquiditySweep: strategy.useLiquiditySweep ?? true,
-    enableStructureBreak: strategy.useStructureBreak ?? true,
-    riskPerTrade: risk.riskPerTrade ?? DEFAULTS.riskPerTrade,
-    positionSizingMethod: risk.positionSizingMethod ?? raw?.positionSizingMethod ?? "percent_risk",
-    fixedLotSize: risk.fixedLotSize ?? raw?.fixedLotSize ?? 0.1,
-    maxDailyLoss: risk.maxDailyDrawdown ?? DEFAULTS.maxDailyLoss,
-    maxOpenPositions: risk.maxConcurrentTrades ?? DEFAULTS.maxOpenPositions,
-    minRiskReward: risk.minRR ?? DEFAULTS.minRiskReward,
-    maxPerSymbol: risk.maxPositionsPerSymbol ?? DEFAULTS.maxPerSymbol,
-    portfolioHeat: risk.maxPortfolioHeat ?? DEFAULTS.portfolioHeat,
-    slMethod: exit.stopLossMethod ?? DEFAULTS.slMethod,
-    tpMethod: exit.takeProfitMethod ?? DEFAULTS.tpMethod,
-    tpRatio: exit.tpRRRatio ?? risk.defaultRR ?? DEFAULTS.tpRatio,
-    trailingStopEnabled: exit.trailingStop ?? false,
-    breakEvenEnabled: exit.breakEven ?? DEFAULTS.breakEvenEnabled,
-    partialTPEnabled: exit.partialTP ?? false,
-    enabledSessions: (
-      Array.isArray(sessions.filter)
-        ? normalizeSessionFilter(sessions.filter)
-        : Array.isArray(raw?.enabledSessions)
-          ? normalizeSessionFilter(raw.enabledSessions)
-          : [...DEFAULTS.enabledSessions]
-    ),
-    maxDrawdown: Math.min(risk.maxDrawdown ?? DEFAULTS.maxDrawdown, protection.circuitBreakerPct ?? 100),
-    factorWeights: raw?.factorWeights || {},
-    useVolumeProfile: strategy.useVolumeProfile ?? raw?.useVolumeProfile ?? DEFAULTS.useVolumeProfile,
-    useTrendDirection: strategy.useTrendDirection ?? raw?.useTrendDirection ?? DEFAULTS.useTrendDirection,
-    useDailyBias: strategy.useDailyBias ?? raw?.useDailyBias ?? DEFAULTS.useDailyBias,
-    useAMD: strategy.useAMD ?? raw?.useAMD ?? DEFAULTS.useAMD,
-    useFOTSI: strategy.useFOTSI ?? raw?.useFOTSI ?? DEFAULTS.useFOTSI,
-    regimeScoringEnabled: strategy.regimeScoringEnabled ?? raw?.regimeScoringEnabled ?? DEFAULTS.regimeScoringEnabled,
-    regimeScoringStrength: strategy.regimeScoringStrength ?? raw?.regimeScoringStrength ?? DEFAULTS.regimeScoringStrength,
-  };
-}
+const mapConfig = mapNestedToFlat;
 
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 1: Config Normalization Parity
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("Config parity: empty config uses DEFAULTS for all fields", () => {
+Deno.test("Config parity: empty config uses RUNTIME_DEFAULTS for all fields", () => {
   const config = mapConfig({});
-  assertEquals(config.minConfluence, DEFAULTS.minConfluence);
-  assertEquals(config.htfBiasRequired, DEFAULTS.htfBiasRequired);
-  assertEquals(config.riskPerTrade, DEFAULTS.riskPerTrade);
-  assertEquals(config.minRiskReward, DEFAULTS.minRiskReward);
-  assertEquals(config.slMethod, DEFAULTS.slMethod);
-  assertEquals(config.tpMethod, DEFAULTS.tpMethod);
-  assertEquals(config.maxDrawdown, DEFAULTS.maxDrawdown);
+  assertEquals(config.minConfluence, RUNTIME_DEFAULTS.minConfluence);
+  assertEquals(config.htfBiasRequired, RUNTIME_DEFAULTS.htfBiasRequired);
+  assertEquals(config.riskPerTrade, RUNTIME_DEFAULTS.riskPerTrade);
+  assertEquals(config.minRiskReward, RUNTIME_DEFAULTS.minRiskReward);
+  assertEquals(config.slMethod, RUNTIME_DEFAULTS.slMethod);
+  assertEquals(config.tpMethod, RUNTIME_DEFAULTS.tpMethod);
+  assertEquals(config.maxDrawdown, RUNTIME_DEFAULTS.maxDrawdown);
 });
 
 Deno.test("Config parity: legacy 0-10 confluenceThreshold auto-scales to percentage", () => {
@@ -164,13 +105,13 @@ Deno.test("Config parity: maxDrawdown is min of risk.maxDrawdown and protection.
   assertEquals(config.maxDrawdown, 15); // min(20, 15) = 15
 });
 
-Deno.test("Config parity: factor toggles default to DEFAULTS values", () => {
+Deno.test("Config parity: factor toggles default to RUNTIME_DEFAULTS values", () => {
   const config = mapConfig({});
-  assertEquals(config.useVolumeProfile, DEFAULTS.useVolumeProfile);
-  assertEquals(config.useTrendDirection, DEFAULTS.useTrendDirection);
-  assertEquals(config.useDailyBias, DEFAULTS.useDailyBias);
-  assertEquals(config.useAMD, DEFAULTS.useAMD);
-  assertEquals(config.useFOTSI, DEFAULTS.useFOTSI);
+  assertEquals(config.useVolumeProfile, RUNTIME_DEFAULTS.useVolumeProfile);
+  assertEquals(config.useTrendDirection, RUNTIME_DEFAULTS.useTrendDirection);
+  assertEquals(config.useDailyBias, RUNTIME_DEFAULTS.useDailyBias);
+  assertEquals(config.useAMD, RUNTIME_DEFAULTS.useAMD);
+  assertEquals(config.useFOTSI, RUNTIME_DEFAULTS.useFOTSI);
 });
 
 Deno.test("Config parity: factor toggles can be overridden via strategy", () => {
@@ -187,7 +128,31 @@ Deno.test("Config parity: factor toggles can be overridden via strategy", () => 
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// SECTION 2: Weight System Parity
+// SECTION 2: Trading Style Parity
+// ═══════════════════════════════════════════════════════════════════════
+
+Deno.test("Style parity: live and backtest resolve identical effective config", () => {
+  const raw = {
+    tradingStyle: { mode: "swing_trader" },
+    strategy: { confluenceThreshold: 61 },
+    exit: { tpRRRatio: 2.7, breakEven: true, partialTP: false },
+  };
+  const live = applyTradingStyleProfile(mapConfig(raw));
+  const backtest = applyTradingStyleProfile(mapConfig(raw), raw.tradingStyle.mode);
+  assertEquals(backtest, live);
+});
+
+Deno.test("Style parity: explicit backtest style uses the canonical profile", () => {
+  const result = applyTradingStyleProfile(mapConfig({}), "scalper");
+  assertEquals(result.style, "scalper");
+  assertEquals(result.config.entryTimeframe, "5m");
+  assertEquals(result.config.htfTimeframe, "1h");
+  assertEquals(result.config.riskPerTrade, 0.5);
+  assertEquals(result.config.impulseSlCapMultiplier, 1.5);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// SECTION 3: Weight System Parity
 // ═══════════════════════════════════════════════════════════════════════
 
 Deno.test("Weight parity: DEFAULT_FACTOR_WEIGHTS has 22 factors", () => {
@@ -222,7 +187,7 @@ Deno.test("Weight parity: applyWeightScale with 0 scale zeros the score", () => 
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// SECTION 3: Session Filter Normalization
+// SECTION 4: Session Filter Normalization
 // ═══════════════════════════════════════════════════════════════════════
 
 Deno.test("Session filter: normalizeSessionFilter handles canonical names", () => {
@@ -242,7 +207,7 @@ Deno.test("Session filter: empty array returns empty", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// SECTION 4: SPECS Consistency
+// SECTION 5: SPECS Consistency
 // ═══════════════════════════════════════════════════════════════════════
 
 Deno.test("SPECS: all instruments have required fields", () => {
@@ -286,35 +251,35 @@ Deno.test("SPECS: type is one of forex/commodity/crypto/index", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// SECTION 5: DEFAULTS Consistency
+// SECTION 6: RUNTIME_DEFAULTS Consistency
 // ═══════════════════════════════════════════════════════════════════════
 
-Deno.test("DEFAULTS: minConfluence is a percentage (0-100)", () => {
-  assert(DEFAULTS.minConfluence >= 0 && DEFAULTS.minConfluence <= 100,
-    `minConfluence ${DEFAULTS.minConfluence} should be 0-100`);
+Deno.test("RUNTIME_DEFAULTS: minConfluence is a percentage (0-100)", () => {
+  assert(RUNTIME_DEFAULTS.minConfluence >= 0 && RUNTIME_DEFAULTS.minConfluence <= 100,
+    `minConfluence ${RUNTIME_DEFAULTS.minConfluence} should be 0-100`);
 });
 
-Deno.test("DEFAULTS: riskPerTrade is reasonable (0.1-10%)", () => {
-  assert(DEFAULTS.riskPerTrade >= 0.1 && DEFAULTS.riskPerTrade <= 10,
-    `riskPerTrade ${DEFAULTS.riskPerTrade} should be 0.1-10%`);
+Deno.test("RUNTIME_DEFAULTS: riskPerTrade is reasonable (0.1-10%)", () => {
+  assert(RUNTIME_DEFAULTS.riskPerTrade >= 0.1 && RUNTIME_DEFAULTS.riskPerTrade <= 10,
+    `riskPerTrade ${RUNTIME_DEFAULTS.riskPerTrade} should be 0.1-10%`);
 });
 
-Deno.test("DEFAULTS: minRiskReward is >= 1.0", () => {
-  assert(DEFAULTS.minRiskReward >= 1.0,
-    `minRiskReward ${DEFAULTS.minRiskReward} should be >= 1.0`);
+Deno.test("RUNTIME_DEFAULTS: minRiskReward is >= 1.0", () => {
+  assert(RUNTIME_DEFAULTS.minRiskReward >= 1.0,
+    `minRiskReward ${RUNTIME_DEFAULTS.minRiskReward} should be >= 1.0`);
 });
 
-Deno.test("DEFAULTS: maxDrawdown is a percentage (1-100)", () => {
-  assert(DEFAULTS.maxDrawdown >= 1 && DEFAULTS.maxDrawdown <= 100,
-    `maxDrawdown ${DEFAULTS.maxDrawdown} should be 1-100`);
+Deno.test("RUNTIME_DEFAULTS: maxDrawdown is a percentage (1-100)", () => {
+  assert(RUNTIME_DEFAULTS.maxDrawdown >= 1 && RUNTIME_DEFAULTS.maxDrawdown <= 100,
+    `maxDrawdown ${RUNTIME_DEFAULTS.maxDrawdown} should be 1-100`);
 });
 
-Deno.test("DEFAULTS: enabledSessions is a non-empty array", () => {
-  assert(Array.isArray(DEFAULTS.enabledSessions));
-  assert(DEFAULTS.enabledSessions.length > 0);
+Deno.test("RUNTIME_DEFAULTS: enabledSessions is a non-empty array", () => {
+  assert(Array.isArray(RUNTIME_DEFAULTS.enabledSessions));
+  assert(RUNTIME_DEFAULTS.enabledSessions.length > 0);
 });
 
-Deno.test("DEFAULTS: tpRatio is >= 1.0", () => {
-  assert(DEFAULTS.tpRatio >= 1.0,
-    `tpRatio ${DEFAULTS.tpRatio} should be >= 1.0`);
+Deno.test("RUNTIME_DEFAULTS: tpRatio is >= 1.0", () => {
+  assert(RUNTIME_DEFAULTS.tpRatio >= 1.0,
+    `tpRatio ${RUNTIME_DEFAULTS.tpRatio} should be >= 1.0`);
 });

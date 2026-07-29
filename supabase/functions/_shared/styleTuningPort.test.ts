@@ -1,98 +1,68 @@
 /**
  * Tests for style-tuning-port changes:
- * 1. STYLE_OVERRIDES parameter validation (scalper/swing tuned values)
+ * 1. Canonical style-profile parameter validation
  * 2. Cascade zone engine integration for swing_trader
  * 3. Regression: day_trader parameters unchanged
  */
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { TRADING_STYLE_PROFILES } from "./tradingStyleConfig.ts";
 
-// ── Test 1: Read STYLE_OVERRIDES from bot-scanner to verify tuned parameters ──
+// ── Test 1: Read style profile from bot-scanner to verify tuned parameters ──
 const scannerSource = await Deno.readTextFile("./supabase/functions/bot-scanner/index.ts");
 
-Deno.test("scalper STYLE_OVERRIDES: tpRatio is 2.0 (validated 2:1 R:R)", () => {
-  // Find the scalper block and check tpRatio
-  const scalperBlock = scannerSource.match(/scalper:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*day_trader)/);
-  if (!scalperBlock) throw new Error("Could not find scalper STYLE_OVERRIDES block");
-  const tpMatch = scalperBlock[0].match(/tpRatio:\s*([\d.]+)/);
-  assertEquals(tpMatch?.[1], "2.0", "Scalper tpRatio should be 2.0 (validated)");
+Deno.test("scalper profile: tpRatio is 2.0 (validated 2:1 R:R)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.scalper.tpRatio, 2);
 });
 
-Deno.test("scalper STYLE_OVERRIDES: breakEvenEnabled is false (validated)", () => {
-  const scalperBlock = scannerSource.match(/scalper:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*day_trader)/);
-  if (!scalperBlock) throw new Error("Could not find scalper STYLE_OVERRIDES block");
-  assertEquals(scalperBlock[0].includes("breakEvenEnabled: false"), true, "Scalper BE should be disabled");
+Deno.test("scalper style profile: breakEvenEnabled is false (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.scalper.breakEvenEnabled, false);
 });
 
-Deno.test("scalper STYLE_OVERRIDES: trailingStopEnabled is false (validated)", () => {
-  const scalperBlock = scannerSource.match(/scalper:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*day_trader)/);
-  if (!scalperBlock) throw new Error("Could not find scalper STYLE_OVERRIDES block");
-  assertEquals(scalperBlock[0].includes("trailingStopEnabled: false"), true, "Scalper trailing should be disabled");
+Deno.test("scalper style profile: trailingStopEnabled is false (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.scalper.trailingStopEnabled, false);
 });
 
-Deno.test("scalper STYLE_OVERRIDES: riskPerTrade is 0.5 (lower for high frequency)", () => {
-  const scalperBlock = scannerSource.match(/scalper:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*day_trader)/);
-  if (!scalperBlock) throw new Error("Could not find scalper STYLE_OVERRIDES block");
-  const riskMatch = scalperBlock[0].match(/riskPerTrade:\s*([\d.]+)/);
-  assertEquals(riskMatch?.[1], "0.5", "Scalper riskPerTrade should be 0.5%");
+Deno.test("scalper style profile: riskPerTrade is 0.5 (lower for high frequency)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.scalper.riskPerTrade, 0.5);
 });
 
-Deno.test("scalper STYLE_OVERRIDES: impulseSlCapMultiplier is 1.5 (tight for scalper)", () => {
-  const scalperBlock = scannerSource.match(/scalper:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*day_trader)/);
-  if (!scalperBlock) throw new Error("Could not find scalper STYLE_OVERRIDES block");
-  const capMatch = scalperBlock[0].match(/impulseSlCapMultiplier:\s*([\d.]+)/);
-  assertEquals(capMatch?.[1], "1.5", "Scalper impulseSlCapMultiplier should be 1.5");
+Deno.test("scalper style profile: impulseSlCapMultiplier is 1.5 (tight for scalper)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.scalper.impulseSlCapMultiplier, 1.5);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: tpRatio is 3.0 (validated 3:1 R:R)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  const tpMatch = swingBlock[0].match(/tpRatio:\s*([\d.]+)/);
-  assertEquals(tpMatch?.[1], "3.0", "Swing tpRatio should be 3.0 (validated)");
+Deno.test("swing_trader style profile: tpRatio is 3.0 (validated 3:1 R:R)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.tpRatio, 3);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: breakEvenEnabled is false (validated)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  assertEquals(swingBlock[0].includes("breakEvenEnabled: false"), true, "Swing BE should be disabled");
+Deno.test("swing_trader style profile: breakEvenEnabled is false (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.breakEvenEnabled, false);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: trailingStopEnabled is false (validated)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  assertEquals(swingBlock[0].includes("trailingStopEnabled: false"), true, "Swing trailing should be disabled");
+Deno.test("swing_trader style profile: trailingStopEnabled is false (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.trailingStopEnabled, false);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: partialTPEnabled is false (validated)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  assertEquals(swingBlock[0].includes("partialTPEnabled: false"), true, "Swing partial TP should be disabled");
+Deno.test("swing_trader style profile: partialTPEnabled is false (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.partialTPEnabled, false);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: minConfluence is 40 (validated)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  const confMatch = swingBlock[0].match(/minConfluence:\s*(\d+)/);
-  assertEquals(confMatch?.[1], "40", "Swing minConfluence should be 40 (validated)");
+Deno.test("swing_trader style profile: minConfluence is 40 (validated)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.minConfluence, 40);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: riskPerTrade is 1.5 (higher conviction)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  const riskMatch = swingBlock[0].match(/riskPerTrade:\s*([\d.]+)/);
-  assertEquals(riskMatch?.[1], "1.5", "Swing riskPerTrade should be 1.5%");
+Deno.test("swing_trader style profile: riskPerTrade is 1.5 (higher conviction)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.riskPerTrade, 1.5);
 });
 
-Deno.test("swing_trader STYLE_OVERRIDES: impulseSlCapMultiplier is 6 (wider for swing)", () => {
-  const swingBlock = scannerSource.match(/swing_trader:\s*\{[\s\S]*?(?=\n\s*\};)/);
-  if (!swingBlock) throw new Error("Could not find swing_trader STYLE_OVERRIDES block");
-  const capMatch = swingBlock[0].match(/impulseSlCapMultiplier:\s*(\d+)/);
-  assertEquals(capMatch?.[1], "6", "Swing impulseSlCapMultiplier should be 6");
+Deno.test("swing_trader style profile: impulseSlCapMultiplier is 6 (wider for swing)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.swing_trader.impulseSlCapMultiplier, 6);
 });
 
 // ── Test 2: Cascade zone engine import exists ──
 Deno.test("bot-scanner imports findCascadeZone from cascadeZoneEngine", () => {
   assertEquals(
-    scannerSource.includes('import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts"'),
+    scannerSource.includes("findCascadeZone") &&
+      scannerSource.includes('from "../_shared/cascadeZoneEngine.ts"'),
     true,
     "Cascade zone engine import should exist"
   );
@@ -101,7 +71,8 @@ Deno.test("bot-scanner imports findCascadeZone from cascadeZoneEngine", () => {
 // ── Test 3: Cascade zone engine is called for swing_trader ──
 Deno.test("bot-scanner calls findCascadeZone for swing_trader", () => {
   assertEquals(
-    scannerSource.includes('resolvedStyle === "swing_trader" && effectiveDirection && dailyCandles.length >= 30'),
+    /resolvedStyle === "swing_trader" && effectiveDirection &&\s+dailyCandles\.length >= 30/.test(scannerSource) &&
+      scannerSource.includes("cascadeResult = findCascadeZone("),
     true,
     "Cascade zone engine should be called conditionally for swing_trader (uses effectiveDirection from verdict)"
   );
@@ -124,24 +95,16 @@ Deno.test("cascade SL override exists for swing_trader", () => {
 });
 
 // ── Test 4: Regression — day_trader parameters are unchanged ──
-Deno.test("day_trader STYLE_OVERRIDES: tpRatio still 2.0 (unchanged)", () => {
-  const dayBlock = scannerSource.match(/day_trader:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*swing_trader)/);
-  if (!dayBlock) throw new Error("Could not find day_trader STYLE_OVERRIDES block");
-  const tpMatch = dayBlock[0].match(/tpRatio:\s*([\d.]+)/);
-  assertEquals(tpMatch?.[1], "2.0", "Day trader tpRatio should remain 2.0");
+Deno.test("day_trader style profile: tpRatio still 2.0 (unchanged)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.day_trader.tpRatio, 2);
 });
 
-Deno.test("day_trader STYLE_OVERRIDES: breakEvenEnabled still true (unchanged)", () => {
-  const dayBlock = scannerSource.match(/day_trader:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*swing_trader)/);
-  if (!dayBlock) throw new Error("Could not find day_trader STYLE_OVERRIDES block");
-  assertEquals(dayBlock[0].includes("breakEvenEnabled: true"), true, "Day trader BE should remain enabled");
+Deno.test("day_trader style profile: breakEvenEnabled still true (unchanged)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.day_trader.breakEvenEnabled, true);
 });
 
-Deno.test("day_trader STYLE_OVERRIDES: minConfluence still 55 (unchanged)", () => {
-  const dayBlock = scannerSource.match(/day_trader:\s*\{[\s\S]*?(?=\n\s*\},\s*\n\s*swing_trader)/);
-  if (!dayBlock) throw new Error("Could not find day_trader STYLE_OVERRIDES block");
-  const confMatch = dayBlock[0].match(/minConfluence:\s*(\d+)/);
-  assertEquals(confMatch?.[1], "55", "Day trader minConfluence should remain 55");
+Deno.test("day_trader style profile: minConfluence still 55 (unchanged)", () => {
+  assertEquals(TRADING_STYLE_PROFILES.day_trader.minConfluence, 55);
 });
 
 // ── Test 5: Cascade engine module exports correctly ──

@@ -3,9 +3,8 @@ import { corsHeaders } from "../_shared/cors.ts";
 import {
   mapNestedToFlat,
   applyPairOverrides,
-  RUNTIME_DEFAULTS,
-  type RuntimeConfig,
 } from "../_shared/configMapper.ts";
+import { applyTradingStyleProfile } from "../_shared/tradingStyleConfig.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
 import {
@@ -231,89 +230,6 @@ function fmtPx(v: number | string | null | undefined, sym: string): string {
   const decimals = Math.max(2, Math.round(-Math.log10(ps)) + 1);
   return n.toFixed(decimals);
 }
-
-// ─── Trading Style Execution Profiles ───────────────────────────────────────────────────────
-// Each style has fundamentally different execution characteristics.
-// Key principle: BE and trailing are now R-based (see scannerManagement.ts),
-// so breakEvenPips here acts as a fallback — the actual trigger is max(1R, breakEvenPips/riskPips).
-// trailingStopPips is a minimum — actual trail distance is max(configPips, 0.5× riskPips).
-const STYLE_OVERRIDES: Record<string, Partial<RuntimeConfig>> = {
-  scalper: {
-    scanIntervalMinutes: 5,
-    entryTimeframe: "5m",
-    htfTimeframe: "1h",
-    tpRatio: 2.0,                   // Validated: 2:1 R:R (ATR floor gives ~20p SL → 40p TP)
-    slBufferPips: 1,
-    minConfluence: 40,              // Percentage — scalpers use lower threshold
-    riskPerTrade: 0.5,              // Lower risk per trade (high frequency)
-    impulseSlCapMultiplier: 1.5,    // Tight SL cap for scalper (validated)
-    // Scalper management: NO BE, NO trailing — let trades run to TP or SL.
-    // Backtest validated: 44% WR × 2:1 R:R = profitable. BE/trailing hurt performance
-    // by cutting winners short on 5m noise.
-    trailingStopEnabled: false,
-    trailingStopPips: 8,
-    trailingStopActivation: "after_1r",
-    breakEvenEnabled: false,        // Validated: disabling BE improves scalper P&L
-    breakEvenPips: 8,
-    partialTPEnabled: false,
-    maxHoldEnabled: true,
-    maxHoldHours: 4,
-  },
-  day_trader: {
-    scanIntervalMinutes: 15,
-    entryTimeframe: "15min",
-    htfTimeframe: "1day",
-    tpRatio: 2.0,
-    slBufferPips: 2,
-    minConfluence: 55,  // Percentage — day traders use moderate threshold
-    // Day trader management: partial TP at 1R, then trailing kicks in, BE at 1R
-    // On 15m chart with ~20-30 pip SL, BE at ~20-30 pips, trail at ~10-15 pips
-    trailingStopEnabled: true,      // Changed: enable trailing AFTER partial TP
-    trailingStopPips: 15,           // minimum trail; proportional (0.5× SL) may be larger
-    trailingStopActivation: "after_1.5r", // Activates after partial TP at 1R + buffer
-    breakEvenEnabled: true,
-    breakEvenPips: 20,              // fallback; R-based trigger (min 1R) takes precedence
-    partialTPEnabled: true,
-    partialTPPercent: 50,
-    partialTPLevel: 1.0,            // partial at 1R
-    maxHoldEnabled: true,
-    maxHoldHours: 24,
-  },
-  swing_trader: {
-    scanIntervalMinutes: 60,
-    entryTimeframe: "1h",
-    htfTimeframe: "1w",
-    tpRatio: 3.0,                   // Validated: 3:1 R:R (cascade SL gives proper structure-based risk)
-    slBufferPips: 5,
-    minConfluence: 40,              // Validated: lower threshold — cascade zone selectivity is the real filter
-    riskPerTrade: 1.5,              // Higher risk per trade (fewer trades, higher conviction)
-    impulseSlCapMultiplier: 6,      // Wider SL cap for swing (larger impulses on Daily/4H)
-    // Swing management: NO BE, NO trailing, NO partial — let trades run to TP or SL.
-    // Backtest validated: 75% WR × 3:1 R:R = PF 8.88. BE was cutting XAU/USD winners
-    // at breakeven (10/10 trades hit BE instead of TP). Cascade zone quality is high
-    // enough that we trust the setup to reach TP without protective management.
-    trailingStopEnabled: false,
-    trailingStopPips: 25,
-    trailingStopActivation: "after_2r",
-    breakEvenEnabled: false,        // Validated: disabling BE dramatically improves swing P&L
-    breakEvenPips: 40,
-    partialTPEnabled: false,        // Validated: no partial TP — let full position reach 3R
-    partialTPPercent: 33,
-    partialTPLevel: 1.0,
-    maxHoldEnabled: false,
-    maxHoldHours: 0,                // no time limit for swings
-  },
-};
-
-// Preserve the scanner's established style-inheritance behavior while using
-// the canonical runtime defaults as the single default authority. Historically
-// the scanner treated partial TP as a non-default value unless it was true;
-// retaining that one compatibility sentinel avoids silently enabling partial
-// profit-taking for existing day-trader configs during this cleanup.
-const STYLE_INHERITANCE_BASELINE: RuntimeConfig = {
-  ...RUNTIME_DEFAULTS,
-  partialTPEnabled: true,
-};
 
 function getEntryInterval(entryTf: string): string {
   const map: Record<string, string> = {
@@ -1244,48 +1160,14 @@ async function runScanForUser(supabase: any, userId: string, opts?: { isManualSc
   }
 
   // ── Resolve Trading Style ──
-  const resolvedStyle = config.tradingStyle?.mode || "day_trader";
-
-  // Apply style overrides as defaults — user-explicit values always win.
-  // The management fields (trailing, BE, partial, maxHold) may have been
-  // explicitly set by the user to accommodate broker-specific conditions.
-  // We only fill in style defaults for fields the user hasn't touched.
-  if (STYLE_OVERRIDES[resolvedStyle]) {
-    const styleDefaults = STYLE_OVERRIDES[resolvedStyle];
-    // These fields should NEVER be overwritten by style if the user set them:
-    const userProtectedFields = new Set([
-      "minConfluence",
-      // I2 Fix: tpRatio is user-tunable — don't silently overwrite with style default
-      "tpRatio",
-      // Management fields the user can tune per-broker:
-      "trailingStopEnabled", "trailingStopPips", "trailingStopActivation",
-      "breakEvenEnabled", "breakEvenPips", "breakEvenOffsetPips",
-      "partialTPEnabled", "partialTPPercent", "partialTPLevel",
-      "maxHoldHours",
-    ]);
-    // I1 Fix: Track provenance of each config field for debugging and transparency.
-    const styleApplied: string[] = [];
-    const userKept: string[] = [];
-    for (const [key, val] of Object.entries(styleDefaults)) {
-      if (userProtectedFields.has(key)) {
-        // Only apply style default if user didn't explicitly set this field
-        // (i.e., the value is still the established style-inheritance baseline)
-        if ((config as any)[key] === (STYLE_INHERITANCE_BASELINE as any)[key]) {
-          (config as any)[key] = val;
-          styleApplied.push(`${key}=${val}`);
-        } else {
-          // User explicitly set a different value — keep it
-          userKept.push(`${key}=${(config as any)[key]} (style wanted ${val})`);
-        }
-      } else {
-        // Non-protected fields (entryTimeframe, htfTimeframe, tpRatio, slBufferPips)
-        // always come from the style
-        (config as any)[key] = val;
-        styleApplied.push(`${key}=${val}`);
-      }
-    }
-    if (styleApplied.length > 0) console.log(`[config] Style "${resolvedStyle}" applied: ${styleApplied.join(", ")}`);
-    if (userKept.length > 0) console.log(`[config] User-protected overrides kept: ${userKept.join(", ")}`);
+  const styleResolution = applyTradingStyleProfile(config, config.tradingStyle?.mode);
+  const resolvedStyle = styleResolution.style;
+  Object.assign(config, styleResolution.config);
+  if (styleResolution.applied.length > 0) {
+    console.log(`[config] Style "${resolvedStyle}" applied: ${styleResolution.applied.join(", ")}`);
+  }
+  if (styleResolution.preserved.length > 0) {
+    console.log(`[config] User-protected overrides kept: ${styleResolution.preserved.join(", ")}`);
   }
 
   // Day-of-week check — skip for crypto-only instrument lists.
