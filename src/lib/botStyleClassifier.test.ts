@@ -6,7 +6,7 @@ import {
 } from "./botStyleClassifier";
 
 const runtimePolicy = {
-  contractVersion: "style-policy.v1.1",
+  contractVersion: "style-policy.v1.2",
   basePolicyHash: "base-hash",
   policyHash: "exact-hash",
   enforcement: "observe_only",
@@ -41,6 +41,12 @@ const runtimePolicy = {
     partialTPEnabled: false,
     maxHoldEnabled: true,
     maxHoldHours: 4,
+  },
+  lifecycle: {
+    gamePlanValidityMinutes: 120,
+    stagingTTLMinutes: 120,
+    limitOrderExpiryMinutes: 60,
+    maxConfirmationAttempts: 3,
   },
   provenance: {
     profileAppliedToRuntime: true,
@@ -83,6 +89,21 @@ describe("runtime style-policy evidence", () => {
       ...runtimePolicy,
       style: "position_trader",
     })).toBeNull();
+  });
+
+  it("derives validity for persisted v1.1 policies without rewriting them", () => {
+    const legacyPolicy = {
+      ...runtimePolicy,
+      contractVersion: "style-policy.v1.1",
+      lifecycle: {
+        stagingTTLMinutes: 120,
+        limitOrderExpiryMinutes: 60,
+        maxConfirmationAttempts: 3,
+      },
+    };
+
+    expect(readRuntimeStylePolicy(legacyPolicy)?.lifecycle)
+      .toMatchObject({ gamePlanValidityMinutes: 120 });
   });
 
   it("extracts meta from serialized scan details", () => {

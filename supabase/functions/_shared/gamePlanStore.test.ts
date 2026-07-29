@@ -5,8 +5,9 @@ import {
 import type { SessionGamePlan } from "./gamePlan.ts";
 import {
   type ActiveGamePlanRow,
-  applyGamePlanRefreshWindow,
+  applyGamePlanValidityWindow,
   buildGamePlanConfigSnapshot,
+  evaluateGamePlanReuse,
   gamePlanToScanLogDetails,
   persistActiveGamePlan,
   rowsToSessionGamePlan,
@@ -110,14 +111,72 @@ Deno.test("active Gameplan rows reconstruct one exact immutable version", () => 
   );
 });
 
-Deno.test("refresh window and scan log event retain the same version", () => {
-  const plan = applyGamePlanRefreshWindow(makePlan(), 2);
+Deno.test("style validity window and scan log event retain the same version", () => {
+  const plan = applyGamePlanValidityWindow(makePlan(), {
+    style: "scalper",
+    lifecycle: {
+      gamePlanValidityMinutes: 120,
+      stagingTTLMinutes: 120,
+      limitOrderExpiryMinutes: 60,
+      maxConfirmationAttempts: 3,
+    },
+  });
   assertEquals(plan.plans[0].expiresAt, "2026-07-29T12:00:00.000Z");
+  assertEquals(plan.validityPolicy?.style, "scalper");
+  assertEquals(plan.validityPolicy?.durationMinutes, 120);
+  assertEquals(
+    plan.plans[0].validityPolicy,
+    plan.validityPolicy,
+  );
   plan.planVersion = "version-2";
   const event = gamePlanToScanLogDetails(plan, "manual_refresh");
   assertEquals(event.plan_version, "version-2");
   assertEquals(event.source, "manual_refresh");
   assertEquals((event.plans as any[])[0].expiresAt, plan.plans[0].expiresAt);
+});
+
+Deno.test("Gameplan reuse requires matching style, session and unexpired policy", () => {
+  const plan = applyGamePlanValidityWindow(makePlan(), {
+    style: "day_trader",
+    lifecycle: {
+      gamePlanValidityMinutes: 240,
+      stagingTTLMinutes: 240,
+      limitOrderExpiryMinutes: 60,
+      maxConfirmationAttempts: 3,
+    },
+  });
+  assertEquals(
+    evaluateGamePlanReuse(plan, {
+      session: "London",
+      style: "day_trader",
+      now: new Date("2026-07-29T11:00:00.000Z"),
+    }).reusable,
+    true,
+  );
+  assertEquals(
+    evaluateGamePlanReuse(plan, {
+      session: "London",
+      style: "scalper",
+      now: new Date("2026-07-29T11:00:00.000Z"),
+    }).reason,
+    "style changed (day_trader → scalper)",
+  );
+  assertEquals(
+    evaluateGamePlanReuse(plan, {
+      session: "New York",
+      style: "day_trader",
+      now: new Date("2026-07-29T11:00:00.000Z"),
+    }).reason,
+    "session changed (London → New York)",
+  );
+  assertEquals(
+    evaluateGamePlanReuse(plan, {
+      session: "London",
+      style: "day_trader",
+      now: new Date("2026-07-29T14:00:00.000Z"),
+    }).reason,
+    "plan expired",
+  );
 });
 
 Deno.test("persistence assigns one version and durable row IDs", async () => {

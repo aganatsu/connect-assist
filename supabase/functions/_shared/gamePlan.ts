@@ -41,6 +41,7 @@ import {
   type GamePlanState,
 } from "./gamePlanClassifier.ts";
 import type { StyleDecisionEvidence } from "./styleDecisionEvidence.ts";
+import type { TradingStyleMode } from "./tradingStyleConfig.ts";
 
 export type {
   BiasEvidence,
@@ -76,6 +77,14 @@ export interface Scenario {
   direction: "long" | "short";
   targetLevel?: number;
   invalidation?: string;
+}
+
+export interface GamePlanValidityPolicy {
+  contractVersion: "gameplan-validity.v1";
+  style: TradingStyleMode;
+  durationMinutes: number;
+  validFrom: string;
+  expiresAt: string;
 }
 
 export interface InstrumentGamePlan {
@@ -134,8 +143,10 @@ export interface InstrumentGamePlan {
   lastPrice: number;
   /** Timestamp of game plan generation */
   generatedAt: string;
-  /** Informational expiry matching the default four-hour plan refresh window. */
+  /** Style-aware expiry assigned when the immutable plan version activates. */
   expiresAt?: string;
+  /** Immutable style-aware validity policy assigned when the version activates. */
+  validityPolicy?: GamePlanValidityPolicy;
   /** Human-readable conditions that invalidate the session narrative. */
   invalidationConditions?: string[];
   /** Last candle used from every timeframe that produced this plan. */
@@ -159,6 +170,8 @@ export interface SessionGamePlan {
   contractVersion?: string;
   session: SessionName;
   generatedAt: string;
+  /** Shared validity policy for every instrument in this immutable version. */
+  validityPolicy?: GamePlanValidityPolicy;
   /** Instruments with clear bias — focus pairs for the session */
   focusPairs: string[];
   /** All instrument plans */

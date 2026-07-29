@@ -28,8 +28,8 @@ the same way. It must finish before Phase 6 begins.
 | 2 | One configuration resolution path for every runtime surface | Complete and production-verified |
 | 3 | Remove duplicate UI presets and show the effective runtime policy | Complete and production-verified |
 | 4 | Make timeframe roles authoritative for every analysis module | Complete and production-verified |
-| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Production-verified; completeness follow-up in review |
-| 6 | Make Gameplan validity windows style-aware | Not started |
+| 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Complete and production-verified |
+| 6 | Make Gameplan validity windows style-aware | Implementation in review |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
 
@@ -108,6 +108,33 @@ The follow-up review prevents a transient candle-source failure from activating
 a partial Gameplan, retries missing pairs during manual refresh, preserves the
 previous complete plan when generation remains incomplete, and renders
 conflict reasons with the active style's timeframe labels.
+
+Slice 6 introduces `gameplan-validity.v1`, a persisted validity decision shared
+by automatic and manual Gameplan generation. Scalper plans have a maximum
+two-hour lifetime, Day Trader plans four hours and Swing Trader plans 24 hours.
+The scanner reuses a plan only while its saved style, session and expiry still
+match the current runtime policy; a saved style change therefore regenerates
+the plan before it can become candidate context. The selected duration, style,
+valid-from time and expiry are stored on the immutable plan version and exposed
+in the Gameplan UI. Existing `style-policy.v1.1` evidence remains readable.
+
+Slice 6 does not change entry authorization or make narrative scenarios
+executable. It only makes the lifetime of their owning Gameplan explicit and
+style-aware.
+
+## Scenario and Zone Story integration thread
+
+The Gameplan scenario, zone story and executable entry path are one decision
+chain, but they are activated in controlled phases:
+
+- Slice 6 keeps scenarios observational while making their owning plan's
+  validity auditable.
+- Slice 7 freezes the exact scenario/zone evidence and matching rule through
+  Watchlist, pending, confirmation and fill, so the setup cannot silently
+  change after qualification.
+- Slice 8 uses the same frozen evidence in live and backtest management. Only
+  after parity and rejected-setup evidence demonstrate value can a scenario
+  matcher move from observation to a configurable execution gate.
 
 ## Phase 3 implementation record
 

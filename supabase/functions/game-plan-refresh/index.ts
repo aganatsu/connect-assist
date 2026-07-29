@@ -30,7 +30,7 @@ import {
   type InstrumentGamePlan,
 } from "../_shared/gamePlan.ts";
 import {
-  applyGamePlanRefreshWindow,
+  applyGamePlanValidityWindow,
   buildGamePlanConfigSnapshot,
   enrichGamePlanWithDirectionalNews,
   persistActiveGamePlan,
@@ -272,9 +272,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    gamePlan = applyGamePlanRefreshWindow(
+    gamePlan = applyGamePlanValidityWindow(
       gamePlan,
-      Number((config as any).gamePlanRefreshHours) || 4,
+      stylePolicy,
     );
     gamePlan = await persistActiveGamePlan(adminClient, gamePlan, {
       userId,
@@ -309,6 +309,7 @@ Deno.serve(async (req) => {
       skipCount,
       source: sourceSummary,
       planVersion: gamePlan.planVersion,
+      validityPolicy: gamePlan.validityPolicy,
       warnings: errors,
     });
   } catch (error: any) {

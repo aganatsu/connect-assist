@@ -592,7 +592,7 @@ export default function BotView() {
               const mismatch = runtimeStyle && runtimeStyle !== configStyle;
               if (meta) {
                 const policyTitle = effectiveRuntimeStylePolicy
-                  ? `Effective runtime: ${meta.label}; ${effectiveRuntimeStylePolicy.cadence.scanIntervalMinutes}m scan; ${effectiveRuntimeStylePolicy.timeframes.runtimeEntry}/${effectiveRuntimeStylePolicy.timeframes.runtimeHTF}; gate ≥${effectiveRuntimeStylePolicy.qualification.effectiveMinConfluence}%; ${effectiveRuntimeStylePolicy.contractVersion} ${effectiveRuntimeStylePolicy.basePolicyHash.slice(0, 12)}`
+                  ? `Effective runtime: ${meta.label}; ${effectiveRuntimeStylePolicy.cadence.scanIntervalMinutes}m scan; ${effectiveRuntimeStylePolicy.lifecycle.gamePlanValidityMinutes}m Gameplan; ${effectiveRuntimeStylePolicy.timeframes.runtimeEntry}/${effectiveRuntimeStylePolicy.timeframes.runtimeHTF}; gate ≥${effectiveRuntimeStylePolicy.qualification.effectiveMinConfluence}%; ${effectiveRuntimeStylePolicy.contractVersion} ${effectiveRuntimeStylePolicy.basePolicyHash.slice(0, 12)}`
                   : `Active style: ${meta.label} (legacy scan metadata)`;
                 return (
                   <span

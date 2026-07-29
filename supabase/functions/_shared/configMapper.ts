@@ -183,6 +183,7 @@ export const RUNTIME_DEFAULTS = {
 
   // ── Game Plan + Direction Verdict Alignment Gate ──
   gamePlanEnabled: true,
+  gamePlanValidityMinutes: 240,
   // off = log only, soft = score impact, hard = require strict alignment.
   gpEnforcementMode: "hard" as "off" | "soft" | "hard",
   // In hard mode, the aligned Game Plan must meet this minimum confidence.
@@ -697,6 +698,10 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
       raw.gamePlan?.enabled
       ?? raw.gamePlanEnabled
       ?? RUNTIME_DEFAULTS.gamePlanEnabled,
+    gamePlanValidityMinutes:
+      raw.gamePlan?.validityMinutes
+      ?? raw.gamePlanValidityMinutes
+      ?? RUNTIME_DEFAULTS.gamePlanValidityMinutes,
     gpEnforcementMode: (
       raw.gamePlan?.enforcementMode
       ?? strategy.gpEnforcementMode

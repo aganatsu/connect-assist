@@ -80,9 +80,10 @@ import {
   type SessionGamePlan, type InstrumentGamePlan, type SessionName,
 } from "../_shared/gamePlan.ts";
 import {
-  applyGamePlanRefreshWindow,
+  applyGamePlanValidityWindow,
   buildGamePlanConfigSnapshot,
   enrichGamePlanWithDirectionalNews,
+  evaluateGamePlanReuse,
   gamePlanToScanLogDetails,
   loadActiveGamePlan,
   persistActiveGamePlan,
@@ -3180,34 +3181,35 @@ async function runScanForUser(
 
   // ── PREMARKET GAME PLAN: Auto-generate session bias + DOL for each instrument ──
   // Runs ONCE per session (deduped). Uses HTF data (D1/4H).
-  // Config: gamePlanEnabled (bool), gamePlanNotify (bool), gamePlanRefreshHours (number)
+  // Validity comes from the immutable resolved style policy.
   // ═══════════════════════════════════════════════════════════════════════════
   const gamePlanEnabled = (config as any).gamePlanEnabled !== false; // ON by default
   let activeGamePlan: SessionGamePlan | null = null;
   try {
     const currentSessionName = getCurrentSession();
     const gamePlanNotify = (config as any).gamePlanNotify !== false; // Telegram ON by default
-    const gamePlanRefreshHours = Number((config as any).gamePlanRefreshHours) || 4; // regenerate after N hours
+    const gamePlanValidityMinutes = scanStylePolicy.lifecycle.gamePlanValidityMinutes;
     const ipdaRangesEnabled = (config as any).ipdaRangesEnabled !== false; // ON by default
     const dolTPExtensionEnabled = (config as any).dolTPExtensionEnabled !== false; // ON by default
     if (gamePlanEnabled) {
       const lastGP = _lastGamePlanForValidation;
-      const lastGPSession = lastGP?.session;
       const lastGPTime = lastGP?.generatedAt
         ? new Date(lastGP.generatedAt).getTime()
         : 0;
       const hoursSinceLastGP = (Date.now() - lastGPTime) / (1000 * 60 * 60);
-      const isSameSession = !!lastGP && lastGPSession === currentSessionName;
-      const isStillFresh = hoursSinceLastGP < gamePlanRefreshHours;
+      const reuseDecision = evaluateGamePlanReuse(lastGP, {
+        session: currentSessionName,
+        style: scanStylePolicy.style,
+      });
 
-      console.log(`[scan ${scanCycleId}] Game Plan dedup check: session=${currentSessionName}, lastSession=${lastGPSession}, sameSession=${isSameSession}, hoursSince=${hoursSinceLastGP.toFixed(2)}, fresh=${isStillFresh}, refreshHours=${gamePlanRefreshHours}`);
+      console.log(`[scan ${scanCycleId}] Game Plan validity check: session=${currentSessionName}, style=${scanStylePolicy.style}, ageHours=${hoursSinceLastGP.toFixed(2)}, reusable=${reuseDecision.reusable}, validityMinutes=${gamePlanValidityMinutes}, expiresAt=${reuseDecision.expiresAt || "none"}, reason=${reuseDecision.reason}`);
 
-      if (isSameSession && isStillFresh) {
+      if (reuseDecision.reusable && lastGP) {
         // Reuse the immutable active version — don't regenerate or notify.
         activeGamePlan = lastGP;
-        console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING version ${lastGP.planVersion} for ${currentSessionName} (${hoursSinceLastGP.toFixed(1)}h old, refresh after ${gamePlanRefreshHours}h) — NO notification sent`);
+        console.log(`[scan ${scanCycleId}] ✅ Game Plan: REUSING version ${lastGP.planVersion} for ${currentSessionName} (${hoursSinceLastGP.toFixed(1)}h old, expires ${reuseDecision.expiresAt}) — NO notification sent`);
       } else {
-        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${!lastGP ? 'no existing plan found' : !isSameSession ? `session changed (${lastGPSession} → ${currentSessionName})` : `plan expired (${hoursSinceLastGP.toFixed(1)}h > ${gamePlanRefreshHours}h)`}`);
+        console.log(`[scan ${scanCycleId}] Game Plan: will generate NEW plan — reason: ${reuseDecision.reason}`);
       }
 
       if (!activeGamePlan) {
@@ -3338,9 +3340,9 @@ async function runScanForUser(
         } catch (e: any) {
           console.warn(`[scan ${scanCycleId}] Game Plan: news fetch error (non-fatal): ${e?.message}`);
         }
-        activeGamePlan = applyGamePlanRefreshWindow(
+        activeGamePlan = applyGamePlanValidityWindow(
           activeGamePlan,
-          gamePlanRefreshHours,
+          scanStylePolicy,
         );
         try {
           activeGamePlan = await persistActiveGamePlan(

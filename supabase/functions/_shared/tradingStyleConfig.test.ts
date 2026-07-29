@@ -13,12 +13,18 @@ Deno.test("trading style profiles retain validated execution values", () => {
   assertEquals(TRADING_STYLE_PROFILES.scalper.tpRatio, 2);
   assertEquals(TRADING_STYLE_PROFILES.scalper.riskPerTrade, 0.5);
   assertEquals(TRADING_STYLE_PROFILES.scalper.impulseSlCapMultiplier, 1.5);
+  assertEquals(TRADING_STYLE_PROFILES.scalper.gamePlanValidityMinutes, 120);
   assertEquals(TRADING_STYLE_PROFILES.day_trader.minConfluence, 55);
+  assertEquals(TRADING_STYLE_PROFILES.day_trader.gamePlanValidityMinutes, 240);
   assertEquals(TRADING_STYLE_PROFILES.day_trader.breakEvenEnabled, true);
   assertEquals(TRADING_STYLE_PROFILES.swing_trader.tpRatio, 3);
   assertEquals(TRADING_STYLE_PROFILES.swing_trader.minConfluence, 40);
   assertEquals(TRADING_STYLE_PROFILES.swing_trader.riskPerTrade, 1.5);
   assertEquals(TRADING_STYLE_PROFILES.swing_trader.impulseSlCapMultiplier, 6);
+  assertEquals(
+    TRADING_STYLE_PROFILES.swing_trader.gamePlanValidityMinutes,
+    1440,
+  );
 });
 
 Deno.test("resolveTradingStyle prefers request, then config, then day trader", () => {

@@ -4,7 +4,7 @@ import type {
   TradingStyleResolution,
 } from "./tradingStyleConfig.ts";
 
-export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1.1";
+export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1.2";
 
 export type StylePolicyEnforcement = "observe_only";
 
@@ -93,6 +93,7 @@ export interface ResolvedStylePolicy {
     structureInvalidationEnabled: boolean;
   };
   lifecycle: {
+    gamePlanValidityMinutes: number;
     stagingTTLMinutes: number;
     limitOrderExpiryMinutes: number;
     maxConfirmationAttempts: number;
@@ -195,6 +196,7 @@ function buildPolicyContent(input: {
       structureInvalidationEnabled: config.structureInvalidationEnabled,
     },
     lifecycle: {
+      gamePlanValidityMinutes: config.gamePlanValidityMinutes,
       stagingTTLMinutes: config.stagingTTLMinutes,
       limitOrderExpiryMinutes: config.limitOrderExpiryMinutes,
       maxConfirmationAttempts: config.maxConfirmationAttempts,

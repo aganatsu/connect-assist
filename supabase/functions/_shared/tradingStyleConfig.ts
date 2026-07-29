@@ -14,6 +14,7 @@ export const TRADING_STYLE_PROFILES: Record<
 > = {
   scalper: {
     scanIntervalMinutes: 5,
+    gamePlanValidityMinutes: 120,
     entryTimeframe: "5m",
     htfTimeframe: "1h",
     tpRatio: 2.0,
@@ -32,6 +33,7 @@ export const TRADING_STYLE_PROFILES: Record<
   },
   day_trader: {
     scanIntervalMinutes: 15,
+    gamePlanValidityMinutes: 240,
     entryTimeframe: "15min",
     htfTimeframe: "1day",
     tpRatio: 2.0,
@@ -50,6 +52,7 @@ export const TRADING_STYLE_PROFILES: Record<
   },
   swing_trader: {
     scanIntervalMinutes: 60,
+    gamePlanValidityMinutes: 1440,
     entryTimeframe: "1h",
     htfTimeframe: "1w",
     tpRatio: 3.0,

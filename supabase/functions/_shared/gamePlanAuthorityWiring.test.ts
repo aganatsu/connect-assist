@@ -18,6 +18,7 @@ Deno.test("automatic scanner reads and activates dedicated Gameplan versions", a
   const source = await Deno.readTextFile(scannerUrl.pathname);
   assertStringIncludes(source, "loadActiveGamePlan(");
   assertStringIncludes(source, "persistActiveGamePlan(");
+  assertStringIncludes(source, "applyGamePlanValidityWindow(");
   assertStringIncludes(source, 'source: "automatic_scan"');
   assertEquals(
     source.includes('.contains("details_json", { type: "game_plan" })'),
@@ -29,7 +30,7 @@ Deno.test("manual refresh uses the same persistence and enrichment contract", as
   const source = await Deno.readTextFile(refreshUrl.pathname);
   assertStringIncludes(source, "persistActiveGamePlan(");
   assertStringIncludes(source, "enrichGamePlanWithDirectionalNews(");
-  assertStringIncludes(source, "gamePlanToScanLogDetails(");
+  assertStringIncludes(source, "applyGamePlanValidityWindow(");
   assertStringIncludes(source, 'source: "manual_refresh"');
 });
 

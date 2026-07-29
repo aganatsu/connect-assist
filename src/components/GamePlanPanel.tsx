@@ -110,6 +110,13 @@ interface InstrumentPlan {
   supportingEvidence?: BiasEvidence[];
   conflictingEvidence?: BiasEvidence[];
   expiresAt?: string;
+  validityPolicy?: {
+    contractVersion: string;
+    style: "scalper" | "day_trader" | "swing_trader";
+    durationMinutes: number;
+    validFrom: string;
+    expiresAt: string;
+  };
   skipReason?: string;
   scenarios: Scenario[];
   keyLevels: KeyLevel[];
@@ -348,6 +355,14 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
         <span className="text-muted-foreground">
           Thesis validity: checked per candidate and again at fill
         </span>
+        {plan.validityPolicy && (
+          <span className="text-muted-foreground">
+            {plan.validityPolicy.style.replace("_", " ")} plan · valid{" "}
+            {plan.validityPolicy.durationMinutes >= 60
+              ? `${plan.validityPolicy.durationMinutes / 60}h`
+              : `${plan.validityPolicy.durationMinutes}m`}
+          </span>
+        )}
       </div>
 
       {/* DOL row */}
@@ -406,6 +421,9 @@ function BiasCard({ plan }: { plan: InstrumentPlan }) {
               {plan.expiresAt && (
                 <div className="text-[9px] text-muted-foreground font-mono mt-1">
                   Expires: {formatDateTime(plan.expiresAt)}
+                  {plan.validityPolicy
+                    ? ` · ${plan.validityPolicy.contractVersion}`
+                    : ""}
                 </div>
               )}
             </div>
