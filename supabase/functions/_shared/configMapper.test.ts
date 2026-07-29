@@ -825,15 +825,22 @@ Deno.test("gpHardBlockThreshold: legacy zero maps enforcement mode to off", () =
 Deno.test("game plan enforcement: defaults to hard", () => {
   const config = mapNestedToFlat(null);
   assertEquals(config.gamePlanEnabled, true);
+  assertEquals(config.gamePlanValidityMinutes, 240);
   assertEquals(config.gpEnforcementMode, "hard");
 });
 
 Deno.test("game plan enforcement: resolves nested user-facing settings first", () => {
   const config = mapNestedToFlat({
-    gamePlan: { enabled: false, enforcementMode: "soft", hardBlockThreshold: 82 },
+    gamePlan: {
+      enabled: false,
+      validityMinutes: 120,
+      enforcementMode: "soft",
+      hardBlockThreshold: 82,
+    },
     strategy: { gpEnforcementMode: "hard", gpHardBlockThreshold: 75 },
   });
   assertEquals(config.gamePlanEnabled, false);
+  assertEquals(config.gamePlanValidityMinutes, 120);
   assertEquals(config.gpEnforcementMode, "soft");
   assertEquals(config.gpHardBlockThreshold, 82);
 });

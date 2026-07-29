@@ -1,4 +1,5 @@
 import type {
+  GamePlanValidityPolicy,
   InstrumentGamePlan,
   SessionGamePlan,
   SessionName,
@@ -7,6 +8,8 @@ import { analyzeNewsImpact, getNewsPairBias } from "./newsImpact.ts";
 import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 
 export const GAME_PLAN_CONTRACT_VERSION = "phase3.v1";
+export const GAME_PLAN_VALIDITY_CONTRACT_VERSION =
+  "gameplan-validity.v1" as const;
 
 export type GamePlanGenerationSource = "automatic_scan" | "manual_refresh";
 
@@ -62,7 +65,10 @@ export function buildGamePlanConfigSnapshot(
       ? [...config.instruments]
       : [],
     entryTimeframe: config?.entryTimeframe ?? "15m",
-    gamePlanRefreshHours: Number(config?.gamePlanRefreshHours) || 4,
+    gamePlanValidityMinutes: Number(
+      stylePolicy?.lifecycle.gamePlanValidityMinutes ??
+        config?.gamePlanValidityMinutes,
+    ) || 240,
     ipdaRangesEnabled: config?.ipdaRangesEnabled !== false,
     equalHighsLowsSensitivity: config?.equalHighsLowsSensitivity,
     liquidityPoolMinTouches: config?.liquidityPoolMinTouches,
@@ -70,19 +76,103 @@ export function buildGamePlanConfigSnapshot(
   };
 }
 
-export function applyGamePlanRefreshWindow(
+export function applyGamePlanValidityWindow(
   gamePlan: SessionGamePlan,
-  refreshHours: number,
+  stylePolicy: Pick<ResolvedStylePolicy, "style" | "lifecycle">,
 ): SessionGamePlan {
-  const safeHours = Number.isFinite(refreshHours) && refreshHours > 0
-    ? refreshHours
-    : 4;
+  const configuredMinutes = Number(
+    stylePolicy.lifecycle.gamePlanValidityMinutes,
+  );
+  const durationMinutes =
+    Number.isFinite(configuredMinutes) && configuredMinutes > 0
+      ? Math.trunc(configuredMinutes)
+      : 240;
+  const validFrom = gamePlan.generatedAt;
   const expiresAt = new Date(
-    new Date(gamePlan.generatedAt).getTime() + safeHours * 60 * 60 * 1000,
+    new Date(validFrom).getTime() + durationMinutes * 60 * 1000,
   ).toISOString();
+  const validityPolicy: GamePlanValidityPolicy = {
+    contractVersion: GAME_PLAN_VALIDITY_CONTRACT_VERSION,
+    style: stylePolicy.style,
+    durationMinutes,
+    validFrom,
+    expiresAt,
+  };
   return {
     ...gamePlan,
-    plans: gamePlan.plans.map((plan) => ({ ...plan, expiresAt })),
+    validityPolicy,
+    plans: gamePlan.plans.map((plan) => ({
+      ...plan,
+      expiresAt,
+      validityPolicy,
+    })),
+  };
+}
+
+export interface GamePlanReuseDecision {
+  reusable: boolean;
+  reason: string;
+  expiresAt: string | null;
+}
+
+/**
+ * A version can be reused only when its immutable validity policy still
+ * matches the active style and session. This prevents a saved style change
+ * from continuing to authorize candidates under the previous plan.
+ */
+export function evaluateGamePlanReuse(
+  gamePlan: SessionGamePlan | null,
+  input: {
+    session: SessionName;
+    style: ResolvedStylePolicy["style"];
+    now?: Date;
+  },
+): GamePlanReuseDecision {
+  if (!gamePlan) {
+    return { reusable: false, reason: "no active plan", expiresAt: null };
+  }
+  const expiresAt = gamePlan.validityPolicy?.expiresAt ||
+    gamePlan.plans
+      .map((plan) => plan.expiresAt)
+      .filter((value): value is string => !!value)
+      .sort()[0] ||
+    null;
+  if (!gamePlan.validityPolicy) {
+    return {
+      reusable: false,
+      reason: "plan validity policy is unavailable",
+      expiresAt,
+    };
+  }
+  if (gamePlan.session !== input.session) {
+    return {
+      reusable: false,
+      reason: `session changed (${gamePlan.session} → ${input.session})`,
+      expiresAt,
+    };
+  }
+  const planStyle = gamePlan.validityPolicy.style;
+  if (planStyle !== input.style) {
+    return {
+      reusable: false,
+      reason: `style changed (${planStyle} → ${input.style})`,
+      expiresAt,
+    };
+  }
+  if (!expiresAt || !Number.isFinite(Date.parse(expiresAt))) {
+    return {
+      reusable: false,
+      reason: "plan expiry is unavailable",
+      expiresAt,
+    };
+  }
+  if ((input.now || new Date()).getTime() >= Date.parse(expiresAt)) {
+    return { reusable: false, reason: "plan expired", expiresAt };
+  }
+  return {
+    reusable: true,
+    reason: `valid ${input.style} plan`,
+    expiresAt,
   };
 }
 
@@ -201,6 +291,7 @@ export function rowsToSessionGamePlan(
     contractVersion: GAME_PLAN_CONTRACT_VERSION,
     session: first.session,
     generatedAt: first.generated_at,
+    validityPolicy: first.plan_json?.validityPolicy,
     focusPairs: first.focus_pairs || [],
     plans,
     newsEvents: (first.news_events || []) as SessionGamePlan["newsEvents"],
@@ -223,6 +314,7 @@ export function gamePlanToScanLogDetails(
     plan_version: gamePlan.planVersion,
     session: gamePlan.session,
     generated_at: gamePlan.generatedAt,
+    validity_policy: gamePlan.validityPolicy || null,
     focus_pairs: gamePlan.focusPairs,
     plans: gamePlan.plans.map((plan) => ({
       ...plan,

@@ -50,6 +50,7 @@ Deno.test("identical effective policy content produces a stable fingerprint", as
   assertEquals(first.contractVersion, STYLE_POLICY_CONTRACT_VERSION);
   assertEquals(first.enforcement, "observe_only");
   assertEquals(first.scope, "pair");
+  assertEquals(first.lifecycle.gamePlanValidityMinutes, 120);
   assertEquals(first.provenance.profileAppliedToRuntime, true);
   assertEquals(first.policyHash, second.policyHash);
   assertEquals(first.basePolicyHash, second.basePolicyHash);
@@ -69,6 +70,7 @@ Deno.test("policy discloses when a surface observed but did not apply the profil
   assertEquals(policy.provenance.profileAppliedToRuntime, false);
   assertEquals(policy.timeframes.runtimeEntry, "15min");
   assertEquals(policy.timeframes.roles.confirmation, "5min");
+  assertEquals(policy.lifecycle.gamePlanValidityMinutes, 240);
 });
 
 Deno.test("policy fingerprint changes when an effective user override changes", async () => {

@@ -580,6 +580,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                   <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-muted-foreground">
                     <span>Style: <strong className="text-foreground">{effectiveMeta.icon} {effectiveMeta.label}</strong></span>
                     <span>Scan: <strong className="text-foreground">{effectiveStylePolicy.cadence.scanIntervalMinutes}m</strong></span>
+                    <span>Gameplan: <strong className="text-foreground">{effectiveStylePolicy.lifecycle.gamePlanValidityMinutes >= 60 ? `${effectiveStylePolicy.lifecycle.gamePlanValidityMinutes / 60}h` : `${effectiveStylePolicy.lifecycle.gamePlanValidityMinutes}m`}</strong></span>
                     <span>Entry / HTF: <strong className="text-foreground">{effectiveStylePolicy.timeframes.runtimeEntry} / {effectiveStylePolicy.timeframes.runtimeHTF}</strong></span>
                     <span>Gate: <strong className="text-foreground">≥{effectiveStylePolicy.qualification.effectiveMinConfluence}%</strong></span>
                     <span>Target: <strong className="text-foreground">{effectiveStylePolicy.risk.tpRatio}:1</strong></span>

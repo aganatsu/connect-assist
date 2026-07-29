@@ -108,6 +108,12 @@ export interface RuntimeStylePolicy {
     maxHoldEnabled: boolean;
     maxHoldHours: number;
   };
+  lifecycle: {
+    gamePlanValidityMinutes: number;
+    stagingTTLMinutes: number;
+    limitOrderExpiryMinutes: number;
+    maxConfirmationAttempts: number;
+  };
   provenance: {
     profileAppliedToRuntime: boolean;
     styleApplied: string[];
@@ -130,12 +136,31 @@ export function readRuntimeStylePolicy(
     !policy.qualification ||
     !policy.risk ||
     !policy.management ||
+    !policy.lifecycle ||
     !policy.provenance ||
     !Array.isArray(policy.provenance.userOverridesPreserved)
   ) {
     return null;
   }
-  return policy as RuntimeStylePolicy;
+  const legacyValidityMinutes = policy.style === "scalper"
+    ? 120
+    : policy.style === "swing_trader"
+    ? 1440
+    : 240;
+  const parsedValidityMinutes = Number(
+    (policy.lifecycle as Partial<RuntimeStylePolicy["lifecycle"]>)
+      .gamePlanValidityMinutes,
+  );
+  return {
+    ...(policy as RuntimeStylePolicy),
+    lifecycle: {
+      ...(policy.lifecycle as RuntimeStylePolicy["lifecycle"]),
+      gamePlanValidityMinutes:
+        Number.isFinite(parsedValidityMinutes) && parsedValidityMinutes > 0
+          ? parsedValidityMinutes
+          : legacyValidityMinutes,
+    },
+  };
 }
 
 export function getScanLogMeta(
