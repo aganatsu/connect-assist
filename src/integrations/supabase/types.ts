@@ -2397,10 +2397,7 @@ export type Database = {
         }
         Returns: Json
       }
-      evaluate_scanner_operational_health: {
-        Args: Record<PropertyKey, never>
-        Returns: Json
-      }
+      evaluate_scanner_operational_health: { Args: never; Returns: Json }
       finalize_market_entry: {
         Args: {
           p_allow_same_direction: boolean
