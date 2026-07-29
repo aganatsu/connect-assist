@@ -3,6 +3,7 @@
  */
 import { assertEquals, assertExists } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { determineDirection, type DirectionResult } from "./directionEngine.ts";
+import { mapNestedToFlat, RUNTIME_DEFAULTS } from "./configMapper.ts";
 import type { Candle } from "./smcAnalysis.ts";
 
 // ── Helper: generate synthetic candles with a trend ──
@@ -490,36 +491,22 @@ Deno.test("HYSTERESIS: source code contains hysteresis check for opposing CHoCH"
 });
 
 // ─── Default Config Guard: useSimpleDirection must be true ──────────────────
-// Ensures the bot-scanner default config has useSimpleDirection enabled fleet-wide.
+// Ensures the canonical runtime config has useSimpleDirection enabled fleet-wide.
 // If someone accidentally reverts this to false, this test catches it.
 
-Deno.test("GUARD: bot-scanner DEFAULTS has useSimpleDirection = true", () => {
-  const source = Deno.readTextFileSync(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
-  );
-  // Check the DEFAULTS object (line ~167)
-  const defaultsMatch = source.match(/const DEFAULTS\s*=\s*\{[\s\S]*?\n\};/);
-  if (!defaultsMatch) {
-    throw new Error("Could not find DEFAULTS object in bot-scanner/index.ts");
-  }
+Deno.test("GUARD: canonical runtime defaults have useSimpleDirection = true", () => {
   assertEquals(
-    defaultsMatch[0].includes("useSimpleDirection: true"),
+    RUNTIME_DEFAULTS.useSimpleDirection,
     true,
-    "DEFAULTS.useSimpleDirection must be true (direction engine with hysteresis should be the default)",
+    "RUNTIME_DEFAULTS.useSimpleDirection must be true (direction engine with hysteresis should be the default)",
   );
 });
 
-Deno.test("GUARD: bot-scanner config merge falls back to useSimpleDirection = true", () => {
-  const source = Deno.readTextFileSync(
-    new URL("../bot-scanner/index.ts", import.meta.url).pathname
-  );
-  // Check the config merge line (line ~773)
-  // Pattern: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? true
-  const mergePattern = /useSimpleDirection:\s*strategy\.useSimpleDirection\s*\?\?\s*raw\.useSimpleDirection\s*\?\?\s*true/;
+Deno.test("GUARD: canonical config mapper falls back to useSimpleDirection = true", () => {
   assertEquals(
-    mergePattern.test(source),
+    mapNestedToFlat({}).useSimpleDirection,
     true,
-    "Config merge must fall back to useSimpleDirection = true (not false)",
+    "Canonical config mapping must fall back to useSimpleDirection = true (not false)",
   );
 });
 
