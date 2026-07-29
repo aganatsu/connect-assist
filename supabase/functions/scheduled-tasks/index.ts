@@ -165,6 +165,38 @@ async function attachRuntimeState(
   });
 }
 
+async function loadOperationalAlerts(
+  adminClient: any,
+  userId: string,
+): Promise<any[]> {
+  const { error: evaluationError } = await adminClient.rpc(
+    "evaluate_scanner_operational_health",
+  );
+  if (evaluationError) {
+    console.warn(
+      `[scheduled-tasks] Health evaluation unavailable: ${evaluationError.message}`,
+    );
+  }
+
+  const { data: alerts, error } = await adminClient
+    .from("scanner_operational_alerts")
+    .select(
+      "id, bot_id, alert_type, severity, title, message, occurrences, first_detected_at, last_detected_at, evidence",
+    )
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .order("severity", { ascending: true })
+    .order("last_detected_at", { ascending: false });
+
+  if (error) {
+    console.warn(
+      `[scheduled-tasks] Operational alerts unavailable: ${error.message}`,
+    );
+    return [];
+  }
+  return alerts || [];
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -211,18 +243,22 @@ Deno.serve(async (req) => {
           .select("*")
           .eq("user_id", user.id)
           .order("category", { ascending: true });
-        return respond({
-          tasks: await attachRuntimeState(
+        const [runtimeTasks, alerts] = await Promise.all([
+          attachRuntimeState(
             adminClient,
             user.id,
             freshTasks || [],
           ),
-        });
+          loadOperationalAlerts(adminClient, user.id),
+        ]);
+        return respond({ tasks: runtimeTasks, alerts });
       }
 
-      return respond({
-        tasks: await attachRuntimeState(adminClient, user.id, tasks),
-      });
+      const [runtimeTasks, alerts] = await Promise.all([
+        attachRuntimeState(adminClient, user.id, tasks),
+        loadOperationalAlerts(adminClient, user.id),
+      ]);
+      return respond({ tasks: runtimeTasks, alerts });
     }
 
     // ── UPDATE: Change interval or enabled state ──

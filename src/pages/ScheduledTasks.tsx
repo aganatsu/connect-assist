@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import {
   Clock, Play, Pause, RotateCw, Zap, BarChart3, Wrench,
   CheckCircle2, XCircle, Minus, ChevronDown, ChevronUp,
+  AlertTriangle,
 } from "lucide-react";
 import { invokeFunction } from "@/lib/api";
 
@@ -44,6 +45,24 @@ interface ScheduledTask {
     error_message: string | null;
     metadata: Record<string, unknown> | null;
   };
+}
+
+interface OperationalAlert {
+  id: string;
+  bot_id: string;
+  alert_type: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  occurrences: number;
+  first_detected_at: string;
+  last_detected_at: string;
+  evidence: Record<string, unknown>;
+}
+
+interface ScheduledTasksPayload {
+  tasks: ScheduledTask[];
+  alerts: OperationalAlert[];
 }
 
 const CATEGORY_META: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -117,14 +136,19 @@ export default function ScheduledTasks() {
   const queryClient = useQueryClient();
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
 
-  const { data: tasks = [], isLoading } = useQuery<ScheduledTask[]>({
+  const { data, isLoading } = useQuery<ScheduledTasksPayload>({
     queryKey: ["scheduled-tasks"],
     queryFn: async () => {
       const res = await invokeFunction("scheduled-tasks", { action: "list" });
-      return res?.tasks || [];
+      return {
+        tasks: res?.tasks || [],
+        alerts: res?.alerts || [],
+      };
     },
     refetchInterval: 30000,
   });
+  const tasks = data?.tasks || [];
+  const alerts = data?.alerts || [];
 
   const updateMutation = useMutation({
     mutationFn: async (params: { taskId: string; enabled?: boolean; interval_minutes?: number }) => {
@@ -202,6 +226,54 @@ export default function ScheduledTasks() {
             {tasks.filter((t) => t.enabled).length}/{tasks.length} active
           </Badge>
         </div>
+
+        {alerts.length > 0 && (
+          <Card className="border-destructive/50 bg-destructive/5">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-destructive" />
+                <div className="font-semibold text-sm">
+                  Operational alert{alerts.length === 1 ? "" : "s"} ({alerts.length})
+                </div>
+                <Badge variant="destructive" className="ml-auto text-[10px]">
+                  Automatic
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                {alerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className="rounded-md border border-border/60 bg-background/60 p-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <Badge
+                        variant={alert.severity === "critical" ? "destructive" : "outline"}
+                        className="mt-0.5 text-[10px] uppercase"
+                      >
+                        {alert.severity}
+                      </Badge>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{alert.title}</div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {alert.message}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-1">
+                          Last detected {formatTimeAgo(alert.last_detected_at)}
+                          {alert.occurrences > 1
+                            ? ` · repeated ${alert.occurrences} times`
+                            : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                These alerts clear automatically after the underlying scanner condition recovers.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {isLoading ? (
           <div className="space-y-4">

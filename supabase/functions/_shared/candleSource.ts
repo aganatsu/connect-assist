@@ -214,7 +214,29 @@ const subscribedSymbols = new Set<string>();
 const deadRegions = new Set<string>();
 const REGION_FAIL_THRESHOLD = 2;
 const regionFailCounts = new Map<string, number>();
-function noteRegionFailure(region: string, err: string) {
+export function classifyMetaApiOperationalIssue(
+  message: string,
+): "metaapi_certificate_failure" | "metaapi_connection_failure" {
+  return /certificate|x509|cert[^a-z]*expired|invalid peer/i.test(message)
+    ? "metaapi_certificate_failure"
+    : "metaapi_connection_failure";
+}
+
+function noteRegionFailure(
+  region: string,
+  err: string,
+  symbol?: string,
+  interval?: string,
+) {
+  if (symbol && interval) {
+    noteSourceIssue({
+      code: classifyMetaApiOperationalIssue(err),
+      provider: "metaapi",
+      symbol,
+      interval,
+      message: `${region}: ${err}`.slice(0, 500),
+    });
+  }
   const isInfra = /dns error|failed to lookup|timeout|connect/i.test(err);
   if (!isInfra) return;
   const n = (regionFailCounts.get(region) ?? 0) + 1;
@@ -272,7 +294,7 @@ async function metaSubscribeSymbol(
     return false;
   } catch (e: any) {
     console.warn(`[candleSource] MetaAPI subscribe error for ${brokerSymbol} on ${region}: ${e?.message}`);
-    noteRegionFailure(region, e?.message ?? "");
+    noteRegionFailure(region, e?.message ?? "", brokerSymbol, canon);
     return false;
   }
 }
@@ -297,6 +319,13 @@ async function metaFetchCandles(
   const order = activeRegions(baseOrder);
   if (order.length === 0) {
     console.warn(`[candleSource] all MetaAPI regions marked dead — skipping broker fetch for ${brokerSymbol}`);
+    noteSourceIssue({
+      code: "metaapi_connection_failure",
+      provider: "metaapi",
+      symbol: brokerSymbol,
+      interval: canon,
+      message: "All MetaAPI regions are marked unavailable",
+    });
     return [];
   }
 
@@ -388,7 +417,7 @@ async function metaFetchCandles(
       }
     } catch (e: any) {
       console.warn(`[candleSource] MetaAPI ${region} fetch error: ${e?.message}`);
-      noteRegionFailure(region, e?.message ?? "");
+      noteRegionFailure(region, e?.message ?? "", brokerSymbol, canon);
     }
   }
   return [];
@@ -624,16 +653,64 @@ export interface SourceTally {
   twelvedata: number;
   polygon: number;
   none: number;
+  metaapiAttempted: boolean;
+  issues: CandleSourceIssue[];
   primary: "metaapi" | "twelvedata" | "polygon" | "none";
 }
-let _activeTally: { metaapi: number; twelvedata: number; polygon: number; none: number } | null = null;
+
+export interface CandleSourceIssue {
+  code:
+    | "metaapi_certificate_failure"
+    | "metaapi_connection_failure"
+    | "candle_source_exhaustion";
+  provider: "metaapi" | "all";
+  symbol: string;
+  interval: string;
+  message: string;
+}
+
+interface ActiveSourceTally {
+  metaapi: number;
+  twelvedata: number;
+  polygon: number;
+  none: number;
+  metaapiAttempted: boolean;
+  issues: CandleSourceIssue[];
+}
+
+let _activeTally: ActiveSourceTally | null = null;
+
+function noteSourceIssue(issue: CandleSourceIssue): void {
+  if (!_activeTally) return;
+  const duplicate = _activeTally.issues.some((current) =>
+    current.code === issue.code &&
+    current.symbol === issue.symbol &&
+    current.interval === issue.interval &&
+    current.message === issue.message
+  );
+  if (!duplicate) _activeTally.issues.push(issue);
+}
 
 export function beginScanSourceTally(): void {
-  _activeTally = { metaapi: 0, twelvedata: 0, polygon: 0, none: 0 };
+  _activeTally = {
+    metaapi: 0,
+    twelvedata: 0,
+    polygon: 0,
+    none: 0,
+    metaapiAttempted: false,
+    issues: [],
+  };
 }
 
 export function endScanSourceTally(): SourceTally {
-  const t = _activeTally ?? { metaapi: 0, twelvedata: 0, polygon: 0, none: 0 };
+  const t = _activeTally ?? {
+    metaapi: 0,
+    twelvedata: 0,
+    polygon: 0,
+    none: 0,
+    metaapiAttempted: false,
+    issues: [],
+  };
   _activeTally = null;
   // "primary" = the source that served the most candle requests this cycle
   const entries: ["metaapi" | "twelvedata" | "polygon" | "none", number][] = [
@@ -665,6 +742,7 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
   // timeframes; probing broker regions/subscriptions there can exceed hosted
   // runtime limits and surface as platform 503s.
   if (!opts.skipBroker && opts.brokerConn?.api_key && opts.brokerConn?.account_id && timeLeft() > 15_000) {
+    if (_activeTally) _activeTally.metaapiAttempted = true;
     let brokerSymbol = resolveBrokerSymbol(opts.symbol, opts.brokerConn);
     let candles = await metaFetchCandles(opts.brokerConn, brokerSymbol, canon, limit);
     console.log(`[candleSource] MetaAPI ${opts.symbol}→${brokerSymbol} ${canon}: ${candles.length} candles`);
@@ -735,5 +813,12 @@ export async function fetchCandlesWithFallback(opts: FetchOptions): Promise<Fetc
 
   console.warn(`[candleSource] All sources failed for ${opts.symbol} ${canon} (deadline ${timeLeft()}ms left)`);
   if (_activeTally) _activeTally.none++;
+  noteSourceIssue({
+    code: "candle_source_exhaustion",
+    provider: "all",
+    symbol: opts.symbol,
+    interval: canon,
+    message: `All candle sources failed with ${Math.max(0, timeLeft())}ms budget remaining`,
+  });
   return { candles: [], source: "none" };
 }

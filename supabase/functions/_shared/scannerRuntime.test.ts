@@ -1,5 +1,7 @@
 import {
   claimScannerLock,
+  publishCandleSourceAlerts,
+  recordScannerAuthorizationFailure,
   releaseScannerLock,
   runTaskKey,
   type ScannerRuntimeRun,
@@ -88,4 +90,87 @@ Deno.test("bot scanner no longer force-clears a valid manual scan lock", async (
   assertEquals(source.includes(".update({ scan_lock_until: null })"), false);
   assertEquals(source.includes("claimScannerLock"), true);
   assertEquals(source.includes("releaseScannerLock"), true);
+});
+
+Deno.test("candle exhaustion creates one durable critical alert", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const supabase = {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return Promise.resolve({ data: crypto.randomUUID(), error: null });
+    },
+  };
+
+  await publishCandleSourceAlerts(supabase, {
+    userId: "11111111-1111-1111-1111-111111111111",
+    botId: "smc",
+    runId: "22222222-2222-2222-2222-222222222222",
+    metaapiAttempted: false,
+    issues: [{
+      code: "candle_source_exhaustion",
+      provider: "all",
+      symbol: "GBP/USD",
+      interval: "1d",
+      message: "All candle sources failed",
+    }],
+  });
+
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].name, "upsert_scanner_operational_alert");
+  assertEquals(calls[0].args.p_alert_type, "candle_source_exhaustion");
+  assertEquals(calls[0].args.p_dedupe_key, "all_sources");
+  assertEquals(calls[0].args.p_severity, "critical");
+});
+
+Deno.test("healthy evaluated candle sources resolve prior alerts", async () => {
+  const calls: string[] = [];
+  const supabase = {
+    rpc: (name: string, _args: Record<string, unknown>) => {
+      calls.push(name);
+      return Promise.resolve({ data: 1, error: null });
+    },
+  };
+
+  await publishCandleSourceAlerts(supabase, {
+    userId: "11111111-1111-1111-1111-111111111111",
+    botId: "smc",
+    metaapiAttempted: true,
+    issues: [],
+  });
+
+  assertEquals(calls.length, 3);
+  assertEquals(
+    calls.every((name) => name === "resolve_scanner_operational_alert"),
+    true,
+  );
+});
+
+Deno.test("authorization failures persist sanitized request metadata", async () => {
+  let tableName = "";
+  let inserted: Record<string, unknown> = {};
+  const supabase = {
+    from: (name: string) => {
+      tableName = name;
+      return {
+        insert: (value: Record<string, unknown>) => {
+          inserted = value;
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+
+  await recordScannerAuthorizationFailure(
+    supabase,
+    "bot-scanner",
+    "Missing or invalid cron authorization",
+    { has_cron_header: true, has_authorization: true },
+  );
+
+  assertEquals(tableName, "scanner_authorization_failures");
+  assertEquals(inserted.function_name, "bot-scanner");
+  assertEquals(
+    JSON.stringify(inserted).includes("Bearer "),
+    false,
+  );
 });

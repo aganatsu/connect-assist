@@ -49,6 +49,27 @@ export interface ScannerLockHandle {
   acquired: boolean;
 }
 
+export type ScannerOperationalAlertType =
+  | "scanner_heartbeat_missing"
+  | "scan_incomplete"
+  | "metaapi_certificate_failure"
+  | "metaapi_connection_failure"
+  | "candle_source_exhaustion"
+  | "stuck_confirmation_order"
+  | "authorization_error"
+  | "migration_drift";
+
+export interface CandleSourceOperationalIssue {
+  code:
+    | "metaapi_certificate_failure"
+    | "metaapi_connection_failure"
+    | "candle_source_exhaustion";
+  provider: "metaapi" | "all";
+  symbol: string;
+  interval: string;
+  message: string;
+}
+
 const nowIso = () => new Date().toISOString();
 
 export function taskKey(functionName: string, action: string): string {
@@ -232,4 +253,164 @@ export async function releaseScannerLock(
     return false;
   }
   return data === true;
+}
+
+export async function upsertScannerAlert(
+  supabase: any,
+  input: {
+    userId: string;
+    botId: string;
+    alertType: ScannerOperationalAlertType;
+    dedupeKey: string;
+    severity: "info" | "warning" | "critical";
+    title: string;
+    message: string;
+    runId?: string;
+    evidence?: Record<string, unknown>;
+  },
+): Promise<string | null> {
+  const { data, error } = await supabase.rpc(
+    "upsert_scanner_operational_alert",
+    {
+      p_user_id: input.userId,
+      p_bot_id: input.botId,
+      p_alert_type: input.alertType,
+      p_dedupe_key: input.dedupeKey,
+      p_severity: input.severity,
+      p_title: input.title,
+      p_message: input.message,
+      p_run_id: input.runId ?? null,
+      p_evidence: input.evidence ?? {},
+    },
+  );
+  if (error) {
+    console.warn(`[scanner-runtime] Could not persist alert: ${error.message}`);
+    return null;
+  }
+  return typeof data === "string" ? data : null;
+}
+
+export async function resolveScannerAlert(
+  supabase: any,
+  input: {
+    userId: string;
+    botId: string;
+    alertType: ScannerOperationalAlertType;
+    dedupeKey: string;
+  },
+): Promise<void> {
+  const { error } = await supabase.rpc(
+    "resolve_scanner_operational_alert",
+    {
+      p_user_id: input.userId,
+      p_bot_id: input.botId,
+      p_alert_type: input.alertType,
+      p_dedupe_key: input.dedupeKey,
+    },
+  );
+  if (error) {
+    console.warn(`[scanner-runtime] Could not resolve alert: ${error.message}`);
+  }
+}
+
+export async function publishCandleSourceAlerts(
+  supabase: any,
+  input: {
+    userId: string;
+    botId: string;
+    runId?: string;
+    issues: CandleSourceOperationalIssue[];
+    metaapiAttempted: boolean;
+  },
+): Promise<void> {
+  const issueTypes: CandleSourceOperationalIssue["code"][] = [
+    "metaapi_certificate_failure",
+    "metaapi_connection_failure",
+    "candle_source_exhaustion",
+  ];
+
+  for (const issueType of issueTypes) {
+    const matching = input.issues.filter((issue) => issue.code === issueType);
+    const shouldEvaluate = issueType === "candle_source_exhaustion" ||
+      input.metaapiAttempted;
+    if (!shouldEvaluate) continue;
+
+    if (matching.length === 0) {
+      await resolveScannerAlert(supabase, {
+        userId: input.userId,
+        botId: input.botId,
+        alertType: issueType,
+        dedupeKey: issueType === "candle_source_exhaustion"
+          ? "all_sources"
+          : "metaapi",
+      });
+      continue;
+    }
+
+    const pairs = [...new Set(matching.map((issue) => issue.symbol))];
+    const evidence = {
+      affected_pairs: pairs,
+      affected_requests: matching.length,
+      samples: matching.slice(0, 10),
+    };
+    if (issueType === "metaapi_certificate_failure") {
+      await upsertScannerAlert(supabase, {
+        userId: input.userId,
+        botId: input.botId,
+        alertType: issueType,
+        dedupeKey: "metaapi",
+        severity: "critical",
+        title: "MetaAPI certificate failure",
+        message:
+          `MetaAPI certificate validation failed for ${pairs.length} pair(s).`,
+        runId: input.runId,
+        evidence,
+      });
+    } else if (issueType === "metaapi_connection_failure") {
+      await upsertScannerAlert(supabase, {
+        userId: input.userId,
+        botId: input.botId,
+        alertType: issueType,
+        dedupeKey: "metaapi",
+        severity: "warning",
+        title: "MetaAPI connection failure",
+        message:
+          `MetaAPI could not serve ${matching.length} candle request(s); fallbacks may have been used.`,
+        runId: input.runId,
+        evidence,
+      });
+    } else {
+      await upsertScannerAlert(supabase, {
+        userId: input.userId,
+        botId: input.botId,
+        alertType: issueType,
+        dedupeKey: "all_sources",
+        severity: "critical",
+        title: "All candle sources exhausted",
+        message:
+          `No candle provider could serve ${matching.length} request(s) across ${pairs.length} pair(s).`,
+        runId: input.runId,
+        evidence,
+      });
+    }
+  }
+}
+
+export async function recordScannerAuthorizationFailure(
+  supabase: any,
+  functionName: string,
+  reason: string,
+  requestMetadata: Record<string, unknown> = {},
+): Promise<void> {
+  const { error } = await supabase.from("scanner_authorization_failures")
+    .insert({
+      function_name: functionName,
+      reason: reason.slice(0, 500),
+      request_metadata: requestMetadata,
+    });
+  if (error) {
+    console.warn(
+      `[scanner-runtime] Could not record authorization failure: ${error.message}`,
+    );
+  }
 }

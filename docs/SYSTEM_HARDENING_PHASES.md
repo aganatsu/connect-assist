@@ -10,7 +10,7 @@ functions and UI have been deployed and verified.
 | 2 | Bot Config contract | Complete |
 | 3 | Unify Gameplan, Direction Verdict and thesis | Complete and production-verified |
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
-| 5 | Operations and scanner reliability | In progress — Phase 5A in review |
+| 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Not started |
 | 7 | Backtest/live parity | Not started |
 | 8 | Strategy validation and controlled activation | Not started |
@@ -72,7 +72,13 @@ qualification through its final outcome.
 
 Phase 5A becomes operationally complete after its migration is applied, the
 three Edge Functions and frontend are deployed, and natural cron cycles show
-advancing heartbeats and completion timestamps. Phase 5B will add automatic
-health evaluation and durable alerts for missing/stuck runs, provider
-exhaustion, repeated authorization errors, stale confirmations and migration
-drift.
+advancing heartbeats and completion timestamps.
+
+- Phase 5B adds a one-minute database health evaluator with an initial grace
+  window, durable deduplicated alerts and automatic recovery.
+- It detects missing heartbeats, incomplete runs, MetaAPI certificate and
+  connection failures, total candle-source exhaustion, stale confirmation
+  orders, repeated scheduler authorization failures and required migration
+  drift.
+- Scheduled Tasks displays the active alerts and their repeat count. Alerts
+  resolve automatically when the underlying condition recovers.

@@ -13,13 +13,14 @@
 
 import {
   beginScanSourceTally,
+  classifyMetaApiOperationalIssue,
   endScanSourceTally,
   resetThrottleStats,
   type SourceTally,
 } from "./candleSource.ts";
 import {
-  assertEquals,
   assert,
+  assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -33,6 +34,8 @@ Deno.test("beginScanSourceTally: initializes tally to zeros", () => {
   assertEquals(result.twelvedata, 0);
   assertEquals(result.polygon, 0);
   assertEquals(result.none, 0);
+  assertEquals(result.metaapiAttempted, false);
+  assertEquals(result.issues.length, 0);
   assertEquals(result.primary, "none");
 });
 
@@ -97,6 +100,17 @@ Deno.test("Module exports expected functions", () => {
   assert(typeof resetThrottleStats === "function");
 });
 
+Deno.test("MetaAPI certificate errors are classified separately from connection errors", () => {
+  assertEquals(
+    classifyMetaApiOperationalIssue("invalid peer certificate: Expired"),
+    "metaapi_certificate_failure",
+  );
+  assertEquals(
+    classifyMetaApiOperationalIssue("connection timed out"),
+    "metaapi_connection_failure",
+  );
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // SECTION 4: Interval canonicalization (tested via eval since not exported)
 // ═══════════════════════════════════════════════════════════════════════
@@ -116,7 +130,7 @@ Deno.test("Full tally cycle: begin → end produces valid SourceTally", () => {
   assertEquals(typeof tally.none, "number");
   assert(
     tally.primary === "metaapi" || tally.primary === "twelvedata" ||
-    tally.primary === "polygon" || tally.primary === "none"
+      tally.primary === "polygon" || tally.primary === "none",
   );
 });
 
@@ -164,7 +178,7 @@ Deno.test("Failover: returns empty candles when no API keys are set", async () =
   // Without API keys, should return empty or fall through to none
   assert(
     result.candles.length === 0 || result.source !== "none",
-    "Should either return empty candles or a valid source"
+    "Should either return empty candles or a valid source",
   );
 });
 
@@ -172,7 +186,9 @@ Deno.test("Failover: unsupported symbol returns empty gracefully", async () => {
   const mod = await import("./candleSource.ts");
   const hasKey = Deno.env.get("TWELVE_DATA_API_KEY");
   if (hasKey) {
-    console.log("  [SKIP] TWELVE_DATA_API_KEY is set, skipping unsupported symbol test");
+    console.log(
+      "  [SKIP] TWELVE_DATA_API_KEY is set, skipping unsupported symbol test",
+    );
     return;
   }
   const result = await mod.fetchCandlesWithFallback({
