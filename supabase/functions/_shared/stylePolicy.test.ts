@@ -49,8 +49,10 @@ Deno.test("identical effective policy content produces a stable fingerprint", as
 
   assertEquals(first.contractVersion, STYLE_POLICY_CONTRACT_VERSION);
   assertEquals(first.enforcement, "observe_only");
+  assertEquals(first.scope, "pair");
   assertEquals(first.provenance.profileAppliedToRuntime, true);
   assertEquals(first.policyHash, second.policyHash);
+  assertEquals(first.basePolicyHash, second.basePolicyHash);
   assertNotEquals(first.resolvedAt, second.resolvedAt);
 });
 
@@ -103,6 +105,7 @@ Deno.test("pair policy records effective thresholds without mutating config", as
   const policy = await buildResolvedStylePolicy({
     resolution,
     config: { ...resolution.config, minConfluence: 48 },
+    baseConfig: resolution.config,
     symbol: "GBP/CAD",
     effectiveMinConfluence: 52,
   });
@@ -111,4 +114,38 @@ Deno.test("pair policy records effective thresholds without mutating config", as
   assertEquals(policy.qualification.minConfluence, 48);
   assertEquals(policy.qualification.effectiveMinConfluence, 52);
   assertEquals(resolution.config.minConfluence, original);
+});
+
+Deno.test("global and pair policies share a comparable base fingerprint", async () => {
+  const resolution = applyTradingStyleProfile(
+    mapNestedToFlat({ tradingStyle: { mode: "scalper" } }),
+  );
+  const globalPolicy = await buildResolvedStylePolicy({ resolution });
+  const gbpPolicy = await buildResolvedStylePolicy({
+    resolution,
+    config: {
+      ...resolution.config,
+      slBufferPips: resolution.config.slBufferPips * 1.2,
+    },
+    baseConfig: resolution.config,
+    symbol: "GBP/USD",
+    effectiveMinConfluence: resolution.config.minConfluence + 2,
+  });
+  const goldPolicy = await buildResolvedStylePolicy({
+    resolution,
+    config: {
+      ...resolution.config,
+      slBufferPips: resolution.config.slBufferPips * 2,
+    },
+    baseConfig: resolution.config,
+    symbol: "XAU/USD",
+    effectiveMinConfluence: resolution.config.minConfluence + 5,
+  });
+
+  assertEquals(globalPolicy.scope, "global");
+  assertEquals(globalPolicy.policyHash, globalPolicy.basePolicyHash);
+  assertEquals(gbpPolicy.basePolicyHash, globalPolicy.basePolicyHash);
+  assertEquals(goldPolicy.basePolicyHash, globalPolicy.basePolicyHash);
+  assertNotEquals(gbpPolicy.policyHash, globalPolicy.policyHash);
+  assertNotEquals(goldPolicy.policyHash, gbpPolicy.policyHash);
 });

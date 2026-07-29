@@ -15,6 +15,7 @@ const [scanner, fastScanner, manualGamePlan, backtest] = await Promise.all([
 Deno.test("automatic scanner snapshots one global and one pair style policy", () => {
   assertStringIncludes(scanner, "const scanStylePolicy = await");
   assertStringIncludes(scanner, "const pairStylePolicy = await");
+  assertStringIncludes(scanner, "baseConfig: config");
   assertStringIncludes(
     scanner,
     "buildGamePlanConfigSnapshot(\n                config,\n                scanStylePolicy,",
@@ -23,6 +24,10 @@ Deno.test("automatic scanner snapshots one global and one pair style policy", ()
   assertStringIncludes(
     scanner,
     "style_policy_hash: pairStylePolicy.policyHash",
+  );
+  assertStringIncludes(
+    scanner,
+    "style_base_policy_hash: pairStylePolicy.basePolicyHash",
   );
   assertStringIncludes(scanner, "stylePolicy: scanStylePolicy");
 });

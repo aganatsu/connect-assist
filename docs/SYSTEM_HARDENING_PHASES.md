@@ -33,7 +33,9 @@ the same way. It must finish before Phase 6 begins.
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
 
-Slice 1 is observe-only. It assigns a stable policy fingerprint and records the
+Slice 1 is observe-only. It assigns two stable fingerprints: a base-policy hash
+for comparing shared style/configuration across surfaces, and an exact policy
+hash that includes pair-specific execution adjustments. It records the
 effective style, timeframe roles, cadence, qualification thresholds, risk,
 management, lifecycle values and override provenance on active Gameplans,
 Direction Verdicts, Watchlist setups, pending orders and positions. Scan logs
