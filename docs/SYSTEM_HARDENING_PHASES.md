@@ -25,8 +25,8 @@ the same way. It must finish before Phase 6 begins.
 | Slice | Purpose | Status |
 |---|---|---|
 | 1 | Shared resolved style-policy contract and durable observability | Complete and production-verified |
-| 2 | One configuration resolution path for every runtime surface | Implemented in `codex/style-policy-shared-resolution`; review and deployment pending |
-| 3 | Remove duplicate UI presets and show the effective runtime policy | Not started |
+| 2 | One configuration resolution path for every runtime surface | Complete and production-verified |
+| 3 | Remove duplicate UI presets and show the effective runtime policy | Implemented; review and deployment pending |
 | 4 | Make timeframe roles authoritative for every analysis module | Not started |
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Not started |
 | 6 | Make Gameplan validity windows style-aware | Not started |
@@ -53,6 +53,20 @@ trading-style profile. The automatic scanner resolves before its interval gate
 and position-management cycle; the fast confirmation scanner, manual Gameplan
 refresh and backtest engine use that same resolver. Surface-specific backtest
 constraints remain explicit post-resolution overrides.
+
+Slice 2 was production-verified on 2026-07-29 from main merge `014dc901`.
+Natural scanner and confirmation cycles loaded the shared resolver, resolved
+the selected `scalper` style to a five-minute cadence and completed without
+configuration-resolution, import or runtime errors.
+
+Slice 3 removes the frontend's executable conservative/moderate/aggressive
+style presets. Selecting Scalper, Day Trader or Swing Trader now changes only
+the requested style and preserves every explicit Bot Config override. The
+backend resolver remains the sole owner of executable profile values. Bot
+Config and the scan header display the persisted effective policy—including
+cadence, timeframes, confluence gate, target ratio, risk, management behavior,
+contract version and base-policy hash—rather than recreating those values in
+the browser. User-saved custom full-config presets remain available.
 
 ## Phase 3 implementation record
 

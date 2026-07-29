@@ -22,6 +22,7 @@ import {
 } from "recharts";
 import { INSTRUMENTS, formatMoney } from "@/lib/marketData";
 import { botConfigApi, backtestApi } from "@/lib/api";
+import { STYLE_META, TRADING_STYLE_MODES } from "@/lib/botStyleClassifier";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
 
@@ -107,12 +108,6 @@ const SYMBOL_GROUPS: Record<string, string[]> = {
   "Crypto": ["BTC/USD", "ETH/USD"],
 };
 const ALL_SYMBOLS = Object.values(SYMBOL_GROUPS).flat();
-
-const TRADING_STYLES = [
-  { value: "scalper", label: "Scalper" },
-  { value: "day_trader", label: "Day Trader" },
-  { value: "swing_trader", label: "Swing Trader" },
-];
 
 const SL_METHODS = [
   { value: "structure", label: "Structure (Swing)" },
@@ -486,7 +481,9 @@ export default function Backtest() {
                   <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Trading Style</label>
                   <select value={tradingStyle} onChange={e => setTradingStyle(e.target.value)}
                     className="w-full mt-1 bg-secondary border border-border rounded px-2 py-1.5 text-xs">
-                    {TRADING_STYLES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                    {TRADING_STYLE_MODES.map(style => (
+                      <option key={style} value={style}>{STYLE_META[style].label}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="flex items-end gap-2">

@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { botConfigApi } from "@/lib/api";
-import { STYLE_PARAMS, STYLE_META, type TradingStyleMode } from "@/lib/botStyleClassifier";
+import {
+  STYLE_META,
+  TRADING_STYLE_MODES,
+  selectTradingStyle,
+  type RuntimeStylePolicy,
+} from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import { X, Shield, Globe, Search, Bookmark, FolderOpen, ChevronDown, ChevronUp, Trash2, Target, Download, Upload, Flag } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
@@ -163,94 +168,6 @@ const TAB_ID_MAP: Record<string, string> = {
   protection: "risk",
 };
 
-// ─── Full Config Presets ─────────────────────────────────────────────────
-const BASE_CONFIG = {
-  strategy: {
-    enableOB: true, enableFVG: true, enableLiquidity: true, enableStructure: true,
-    enableDisplacement: true, enableBreaker: false, enableUnicorn: false,
-    enableSession: true, enableSMT: false, enableVolumeProfile: false,
-    enableTrendDirection: true, enableDailyBias: true, enableAMD: true, enableFOTSI: false,
-    confluenceThreshold: 55, normalizedScoring: true,
-    htfBiasHardVeto: false, requireHTFBias: true,
-    onlyBuyInDiscount: false, onlySellInPremium: false,
-    requireLiquiditySweep: false,
-    impulseZoneGateMode: "hard", fibMaxRetracement: 0.786,
-    tier1GateEnabled: true, minTier1Factors: 2,
-    structuralConvictionEnabled: true,
-    regimeScoringEnabled: true, regimeScoringStrength: 1.0,
-    structureLookback: 50, fvgMinSizePips: 3, fvgOnlyUnfilled: true, liquidityMinTouches: 2,
-    sweptAbsorbedPenalty: 2.0,
-  },
-  risk: {
-    riskPerTrade: 1, positionSizingMethod: "percent_risk",
-    maxConcurrentTrades: 5, maxPortfolioHeat: 10, maxPositionsPerSymbol: 2,
-    minRR: 1.5, allowSameDirectionStacking: false,
-    maxDailyDrawdown: 3, maxDrawdown: 15,
-    standaloneMultiplier: 0.5,
-    conflictThresholdRaise: 4, conflictBlockAt: 6,
-  },
-  entry: { cooldownMinutes: 30, scanIntervalMinutes: 15, pendingZoneOrders: true, confirmationMethod: "choch" },
-  exit: { slMethod: "structure", slBufferPips: 2, tpMethod: "rr", tpRRRatio: 2 },
-  instruments: { enabled: null },
-  sessions: { filter: ["london", "newyork"] },
-  gamePlan: {
-    enabled: false,
-    enforcementMode: "hard",
-    hardBlockThreshold: 75,
-    autoKeyLevels: true,
-    sessionBias: true,
-    pdLevels: true,
-  },
-  protection: { maxDailyLoss: 500, maxConsecutiveLosses: 3, circuitBreakerPct: 20 },
-  account: { startingBalance: 10000 },
-  management: { trailingStopEnabled: false, breakEvenEnabled: false, partialTPEnabled: false, fridayCloseEnabled: true, fridayCloseHour: 20 },
-};
-
-const PRESETS: Record<string, { config: any; tradingStyle: "swing_trader" | "day_trader" | "scalper"; description: string }> = {
-  conservative: {
-    tradingStyle: "swing_trader",
-    description: "Low frequency, high conviction. Wider stops, longer holds.",
-    config: {
-      ...JSON.parse(JSON.stringify(BASE_CONFIG)),
-      tradingStyle: { mode: "swing_trader" },
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 65, tier1GateEnabled: true, minTier1Factors: 3 },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 0.5, maxConcurrentTrades: 3, maxDailyDrawdown: 2, maxDrawdown: 10, minRR: 2.5, conflictThresholdRaise: 4, conflictBlockAt: 6 },
-      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 60, scanIntervalMinutes: 30 },
-      exit: { slMethod: "structure", slBufferPips: 5, tpMethod: "rr", tpRRRatio: 3 },
-      sessions: { filter: ["london", "newyork"] },
-      management: { ...BASE_CONFIG.management, trailingStopEnabled: true, trailingStopPips: 30, breakEvenEnabled: true, breakEvenTriggerPips: 20 },
-    },
-  },
-  moderate: {
-    tradingStyle: "day_trader",
-    description: "Balanced approach. Standard SMC setups with moderate risk.",
-    config: {
-      ...JSON.parse(JSON.stringify(BASE_CONFIG)),
-      tradingStyle: { mode: "day_trader" },
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 55, tier1GateEnabled: true, minTier1Factors: 2 },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 1, maxConcurrentTrades: 5, maxDailyDrawdown: 3, maxDrawdown: 15, minRR: 1.5, conflictThresholdRaise: 4, conflictBlockAt: 6 },
-      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 30, scanIntervalMinutes: 15 },
-      exit: { slMethod: "structure", slBufferPips: 2, tpMethod: "rr", tpRRRatio: 2 },
-      sessions: { filter: ["london", "newyork"] },
-      management: { ...BASE_CONFIG.management, trailingStopEnabled: false, breakEvenEnabled: false },
-    },
-  },
-  aggressive: {
-    tradingStyle: "scalper",
-    description: "High frequency, lower conviction threshold. Tight stops, quick exits.",
-    config: {
-      ...JSON.parse(JSON.stringify(BASE_CONFIG)),
-      tradingStyle: { mode: "scalper" },
-      strategy: { ...BASE_CONFIG.strategy, confluenceThreshold: 40, tier1GateEnabled: true, minTier1Factors: 1 },
-      risk: { ...BASE_CONFIG.risk, riskPerTrade: 2, maxConcurrentTrades: 8, maxDailyDrawdown: 5, maxDrawdown: 20, minRR: 1.0, conflictThresholdRaise: 4, conflictBlockAt: 6 },
-      entry: { ...BASE_CONFIG.entry, cooldownMinutes: 10, scanIntervalMinutes: 5 },
-      exit: { slMethod: "atr", slBufferPips: 1, tpMethod: "rr", tpRRRatio: 1.5 },
-      sessions: { filter: ["asian", "london", "newyork"] },
-      management: { ...BASE_CONFIG.management, trailingStopEnabled: true, trailingStopPips: 10, breakEvenEnabled: true, breakEvenTriggerPips: 8, partialTPEnabled: true, partialTPPercent: 50, partialTPLevel: 1 },
-    },
-  },
-};
-
 // ─── Component ────────────────────────────────────────────────────────────────
 interface BotConfigModalProps {
   open: boolean;
@@ -259,9 +176,10 @@ interface BotConfigModalProps {
   connectionName?: string;
   defaultTab?: string;
   defaultSearch?: string;
+  effectiveStylePolicy?: RuntimeStylePolicy | null;
 }
 
-export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch }: BotConfigModalProps) {
+export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch, effectiveStylePolicy }: BotConfigModalProps) {
   const queryClient = useQueryClient();
   const queryKey = connectionId ? ["bot-config", connectionId] : ["bot-config"];
   const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
@@ -616,18 +534,22 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
         {/* Trading Style Quick-Select */}
         {effectiveActiveTab === "scan" && config && (
           <div className="px-6 py-2.5 border-b border-border bg-secondary/20">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold mb-2">Quick Setup</p>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Trading Style</p>
+              <span className="text-[9px] text-muted-foreground">Selection only — explicit overrides stay intact</span>
+            </div>
             <div className="grid grid-cols-3 gap-2">
-              {(["scalper", "day_trader", "swing_trader"] as TradingStyleMode[]).map(mode => {
+              {TRADING_STYLE_MODES.map(mode => {
                 const isActive = (config.tradingStyle?.mode || "day_trader") === mode;
                 const meta = STYLE_META[mode];
-                const params = STYLE_PARAMS[mode];
                 return (
                   <button
                     key={mode}
                     onClick={() => {
-                      const presetKey = mode === "scalper" ? "aggressive" : mode === "day_trader" ? "moderate" : "conservative";
-                      applyPresetConfig(PRESETS[presetKey].config, `${meta.icon} ${meta.label}`);
+                      setConfig((previous: unknown) => selectTradingStyle(previous, mode));
+                      toast.info(`${meta.label} selected`, {
+                        description: "Save Config to apply it. The next scan will show the effective runtime policy.",
+                      });
                     }}
                     className={`p-2.5 border text-left transition-colors ${isActive ? "border-primary bg-primary/5" : "border-border hover:border-border/80"}`}
                   >
@@ -635,16 +557,55 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
                       <span className="text-sm">{meta.icon}</span>
                       <span className="text-[10px] font-bold">{meta.label}</span>
                     </div>
-                    <div className="grid grid-cols-2 gap-x-2 text-[8px] text-muted-foreground">
-                      <span>TF: <strong className="text-foreground">{params.entryTimeframe}</strong></span>
-                      <span>TP: <strong className="text-foreground">{params.tpRatio}:1</strong></span>
-                      <span>Thr: <strong className="text-foreground">{params.confluenceThreshold}%</strong></span>
-                      <span>Hold: <strong className="text-foreground">{params.maxHoldHours === 0 ? "∞" : `${params.maxHoldHours}h`}</strong></span>
-                    </div>
+                    <p className="text-[8px] leading-tight text-muted-foreground">{meta.description}</p>
                   </button>
                 );
               })}
             </div>
+            {effectiveStylePolicy ? (() => {
+              const effectiveMeta = STYLE_META[effectiveStylePolicy.style];
+              const selectedMode = config.tradingStyle?.mode || "day_trader";
+              const pendingChange = selectedMode !== effectiveStylePolicy.style;
+              const management = effectiveStylePolicy.management;
+              return (
+                <div className="mt-2.5 border border-primary/30 bg-background/60 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-primary">
+                      Effective runtime policy
+                    </span>
+                    <span className="text-[9px] font-mono text-muted-foreground">
+                      {effectiveStylePolicy.contractVersion} · {effectiveStylePolicy.basePolicyHash.slice(0, 12)}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-muted-foreground">
+                    <span>Style: <strong className="text-foreground">{effectiveMeta.icon} {effectiveMeta.label}</strong></span>
+                    <span>Scan: <strong className="text-foreground">{effectiveStylePolicy.cadence.scanIntervalMinutes}m</strong></span>
+                    <span>Entry / HTF: <strong className="text-foreground">{effectiveStylePolicy.timeframes.runtimeEntry} / {effectiveStylePolicy.timeframes.runtimeHTF}</strong></span>
+                    <span>Gate: <strong className="text-foreground">≥{effectiveStylePolicy.qualification.effectiveMinConfluence}%</strong></span>
+                    <span>Target: <strong className="text-foreground">{effectiveStylePolicy.risk.tpRatio}:1</strong></span>
+                    <span>Risk: <strong className="text-foreground">{effectiveStylePolicy.risk.riskPerTrade}%</strong></span>
+                    <span>
+                      Management: <strong className="text-foreground">
+                        {[
+                          management.breakEvenEnabled && "BE",
+                          management.trailingStopEnabled && "trail",
+                          management.partialTPEnabled && "partial",
+                        ].filter(Boolean).join(" + ") || "fixed exit"}
+                      </strong>
+                    </span>
+                  </div>
+                  <p className={`mt-1.5 text-[9px] ${pendingChange ? "text-warning" : "text-success"}`}>
+                    {pendingChange
+                      ? `Pending: save ${STYLE_META[selectedMode as keyof typeof STYLE_META]?.label || selectedMode}, then wait for the next scan.`
+                      : `Selected style matches the last resolved scan. ${effectiveStylePolicy.provenance.userOverridesPreserved.length} explicit override(s) preserved.`}
+                  </p>
+                </div>
+              );
+            })() : (
+              <p className="mt-2 text-[9px] text-muted-foreground">
+                No resolved policy snapshot is available here yet. Save your selection and check again after the next scan.
+              </p>
+            )}
           </div>
         )}
 

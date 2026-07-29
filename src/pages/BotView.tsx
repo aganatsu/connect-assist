@@ -10,7 +10,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney, INSTRUMENTS } from "@/lib/marketData";
 import { formatBrokerTime, formatTimeOnly, formatFullDateTime } from "@/lib/formatTime";
 import { paperApi, scannerApi, brokerApi, botConfigApi, brokerExecApi } from "@/lib/api";
-import { STYLE_META, STYLE_PARAMS, getActiveStyle } from "@/lib/botStyleClassifier";
+import {
+  STYLE_META,
+  getActiveStyle,
+  getScanLogMeta,
+  isTradingStyleMode,
+  readRuntimeStylePolicy,
+} from "@/lib/botStyleClassifier";
 import { toast } from "sonner";
 import {
   Play, Pause, Square, AlertTriangle, Scan, Loader2,
@@ -339,6 +345,11 @@ export default function BotView() {
     return Array.isArray(dj) ? dj : [];
   })();
   const latestMeta = latestRawDetails.find((d: any) => d?.__meta) ?? null;
+  const selectedScanStylePolicy = readRuntimeStylePolicy(latestMeta?.stylePolicy);
+  const latestRuntimeMeta = getScanLogMeta(logs[0]);
+  const effectiveRuntimeStylePolicy = readRuntimeStylePolicy(
+    latestRuntimeMeta?.stylePolicy,
+  );
   const latestDetailsCleanRaw: any[] = latestRawDetails.filter((d: any) => !d?.__meta);
   // Group/sort by status so the most actionable rows surface first.
   const STATUS_PRIORITY: Record<string, number> = {
@@ -566,16 +577,30 @@ export default function BotView() {
               </button>
             )}
 
-            {/* Trading Style Badge — shows the style from the LAST SCAN (not just config) */}
+            {/* Trading Style Badge — the persisted runtime policy is authoritative */}
             {(() => {
-              const configStyle = botConfig?.tradingStyle?.mode || "day_trader";
-              const scanStyle = latestMeta?.activeStyle as keyof typeof STYLE_META | undefined;
-              const displayStyle = scanStyle || configStyle;
+              const configStyle = getActiveStyle(botConfig);
+              const legacyScanStyle = isTradingStyleMode(
+                latestRuntimeMeta?.activeStyle,
+              )
+                ? latestRuntimeMeta.activeStyle
+                : null;
+              const runtimeStyle = effectiveRuntimeStylePolicy?.style ||
+                legacyScanStyle;
+              const displayStyle = runtimeStyle || configStyle;
               const meta = STYLE_META[displayStyle as keyof typeof STYLE_META];
-              const mismatch = scanStyle && scanStyle !== configStyle;
+              const mismatch = runtimeStyle && runtimeStyle !== configStyle;
               if (meta) {
+                const policyTitle = effectiveRuntimeStylePolicy
+                  ? `Effective runtime: ${meta.label}; ${effectiveRuntimeStylePolicy.cadence.scanIntervalMinutes}m scan; ${effectiveRuntimeStylePolicy.timeframes.runtimeEntry}/${effectiveRuntimeStylePolicy.timeframes.runtimeHTF}; gate ≥${effectiveRuntimeStylePolicy.qualification.effectiveMinConfluence}%; ${effectiveRuntimeStylePolicy.contractVersion} ${effectiveRuntimeStylePolicy.basePolicyHash.slice(0, 12)}`
+                  : `Active style: ${meta.label} (legacy scan metadata)`;
                 return (
-                  <span className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`} title={mismatch ? `Last scan used ${meta.label} — config now set to ${STYLE_META[configStyle as keyof typeof STYLE_META]?.label || configStyle}. Run a new scan to apply.` : `Active style: ${meta.label}`}>
+                  <span
+                    className={`text-[10px] font-medium px-1.5 py-0.5 border flex items-center gap-1 ${meta.color}`}
+                    title={mismatch
+                      ? `${policyTitle}. Config is now set to ${STYLE_META[configStyle].label}; save and run a new scan to apply.`
+                      : policyTitle}
+                  >
                     {meta.icon} {meta.label}{mismatch && " ⟳"}
                   </span>
                 );
@@ -859,13 +884,11 @@ export default function BotView() {
               </TabsContent>
               <TabsContent value="watchlist" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
                 <WatchlistPanel confluenceGate={(() => {
-                  if (!botConfig?.strategy) return 55;
-                  const DEFAULT_CONFLUENCE = 55;
-                  const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                  const activeStyle = getActiveStyle(botConfig);
-                  const styleParams = STYLE_PARAMS[activeStyle];
-                  const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                  return rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
+                  const effectiveGate =
+                    effectiveRuntimeStylePolicy?.qualification
+                      .effectiveMinConfluence;
+                  if (typeof effectiveGate === "number") return effectiveGate;
+                  return botConfig?.strategy?.confluenceThreshold ?? 55;
                 })()} />
               </TabsContent>
               <TabsContent value="pending-orders" className="flex-1 overflow-y-auto overflow-x-hidden mt-1 min-w-0 max-w-full">
@@ -1109,8 +1132,9 @@ export default function BotView() {
                     — {formatTimeOnly(currentScan.scanned_at)}
                   </span>
                 )}
-                {latestMeta?.activeStyle && (() => {
-                  const sm = STYLE_META[latestMeta.activeStyle as keyof typeof STYLE_META];
+                {(selectedScanStylePolicy?.style || latestMeta?.activeStyle) && (() => {
+                  const style = selectedScanStylePolicy?.style || latestMeta.activeStyle;
+                  const sm = STYLE_META[style as keyof typeof STYLE_META];
                   return sm ? <span className={`shrink-0 text-[9px] font-medium px-1 py-0 border rounded-sm ${sm.color}`}>{sm.icon} {sm.label}</span> : null;
                 })()}
                 {logs.length > 1 && (
@@ -1140,28 +1164,26 @@ export default function BotView() {
             </div>
             <div className="flex items-center gap-1.5 min-w-0 max-w-full overflow-hidden md:flex-wrap md:shrink-0">
               <SessionStatusPill sessions={botConfig?.sessions} scanDetails={latestRawDetails} className="min-w-0 max-w-full truncate" />
-              {botConfig?.strategy && (() => {
-                const activeStyle = getActiveStyle(botConfig);
-                const styleParams = STYLE_PARAMS[activeStyle];
-                const styleMeta = STYLE_META[activeStyle];
-                // Replicate bot-scanner resolution: style override applies when
-                // the user's value matches the global default (55), because the
-                // scanner can't distinguish "user set 55" from "never touched".
-                const DEFAULT_CONFLUENCE = 55;
-                const rawThreshold = botConfig.strategy?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                const styleThreshold = styleParams?.confluenceThreshold ?? DEFAULT_CONFLUENCE;
-                const resolvedGate = rawThreshold === DEFAULT_CONFLUENCE ? styleThreshold : rawThreshold;
-                const styleLabel = styleMeta?.label || activeStyle;
-                const isStyleOverride = resolvedGate !== rawThreshold;
+              {(selectedScanStylePolicy || botConfig?.strategy) && (() => {
+                const configuredGate = botConfig?.strategy?.confluenceThreshold ?? 55;
+                const resolvedGate =
+                  selectedScanStylePolicy?.qualification
+                    .effectiveMinConfluence ?? configuredGate;
+                const style = selectedScanStylePolicy?.style ||
+                  getActiveStyle(botConfig);
+                const styleLabel = STYLE_META[style]?.label || style;
+                const preservedOverrides =
+                  selectedScanStylePolicy?.provenance.userOverridesPreserved
+                    .length ?? 0;
                 return (
-                    <Badge
+                  <Badge
                     variant="outline"
-                      className={`hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-border/60 ${
-                      isStyleOverride ? 'border-warning/40 text-warning' : ''
-                    }`}
-                    title={`Active confluence gate${isStyleOverride ? ` (overridden by ${styleLabel} style from ${rawThreshold}% → ${resolvedGate}%)` : ` (${styleLabel} style)`}. Setups must score ≥${resolvedGate}% to trigger.`}
+                    className="hidden md:inline-flex text-[8px] font-mono px-1.5 py-0 h-4 border-primary/40 text-primary"
+                    title={selectedScanStylePolicy
+                      ? `Effective policy for this scan: ${styleLabel}; gate ≥${resolvedGate}%; ${selectedScanStylePolicy.cadence.scanIntervalMinutes}m cadence; ${preservedOverrides} explicit override(s) preserved.`
+                      : `No policy snapshot on this scan. Showing configured confluence gate ≥${resolvedGate}%.`}
                   >
-                    Gate: ≥{resolvedGate}%{isStyleOverride ? ` (${styleLabel})` : ''}
+                    Effective: {styleLabel} · ≥{resolvedGate}%
                   </Badge>
                 );
               })()}
@@ -1250,7 +1272,11 @@ export default function BotView() {
           </div>
         )}
 
-        <BotConfigModal open={configOpen} onClose={() => setConfigOpen(false)} />
+        <BotConfigModal
+          open={configOpen}
+          onClose={() => setConfigOpen(false)}
+          effectiveStylePolicy={effectiveRuntimeStylePolicy}
+        />
 
         {/* Mobile: Account & Performance Bottom Sheet */}
         <Sheet open={mobileAccountSheet} onOpenChange={setMobileAccountSheet}>
