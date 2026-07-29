@@ -12,6 +12,13 @@ import {
   getCurrentSession,
   type InstrumentGamePlan,
 } from "../_shared/gamePlan.ts";
+import {
+  applyGamePlanRefreshWindow,
+  buildGamePlanConfigSnapshot,
+  enrichGamePlanWithDirectionalNews,
+  gamePlanToScanLogDetails,
+  persistActiveGamePlan,
+} from "../_shared/gamePlanStore.ts";
 import type { Candle } from "../_shared/smcAnalysis.ts";
 
 const BOT_ID = "smc";
@@ -163,43 +170,32 @@ Deno.serve(async (req) => {
     try {
       const newsEvents = await fetchNewsForGamePlan(supabaseUrl, serviceRoleKey, config.instruments);
       gamePlan = enrichGamePlanWithNews(gamePlan, newsEvents);
+      gamePlan = enrichGamePlanWithDirectionalNews(gamePlan);
     } catch (error: any) {
       console.warn(`[game-plan-refresh] News enrichment failed: ${error?.message || error}`);
     }
 
-    const detailsJson = {
-      type: "game_plan",
+    gamePlan = applyGamePlanRefreshWindow(
+      gamePlan,
+      Number((config as any).gamePlanRefreshHours) || 4,
+    );
+    const sourceSummary = endScanSourceTally();
+    gamePlan = await persistActiveGamePlan(adminClient, gamePlan, {
+      userId,
+      botId: BOT_ID,
       source: "manual_refresh",
-      session: currentSession,
-      generated_at: gamePlan.generatedAt,
-      focus_pairs: gamePlan.focusPairs,
-      plans: gamePlan.plans.map((plan) => ({
-        symbol: plan.symbol,
-        bias: plan.bias,
-        biasConfidence: plan.biasConfidence,
-        biasReasoning: plan.biasReasoning,
-        dol: plan.dol,
-        regime: plan.regime,
-        amdPhase: plan.amdPhase,
-        zone: plan.zone,
-        htfTrend: plan.htfTrend,
-        h4Trend: plan.h4Trend,
-        tradeable: plan.tradeable,
-        skipReason: plan.skipReason,
-        scenarios: plan.scenarios,
-        keyLevels: plan.keyLevels.slice(0, 10),
-        state: plan.state,
-        stateReason: plan.stateReason,
-        conviction: plan.conviction,
-        evidence: plan.evidence,
-        supportingEvidence: plan.supportingEvidence,
-        conflictingEvidence: plan.conflictingEvidence,
-        expiresAt: plan.expiresAt,
-      })),
-      newsEvents: gamePlan.newsEvents || [],
-      summary: gamePlan.summary,
-      generationErrors: errors,
-    };
+      configSnapshot: buildGamePlanConfigSnapshot(config),
+      marketDataSnapshot: {
+        hierarchy: ["Twelve Data", "Polygon"],
+        source: sourceSummary,
+        generationErrors: errors,
+      },
+    });
+    const detailsJson = gamePlanToScanLogDetails(
+      gamePlan,
+      "manual_refresh",
+      { generationErrors: errors },
+    );
 
     const { data: storedPlan, error: insertError } = await adminClient
       .from("scan_logs")
@@ -213,7 +209,11 @@ Deno.serve(async (req) => {
       })
       .select("id, scanned_at")
       .single();
-    if (insertError) throw new Error(`Could not save Game Plan: ${insertError.message}`);
+    if (insertError) {
+      console.warn(
+        `[game-plan-refresh] Active version ${gamePlan.planVersion} saved, but observability event failed: ${insertError.message}`,
+      );
+    }
 
     const tradeableCount = gamePlan.plans.filter((plan) => plan.state === "tradeable").length;
     const waitCount = gamePlan.plans.filter((plan) => plan.state === "wait").length;
@@ -221,15 +221,16 @@ Deno.serve(async (req) => {
 
     return respond({
       success: true,
-      id: storedPlan.id,
+      id: storedPlan?.id || gamePlan.planVersion,
       generatedAt: gamePlan.generatedAt,
-      scannedAt: storedPlan.scanned_at,
+      scannedAt: storedPlan?.scanned_at || gamePlan.generatedAt,
       session: currentSession,
       planCount: gamePlan.plans.length,
       tradeableCount,
       waitCount,
       skipCount,
-      source: endScanSourceTally(),
+      source: sourceSummary,
+      planVersion: gamePlan.planVersion,
       warnings: errors,
     });
   } catch (error: any) {

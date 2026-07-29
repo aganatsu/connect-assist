@@ -74,6 +74,10 @@ export interface Scenario {
 }
 
 export interface InstrumentGamePlan {
+  /** Durable row ID from active_game_plans once this plan is persisted. */
+  gamePlanId?: string;
+  /** Immutable version shared by every instrument generated in the same refresh. */
+  planVersion?: string;
   symbol: string;
   session: SessionName;
   /** Overall directional bias for this session */
@@ -125,9 +129,24 @@ export interface InstrumentGamePlan {
   generatedAt: string;
   /** Informational expiry matching the default four-hour plan refresh window. */
   expiresAt?: string;
+  /** Human-readable conditions that invalidate the session narrative. */
+  invalidationConditions?: string[];
+  /** Last candle used from every timeframe that produced this plan. */
+  sourceCandleTimestamps?: {
+    daily: string | null;
+    h4: string | null;
+    entry: string | null;
+    hourly: string | null;
+  };
 }
 
 export interface SessionGamePlan {
+  /** Immutable ID for this complete session refresh. */
+  planVersion?: string;
+  /** How the version was generated. */
+  source?: "automatic_scan" | "manual_refresh";
+  /** Version of the persisted Gameplan contract. */
+  contractVersion?: string;
   session: SessionName;
   generatedAt: string;
   /** Instruments with clear bias — focus pairs for the session */
@@ -806,6 +825,8 @@ export function generateInstrumentGamePlan(
     evidence,
   });
   const generatedAt = new Date();
+  const lastTimestamp = (candles: Candle[]): string | null =>
+    candles.length > 0 ? candles[candles.length - 1].datetime : null;
 
   return {
     symbol,
@@ -836,6 +857,15 @@ export function generateInstrumentGamePlan(
     lastPrice,
     generatedAt: generatedAt.toISOString(),
     expiresAt: new Date(generatedAt.getTime() + 4 * 60 * 60 * 1000).toISOString(),
+    invalidationConditions: scenarios
+      .map((scenario) => scenario.invalidation)
+      .filter((condition): condition is string => !!condition),
+    sourceCandleTimestamps: {
+      daily: lastTimestamp(dailyCandles),
+      h4: lastTimestamp(h4Candles),
+      entry: lastTimestamp(entryCandles),
+      hourly: lastTimestamp(hourlyCandles),
+    },
   };
 }
 
