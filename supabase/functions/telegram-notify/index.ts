@@ -1,6 +1,22 @@
 import { corsHeaders } from "../_shared/cors.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
+import { authorizeTelegramSend, chatIdsFromPreferences } from "./authorize.ts";
 
 const GATEWAY_URL = "https://connector-gateway.lovable.dev/telegram";
+
+/** Chat ids the given user has saved in their own settings. */
+async function loadUserChatIds(userId: string): Promise<string[]> {
+  const url = Deno.env.get("SUPABASE_URL");
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !serviceKey) return [];
+  const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+  const { data } = await admin
+    .from("user_settings")
+    .select("preferences_json")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return chatIdsFromPreferences(data?.preferences_json);
+}
 
 // M9: Rate limit tracking — max 1 message per 5 seconds per chat
 const _lastSentTimestamps = new Map<string, number>();
@@ -38,6 +54,17 @@ Deno.serve(async (req) => {
     } else {
       return new Response(JSON.stringify({ error: "message or messages[] is required" }), {
         status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ── Caller verification ──
+    const decision = await authorizeTelegramSend(req, String(chatId), {
+      loadUserChatIds,
+    });
+    if (!decision.allowed) {
+      return new Response(JSON.stringify({ error: decision.error }), {
+        status: decision.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

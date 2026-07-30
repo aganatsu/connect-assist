@@ -3,20 +3,30 @@
  *
  * Two modes:
  * 1. `verifyCronCaller(req)` — cron-only functions. Rejects unless
- *    x-cron-secret header matches CRON_SECRET env var.
+ *    x-cron-secret header matches CRON_SECRET exactly.
  * 2. `verifyCronOrUserCaller(req)` — dual-path functions called by both
  *    the cron scheduler AND the frontend. Accepts if EITHER:
- *    - x-cron-secret matches (cron path), OR
- *    - Authorization header contains a valid Supabase user JWT (user path)
+ *    - x-cron-secret matches exactly (cron path), OR
+ *    - the Authorization header carries a Supabase user JWT whose signature
+ *      is cryptographically validated via getClaims() (user path).
+ *
+ * The mere presence of a Bearer token is NEVER treated as authenticated.
  *
  * Usage (cron-only):
  *   const authError = verifyCronCaller(req);
  *   if (authError) return authError;
  *
  * Usage (dual-path):
- *   const authError = verifyCronOrUserCaller(req);
+ *   const authError = await verifyCronOrUserCaller(req);
  *   if (authError) return authError;
  */
+
+import {
+  type ClaimsVerifier,
+  defaultClaimsVerifier,
+  resolveAuthenticatedUserId,
+  secretsMatch,
+} from "./callerAuth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,22 +41,19 @@ function unauthorizedResponse(reason: string): Response {
 }
 
 /**
- * Verify the caller is the cron scheduler (x-cron-secret must match).
+ * Verify the caller is the cron scheduler (x-cron-secret must match exactly).
  * Returns a 401 Response if unauthorized, or null if authorized.
  */
 export function verifyCronCaller(req: Request): Response | null {
-  console.log(`[cronAuth debug] header names received: ${[...req.headers.keys()].join(", ")}`);
   const cronSecret = req.headers.get("x-cron-secret");
   const expected = Deno.env.get("CRON_SECRET");
 
   if (!expected) {
-    // If CRON_SECRET is not configured, fail closed — refuse all requests.
-    // This prevents the function from being callable if the secret hasn't been set.
+    // Fail closed — refuse all requests when the secret is not configured.
     return unauthorizedResponse("CRON_SECRET not configured on server");
   }
 
-  console.log(`[cronAuth debug] received length=${cronSecret?.length ?? "null"}, expected length=${expected?.length ?? "null"}`);
-  if (cronSecret !== expected) {
+  if (!secretsMatch(cronSecret, expected)) {
     return unauthorizedResponse("Invalid or missing x-cron-secret header");
   }
 
@@ -57,43 +64,25 @@ export function verifyCronCaller(req: Request): Response | null {
  * Verify the caller is either the cron scheduler OR an authenticated user.
  * Returns a 401 Response if neither path is satisfied, or null if authorized.
  *
- * Cron path: x-cron-secret header matches CRON_SECRET env var.
- * User path: Authorization header contains "Bearer <token>" where the token
- * is a valid JWT signed by Supabase (verified by Supabase's built-in JWT
- * middleware before the function is invoked — if the request reaches us
- * with a Bearer token, Supabase has already validated it).
+ * Cron path: x-cron-secret matches CRON_SECRET exactly.
+ * User path: Authorization Bearer token validated with getClaims(). The
+ * service-role key is not a user credential and is rejected here.
  */
-export function verifyCronOrUserCaller(req: Request): Response | null {
-  console.log(`[cronAuth debug] header names received: ${[...req.headers.keys()].join(", ")}`);
-  // Path 1: Cron secret
-  const cronSecret = req.headers.get("x-cron-secret");
+export async function verifyCronOrUserCaller(
+  req: Request,
+  verifier: ClaimsVerifier = defaultClaimsVerifier,
+): Promise<Response | null> {
+  // Path 1: Cron secret (exact match)
   const expectedCronSecret = Deno.env.get("CRON_SECRET");
-  if (expectedCronSecret && cronSecret === expectedCronSecret) {
+  if (secretsMatch(req.headers.get("x-cron-secret"), expectedCronSecret)) {
     return null; // Authorized via cron path
   }
 
-  // Path 2: User JWT (Supabase validates the JWT before the function runs;
-  // if Authorization contains a Bearer token, the user is authenticated)
-  const authHeader = req.headers.get("authorization") || "";
-  if (authHeader.startsWith("Bearer ")) {
-    const token = authHeader.slice(7);
-    // The service role key is NOT a valid user token — reject it on the user path.
-    // This prevents the scheduled-tasks function (which sends Bearer <SERVICE_ROLE_KEY>)
-    // from accidentally passing the user-path check when it should use x-cron-secret.
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    if (token === serviceRoleKey) {
-      // Service role key is not a user credential — must use x-cron-secret path
-      return unauthorizedResponse(
-        "Service role key is not accepted on the user auth path. " +
-        "Cron callers must include x-cron-secret header."
-      );
-    }
-    // Any other Bearer token has been validated by Supabase's JWT middleware
-    return null; // Authorized via user path
-  }
+  // Path 2: Cryptographically validated user JWT
+  const userId = await resolveAuthenticatedUserId(req, verifier);
+  if (userId) return null;
 
-  // Neither path satisfied
   return unauthorizedResponse(
-    "Requires either x-cron-secret header (cron path) or valid user JWT (user path)"
+    "Requires either a valid x-cron-secret header (cron path) or a valid Supabase user JWT (user path)",
   );
 }
