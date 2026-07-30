@@ -207,7 +207,7 @@ async function fetchStrategyActivations(
     .eq("user_id", userId)
     .eq("bot_id", "smc");
   if (error) throw new Error(error.message);
-  return data || [];
+  return (data || []) as unknown as StrategyActivationRecord[];
 }
 
 async function fetchStrategyEvidenceCertificates(
@@ -222,7 +222,7 @@ async function fetchStrategyEvidenceCertificates(
     .eq("bot_id", "smc")
     .eq("is_current", true);
   if (error) throw new Error(error.message);
-  return data || [];
+  return (data || []) as unknown as StrategyEvidenceCertificateRecord[];
 }
 
 // ── Summary Stats ──
