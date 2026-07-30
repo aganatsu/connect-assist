@@ -36,6 +36,10 @@
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import {
+  isServiceRoleCaller,
+  resolveAuthenticatedUserId,
+} from "../_shared/callerAuth.ts";
+import {
   type Candle,
   type SwingPoint,
   type ReasoningFactor,
