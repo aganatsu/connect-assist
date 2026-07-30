@@ -33,6 +33,13 @@ import {
   classifyInstrumentRegime,
 } from "./smcAnalysis.ts";
 import { computeAdaptiveTrail } from "./exitEngine.ts";
+import {
+  computeManagementDecision,
+  type DecisionAction,
+} from "./computeManagementDecision.ts";
+import {
+  resolvePositionManagementPolicy,
+} from "./managementPolicy.ts";
 
 // ─── Setup Classification Types ──────────────────────────────────────
 
@@ -345,25 +352,6 @@ export async function manageOpenPositions(
   const actions: ManagementAction[] = [];
   if (!positions || positions.length === 0) return actions;
 
-  // Read trading style for style-aware management decisions
-  const tradingStyle: string = config.tradingStyle?.mode ?? "day_trader";
-
-  // Read management params from user config (resolved by the shared style profile and user overrides)
-  const trailingEnabled = config.trailingStopEnabled ?? false;
-  const trailingPips = config.trailingStopPips ?? 15;
-  const trailingActivation = config.trailingStopActivation ?? "after_1r";
-  const partialTPEnabled = config.partialTPEnabled ?? false;
-  const partialTPPercent = config.partialTPPercent ?? 50;
-  const partialTPLevel = config.partialTPLevel ?? 1.0;
-  const breakEvenEnabled = config.breakEvenEnabled ?? true;
-  const breakEvenPips = config.breakEvenPips ?? 20;
-  // Offset above/below entry when SL is moved to breakeven. Default 3 pips
-  // to absorb spread + commission so a "BE stop" still nets ~flat instead of
-  // closing slightly negative on live brokers.
-  const breakEvenOffsetPips = Math.max(0, Number(config.breakEvenOffsetPips ?? 3));
-  const maxHoldEnabled = config.maxHoldEnabled ?? false;
-  const maxHoldHours = config.maxHoldHours ?? 0; // 0 = no limit
-
   // Helper: round price to instrument precision to avoid floating point garbage
   // e.g. pipSize 0.01 → 2 decimals, pipSize 0.0001 → 4 decimals, pipSize 1 → 0 decimals
   const roundPrice = (price: number, pipSize: number): number => {
@@ -395,38 +383,25 @@ export async function manageOpenPositions(
         ? parseFloat(signalData.brokerEntryPrice)
         : paperEntryPrice;
 
-      // ── Per-Trade Overrides: individual position settings override global config ──
-      // If trade_overrides JSON exists on this position, those values take priority.
-      // Missing fields fall back to the global config values read above.
-      let posTrailingEnabled = trailingEnabled;
-      let posTrailingPips = trailingPips;
-      let posTrailingActivation = trailingActivation;
-      let posBreakEvenEnabled = breakEvenEnabled;
-      let posBreakEvenPips = breakEvenPips;
-      let posBreakEvenOffsetPips = breakEvenOffsetPips;
-      let posPartialTPEnabled = partialTPEnabled;
-      let posPartialTPPercent = partialTPPercent;
-      let posPartialTPLevel = partialTPLevel;
-      let posMaxHoldEnabled = maxHoldEnabled;
-      let posMaxHoldHours = maxHoldHours;
-      if (pos.trade_overrides) {
-        let overrides: any = {};
-        try { overrides = typeof pos.trade_overrides === 'string' ? JSON.parse(pos.trade_overrides) : pos.trade_overrides; } catch {}
-        if (overrides.trailingStopEnabled !== undefined) posTrailingEnabled = overrides.trailingStopEnabled;
-        if (overrides.trailingStopPips !== undefined) posTrailingPips = overrides.trailingStopPips;
-        if (overrides.trailingStopActivation !== undefined) posTrailingActivation = overrides.trailingStopActivation;
-        if (overrides.breakEvenEnabled !== undefined) posBreakEvenEnabled = overrides.breakEvenEnabled;
-        if (overrides.breakEvenPips !== undefined) posBreakEvenPips = overrides.breakEvenPips;
-        if (overrides.breakEvenOffsetPips !== undefined) posBreakEvenOffsetPips = Math.max(0, Number(overrides.breakEvenOffsetPips));
-        if (overrides.partialTPEnabled !== undefined) posPartialTPEnabled = overrides.partialTPEnabled;
-        if (overrides.partialTPPercent !== undefined) posPartialTPPercent = overrides.partialTPPercent;
-        if (overrides.partialTPLevel !== undefined) posPartialTPLevel = overrides.partialTPLevel;
-        if (overrides.maxHoldEnabled !== undefined) posMaxHoldEnabled = overrides.maxHoldEnabled;
-        if (overrides.maxHoldHours !== undefined) posMaxHoldHours = overrides.maxHoldHours;
-        // Direct SL/TP override: if user manually set a new SL or TP price
-        // These are applied immediately via the update-trade API, not here.
-        // Management respects the current pos.stop_loss and pos.take_profit values.
-      }
+      // Resolve the immutable entry-time management policy. New positions use
+      // the frozen setup/style snapshot; legacy positions use their saved
+      // exitFlags intent before today's runtime config. Explicit per-trade
+      // overrides remain the only way to alter an already-open position.
+      const managementPolicy = resolvePositionManagementPolicy(pos, config);
+      const managementConfig = managementPolicy.decision;
+      const tradingStyle = managementPolicy.tradingStyle;
+      const posTrailingEnabled = managementConfig.trailingStopEnabled;
+      const posTrailingPips = managementConfig.trailingStopPips;
+      const posTrailingActivation = managementConfig.trailingStopActivation;
+      const posBreakEvenEnabled = managementConfig.breakEvenEnabled;
+      const posBreakEvenPips = managementConfig.breakEvenPips;
+      const posBreakEvenOffsetPips =
+        managementConfig.breakEvenOffsetPips;
+      const posPartialTPEnabled = managementConfig.partialTPEnabled;
+      const posPartialTPPercent = managementPolicy.partialTPPercent;
+      const posPartialTPLevel = managementPolicy.partialTPLevel;
+      const posMaxHoldEnabled = managementConfig.maxHoldEnabled;
+      const posMaxHoldHours = managementConfig.maxHoldHours;
 
       // Calculate current R-multiple using ORIGINAL SL (not the moved SL after BE/trailing)
       // signalData.originalSL is stored at trade open time; fall back to current SL for legacy trades
@@ -458,6 +433,134 @@ export async function manageOpenPositions(
         timestamp: new Date().toISOString(),
         marketContext,
       });
+
+      // ── Shared live/backtest management authority ──
+      // The pure calculator is also used by backtest-engine. Live supplies the
+      // current tick as both currentPrice and bestPrice; backtest supplies the
+      // candle close plus its favorable high/low.
+      let adaptiveTrailCandles:
+        | Array<{ open: number; high: number; low: number; close: number }>
+        | null = null;
+      if (
+        managementConfig.adaptiveTrailingEnabled &&
+        exitFlags.trailingStopActivated === true &&
+        rMultiple > 0
+      ) {
+        try {
+          adaptiveTrailCandles = await fetchCandlesFn(
+            symbol,
+            signalData.entryTimeframe || "15min",
+            "2d",
+          ).then((candles) =>
+            candles.slice(-10).map((candle) => ({
+              open: candle.open,
+              high: candle.high,
+              low: candle.low,
+              close: candle.close,
+            }))
+          ).catch(() => []);
+        } catch {
+          adaptiveTrailCandles = [];
+        }
+      }
+      const managementSession = detectSessionFn(config);
+      const normalizedManagementSession = managementSession.filterKey ||
+        managementSession.name.toLowerCase().replace(/[\s-]/g, "");
+      const sharedDecision = computeManagementDecision(
+        {
+          symbol,
+          direction: pos.direction as "long" | "short",
+          entryPrice,
+          currentPrice,
+          bestPrice: currentPrice,
+          currentSL: sl,
+          originalSL: originalSl,
+          takeProfit: tp,
+          holdHours,
+          exitFlags,
+          structureCheck: null,
+          adaptiveTrailCandles,
+          atrValue: signalData.atrValue ?? 0,
+          regimeInfo: signalData.regimeInfo ?? null,
+          currentSession: normalizedManagementSession,
+        },
+        managementConfig,
+      );
+      if (sharedDecision.action !== "no_change") {
+        const actionMap: Record<
+          Exclude<DecisionAction, "no_change" | "structure_invalidated">,
+          {
+            action: ManagementAction["action"];
+            trigger: ExitAttribution["trigger"];
+          }
+        > = {
+          be_activated: { action: "be_enabled", trigger: "be_enabled" },
+          trailing_activated: {
+            action: "trailing_enabled",
+            trigger: "trailing_enabled",
+          },
+          trailing_tightened: {
+            action: "sl_tightened",
+            trigger: "trailing_stop",
+          },
+          max_hold_be: {
+            action: "sl_tightened",
+            trigger: "max_hold_exceeded",
+          },
+          session_close_be: {
+            action: "sl_tightened",
+            trigger: "session_close",
+          },
+        };
+        const mapped = sharedDecision.action === "structure_invalidated"
+          ? {
+            action: "sl_tightened" as const,
+            trigger: "structure_invalidated" as const,
+          }
+          : actionMap[sharedDecision.action];
+        const attribution = makeAttribution(
+          mapped.trigger,
+          sharedDecision.detail,
+          { session: normalizedManagementSession },
+        );
+        const updatedSignal = {
+          ...signalData,
+          exitFlags: sharedDecision.updatedExitFlags,
+          managementPolicy: {
+            contractVersion: managementPolicy.contractVersion,
+            source: managementPolicy.source,
+            stylePolicyVersion: managementPolicy.stylePolicyVersion,
+            stylePolicyHash: managementPolicy.stylePolicyHash,
+            basePolicyHash: managementPolicy.basePolicyHash,
+            tradingStyle: managementPolicy.tradingStyle,
+          },
+          exitAttribution: [
+            ...(signalData.exitAttribution || []),
+            attribution,
+          ],
+        };
+        const update: Record<string, unknown> = {
+          signal_reason: JSON.stringify(updatedSignal),
+        };
+        if (sharedDecision.newSL !== null) {
+          update.stop_loss = sharedDecision.newSL.toString();
+        }
+        await supabase.from("paper_positions").update(update).eq("id", pos.id);
+        actions.push({
+          positionId: pos.position_id,
+          symbol,
+          action: mapped.action,
+          reason: sharedDecision.detail,
+          newSL: sharedDecision.newSL ?? undefined,
+          attribution,
+        });
+        console.log(
+          `[mgmt ${scanCycleId}] SHARED ${symbol} `
+            + `${sharedDecision.action} source=${managementPolicy.source} `
+            + `policy=${managementPolicy.stylePolicyHash?.slice(0, 12) || "legacy"}`,
+        );
+        continue;
+      }
 
       // ── 1. MAX HOLD TIME CHECK ──
       // If maxHoldEnabled and maxHoldHours is set and exceeded, flag for tightening
@@ -621,7 +724,8 @@ export async function manageOpenPositions(
         const effectiveTrailPips = exitFlags.trailingStopPips ?? posTrailingPips;
 
         // ── Adaptive trailing (momentum-fade) when enabled ──
-        const adaptiveTrailingOn = config.adaptiveTrailingEnabled ?? false;
+        const adaptiveTrailingOn =
+          managementConfig.adaptiveTrailingEnabled;
         let newTrailLevel: number;
         let trailReason: string;
 
@@ -645,10 +749,12 @@ export async function manageOpenPositions(
             atrValue: atrVal,
             pipSize: spec.pipSize,
             recentCandles: recentCandles.slice(-10),
-            baseTrailATRMultiple: config.baseTrailATRMultiple ?? 1.5,
-            momentumFadeThreshold: config.momentumFadeThreshold ?? 0.4,
-            tightenFactor: config.trailTightenFactor ?? 0.6,
-            widenFactor: config.trailWidenFactor ?? 1.3,
+            baseTrailATRMultiple:
+              managementConfig.baseTrailATRMultiple ?? 1.5,
+            momentumFadeThreshold:
+              managementConfig.momentumFadeThreshold ?? 0.4,
+            tightenFactor: managementConfig.trailTightenFactor ?? 0.6,
+            widenFactor: managementConfig.trailWidenFactor ?? 1.3,
           });
 
           newTrailLevel = adaptiveResult.newSL;
@@ -780,7 +886,8 @@ export async function manageOpenPositions(
       // ONE-SHOT: only fires once per position to prevent progressive squeeze.
       // Without this guard, repeated CHoCH detections would halve the SL distance
       // every scan cycle, squeezing it to near-zero and guaranteeing a stop-out.
-      const structureInvalidationEnabled = config.structureInvalidationEnabled ?? false;
+      const structureInvalidationEnabled =
+        managementConfig.structureInvalidationEnabled;
       const structureInvalidationAlreadyFired = exitFlags.structureInvalidationFired === true;
       if (structureInvalidationEnabled && !structureInvalidationAlreadyFired && rMultiple < 0 && rMultiple > -0.8) {
         try {

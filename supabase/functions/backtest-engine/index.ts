@@ -139,6 +139,10 @@ import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weekl
 import { checkMinRR } from "../_shared/gateMinRR.ts";
 import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
 import {
+  resolveBacktestManagementPolicy,
+  type ResolvedManagementPolicy,
+} from "../_shared/managementPolicy.ts";
+import {
   generateInstrumentGamePlan,
   buildSessionGamePlan,
   type InstrumentGamePlan,
@@ -184,6 +188,7 @@ interface BacktestTrade {
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
+  managementPolicy?: ResolvedManagementPolicy;
 }
 interface BlockedTrade {
   symbol: string;
@@ -275,6 +280,7 @@ interface OpenPosition {
   session?: string;
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
+  managementPolicy?: ResolvedManagementPolicy;
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -886,11 +892,44 @@ function processExits(
     let sl = pos.currentSL;
     const tp = pos.takeProfit;
     const spec = SPECS[pos.symbol] || SPECS["EUR/USD"];
+    const managementConfig = pos.managementPolicy?.decision || {
+      breakEvenEnabled:
+        pos.exitFlags.breakEven ?? config.breakEvenEnabled ?? true,
+      breakEvenPips:
+        pos.exitFlags.breakEvenPips ?? config.breakEvenPips ?? 20,
+      breakEvenOffsetPips: config.breakEvenOffsetPips ?? 3,
+      trailingStopEnabled:
+        pos.exitFlags.trailingStop ?? config.trailingStopEnabled ?? false,
+      trailingStopPips:
+        pos.exitFlags.trailingStopPips ?? config.trailingStopPips ?? 15,
+      trailingStopActivation:
+        pos.exitFlags.trailingStopActivation ??
+          config.trailingStopActivation ??
+          "after_1r",
+      partialTPEnabled:
+        pos.exitFlags.partialTP ?? config.partialTPEnabled ?? false,
+      maxHoldEnabled: config.maxHoldEnabled ?? false,
+      maxHoldHours:
+        pos.exitFlags.maxHoldHours ?? config.maxHoldHours ?? 0,
+      structureInvalidationEnabled:
+        config.structureInvalidationEnabled ?? false,
+      adaptiveTrailingEnabled: config.adaptiveTrailingEnabled ?? false,
+      baseTrailATRMultiple: config.baseTrailATRMultiple,
+      momentumFadeThreshold: config.momentumFadeThreshold,
+      trailTightenFactor: config.trailTightenFactor,
+      trailWidenFactor: config.trailWidenFactor,
+      tradingStyle: config.tradingStyle?.mode ?? "day_trader",
+    };
 
     // ── Steps 1-2b: SL Management via computeManagementDecision (shared with live) ──
     // Compute structure check if enabled and we have enough candles
     let structureCheck: StructureCheckResult | null = null;
-    if (config.structureInvalidationEnabled !== false && !pos.structureInvalidationFired && allCandles && barIndex >= 20) {
+    if (
+      managementConfig.structureInvalidationEnabled &&
+      !pos.structureInvalidationFired &&
+      allCandles &&
+      barIndex >= 20
+    ) {
       const lookbackStart = Math.max(0, barIndex - 50);
       const recentCandles = allCandles.slice(lookbackStart, barIndex + 1);
       if (recentCandles.length >= 20) {
@@ -911,7 +950,8 @@ function processExits(
     const atrValue = atrCandles.length >= 14 ? calculateATR(atrCandles, 14) : 0;
 
     // Adaptive trail candles (last 10 bars)
-    const adaptiveTrailCandles = (config.adaptiveTrailingEnabled && allCandles)
+    const adaptiveTrailCandles =
+      (managementConfig.adaptiveTrailingEnabled && allCandles)
       ? allCandles.slice(Math.max(0, barIndex - 9), barIndex + 1).map((c: Candle) => ({ open: c.open, high: c.high, low: c.low, close: c.close }))
       : null;
 
@@ -945,24 +985,7 @@ function processExits(
         regimeInfo: null,  // backtest doesn't have live regime info per-bar (acceptable simplification)
         currentSession,
       },
-      {
-        breakEvenEnabled: pos.exitFlags.breakEven ?? config.breakEvenEnabled ?? true,
-        breakEvenPips: pos.exitFlags.breakEvenPips ?? config.breakEvenPips ?? 20,
-        breakEvenOffsetPips: config.breakEvenOffsetPips ?? 3,
-        trailingStopEnabled: pos.exitFlags.trailingStop ?? config.trailingStopEnabled ?? false,
-        trailingStopPips: pos.exitFlags.trailingStopPips ?? config.trailingStopPips ?? 15,
-        trailingStopActivation: pos.exitFlags.trailingStopActivation ?? config.trailingStopActivation ?? "after_1r",
-        partialTPEnabled: pos.exitFlags.partialTP ?? config.partialTPEnabled ?? false,
-        maxHoldEnabled: config.maxHoldEnabled ?? false,
-        maxHoldHours: pos.exitFlags.maxHoldHours ?? config.maxHoldHours ?? 0,
-        structureInvalidationEnabled: config.structureInvalidationEnabled ?? false,
-        adaptiveTrailingEnabled: config.adaptiveTrailingEnabled ?? false,
-        baseTrailATRMultiple: config.baseTrailATRMultiple,
-        momentumFadeThreshold: config.momentumFadeThreshold,
-        trailTightenFactor: config.trailTightenFactor,
-        trailWidenFactor: config.trailWidenFactor,
-        tradingStyle: config.tradingStyle?.mode ?? "day_trader",
-      },
+      managementConfig,
     );
 
     // Apply the decision
@@ -1009,9 +1032,23 @@ function processExits(
     // market decide. Removing the old "time_exit" force-close to match live parity.
 
     // ── Step 5: Partial TP (exit at trigger price, not candle close) ──
-    if (!closeReason && pos.exitFlags.partialTP && !pos.partialTPFired && pos.exitFlags.partialTPPercent > 0) {
+    const partialTPEnabled = managementConfig.partialTPEnabled;
+    const partialTPPercent = pos.managementPolicy?.partialTPPercent ??
+      pos.exitFlags.partialTPPercent ??
+      config.partialTPPercent ??
+      50;
+    const partialTPLevel = pos.managementPolicy?.partialTPLevel ??
+      pos.exitFlags.partialTPLevel ??
+      config.partialTPLevel ??
+      1;
+    if (
+      !closeReason &&
+      partialTPEnabled &&
+      !pos.partialTPFired &&
+      partialTPPercent > 0
+    ) {
       const slDistPips = Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize;
-      const triggerPips = slDistPips * (pos.exitFlags.partialTPLevel || 1.0);
+      const triggerPips = slDistPips * partialTPLevel;
       const triggerPrice = pos.direction === "long"
         ? pos.entryPrice + triggerPips * spec.pipSize
         : pos.entryPrice - triggerPips * spec.pipSize;
@@ -1019,7 +1056,7 @@ function processExits(
         ? candle.high >= triggerPrice
         : candle.low <= triggerPrice;
       if (triggerHit) {
-        const closeSize = pos.size * (pos.exitFlags.partialTPPercent / 100);
+        const closeSize = pos.size * (partialTPPercent / 100);
         const remainSize = pos.size - closeSize;
         const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol, btRateMap);
         const partialComm = closeSize * commissionPerLot * 2;
@@ -1045,6 +1082,7 @@ function processExits(
           session: pos.session,
           signalSource: pos.signalSource,
           conviction: pos.conviction || null,
+          managementPolicy: pos.managementPolicy,
         });
         pos.size = remainSize;
         pos.partialTPFired = true;
@@ -1076,6 +1114,7 @@ function processExits(
         session: pos.session,
         signalSource: pos.signalSource,
         conviction: pos.conviction || null,
+        managementPolicy: pos.managementPolicy,
       });
     } else {
       pos.currentSL = sl;
@@ -3083,6 +3122,16 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // ── Open Position ──
         tradeCounter++;
         const posId = `bt_${runId.slice(0, 8)}_${tradeCounter}`;
+        const positionStylePolicy = await buildResolvedStylePolicy({
+          resolution: styleResolution,
+          config: pairConfig,
+          baseConfig: config,
+          symbol,
+        });
+        const positionManagementPolicy = resolveBacktestManagementPolicy(
+          positionStylePolicy,
+          pairConfig,
+        );
         const newPos: OpenPosition = {
           id: posId,
           symbol,
@@ -3097,17 +3146,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           effectiveScore,
           factors: analysis.factors.map((f: any) => ({ name: f.name, present: f.present, weight: f.weight })),
           exitFlags: {
-            breakEven: config.breakEvenEnabled,
-            breakEvenPips: config.breakEvenPips,
-            trailingStop: config.trailingStopEnabled,
-            trailingStopPips: config.trailingStopPips,
-            trailingStopActivation: config.trailingStopActivation,
-            tpRatio: config.tpRatio,
-            partialTP: config.partialTPEnabled,
-            partialTPPercent: config.partialTPPercent,
-            partialTPLevel: config.partialTPLevel,
-            maxHoldHours: config.maxHoldHours,
+            breakEven: positionManagementPolicy.decision.breakEvenEnabled,
+            breakEvenPips: positionManagementPolicy.decision.breakEvenPips,
+            trailingStop:
+              positionManagementPolicy.decision.trailingStopEnabled,
+            trailingStopPips:
+              positionManagementPolicy.decision.trailingStopPips,
+            trailingStopActivation:
+              positionManagementPolicy.decision.trailingStopActivation,
+            tpRatio: pairConfig.tpRatio,
+            partialTP: positionManagementPolicy.decision.partialTPEnabled,
+            partialTPPercent: positionManagementPolicy.partialTPPercent,
+            partialTPLevel: positionManagementPolicy.partialTPLevel,
+            maxHoldHours: positionManagementPolicy.decision.maxHoldHours,
           },
+          managementPolicy: positionManagementPolicy,
           partialTPFired: false,
           currentSL: analysis.stopLoss,
           structureInvalidationFired: false,
@@ -3203,6 +3256,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           session: pos.session,
           signalSource: pos.signalSource,
           conviction: pos.conviction || null,
+          managementPolicy: pos.managementPolicy,
         });
         balance += rawPnl - comm;
       }

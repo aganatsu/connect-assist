@@ -15,7 +15,7 @@ function stylePolicy(
 ): any {
   const scalper = style === "scalper";
   return {
-    contractVersion: "style-policy.v1.2",
+    contractVersion: "style-policy.v1.3",
     basePolicyHash: `${style}-base`,
     policyHash: `${style}-exact`,
     enforcement: "observe_only",

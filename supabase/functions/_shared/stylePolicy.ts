@@ -4,7 +4,7 @@ import type {
   TradingStyleResolution,
 } from "./tradingStyleConfig.ts";
 
-export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1.2";
+export const STYLE_POLICY_CONTRACT_VERSION = "style-policy.v1.3";
 
 export type StylePolicyEnforcement = "observe_only";
 
@@ -82,6 +82,7 @@ export interface ResolvedStylePolicy {
   management: {
     breakEvenEnabled: boolean;
     breakEvenPips: number;
+    breakEvenOffsetPips: number;
     trailingStopEnabled: boolean;
     trailingStopPips: number;
     trailingStopActivation: string;
@@ -91,6 +92,11 @@ export interface ResolvedStylePolicy {
     maxHoldEnabled: boolean;
     maxHoldHours: number;
     structureInvalidationEnabled: boolean;
+    adaptiveTrailingEnabled: boolean;
+    baseTrailATRMultiple: number;
+    momentumFadeThreshold: number;
+    trailTightenFactor: number;
+    trailWidenFactor: number;
   };
   lifecycle: {
     gamePlanValidityMinutes: number;
@@ -185,6 +191,7 @@ function buildPolicyContent(input: {
     management: {
       breakEvenEnabled: config.breakEvenEnabled,
       breakEvenPips: config.breakEvenPips,
+      breakEvenOffsetPips: config.breakEvenOffsetPips,
       trailingStopEnabled: config.trailingStopEnabled,
       trailingStopPips: config.trailingStopPips,
       trailingStopActivation: config.trailingStopActivation,
@@ -194,6 +201,11 @@ function buildPolicyContent(input: {
       maxHoldEnabled: config.maxHoldEnabled,
       maxHoldHours: config.maxHoldHours,
       structureInvalidationEnabled: config.structureInvalidationEnabled,
+      adaptiveTrailingEnabled: config.adaptiveTrailingEnabled,
+      baseTrailATRMultiple: config.baseTrailATRMultiple,
+      momentumFadeThreshold: config.momentumFadeThreshold,
+      trailTightenFactor: config.trailTightenFactor,
+      trailWidenFactor: config.trailWidenFactor,
     },
     lifecycle: {
       gamePlanValidityMinutes: config.gamePlanValidityMinutes,
