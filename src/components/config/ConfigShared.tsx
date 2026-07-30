@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import {
+  FEATURE_STATE_LABELS,
+  type FeatureState,
+} from "@/lib/featureState";
+
+export type { FeatureState } from "@/lib/featureState";
 
 // ─── Context for search highlighting ────────────────────────────────────────
 export const HighlightContext = createContext<Set<string>>(new Set());
@@ -13,19 +19,20 @@ export interface ConfigTabProps {
   highlightedLabels?: Set<string>;
 }
 
-export type FeatureState = "active" | "log-only" | "disabled" | "unavailable";
-
 export function FeatureStateBadge({ state }: { state: FeatureState }) {
   const style = {
     active: "border-success/40 bg-success/10 text-success",
+    shadow: "border-primary/40 bg-primary/10 text-primary",
     "log-only": "border-warning/40 bg-warning/10 text-warning",
+    monitoring: "border-info-c/40 bg-info-c/10 text-info-c",
+    inactive: "border-border bg-muted text-muted-foreground",
     disabled: "border-border bg-muted text-muted-foreground",
     unavailable: "border-destructive/30 bg-destructive/10 text-destructive",
   }[state];
 
   return (
     <span className={`ml-2 inline-flex rounded border px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide ${style}`}>
-      {state}
+      {FEATURE_STATE_LABELS[state]}
     </span>
   );
 }

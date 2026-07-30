@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { scannerApi, type StagedSetup } from "@/lib/api";
 import { generateWatchlistNarrative } from "@/lib/narrative";
+import { getWatchlistDisplay } from "@/lib/featureState";
 import { toast } from "sonner";
 import {
   Eye, EyeOff, TrendingUp, TrendingDown, X, Clock,
@@ -87,12 +88,13 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const ttl = ttlRemaining(setup.staged_at, setup.ttl_minutes);
-  const observeOnly = setup.execution_eligible === false;
-  const isNearGate = !observeOnly && setup.current_score >= gate * 0.85;
+  const watchlistDisplay = getWatchlistDisplay(setup.execution_eligible);
+  const monitoringOnly = watchlistDisplay.state === "monitoring";
+  const isNearGate = !monitoringOnly && setup.current_score >= gate * 0.85;
 
   return (
     <div className={`border rounded-md p-2 transition-all ${
-      observeOnly
+      monitoringOnly
         ? "border-info-c/35 bg-info-c/5"
         : isNearGate
         ? "border-warn/40 bg-badge-warn"
@@ -116,12 +118,12 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
               {setup.setup_type.replace(/_/g, " ")}
             </span>
           )}
-          {observeOnly && (
+          {monitoringOnly && (
             <Badge
               variant="outline"
               className="text-[9px] h-4 px-1.5 border-info-c/40 text-info-c"
             >
-              OBSERVE ONLY · WAITING ZONE
+              {watchlistDisplay.label}
             </Badge>
           )}
           {setup.status === "qualified" && (
@@ -196,9 +198,9 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 
       {/* Narrative sentence */}
       <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
-        {observeOnly
+        {monitoringOnly
           ? setup.observation_reason ||
-            "Directional evidence is present, but no valid unified zone exists. This observation cannot execute."
+            watchlistDisplay.description
           : generateWatchlistNarrative(setup)}
       </p>
 
@@ -346,8 +348,8 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
             ) : active.length === 0 ? (
               <p className="text-xs text-foreground/50 text-center py-3">
                 No setups being watched. Directional candidates above the watch
-                floor can appear as observe-only while they wait for a valid
-                unified zone.
+                floor can appear in monitoring while they wait for a valid
+                unified zone. Monitoring candidates cannot execute.
               </p>
             ) : (
               active.map(setup => (

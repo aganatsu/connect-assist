@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { INSTRUMENTS, INSTRUMENT_TYPES, INSTRUMENT_TYPE_LABELS } from "@/lib/marketData";
 import { toast } from "sonner";
 import { CollapsibleSection, SectionHeader, FieldGroup, ToggleField, ConfigTabProps } from "./ConfigShared";
+import { getLiveThesisConvictionDisplay } from "@/lib/featureState";
 
 // ─── Factor Weight Definitions (with tierPts for scoring) ─────────────────────
 const FACTOR_WEIGHT_DEFS: { key: string; name: string; defaultWeight: number; tier: 1 | 2 | 3; tierPts: number; description: string }[] = [
@@ -73,11 +74,10 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
   const pendingZoneOrdersEnabled = config.entry?.pendingZoneOrders ?? false;
   const marketFillEnabled = config.entry?.marketFillAtZone ?? true;
   const thesisEnabled = config.strategy?.thesisConvictionEnabled ?? true;
-  const thesisStatus = !thesisEnabled
-    ? "disabled"
-    : (config.strategy?.thesisConvictionMode ?? "shadow") === "active"
-      ? "active"
-      : "log-only";
+  const thesisDisplay = getLiveThesisConvictionDisplay(
+    thesisEnabled,
+    config.strategy?.thesisConvictionMode ?? "shadow",
+  );
   const weights: Record<string, number> = config.factorWeights || {};
   const hasWeightOverrides = Object.keys(weights).length > 0;
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
@@ -173,7 +173,13 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         )}
         <div className="border-t border-border pt-3 space-y-3">
           <ToggleField label="Score Normalization" description="Normalize raw score to 0-100 scale" checked={config.strategy?.normalizedScoring ?? true} onChange={v => updateField('strategy', 'normalizedScoring', v)} />
-          <ToggleField label="Thesis Conviction" description="Tracks thesis alignment; shadow mode records evidence without changing entries" checked={thesisEnabled} onChange={v => updateField('strategy', 'thesisConvictionEnabled', v)} status={thesisStatus} />
+          <ToggleField
+            label="Thesis Conviction"
+            description={thesisDisplay.description}
+            checked={thesisEnabled}
+            onChange={v => updateField('strategy', 'thesisConvictionEnabled', v)}
+            status={thesisDisplay.state}
+          />
         </div>
       </CollapsibleSection>
 
