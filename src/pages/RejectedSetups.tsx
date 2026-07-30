@@ -22,6 +22,7 @@ import {
 import {
   RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
 import {
@@ -39,6 +40,11 @@ import {
   getStrategyActivationDisplay,
   type StrategyActivationRecord,
 } from "@/lib/strategyActivation";
+import {
+  shortCertificateHash,
+  STRATEGY_EVIDENCE_STATUS,
+  type StrategyEvidenceCertificateRecord,
+} from "@/lib/strategyEvidenceCertificate";
 
 // ── Types ──
 interface ShadowAudit {
@@ -204,6 +210,21 @@ async function fetchStrategyActivations(
   return data || [];
 }
 
+async function fetchStrategyEvidenceCertificates(
+  userId: string,
+): Promise<StrategyEvidenceCertificateRecord[]> {
+  const { data, error } = await supabase
+    .from("strategy_evidence_certificates")
+    .select(
+      "feature_key, variant_key, status, certificate_hash, resolved_count, changed_count, coverage_percent, beneficial_rate_percent, expectancy_delta_r, max_drawdown_delta_percent, good_trade_retention_percent, out_of_sample_passed, walk_forward_consistent, source_window_start, source_window_end, generated_at, is_current",
+    )
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .eq("is_current", true);
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 // ── Summary Stats ──
 function computeStats(setups: RejectedSetup[]) {
   const resolved = setups.filter(s => s.outcome_status !== "pending" && s.outcome_status !== "inconclusive");
@@ -285,6 +306,7 @@ export default function RejectedSetups() {
   const [symbolFilter, setSymbolFilter] = useState<string>("all");
   const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [isGeneratingCertificate, setIsGeneratingCertificate] = useState(false);
 
   const { data: rawSetups = [], isLoading, refetch } = useQuery({
     queryKey: ["rejected-setups", user?.id, days],
@@ -308,6 +330,16 @@ export default function RejectedSetups() {
   } = useQuery({
     queryKey: ["strategy-activation-registry", user?.id],
     queryFn: () => fetchStrategyActivations(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+  });
+  const {
+    data: strategyEvidenceCertificates = [],
+    isLoading: isLoadingStrategyEvidenceCertificates,
+    refetch: refetchStrategyEvidenceCertificates,
+  } = useQuery({
+    queryKey: ["strategy-evidence-certificates", user?.id],
+    queryFn: () => fetchStrategyEvidenceCertificates(user!.id),
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
@@ -350,6 +382,38 @@ export default function RejectedSetups() {
     ),
     [strategyActivations],
   );
+  const certificateByFeature = useMemo(
+    () => new Map(
+      strategyEvidenceCertificates.map((record) => [
+        record.feature_key,
+        record,
+      ]),
+    ),
+    [strategyEvidenceCertificates],
+  );
+
+  const generateStrategyEvidenceCertificate = async () => {
+    setIsGeneratingCertificate(true);
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "strategy-evidence-certifier",
+        { body: { bot_id: "smc", days } },
+      );
+      if (error) throw error;
+      if (!data?.success) {
+        throw new Error(data?.error || "Certificate generation failed");
+      }
+      await refetchStrategyEvidenceCertificates();
+      toast.success(
+        `Trusted ${days}-day evidence certificates generated. Runtime remains unchanged.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Evidence certificate failed: ${message}`);
+    } finally {
+      setIsGeneratingCertificate(false);
+    }
+  };
 
   const symbols = useMemo(
     () => [...new Set([
@@ -860,14 +924,28 @@ export default function RejectedSetups() {
                       Compares the feature&apos;s proposed decision with the actual system decision across distinct rejected opportunities and completed trades.
                     </p>
                   </div>
-                  <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
-                    {shadowEvidenceReport.totalCandidates} CANDIDATES
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
+                      {shadowEvidenceReport.totalCandidates} CANDIDATES
+                    </Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-[10px]"
+                      disabled={isGeneratingCertificate}
+                      onClick={generateStrategyEvidenceCertificate}
+                    >
+                      <RefreshCw className={`h-3 w-3 mr-1 ${isGeneratingCertificate ? "animate-spin" : ""}`} />
+                      {isGeneratingCertificate ? "Certifying…" : `Certify ${days} days`}
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
 
-            {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ? (
+            {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ||
+                isLoadingStrategyEvidenceCertificates ? (
               <Card className="border-border/50">
                 <CardContent className="py-10 text-center text-sm text-muted-foreground">
                   Loading shadow evidence…
@@ -878,10 +956,12 @@ export default function RejectedSetups() {
                 <ShadowFeatureEvidenceCard
                   summary={shadowEvidenceReport.gameplanHierarchy}
                   activation={activationByFeature.get("gameplan_hierarchy")}
+                  certificate={certificateByFeature.get("gameplan_hierarchy")}
                 />
                 <ShadowFeatureEvidenceCard
                   summary={shadowEvidenceReport.thesisConviction}
                   activation={activationByFeature.get("thesis_conviction")}
+                  certificate={certificateByFeature.get("thesis_conviction")}
                 />
               </div>
             )}
@@ -1095,12 +1175,17 @@ function EvidenceBreakdownTable({
 function ShadowFeatureEvidenceCard({
   summary,
   activation,
+  certificate,
 }: {
   summary: ShadowFeatureEvidenceSummary;
   activation?: StrategyActivationRecord;
+  certificate?: StrategyEvidenceCertificateRecord;
 }) {
   const status = SHADOW_STATUS_CONFIG[summary.status];
   const activationDisplay = getStrategyActivationDisplay(activation);
+  const certificateStatus = certificate
+    ? STRATEGY_EVIDENCE_STATUS[certificate.status]
+    : null;
   return (
     <Card className="border-border/50">
       <CardHeader className="px-4 pt-3 pb-2">
@@ -1132,6 +1217,50 @@ function ShadowFeatureEvidenceCard({
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
             {activationDisplay.description}
           </p>
+        </div>
+
+        <div className="rounded border border-border/40 p-2">
+          {certificate && certificateStatus ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Badge
+                  variant="outline"
+                  className={`text-[9px] ${certificateStatus.className}`}
+                >
+                  {certificateStatus.label}
+                </Badge>
+                <span className="font-mono text-[9px] text-muted-foreground">
+                  {shortCertificateHash(certificate.certificate_hash)}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                <span>
+                  Out-of-sample:{" "}
+                  <strong>{certificate.out_of_sample_passed ? "PASS" : "WAIT"}</strong>
+                </span>
+                <span>
+                  Walk-forward:{" "}
+                  <strong>{certificate.walk_forward_consistent ? "PASS" : "WAIT"}</strong>
+                </span>
+                <span>Expectancy Δ: {certificate.expectancy_delta_r.toFixed(3)}R</span>
+                <span>Drawdown Δ: {certificate.max_drawdown_delta_percent.toFixed(1)}%</span>
+                <span>Good trades kept: {certificate.good_trade_retention_percent.toFixed(0)}%</span>
+                <span>{certificate.resolved_count} resolved · {certificate.changed_count} changed</span>
+              </div>
+              <p className="mt-1 text-[9px] text-muted-foreground">
+                Server-generated certificate. It can recommend Log-only but cannot activate it.
+              </p>
+            </>
+          ) : (
+            <>
+              <Badge variant="outline" className="text-[9px] border-border text-muted-foreground">
+                NO TRUSTED CERTIFICATE
+              </Badge>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Use Certify to create an immutable server-side snapshot of the selected history window.
+              </p>
+            </>
+          )}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
