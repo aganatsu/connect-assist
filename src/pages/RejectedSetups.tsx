@@ -29,6 +29,12 @@ import {
   normalizeRejectedGate,
   normalizedGateLabel,
 } from "@/lib/rejectedSetupAnalytics";
+import {
+  buildShadowEvidenceReport,
+  type ClosedTradeShadowEvidenceRecord,
+  type ShadowEvidenceBreakdown,
+  type ShadowFeatureEvidenceSummary,
+} from "@/lib/shadowEvidenceAnalytics";
 
 // ── Types ──
 interface ShadowAudit {
@@ -156,6 +162,30 @@ async function fetchRejectedSetups(userId: string, days: number): Promise<Reject
   return rows;
 }
 
+async function fetchClosedTradeEvidence(
+  userId: string,
+  days: number,
+): Promise<ClosedTradeShadowEvidenceRecord[]> {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const pageSize = 1000;
+  const rows: ClosedTradeShadowEvidenceRecord[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from("paper_trade_history")
+      .select("id, position_id, symbol, pnl, signal_score, signal_reason, close_reason, closed_at")
+      .eq("user_id", userId)
+      .gte("closed_at", since)
+      .order("closed_at", { ascending: false })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+
+  return rows;
+}
+
 // ── Summary Stats ──
 function computeStats(setups: RejectedSetup[]) {
   const resolved = setups.filter(s => s.outcome_status !== "pending" && s.outcome_status !== "inconclusive");
@@ -244,6 +274,16 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
+  const {
+    data: closedTradeEvidence = [],
+    isLoading: isLoadingClosedTrades,
+    refetch: refetchClosedTrades,
+  } = useQuery({
+    queryKey: ["shadow-evidence-closed-trades", user?.id, days],
+    queryFn: () => fetchClosedTradeEvidence(user!.id, days),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+  });
 
   // Collapse repeated scanner observations before applying outcome filters so
   // analytics measure distinct market opportunities instead of scan frequency.
@@ -267,8 +307,24 @@ export default function RejectedSetups() {
     () => setups.reduce((total, setup) => total + setup.occurrence_count, 0),
     [setups],
   );
+  const filteredClosedTradeEvidence = useMemo(
+    () => symbolFilter === "all"
+      ? closedTradeEvidence
+      : closedTradeEvidence.filter((trade) => trade.symbol === symbolFilter),
+    [closedTradeEvidence, symbolFilter],
+  );
+  const shadowEvidenceReport = useMemo(
+    () => buildShadowEvidenceReport(opportunities, filteredClosedTradeEvidence),
+    [opportunities, filteredClosedTradeEvidence],
+  );
 
-  const symbols = useMemo(() => [...new Set(rawSetups.map(s => s.symbol))].sort(), [rawSetups]);
+  const symbols = useMemo(
+    () => [...new Set([
+      ...rawSetups.map((setup) => setup.symbol),
+      ...closedTradeEvidence.map((trade) => trade.symbol),
+    ])].sort(),
+    [rawSetups, closedTradeEvidence],
+  );
   const stats = useMemo(() => computeStats(setups), [setups]);
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
   const dailyTrend = useMemo(() => computeDailyTrend(setups), [setups]);
@@ -386,11 +442,59 @@ export default function RejectedSetups() {
     }
   };
 
+  const downloadShadowEvidence = () => {
+    const summaries = [
+      shadowEvidenceReport.gameplanHierarchy,
+      shadowEvidenceReport.thesisConviction,
+    ];
+    const rows = summaries.flatMap((summary) => [
+      {
+        section: "summary",
+        feature: summary.label,
+        status: summary.status,
+        total_candidates: summary.totalCandidates,
+        evidence_count: summary.evidenceCount,
+        coverage_pct: summary.coveragePercent.toFixed(2),
+        resolved: summary.resolved,
+        changed: summary.changed,
+        beneficial: summary.beneficial,
+        harmful: summary.harmful,
+        beneficial_rate_pct: summary.beneficialRate?.toFixed(2) ?? "",
+        rescued_winners: summary.rescuedWinners,
+        avoided_losses: summary.avoidedLosses,
+        admitted_losses: summary.admittedLosses,
+        blocked_winners: summary.blockedWinners,
+      },
+      ...summary.byStyle.map((row) => ({
+        section: "style",
+        feature: summary.label,
+        key: row.key,
+        resolved: row.resolved,
+        changed: row.changed,
+        beneficial: row.beneficial,
+        harmful: row.harmful,
+        beneficial_rate_pct: row.beneficialRate?.toFixed(2) ?? "",
+      })),
+      ...summary.byPair.map((row) => ({
+        section: "pair",
+        feature: summary.label,
+        key: row.key,
+        resolved: row.resolved,
+        changed: row.changed,
+        beneficial: row.beneficial,
+        harmful: row.harmful,
+        beneficial_rate_pct: row.beneficialRate?.toFixed(2) ?? "",
+      })),
+    ]);
+    downloadFile(`shadow-evidence-${tsStamp()}.csv`, toCSV(rows), "text/csv");
+  };
+
   const downloadAll = () => {
     downloadSummary();
     downloadOverview();
     downloadGates();
     downloadSetups();
+    downloadShadowEvidence();
     downloadAdvisor();
   };
 
@@ -430,7 +534,15 @@ export default function RejectedSetups() {
                 <SelectItem value="30">30 days</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="ghost" size="sm" onClick={() => refetch()} className="h-8 w-8 p-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                refetch();
+                refetchClosedTrades();
+              }}
+              className="h-8 w-8 p-0"
+            >
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
             <DropdownMenu>
@@ -445,6 +557,7 @@ export default function RejectedSetups() {
                 <DropdownMenuItem onClick={downloadSummary} className="text-xs">Summary Analytics (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadOverview} className="text-xs">Overview Charts (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadGates} className="text-xs">Gate Analysis (CSV)</DropdownMenuItem>
+                <DropdownMenuItem onClick={downloadShadowEvidence} className="text-xs">Shadow Evidence (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadSetups} className="text-xs">Distinct Opportunities (CSV)</DropdownMenuItem>
                 <DropdownMenuItem onClick={downloadAdvisor} className="text-xs">AI Advisor (JSON)</DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -529,6 +642,7 @@ export default function RejectedSetups() {
           <TabsList className="h-8">
             <TabsTrigger value="overview" className="text-xs h-7">Overview</TabsTrigger>
             <TabsTrigger value="gates" className="text-xs h-7">Gate Analysis</TabsTrigger>
+            <TabsTrigger value="shadow" className="text-xs h-7">Shadow Evidence</TabsTrigger>
             <TabsTrigger value="advisor" className="text-xs h-7 gap-1">
               <Sparkles className="h-3 w-3" /> Advisor
             </TabsTrigger>
@@ -700,6 +814,40 @@ export default function RejectedSetups() {
             )}
           </TabsContent>
 
+          {/* Shadow Evidence Tab */}
+          <TabsContent value="shadow" className="space-y-4 mt-3">
+            <Card className="border-primary/30 bg-primary/5">
+              <CardContent className="p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">
+                      Observation only — no execution impact
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Compares the feature&apos;s proposed decision with the actual system decision across distinct rejected opportunities and completed trades.
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
+                    {shadowEvidenceReport.totalCandidates} CANDIDATES
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+
+            {isLoading || isLoadingClosedTrades ? (
+              <Card className="border-border/50">
+                <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                  Loading shadow evidence…
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <ShadowFeatureEvidenceCard summary={shadowEvidenceReport.gameplanHierarchy} />
+                <ShadowFeatureEvidenceCard summary={shadowEvidenceReport.thesisConviction} />
+              </div>
+            )}
+          </TabsContent>
+
           {/* Table Tab */}
           {/* Strategy Advisor Tab */}
           <TabsContent value="advisor" className="mt-3">
@@ -849,6 +997,125 @@ export default function RejectedSetups() {
 }
 
 // ── Sub-components ──
+const SHADOW_STATUS_CONFIG = {
+  no_data: {
+    label: "NO DATA",
+    className: "border-border text-muted-foreground",
+  },
+  collecting: {
+    label: "COLLECTING",
+    className: "border-info-c/40 text-info-c",
+  },
+  paper_candidate: {
+    label: "PAPER CANDIDATE",
+    className: "border-success/40 text-success",
+  },
+  keep_shadow: {
+    label: "KEEP SHADOW",
+    className: "border-warning/40 text-warning",
+  },
+} as const;
+
+function EvidenceBreakdownTable({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: ShadowEvidenceBreakdown[];
+}) {
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
+        {title}
+      </p>
+      {rows.length === 0 ? (
+        <p className="text-[10px] text-muted-foreground">No resolved decision changes yet.</p>
+      ) : (
+        <div className="space-y-1">
+          {rows.slice(0, 8).map((row) => (
+            <div
+              key={row.key}
+              className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 rounded border border-border/40 px-2 py-1.5"
+            >
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium truncate">{row.key}</p>
+                <p className="text-[9px] text-muted-foreground">
+                  {row.resolved} resolved · {row.changed} changed
+                </p>
+              </div>
+              <span className="text-[10px] text-success">{row.beneficial} useful</span>
+              <span className="text-[10px] text-destructive">{row.harmful} harmful</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShadowFeatureEvidenceCard({
+  summary,
+}: {
+  summary: ShadowFeatureEvidenceSummary;
+}) {
+  const status = SHADOW_STATUS_CONFIG[summary.status];
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="px-4 pt-3 pb-2">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-sm font-medium">{summary.label}</CardTitle>
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {summary.evidenceCount}/{summary.totalCandidates} candidates have comparable evidence
+            </p>
+          </div>
+          <Badge variant="outline" className={`text-[9px] ${status.className}`}>
+            {status.label}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-[9px] text-muted-foreground uppercase">Coverage</p>
+            <p className="text-lg font-bold">{summary.coveragePercent.toFixed(0)}%</p>
+          </div>
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-[9px] text-muted-foreground uppercase">Resolved</p>
+            <p className="text-lg font-bold">{summary.resolved}</p>
+          </div>
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-[9px] text-muted-foreground uppercase">Changes</p>
+            <p className="text-lg font-bold">{summary.changed}</p>
+          </div>
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-[9px] text-muted-foreground uppercase">Useful Rate</p>
+            <p className="text-lg font-bold">
+              {summary.beneficialRate === null ? "—" : `${summary.beneficialRate.toFixed(0)}%`}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded bg-muted/20 p-2 text-[10px]">
+          <span className="text-success">Rescued winners: {summary.rescuedWinners}</span>
+          <span className="text-success">Avoided losses: {summary.avoidedLosses}</span>
+          <span className="text-destructive">Admitted losses: {summary.admittedLosses}</span>
+          <span className="text-destructive">Blocked winners: {summary.blockedWinners}</span>
+        </div>
+
+        <p className="text-[10px] leading-relaxed text-muted-foreground">
+          {summary.statusReason}
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <EvidenceBreakdownTable title="By trading style" rows={summary.byStyle} />
+          <EvidenceBreakdownTable title="By pair" rows={summary.byPair} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function OutcomeBadge({ status }: { status: string }) {
   const config: Record<string, { label: string; className: string }> = {
     would_have_won: { label: "Won ✓", className: "bg-emerald-500/10 text-profit border-emerald-500/30" },

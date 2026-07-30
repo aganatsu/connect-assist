@@ -8154,8 +8154,16 @@ async function runScanForUser(
             rawDetail: {
               scanCycleId,
               gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+              thesisConviction: (detail as any).thesisConviction || null,
               directionVerdict: (detail as any).directionVerdict || null,
               impulseZone: (detail as any).impulseZone || null,
+              decisionContext: (detail as any).decisionContext || null,
+              stylePolicy: pairStylePolicy,
+              shadowEvaluation: {
+                baseScore: analysis.score,
+                effectiveScore,
+                threshold: conflictAdjustedMinConfluence,
+              },
             },
           });
         } catch (rsErr: any) {
@@ -8500,8 +8508,16 @@ async function runScanForUser(
               rawDetail: {
                 scanCycleId,
                 gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null,
+                thesisConviction: (detail as any).thesisConviction || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 impulseZone: (detail as any).impulseZone || null,
+                decisionContext: (detail as any).decisionContext || null,
+                stylePolicy: pairStylePolicy,
+                shadowEvaluation: {
+                  baseScore: analysis.score,
+                  effectiveScore,
+                  threshold: conflictAdjustedMinConfluence,
+                },
               },
             });
           } catch (rsErr: any) {
