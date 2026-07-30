@@ -149,6 +149,10 @@ import {
   type StructureInvalidationEvidence,
 } from "../_shared/exitParity.ts";
 import {
+  buildGoldenReplaySnapshot,
+  type GoldenReplaySnapshot,
+} from "../_shared/goldenReplay.ts";
+import {
   generateInstrumentGamePlan,
   buildSessionGamePlan,
   type InstrumentGamePlan,
@@ -195,6 +199,7 @@ interface BacktestTrade {
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
   managementPolicy?: ResolvedManagementPolicy;
+  goldenReplaySnapshot?: GoldenReplaySnapshot;
   exitParityEvidence?: {
     partialClose?: PartialCloseDecision | null;
     structureInvalidation?: StructureInvalidationEvidence | null;
@@ -214,6 +219,7 @@ interface BlockedTrade {
   hypotheticalPnlPips: number;
   regime?: string;
   session?: string;
+  goldenReplaySnapshot?: GoldenReplaySnapshot;
 }
 
 interface BacktestStats {
@@ -291,6 +297,7 @@ interface OpenPosition {
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
   managementPolicy?: ResolvedManagementPolicy;
+  goldenReplaySnapshot?: GoldenReplaySnapshot;
   exitParityEvidence?: {
     partialClose?: PartialCloseDecision | null;
     structureInvalidation?: StructureInvalidationEvidence | null;
@@ -1103,6 +1110,7 @@ function processExits(
         signalSource: pos.signalSource,
         conviction: pos.conviction || null,
         managementPolicy: pos.managementPolicy,
+        goldenReplaySnapshot: pos.goldenReplaySnapshot,
         exitParityEvidence: {
           ...pos.exitParityEvidence,
           partialClose: partialDecision,
@@ -1146,6 +1154,7 @@ function processExits(
         signalSource: pos.signalSource,
         conviction: pos.conviction || null,
         managementPolicy: pos.managementPolicy,
+        goldenReplaySnapshot: pos.goldenReplaySnapshot,
         exitParityEvidence: pos.exitParityEvidence,
       });
     } else {
@@ -1662,6 +1671,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     );
     const config = styleResolution.config;
     const resolvedTradingStyle = styleResolution.style;
+    const canonicalRuntimeConfig = { ...config };
     const stylePolicy = await buildResolvedStylePolicy({
       resolution: styleResolution,
       config,
@@ -1922,6 +1932,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     let openPositions: OpenPosition[] = [];
     let allTrades: BacktestTrade[] = [];
     let blockedTrades: BlockedTrade[] = [];
+    let goldenReplaySnapshots: GoldenReplaySnapshot[] = [];
     let tradeCounter = 0;
     let resumeSymbolIndex = 0; // For time-boxing: which symbol to resume from
     let resumeBarIndex = -1;   // For time-boxing: which bar to resume from (-1 = start from beginning)
@@ -1935,6 +1946,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         openPositions = ps.openPositions || [];
         allTrades = ps.allTrades || [];
         blockedTrades = ps.blockedTrades || [];
+        goldenReplaySnapshots = ps.goldenReplaySnapshots || [];
         tradeCounter = ps.tradeCounter || 0;
         resumeSymbolIndex = ps.resumeSymbolIndex || 0;
         resumeBarIndex = ps.resumeBarIndex ?? -1;
@@ -2054,6 +2066,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               openPositions,
               allTrades,
               blockedTrades,
+              goldenReplaySnapshots,
               tradeCounter,
               diagnostics,
               btRateMap,
@@ -3040,6 +3053,111 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
         const failedGates = gates.filter(g => !g.passed);
         const allPassed = failedGates.length === 0;
+        const replayPairPlan = activeGamePlan?.plans?.find((plan) =>
+          plan.symbol === symbol
+        ) || null;
+        const replayStylePolicy = await buildResolvedStylePolicy({
+          resolution: styleResolution,
+          config: {
+            ...pairConfig,
+            scanIntervalMinutes: canonicalRuntimeConfig.scanIntervalMinutes,
+          },
+          baseConfig: canonicalRuntimeConfig,
+          symbol,
+          effectiveMinConfluence: conflictAdjustedMinConfluence,
+          resolvedAt: candle.datetime,
+        });
+        const replayZone = unifiedResult?.hasZone
+          ? {
+            source: signalSource,
+            state: unifiedResult.state || null,
+            hasZone: true,
+            entryReady: unifiedResult.confirmation?.entryReady === true,
+            score: unifiedResult.unifiedScore ?? null,
+            timeframe: unifiedResult.selectedTF ?? null,
+            low: unifiedResult.zone?.low ?? null,
+            high: unifiedResult.zone?.high ?? null,
+            entry: unifiedResult.entry?.entryPrice ?? null,
+          }
+          : {
+            source: signalSource,
+            state: izData?.hasZone
+              ? (izData.bestZone?.priceAtZone
+                ? "triggered"
+                : "waiting_for_price")
+              : "no_zone",
+            hasZone: izData?.hasZone === true,
+            entryReady: izData?.bestZone?.priceAtZone === true,
+            score: izData?.bestZone?.totalScore ?? null,
+            timeframe: izData?.selectedTF ?? null,
+            low: izData?.bestZone?.low ?? null,
+            high: izData?.bestZone?.high ?? null,
+            entry: izData?.bestZone?.refinedEntry ?? null,
+          };
+        const replaySnapshot = await buildGoldenReplaySnapshot({
+          surface: "backtest",
+          symbol,
+          evaluatedAt: candle.datetime,
+          stylePolicy: replayStylePolicy,
+          direction: analysis.direction,
+          directionVerdict: {
+            verdict: directionVerdict?.verdict || null,
+            confidence: directionVerdict?.confidence ?? null,
+            shouldBlock: directionVerdict?.shouldBlock ?? null,
+            version: null,
+            gamePlanVersion: activeGamePlan?.planVersion || null,
+          },
+          gamePlan: replayPairPlan
+            ? {
+              id: replayPairPlan.gamePlanId || null,
+              version: replayPairPlan.planVersion ||
+                activeGamePlan?.planVersion ||
+                null,
+              state: replayPairPlan.state || null,
+              bias: replayPairPlan.bias || null,
+              confidence: replayPairPlan.biasConfidence ?? null,
+            }
+            : null,
+          zone: replayZone,
+          scenario: {
+            enforcement: "observe_only",
+            selectedScenarioIndex: null,
+            candidates: (replayPairPlan?.scenarios || []).map(
+              (scenario, index) => ({
+                index,
+                direction: scenario.direction || null,
+                condition: scenario.condition || null,
+                action: scenario.action || null,
+                target: scenario.targetLevel ?? null,
+                invalidation: scenario.invalidation || null,
+              }),
+            ),
+          },
+          scoring: {
+            raw: analysis.score,
+            effective: effectiveScore,
+            threshold: conflictAdjustedMinConfluence,
+            passed: effectiveScore >= conflictAdjustedMinConfluence,
+          },
+          gates,
+          execution: {
+            eligible: allPassed,
+            entryPrice: candle.close,
+            stopLoss: analysis.stopLoss,
+            takeProfit: analysis.takeProfit,
+            riskReward: analysis.stopLoss && analysis.takeProfit
+              ? Math.abs(analysis.takeProfit - candle.close) /
+                Math.abs(candle.close - analysis.stopLoss)
+              : null,
+            positionSize: null,
+            orderType: "market",
+          },
+          managementContractVersion: "management-policy.v1",
+        });
+        goldenReplaySnapshots.push(replaySnapshot);
+        if (goldenReplaySnapshots.length > 500) {
+          goldenReplaySnapshots.shift();
+        }
 
         if (!allPassed) {
           diagnostics.skippedGateBlocked++;
@@ -3058,6 +3176,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               ...cf,
               regime: analysis.regimeInfo?.regime || "unknown",
               session: session.name,
+              goldenReplaySnapshot: replaySnapshot,
             });
           }
           continue;
@@ -3193,6 +3312,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             maxHoldHours: positionManagementPolicy.decision.maxHoldHours,
           },
           managementPolicy: positionManagementPolicy,
+          goldenReplaySnapshot: replaySnapshot,
           partialTPFired: false,
           currentSL: analysis.stopLoss,
           structureInvalidationFired: false,
@@ -3242,6 +3362,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         openPositions,
         allTrades,
         blockedTrades,
+        goldenReplaySnapshots,
         tradeCounter,
         diagnostics,
         btRateMap,
@@ -3289,6 +3410,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           signalSource: pos.signalSource,
           conviction: pos.conviction || null,
           managementPolicy: pos.managementPolicy,
+          goldenReplaySnapshot: pos.goldenReplaySnapshot,
           exitParityEvidence: pos.exitParityEvidence,
         });
         balance += rawPnl - comm;
@@ -3352,6 +3474,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         blockedTrades: researchAnalytics.blockedTrades.slice(0, maxBlockedStored),
         counterfactualStats: researchAnalytics.counterfactualStats,
       } : null,
+      goldenReplay: {
+        contractVersion: "golden-replay.v1",
+        snapshotCount: goldenReplaySnapshots.length,
+        snapshots: goldenReplaySnapshots,
+      },
     };
 
     await db.from("backtest_runs").update({
