@@ -64,7 +64,6 @@ import {
   calculateAnchoredVWAP,
   calculateATR,
   calculateSLTP,
-  calculatePositionSize,
   calcPnl,
   getQuoteToUSDRate,
   detectSilverBullet,
@@ -134,9 +133,19 @@ import { checkConsecutiveLosses } from "../_shared/gateConsecutiveLosses.ts";
 import { checkCooldown } from "../_shared/gateCooldown.ts";
 import { checkATRVolatility } from "../_shared/gateATRVolatility.ts";
 import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
-import { getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
+import {
+  checkPortfolioConflict,
+  getCorrelation,
+  getDirectionalCorrelation,
+} from "../_shared/portfolioCorrelation.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
+import {
+  applyFinalCandidateSizeAdjustments,
+  computePositionSize,
+  resolveCorrelationSizeMultiplier,
+  resolveSizingVolatilityContext,
+} from "../_shared/unifiedPositionSizing.ts";
 import { computeManagementDecision } from "../_shared/computeManagementDecision.ts";
 import {
   resolveBacktestManagementPolicy,
@@ -3286,18 +3295,48 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           } catch { /* non-fatal */ }
         }
 
-        // ── Position Sizing ──
-        const risk = Math.abs(candle.close - analysis.stopLoss);
-        let posSize: number;
-        if (config.positionSizingMethod === "fixed_lot") {
-          posSize = config.fixedLotSize;
-        } else {
-          const riskAmount = balance * (config.riskPerTrade / 100);
-          const pipsRisk = risk / spec.pipSize;
-          const pipValue = spec.pipSize * (spec.lotUnits || 100000) * (btRateMap[symbol] || 1);
-          posSize = pipsRisk > 0 && pipValue > 0 ? riskAmount / (pipsRisk * pipValue) : 0.01;
-          posSize = Math.max(0.01, Math.min(posSize, 10));
-        }
+        // ── Position Sizing: same engine and adjustment order as live ──
+        const sizingResult = computePositionSize(
+          {
+            balance,
+            riskPercent: pairConfig.riskPerTrade,
+            entryPrice: candle.close,
+            stopLoss: analysis.stopLoss,
+            symbol,
+            method: pairConfig.positionSizingMethod,
+            fixedLotSize: pairConfig.fixedLotSize,
+            atrValue: (analysis as any).atrValue,
+            atrVolatilityMultiplier: pairConfig.atrVolatilityMultiplier,
+            rateMap: btRateMap,
+            commissionPerLot,
+          },
+          undefined,
+          resolveSizingVolatilityContext(analysis.regimeInfo),
+          undefined,
+        );
+        const portfolioCheck = checkPortfolioConflict(
+          {
+            symbol,
+            direction: analysis.direction,
+            size: 0.01,
+          },
+          openPositions.map((position) => ({
+            symbol: position.symbol,
+            direction: position.direction,
+            size: position.size,
+            entryPrice: position.entryPrice,
+          })),
+          { staticOnly: true },
+        );
+        const finalSizing = applyFinalCandidateSizeAdjustments({
+          lots: sizingResult.lots,
+          correlationMultiplier: resolveCorrelationSizeMultiplier(
+            portfolioCheck.concentrationScore,
+          ),
+          signalSource,
+          standaloneMultiplier: pairConfig.standaloneMultiplier,
+        });
+        const posSize = finalSizing.lots;
 
         // ── Open Position ──
         tradeCounter++;

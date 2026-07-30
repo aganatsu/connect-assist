@@ -181,7 +181,14 @@ import { validateFVGBatch, type BatchFVGValidationResult, type FVGInvalidationCo
 import { evaluateICTKillZone, type ICTKillZoneResult, type ICTKillZoneConfig, DEFAULT_ICT_KILLZONE_CONFIG } from "../_shared/ictKillZones.ts";
 import { updateConviction, buildConvictionKey, saveConvictionState, loadConvictionState, type ConvictionInput, type ThesisConvictionState, type ConvictionResult, type ConvictionConfig, DEFAULT_CONVICTION_CONFIG } from "../_shared/thesisConviction.ts";
 import { assessRisk, type ICTRiskAssessment, type ICTRiskConfig, DEFAULT_ICT_RISK_CONFIG } from "../_shared/ictRiskManagement.ts";
-import { computePositionSize, calculatePositionRisk, type VolatilityContext, type PropFirmContext } from "../_shared/unifiedPositionSizing.ts";
+import {
+  applyFinalCandidateSizeAdjustments,
+  computePositionSize,
+  calculatePositionRisk,
+  resolveCorrelationSizeMultiplier,
+  resolveSizingVolatilityContext,
+  type PropFirmContext,
+} from "../_shared/unifiedPositionSizing.ts";
 import { isConnectionAvailable, updateHealth, createInitialHealth, type BrokerHealth, type ExecutionResult, DEFAULT_FAILOVER_CONFIG } from "../_shared/multiBrokerFailover.ts";
 import { checkPortfolioConflict } from "../_shared/portfolioCorrelation.ts";
 import { checkCorrelationExposure } from "../_shared/gateCorrelation.ts";
@@ -6609,9 +6616,10 @@ async function runScanForUser(
             })),
             { staticOnly: true }, // Use static correlations (fast, no candle fetch needed)
           );
-          if (portfolioCheck.concentrationScore > 0.5) {
-            // High concentration: reduce size proportionally (50% concentration = no reduction, 100% = 50% reduction)
-            correlationSizeMultiplier = Math.max(0.5, 1.0 - (portfolioCheck.concentrationScore - 0.5));
+          correlationSizeMultiplier = resolveCorrelationSizeMultiplier(
+            portfolioCheck.concentrationScore,
+          );
+          if (correlationSizeMultiplier < 1.0) {
             console.log(`[${pair}] ⚠️ Portfolio correlation advisory: concentration=${(portfolioCheck.concentrationScore * 100).toFixed(0)}%, size multiplier=${correlationSizeMultiplier.toFixed(2)}. Conflicts: ${portfolioCheck.conflicts.map(c => c.detail).join("; ") || "none"}`);
             detail.correlationAdvisory = {
               concentrationScore: portfolioCheck.concentrationScore,
@@ -6626,12 +6634,7 @@ async function runScanForUser(
 
         // ── Unified Position Sizing (volatility scaling + prop firm compliance) ──
         // Portfolio heat and correlation checks are handled by Gates 6 & 22 above.
-        const volCtx: VolatilityContext | undefined = analysis.regimeInfo ? {
-          regime: analysis.regimeInfo.atrTrend === "expanding" ? "high" :
-                  analysis.regimeInfo.regime === "choppy_range" ? "high" :
-                  analysis.regimeInfo.atrTrend === "contracting" ? "low" : "normal",
-          atrPercentile: undefined,
-        } : undefined;
+        const volCtx = resolveSizingVolatilityContext(analysis.regimeInfo);
         const propFirmCtx: PropFirmContext | undefined = (propFirmGateResult?.enabled) ? {
           enabled: true,
           sizeMultiplier: propFirmSizeMultiplier,
@@ -6656,11 +6659,15 @@ async function runScanForUser(
           volCtx,
           propFirmCtx,
         );
-        let size = sizingResult.lots;
+        const finalSizing = applyFinalCandidateSizeAdjustments({
+          lots: sizingResult.lots,
+          correlationMultiplier: correlationSizeMultiplier,
+          signalSource: (detail as any).signalSource,
+          standaloneMultiplier: (pairConfig as any).standaloneMultiplier,
+        });
+        const size = finalSizing.lots;
         if (correlationSizeMultiplier < 1.0) {
-          size = Math.round(size * correlationSizeMultiplier * 100) / 100;
-          if (size < 0.01) size = 0.01; // Floor at minimum lot
-          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${size} (×${correlationSizeMultiplier.toFixed(2)})`);
+          console.log(`[${pair}] Correlation advisory reduced size: ${sizingResult.lots} → ${finalSizing.afterCorrelationLots} (×${correlationSizeMultiplier.toFixed(2)})`);
         }
         if (sizingResult.adjustments.length > 0) {
           console.log(`[${pair}] Unified sizing: base=${sizingResult.baseLots} → final=${size} [${sizingResult.adjustments.map(a => `${a.type}:${a.multiplier.toFixed(2)}`).join(", ")}]`);
@@ -6671,10 +6678,7 @@ async function runScanForUser(
         // confirmation) aligns vs just the impulse zone engine alone.
         if ((detail as any).signalSource !== "unified") {
           const standaloneMultiplier = Math.max(0.1, Math.min(1.0, (pairConfig as any).standaloneMultiplier ?? 0.5));
-          const prevSize = size;
-          size = Math.round(size * standaloneMultiplier * 100) / 100;
-          if (size < 0.01) size = 0.01; // Floor at minimum lot
-          console.log(`[${pair}] Signal source: standalone \u2014 size reduced ${prevSize} \u2192 ${size} (\u00d7${standaloneMultiplier})`);
+          console.log(`[${pair}] Signal source: standalone \u2014 size reduced ${finalSizing.afterCorrelationLots} \u2192 ${size} (\u00d7${standaloneMultiplier})`);
         } else {
           console.log(`[${pair}] Signal source: unified \u2014 full size ${size} (\u00d71.0)`);
         }
