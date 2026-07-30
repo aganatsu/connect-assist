@@ -6,6 +6,10 @@
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  resolveAuthenticatedUserId,
+  resolveCallerScopedUserId,
+} from "../_shared/callerAuth.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import {
   computeGatePerformance,
@@ -746,6 +750,7 @@ Deno.serve(async (req) => {
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
   const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
+  const authenticatedUserId = await resolveAuthenticatedUserId(req);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -761,9 +766,23 @@ Deno.serve(async (req) => {
       const body = await req.json();
       reviewType = body.review_type || "daily";
       targetBotId = body.bot_id || null;
-      targetUserId = body.user_id || null;
+      const callerScope = resolveCallerScopedUserId(
+        authenticatedUserId,
+        body.user_id,
+      );
+      if (callerScope.forbidden) {
+        return new Response(
+          JSON.stringify({ error: "Cannot review another user's account" }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+      targetUserId = callerScope.userId;
     } catch {
       // No body — use defaults (daily review for all bots)
+      targetUserId = authenticatedUserId;
     }
 
     console.log(`[Bot Review] Starting ${reviewType} review...`);

@@ -5,6 +5,10 @@
 // ============================================================
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import {
+  resolveAuthenticatedUserId,
+  resolveCallerScopedUserId,
+} from "../_shared/callerAuth.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { mapNestedToFlat } from "../_shared/configMapper.ts";
 import {
@@ -251,6 +255,7 @@ Deno.serve(async (req: Request) => {
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
   const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
+  const authenticatedUserId = await resolveAuthenticatedUserId(req);
 
   try {
     const supabase = createClient(
@@ -262,7 +267,20 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const mode: AdvisorMode = body.mode || "on_demand";
     const specificBotId: string | undefined = body.bot_id;
-    const specificUserId: string | undefined = body.user_id;
+    const callerScope = resolveCallerScopedUserId(
+      authenticatedUserId,
+      body.user_id,
+    );
+    if (callerScope.forbidden) {
+      return new Response(
+        JSON.stringify({ error: "Cannot operate another user's account" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+    const specificUserId = callerScope.userId || undefined;
 
     if (!["on_demand", "daily", "weekly"].includes(mode)) {
       return new Response(
