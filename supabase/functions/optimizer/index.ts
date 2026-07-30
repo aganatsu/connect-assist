@@ -91,7 +91,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
-  const authError = verifyCronOrUserCaller(req);
+  const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;

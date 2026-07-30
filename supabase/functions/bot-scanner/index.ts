@@ -970,7 +970,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   // ─── Caller verification: reject requests without valid cron secret OR user JWT ───
-  const authError = verifyCronOrUserCaller(req);
+  const authError = await verifyCronOrUserCaller(req);
   if (authError) {
     const authHeader = req.headers.get("authorization") || "";
     const likelySchedulerRequest = req.headers.has("x-cron-secret") ||

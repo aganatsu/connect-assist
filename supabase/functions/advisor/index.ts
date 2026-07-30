@@ -249,7 +249,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
-  const authError = verifyCronOrUserCaller(req);
+  const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
 
   try {

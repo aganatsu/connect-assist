@@ -109,7 +109,7 @@ Deno.serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  const authError = verifyCronOrUserCaller(req);
+  const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
 
   try {
