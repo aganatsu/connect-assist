@@ -3612,25 +3612,15 @@ Deno.serve(async (req: Request) => {
     const action = body?.action || "start";
     const db = getAdminClient();
 
-    // Resolve user from JWT for ownership on start/list
-    // Also supports service-role-key calls (server-to-server) with userId in body
+    // Trusted server-to-server caller (optimizer, warmup/chunk self-invocation).
+    const serviceCaller = isServiceRoleCaller(req);
+
+    // Resolve the acting user. Service-role callers may act for the userId in
+    // the body; everyone else must present a cryptographically validated
+    // Supabase user JWT.
     async function getUserId(): Promise<string | null> {
-      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-      const apiKey = req.headers.get("apikey");
-      // Opaque backend keys authenticate through `apikey`; they are not JWTs
-      // and must never be sent as an Authorization Bearer token.
-      if (serviceRoleKey && apiKey === serviceRoleKey) {
-        return body?.userId || null;
-      }
-      const auth = req.headers.get("Authorization");
-      if (!auth?.startsWith("Bearer ")) return null;
-      const token = auth.replace("Bearer ", "");
-      // Preserve compatibility with legacy JWT-shaped backend keys.
-      if (serviceRoleKey && token === serviceRoleKey) {
-        return body?.userId || null;
-      }
-      const { data } = await db.auth.getUser(token);
-      return data?.user?.id || null;
+      if (serviceCaller) return body?.userId || null;
+      return await resolveAuthenticatedUserId(req);
     }
 
     // ── Action: golden_replay_report — compare supplied evidence only ──
@@ -3678,11 +3668,19 @@ Deno.serve(async (req: Request) => {
     if (action === "status") {
       const { runId } = body;
       if (!runId) return respond({ error: "runId is required" }, 400);
-      const { data, error } = await db
+      // Service-role callers (optimizer polling) may read any run. Everyone
+      // else must be authenticated and may only read their own run.
+      let ownerId: string | null = null;
+      if (!serviceCaller) {
+        ownerId = await resolveAuthenticatedUserId(req);
+        if (!ownerId) return respond({ error: "Unauthorized" }, 401);
+      }
+      let statusQuery = db
         .from("backtest_runs")
         .select("id,status,progress,progress_message,results,error_message,created_at,started_at,completed_at,heartbeat_at")
-        .eq("id", runId)
-        .maybeSingle();
+        .eq("id", runId);
+      if (ownerId) statusQuery = statusQuery.eq("user_id", ownerId);
+      const { data, error } = await statusQuery.maybeSingle();
       if (error) return respond({ error: error.message }, 500);
       if (!data) return respond({ error: "Run not found" }, 404);
       // Detect stale runs: if running but heartbeat is >900s old, mark as failed.
