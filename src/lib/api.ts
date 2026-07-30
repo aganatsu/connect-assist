@@ -521,6 +521,9 @@ export interface StagedSetup {
   direction_verdict?: any;
   thesis_version?: string | null;
   originating_zone?: any;
+  execution_eligible: boolean;
+  observation_parent_id?: string | null;
+  observation_reason?: string | null;
   confirmation_method?: "choch" | "indicators" | "choch_and_indicators" | null;
   confirmation_config?: { indicatorMinCount?: number };
   authorization_result?: any;

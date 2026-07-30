@@ -30,7 +30,7 @@ the same way. It must finish before Phase 6 begins.
 | 4 | Make timeframe roles authoritative for every analysis module | Complete and production-verified |
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Complete and production-verified |
 | 6 | Make Gameplan validity windows style-aware | Merged; deployment verification pending |
-| 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Implementation in review |
+| 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Direct-entry path production-verified; Slice 7.1 in review |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
 
 Slice 1 is observe-only. It assigns two stable fingerprints: a base-policy hash
@@ -138,6 +138,22 @@ scenario prose to authorize execution. Fill-time account, kill-switch, broker,
 spread, prop-firm, fresh-thesis and current-direction safety checks remain
 current. They can reject an old setup without rewriting the evidence that
 originally qualified it.
+
+Slice 7's direct-entry path was production-verified on 2026-07-30. A natural
+CAD/JPY market entry persisted a non-null frozen strategy hash, policy freeze
+timestamp, candidate ID and `style-policy.v1.2` evidence on its position.
+Watchlist and pending propagation remained unobservable because the active
+configuration requires a complete unified zone and uses market rather than
+limit orders.
+
+Slice 7.1 separates Watchlist visibility from execution eligibility. A
+directional candidate above the normal Watchlist floor can appear as
+`waiting_for_unified_zone`, but the database prevents that observation from
+creating an order or position. When a complete zone appears, the observation
+is resolved and a fresh candidate—with a new ID and complete frozen zone
+evidence—is created. Complete zones waiting for price, confirmation or a
+liquidity sweep are staged before the hard unified-zone skip. The hard
+execution gate and all zone qualification thresholds remain unchanged.
 
 ## Scenario and Zone Story integration thread
 

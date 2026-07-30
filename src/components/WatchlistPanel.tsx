@@ -87,11 +87,16 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const ttl = ttlRemaining(setup.staged_at, setup.ttl_minutes);
-  const isNearGate = setup.current_score >= gate * 0.85;
+  const observeOnly = setup.execution_eligible === false;
+  const isNearGate = !observeOnly && setup.current_score >= gate * 0.85;
 
   return (
     <div className={`border rounded-md p-2 transition-all ${
-      isNearGate ? "border-warn/40 bg-badge-warn" : "border-border/60 bg-card/50"
+      observeOnly
+        ? "border-info-c/35 bg-info-c/5"
+        : isNearGate
+        ? "border-warn/40 bg-badge-warn"
+        : "border-border/60 bg-card/50"
     }`}>
       {/* Header row */}
       <div className="flex items-center justify-between gap-2">
@@ -107,7 +112,17 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
             {setup.direction.toUpperCase()}
           </Badge>
           {setup.setup_type && (
-            <span className="text-[12px] text-foreground/70 truncate">{setup.setup_type}</span>
+            <span className="text-[12px] text-foreground/70 truncate">
+              {setup.setup_type.replace(/_/g, " ")}
+            </span>
+          )}
+          {observeOnly && (
+            <Badge
+              variant="outline"
+              className="text-[9px] h-4 px-1.5 border-info-c/40 text-info-c"
+            >
+              OBSERVE ONLY · WAITING ZONE
+            </Badge>
           )}
           {setup.status === "qualified" && (
             <Badge
@@ -181,7 +196,10 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
 
       {/* Narrative sentence */}
       <p className="text-[11px] text-foreground/70 italic mt-1.5 leading-tight">
-        {generateWatchlistNarrative(setup)}
+        {observeOnly
+          ? setup.observation_reason ||
+            "Directional evidence is present, but no valid unified zone exists. This observation cannot execute."
+          : generateWatchlistNarrative(setup)}
       </p>
 
       {/* Expand/collapse for factors */}
@@ -211,6 +229,12 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
             {setup.lifecycle_reason && (
               <div className="font-sans text-foreground/55">
                 {setup.lifecycle_reason}
+              </div>
+            )}
+            {setup.observation_parent_id && (
+              <div className="font-sans text-foreground/55">
+                Fresh candidate from observation{" "}
+                {setup.observation_parent_id.slice(0, 8)}
               </div>
             )}
           </div>
@@ -281,7 +305,10 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
   const history = (allSetups || []).filter(
     s => s.status !== "watching" && s.status !== "qualified",
   );
-  const nearGateCount = active.filter(s => s.current_score >= confluenceGate * 0.85).length;
+  const nearGateCount = active.filter(
+    s => s.execution_eligible !== false &&
+      s.current_score >= confluenceGate * 0.85,
+  ).length;
 
   return (
     <Card className="border-amber-500/20">
@@ -318,7 +345,9 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
               </div>
             ) : active.length === 0 ? (
               <p className="text-xs text-foreground/50 text-center py-3">
-                No setups being watched. Setups scoring {confluenceGate > 0 ? `${Math.round(confluenceGate * 0.45)}%–${confluenceGate}%` : "between watch threshold and gate"} with at least 1 Tier 1 factor will appear here.
+                No setups being watched. Directional candidates above the watch
+                floor can appear as observe-only while they wait for a valid
+                unified zone.
               </p>
             ) : (
               active.map(setup => (
