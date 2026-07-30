@@ -42,11 +42,11 @@ Deno.test("all automated fill paths preserve style policy evidence", () => {
   );
   assertStringIncludes(
     scanner,
-    "parsedPendingEvidence?.decisionContext?.stylePolicy",
+    "stylePolicy: pendingPolicyResolution.policy",
   );
   assertStringIncludes(
     fastScanner,
-    "parsedPendingEvidence?.decisionContext?.stylePolicy",
+    "stylePolicy: pendingPolicyResolution.policy",
   );
 });
 

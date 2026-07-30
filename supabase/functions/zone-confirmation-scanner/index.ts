@@ -43,13 +43,15 @@ import type { RuntimeConfig } from "../_shared/configMapper.ts";
 import {
   resolveEffectiveRuntimeConfig,
 } from "../_shared/runtimeConfigResolver.ts";
-import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
+import {
+  buildResolvedStylePolicy,
+  type ResolvedStylePolicy,
+} from "../_shared/stylePolicy.ts";
 import {
   bindTimeframeCandles,
   buildTimeframeCandleMap,
   resolveTimeframeAuthority,
 } from "../_shared/timeframeAuthority.ts";
-import type { TimeframeAuthority } from "../_shared/timeframeAuthority.ts";
 import {
   buildStyleDecisionEvidence,
 } from "../_shared/styleDecisionEvidence.ts";
@@ -84,6 +86,9 @@ import {
 import {
   resolvePendingConfirmationMethod,
   resolvePendingIndicatorMinimum,
+  resolvePendingMaxConfirmationAttempts,
+  resolvePendingStylePolicy,
+  validateFrozenSetupIdentity,
 } from "../_shared/setupLifecycle.ts";
 import {
   beginScannerOperation,
@@ -291,7 +296,7 @@ Deno.serve(async (req) => {
       openPositions: any[];
       account: any | null;
       config: RuntimeConfig;
-      timeframeAuthority: TimeframeAuthority;
+      stylePolicy: ResolvedStylePolicy;
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
     }> = {};
@@ -382,7 +387,7 @@ Deno.serve(async (req) => {
         openPositions: openPositions || [],
         account: account || null,
         config: styleResolution.config,
-        timeframeAuthority: resolveTimeframeAuthority(stylePolicy),
+        stylePolicy,
         gamePlan,
         directionVerdicts,
       };
@@ -424,7 +429,7 @@ Deno.serve(async (req) => {
           openPositions,
           account,
           config,
-          timeframeAuthority,
+          stylePolicy: runtimeStylePolicy,
           gamePlan,
           directionVerdicts,
         } = userData;
@@ -440,10 +445,41 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Fetch fresh 5m candles for this pair
-        const candles5m = await fetchCandles(pending.symbol, "5m", brokerConn);
+        const pendingPolicyResolution = resolvePendingStylePolicy(
+          pending,
+          runtimeStylePolicy,
+        );
+        const pendingTimeframeAuthority = resolveTimeframeAuthority(
+          pendingPolicyResolution.policy,
+        );
+        const frozenIdentity = validateFrozenSetupIdentity(
+          pending,
+          pendingPolicyResolution.frozenContext,
+        );
+        if (!frozenIdentity.valid) {
+          await supabase.from("pending_orders").update({
+            status: "invalidated",
+            cancel_reason: frozenIdentity.reason,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", pending.id).eq("user_id", userId);
+          cancelled++;
+          console.warn(
+            `[zone-confirm] ${pending.symbol} invalidated: ${frozenIdentity.reason}`,
+          );
+          continue;
+        }
+
+        const confirmationTimeframe =
+          pendingTimeframeAuthority.roles.confirmation;
+        const refinementTimeframe =
+          pendingTimeframeAuthority.roles.refinement;
+        const candles5m = await fetchCandles(
+          pending.symbol,
+          confirmationTimeframe,
+          brokerConn,
+        );
         if (candles5m.length < 10) {
-          console.log(`[zone-confirm] ${pending.symbol} — insufficient 5m candles (${candles5m.length})`);
+          console.log(`[zone-confirm] ${pending.symbol} — insufficient ${confirmationTimeframe} frozen-confirmation candles (${candles5m.length})`);
           stillHunting++;
           continue;
         }
@@ -481,7 +517,10 @@ Deno.serve(async (req) => {
         const zoneHigh = hasRefinedZone ? rawRefinedHigh : parseFloat(pending.entry_zone_high || "0");
         if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
           const attempts = (pending.confirmation_attempts || 0) + 1;
-          const maxAttempts = config.maxConfirmationAttempts ?? 3;
+          const maxAttempts = resolvePendingMaxConfirmationAttempts(
+            pending,
+            config,
+          );
           if (attempts >= maxAttempts) {
             // Cap reached — cancel the order instead of retrying indefinitely
             await supabase.from("pending_orders").update({
@@ -535,10 +574,14 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Fetch 1m candles for LTF CHoCH detection (Level 2 in hierarchy)
+        // Fetch the exact lower timeframe frozen with this setup.
         let candles1m: Candle[] = [];
         try {
-          candles1m = await fetchCandles(pending.symbol, "1m", brokerConn);
+          candles1m = await fetchCandles(
+            pending.symbol,
+            refinementTimeframe,
+            brokerConn,
+          );
         } catch { /* non-critical: LTF path just won't fire */ }
 
         // Extract sweep data from signal_reason (stored at order placement time)
@@ -646,38 +689,39 @@ Deno.serve(async (req) => {
               await Promise.all([
               fetchCandles(
                 pending.symbol,
-                timeframeAuthority.roles.bias,
+                pendingTimeframeAuthority.roles.bias,
                 brokerConn,
                 120,
               ),
               fetchCandles(
                 pending.symbol,
-                timeframeAuthority.roles.structure,
+                pendingTimeframeAuthority.roles.structure,
                 brokerConn,
                 120,
               ),
               fetchCandles(
                 pending.symbol,
-                timeframeAuthority.roles.setup,
+                pendingTimeframeAuthority.roles.setup,
                 brokerConn,
                 120,
               ),
             ]);
             const decisionEvidence = buildStyleDecisionEvidence(
-              timeframeAuthority,
+              pendingTimeframeAuthority,
               bindTimeframeCandles(
-                timeframeAuthority,
+                pendingTimeframeAuthority,
                 buildTimeframeCandleMap([
                   {
-                    timeframe: timeframeAuthority.roles.bias,
+                    timeframe: pendingTimeframeAuthority.roles.bias,
                     candles: biasCandles,
                   },
                   {
-                    timeframe: timeframeAuthority.roles.structure,
+                    timeframe:
+                      pendingTimeframeAuthority.roles.structure,
                     candles: structureCandles,
                   },
                   {
-                    timeframe: timeframeAuthority.roles.setup,
+                    timeframe: pendingTimeframeAuthority.roles.setup,
                     candles: setupCandles,
                   },
                 ]),
@@ -814,7 +858,7 @@ Deno.serve(async (req) => {
           direction: pending.direction as "long" | "short",
           currentPrice: actualFillPrice,
           candles: candles5m,
-          interval: "5m",
+          interval: pendingTimeframeAuthority.runtimeEntry,
           openPositions,
           accountBalance: account.balance,
           config: {
@@ -923,10 +967,7 @@ Deno.serve(async (req) => {
               null,
             entryConfirmation,
             hierarchy,
-            stylePolicy:
-              parsedPendingEvidence?.decisionContext?.stylePolicy ||
-              parsedPendingEvidence?.stylePolicy ||
-              null,
+            stylePolicy: pendingPolicyResolution.policy,
             evaluatedAt: nowStr,
           }),
         );

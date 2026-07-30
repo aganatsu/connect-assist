@@ -29,8 +29,8 @@ the same way. It must finish before Phase 6 begins.
 | 3 | Remove duplicate UI presets and show the effective runtime policy | Complete and production-verified |
 | 4 | Make timeframe roles authoritative for every analysis module | Complete and production-verified |
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Complete and production-verified |
-| 6 | Make Gameplan validity windows style-aware | Implementation in review |
-| 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Not started |
+| 6 | Make Gameplan validity windows style-aware | Merged; deployment verification pending |
+| 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Implementation in review |
 | 8 | Use one style-frozen management engine in live and backtest paths | Not started |
 
 Slice 1 is observe-only. It assigns two stable fingerprints: a base-policy hash
@@ -122,6 +122,22 @@ while a legacy Gameplan without a validity contract is regenerated once.
 Slice 6 does not change entry authorization or make narrative scenarios
 executable. It only makes the lifetime of their owning Gameplan explicit and
 style-aware.
+
+Slice 7 introduces `setup-policy-freeze.v1`, an immutable origin package that
+travels from Watchlist qualification through pending confirmation and fill.
+It freezes the exact resolved style policy, Gameplan and Direction Verdict
+versions, originating zone, same-direction narrative scenario candidates,
+confirmation method, indicator threshold, confirmation/refinement timeframes
+and maximum confirmation attempts. Both confirmation scanners now use those
+frozen timeframes and limits even if Bot Config changes while the setup waits.
+The database fingerprints the package and rejects later attempts to replace it.
+
+Narrative scenarios remain explicitly `observe_only`: the system records which
+same-direction scenarios existed, but does not claim that one matched or use
+scenario prose to authorize execution. Fill-time account, kill-switch, broker,
+spread, prop-firm, fresh-thesis and current-direction safety checks remain
+current. They can reject an old setup without rewriting the evidence that
+originally qualified it.
 
 ## Scenario and Zone Story integration thread
 
