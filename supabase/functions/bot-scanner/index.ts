@@ -102,11 +102,16 @@ import {
   executeBrokerOrderWithLedger,
 } from "../_shared/brokerExecutionLedger.ts";
 import {
+  buildFrozenSetupStrategyContext,
   buildSetupLifecycleEvidence,
+  readFrozenSetupStrategyContext,
   resolvePendingConfirmationMethod,
   resolvePendingIndicatorMinimum,
+  resolvePendingMaxConfirmationAttempts,
+  resolvePendingStylePolicy,
   THESIS_VALIDATION_VERSION,
   transitionStagedSetup,
+  validateFrozenSetupIdentity,
   type SetupLifecycleEvidence,
 } from "../_shared/setupLifecycle.ts";
 import {
@@ -1366,35 +1371,36 @@ async function runScanForUser(
   const timeframeAuthority = resolveTimeframeAuthority(scanStylePolicy);
   const loadCurrentDecisionEvidence = async (
     symbol: string,
+    authority = timeframeAuthority,
   ): Promise<StyleDecisionEvidence> => {
     const [bias, structure, setup] = await Promise.all([
       cachedFetch(
         symbol,
-        timeframeAuthority.roles.bias,
-        timeframeFetchRange(timeframeAuthority.roles.bias),
+        authority.roles.bias,
+        timeframeFetchRange(authority.roles.bias),
       ),
       cachedFetch(
         symbol,
-        timeframeAuthority.roles.structure,
-        timeframeFetchRange(timeframeAuthority.roles.structure),
+        authority.roles.structure,
+        timeframeFetchRange(authority.roles.structure),
       ),
       cachedFetch(
         symbol,
-        timeframeAuthority.roles.setup,
-        timeframeFetchRange(timeframeAuthority.roles.setup),
+        authority.roles.setup,
+        timeframeFetchRange(authority.roles.setup),
       ),
     ]);
     return buildStyleDecisionEvidence(
-      timeframeAuthority,
+      authority,
       bindTimeframeCandles(
-        timeframeAuthority,
+        authority,
         buildTimeframeCandleMap([
-          { timeframe: timeframeAuthority.roles.bias, candles: bias },
+          { timeframe: authority.roles.bias, candles: bias },
           {
-            timeframe: timeframeAuthority.roles.structure,
+            timeframe: authority.roles.structure,
             candles: structure,
           },
-          { timeframe: timeframeAuthority.roles.setup, candles: setup },
+          { timeframe: authority.roles.setup, candles: setup },
         ]),
       ),
       {
@@ -2121,6 +2127,29 @@ async function runScanForUser(
     console.log(`[scan ${scanCycleId}] Monitoring ${activePendingOrders.length} pending orders`);
     for (const pending of activePendingOrders) {
       try {
+        const pendingPolicyResolution = resolvePendingStylePolicy(
+          pending,
+          scanStylePolicy,
+        );
+        const pendingTimeframeAuthority = resolveTimeframeAuthority(
+          pendingPolicyResolution.policy,
+        );
+        const frozenIdentity = validateFrozenSetupIdentity(
+          pending,
+          pendingPolicyResolution.frozenContext,
+        );
+        if (!frozenIdentity.valid) {
+          await supabase.from("pending_orders").update({
+            status: "invalidated",
+            cancel_reason: frozenIdentity.reason,
+            resolved_at: new Date().toISOString(),
+          }).eq("id", pending.id).eq("user_id", userId);
+          pendingCancelled++;
+          console.warn(
+            `[pending] ${pending.symbol} invalidated: ${frozenIdentity.reason}`,
+          );
+          continue;
+        }
         const pendingConfirmationMethod = resolvePendingConfirmationMethod(
           pending,
           config,
@@ -2145,7 +2174,11 @@ async function runScanForUser(
         }
 
         // Fetch current price to check if limit order should fill
-        const pendingCandles = await cachedFetch(pending.symbol, config.entryTimeframe || "15min", "5d");
+        const pendingCandles = await cachedFetch(
+          pending.symbol,
+          pendingTimeframeAuthority.runtimeEntry,
+          timeframeFetchRange(pendingTimeframeAuthority.runtimeEntry),
+        );
         if (pendingCandles.length === 0) continue;
         const currentPrice = pendingCandles[pendingCandles.length - 1].close;
         const lastCandle = pendingCandles[pendingCandles.length - 1];
@@ -2189,7 +2222,10 @@ async function runScanForUser(
         {
           try {
             const pendingDecisionEvidence =
-              await loadCurrentDecisionEvidence(pending.symbol);
+              await loadCurrentDecisionEvidence(
+                pending.symbol,
+                pendingTimeframeAuthority,
+              );
             const thesisResult: ThesisValidationResult = validatePendingOrderThesis(
               {
                 order_id: pending.order_id,
@@ -2331,7 +2367,10 @@ async function runScanForUser(
           if (zoneLow > 0 && zoneHigh > 0 && !isPriceInZone(currentPrice, zoneLow, zoneHigh, pending.direction as "long" | "short")) {
             // Price left zone without confirming — reset to pending, wait for next approach
             const attempts = (pending.confirmation_attempts || 0) + 1;
-            const maxAttempts = config.maxConfirmationAttempts || 3;
+            const maxAttempts = resolvePendingMaxConfirmationAttempts(
+              pending,
+              config,
+            );
             if (attempts >= maxAttempts) {
               // Cap reached — cancel the order instead of retrying indefinitely
               await supabase.from("pending_orders").update({
@@ -2354,10 +2393,18 @@ async function runScanForUser(
             continue;
           }
 
-          // Fetch 5m candles for the configured confirmation checks.
-          const confirm5mCandles = await cachedFetch(pending.symbol, "5m", "5d");
+          // Use the exact confirmation timeframe frozen with this setup.
+          const confirmationTimeframe =
+            pendingTimeframeAuthority.roles.confirmation;
+          const refinementTimeframe =
+            pendingTimeframeAuthority.roles.refinement;
+          const confirm5mCandles = await cachedFetch(
+            pending.symbol,
+            confirmationTimeframe,
+            timeframeFetchRange(confirmationTimeframe),
+          );
           if (confirm5mCandles.length < 10) {
-            console.log(`[pending] ${pending.symbol} — insufficient 5m candles for confirmation (${confirm5mCandles.length})`);
+            console.log(`[pending] ${pending.symbol} — insufficient ${confirmationTimeframe} candles for frozen confirmation (${confirm5mCandles.length})`);
             continue;
           }
 
@@ -2379,10 +2426,14 @@ async function runScanForUser(
           let confirmationSignal: ConfirmationSignal | null = null;
           let indicatorConfResult: { confirmed: boolean; summary: string; passedCount: number } | null = null;
 
-          // Fetch 1m candles for LTF CHoCH detection (Level 2 in hierarchy)
+          // Fetch the frozen refinement timeframe for lower-timeframe evidence.
           let confirm1mCandles: any[] = [];
           try {
-            confirm1mCandles = await cachedFetch(pending.symbol, "1m", "1d");
+            confirm1mCandles = await cachedFetch(
+              pending.symbol,
+              refinementTimeframe,
+              timeframeFetchRange(refinementTimeframe),
+            );
           } catch { /* non-critical: LTF path just won't fire */ }
 
           // Extract sweep data from signal_reason (stored at order placement time)
@@ -2572,7 +2623,7 @@ async function runScanForUser(
             direction: pending.direction as "long" | "short",
             currentPrice: actualFillPrice,
             candles: pendingCandles,
-            interval: config.entryTimeframe || "15min",
+            interval: pendingTimeframeAuthority.runtimeEntry,
             openPositions: openPosArr,
             accountBalance: account.balance,
             config: {
@@ -2689,10 +2740,7 @@ async function runScanForUser(
                 null,
               entryConfirmation: pendingEntryConfirmation,
               hierarchy: pendingHierarchy,
-              stylePolicy:
-                parsedPendingEvidence?.decisionContext?.stylePolicy ||
-                parsedPendingEvidence?.stylePolicy ||
-                null,
+              stylePolicy: pendingPolicyResolution.policy,
               evaluatedAt: nowStr,
             }),
           );
@@ -4733,10 +4781,26 @@ async function runScanForUser(
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
+      const setupId = crypto.randomUUID();
+      const candidateId = crypto.randomUUID();
       const pairPlan = activeGamePlan?.plans?.find(
         (plan: InstrumentGamePlan) => plan.symbol === pair,
       );
+      const frozenStrategyContext = buildFrozenSetupStrategyContext({
+        identity: { setupId, candidateId },
+        symbol: pair,
+        direction: analysis.direction as "long" | "short",
+        stylePolicy: pairStylePolicy,
+        decisionContext: (detail as any).decisionContext || null,
+        gamePlan: activeGamePlan,
+        directionVerdict: activeDirectionVerdict,
+        originatingZone,
+        confirmationMethod: pairConfig.confirmationMethod || "choch",
+        indicatorMinCount: pairConfig.indicatorMinCount || 3,
+      });
       return {
+        id: setupId,
+        candidate_id: candidateId,
         game_plan_id: pairPlan?.gamePlanId ||
           activeDirectionVerdict?.gamePlanId ||
           null,
@@ -4751,13 +4815,17 @@ async function runScanForUser(
         confirmation_method: pairConfig.confirmationMethod || "choch",
         confirmation_config: {
           indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          maxConfirmationAttempts:
+            pairStylePolicy.lifecycle.maxConfirmationAttempts,
         },
+        frozen_strategy_context: frozenStrategyContext,
         authorization_result: {
           contractVersion: TRADE_DECISION_CONTRACT_VERSION,
           stage: "watching",
           authorized: false,
           reason: "Setup is observational until qualification",
           stylePolicy: pairStylePolicy,
+          frozenStrategyContext,
         },
         style_policy_version: pairStylePolicy.contractVersion,
         style_base_policy_hash: pairStylePolicy.basePolicyHash,
@@ -5608,7 +5676,10 @@ async function runScanForUser(
       authorizationResult?: Record<string, unknown> | null,
     ): (SetupLifecycleEvidence & {
       directionVerdict: unknown;
-      confirmationConfig: { indicatorMinCount: number };
+      confirmationConfig: {
+        indicatorMinCount: number;
+        maxConfirmationAttempts: number;
+      };
       authorizationResult: Record<string, unknown> | null;
     }) | null => {
       if (!isPromotedFromStaging || !existingStaged?.id) return null;
@@ -5616,20 +5687,57 @@ async function runScanForUser(
         setupId: existingStaged.id,
         candidateId: existingStaged.candidate_id || existingStaged.id,
       };
+      const savedPolicy = resolvePendingStylePolicy(
+        existingStaged,
+        pairStylePolicy,
+      ).policy;
+      const frozenStrategyContext =
+        readFrozenSetupStrategyContext(existingStaged) ||
+        buildFrozenSetupStrategyContext({
+          identity,
+          symbol: pair,
+          direction: analysis.direction as "long" | "short",
+          stylePolicy: savedPolicy,
+          decisionContext:
+            existingStaged.authorization_result?.decisionContext ||
+            null,
+          gamePlan: activeGamePlan,
+          directionVerdict: activeDirectionVerdict,
+          originatingZone:
+            existingStaged.originating_zone || originatingZone,
+          confirmationMethod:
+            existingStaged.confirmation_method ||
+            pairConfig.confirmationMethod ||
+            "choch",
+          indicatorMinCount:
+            existingStaged.confirmation_config?.indicatorMinCount ||
+            pairConfig.indicatorMinCount ||
+            3,
+        });
       return {
         ...buildSetupLifecycleEvidence({
           identity,
           symbol: pair,
           gamePlan: activeGamePlan,
           directionVerdict: activeDirectionVerdict,
-          confirmationMethod: pairConfig.confirmationMethod || "choch",
+          confirmationMethod: frozenStrategyContext.confirmation.method,
           originatingZone,
+          frozenStrategyContext,
         }),
-        directionVerdict: (detail as any).directionVerdict || null,
+        directionVerdict:
+          frozenStrategyContext.directionVerdict ||
+          (detail as any).directionVerdict ||
+          null,
         confirmationConfig: {
-          indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          indicatorMinCount:
+            frozenStrategyContext.confirmation.indicatorMinCount,
+          maxConfirmationAttempts:
+            frozenStrategyContext.confirmation.maxAttempts,
         },
-        authorizationResult: authorizationResult || null,
+        authorizationResult: {
+          ...(authorizationResult || {}),
+          frozenStrategyContext,
+        },
       };
     };
 
@@ -6475,6 +6583,25 @@ async function runScanForUser(
           );
           const pendingCandidateId =
             pendingLifecycleEvidence?.candidateId || crypto.randomUUID();
+          const pendingFrozenStrategyContext =
+            pendingLifecycleEvidence?.frozenStrategyContext ||
+            buildFrozenSetupStrategyContext({
+              identity: {
+                setupId: pendingLifecycleEvidence?.setupId ||
+                  crypto.randomUUID(),
+                candidateId: pendingCandidateId,
+              },
+              symbol: pair,
+              direction: analysis.direction as "long" | "short",
+              stylePolicy: pairStylePolicy,
+              decisionContext: pendingDecisionContext,
+              gamePlan: activeGamePlan,
+              directionVerdict: activeDirectionVerdict,
+              originatingZone: pendingOriginatingZone,
+              confirmationMethod:
+                pairConfig.confirmationMethod || "choch",
+              indicatorMinCount: pairConfig.indicatorMinCount || 3,
+            });
           if (pendingLifecycleEvidence) {
             try {
               await qualifyPromotedSetup(
@@ -6524,7 +6651,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pairConfig.confirmationMethod || "choch", indicatorMinCount: pairConfig.indicatorMinCount || 3, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -6538,8 +6665,12 @@ async function runScanForUser(
               pairConfig.confirmationMethod ||
               "choch",
             confirmation_config: {
-              indicatorMinCount: pairConfig.indicatorMinCount || 3,
+              indicatorMinCount:
+                pendingFrozenStrategyContext.confirmation.indicatorMinCount,
+              maxConfirmationAttempts:
+                pendingFrozenStrategyContext.confirmation.maxAttempts,
             },
+            frozen_strategy_context: pendingFrozenStrategyContext,
             staged_cycles: isPromotedFromStaging && existingStaged ? existingStaged.scan_cycles + 1 : 0,
             staged_initial_score: isPromotedFromStaging && existingStaged ? parseFloat(existingStaged.initial_score) : null,
             exit_flags: exitFlags,
@@ -6895,6 +7026,25 @@ async function runScanForUser(
         );
         const directCandidateId =
           directLifecycleEvidence?.candidateId || crypto.randomUUID();
+        const directFrozenStrategyContext =
+          directLifecycleEvidence?.frozenStrategyContext ||
+          buildFrozenSetupStrategyContext({
+            identity: {
+              setupId: directLifecycleEvidence?.setupId ||
+                crypto.randomUUID(),
+              candidateId: directCandidateId,
+            },
+            symbol: pair,
+            direction: analysis.direction as "long" | "short",
+            stylePolicy: pairStylePolicy,
+            decisionContext: directAuthorization.decisionContext,
+            gamePlan: activeGamePlan,
+            directionVerdict: activeDirectionVerdict,
+            originatingZone: directOriginatingZone,
+            confirmationMethod:
+              pairConfig.confirmationMethod || "choch",
+            indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          });
         if (directLifecycleEvidence) {
           try {
             await qualifyPromotedSetup(
@@ -7136,8 +7286,11 @@ async function runScanForUser(
           gamePlanSnapshot,
           finalAuthorization: directAuthorization,
           decisionContext: directAuthorization.decisionContext,
-          confirmationMethod: pairConfig.confirmationMethod || "choch",
-          indicatorMinCount: pairConfig.indicatorMinCount || 3,
+          frozenStrategyContext: directFrozenStrategyContext,
+          confirmationMethod:
+            directFrozenStrategyContext.confirmation.method,
+          indicatorMinCount:
+            directFrozenStrategyContext.confirmation.indicatorMinCount,
           thesisVersion: THESIS_VALIDATION_VERSION,
           ...(directLifecycleEvidence
             ? { watchlistLifecycle: directLifecycleEvidence }
@@ -7924,6 +8077,29 @@ async function runScanForUser(
             const breakerCandidateId = crypto.randomUUID();
             const breakerExpiry = config.limitOrderExpiryMinutes || 60;
             const breakerExpiresAt = new Date(Date.now() + breakerExpiry * 60 * 1000).toISOString();
+            const breakerOriginatingZone = {
+              type: "breaker_block",
+              low: breaker.entryZone.low,
+              high: breaker.entryZone.high,
+              entry: breakerEntry,
+            };
+            const breakerFrozenStrategyContext =
+              buildFrozenSetupStrategyContext({
+                identity: {
+                  setupId: crypto.randomUUID(),
+                  candidateId: breakerCandidateId,
+                },
+                symbol: pair,
+                direction: breakerDir,
+                stylePolicy: pairStylePolicy,
+                decisionContext: breakerAuthorization.decisionContext,
+                gamePlan: activeGamePlan,
+                directionVerdict: activeDirectionVerdict,
+                originatingZone: breakerOriginatingZone,
+                confirmationMethod:
+                  pairConfig.confirmationMethod || "choch",
+                indicatorMinCount: pairConfig.indicatorMinCount || 3,
+              });
 
             const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
               user_id: userId,
@@ -7941,18 +8117,16 @@ async function runScanForUser(
               entry_zone_type: "breaker_block",
               entry_zone_low: breaker.entryZone.low,
               entry_zone_high: breaker.entryZone.high,
-              originating_zone: {
-                type: "breaker_block",
-                low: breaker.entryZone.low,
-                high: breaker.entryZone.high,
-                entry: breakerEntry,
-              },
+              originating_zone: breakerOriginatingZone,
               thesis_version: THESIS_VALIDATION_VERSION,
               confirmation_method:
                 pairConfig.confirmationMethod || "choch",
               confirmation_config: {
                 indicatorMinCount: pairConfig.indicatorMinCount || 3,
+                maxConfirmationAttempts:
+                  breakerFrozenStrategyContext.confirmation.maxAttempts,
               },
+              frozen_strategy_context: breakerFrozenStrategyContext,
               status: "pending",
               expiry_minutes: breakerExpiry,
               expires_at: breakerExpiresAt,
@@ -7974,6 +8148,7 @@ async function runScanForUser(
                 gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
                 candidateAuthorization: breakerAuthorization,
                 decisionContext: breakerAuthorization.decisionContext,
+                frozenStrategyContext: breakerFrozenStrategyContext,
               }),
               signal_score: breaker.confidence * 100,
               setup_type: "breaker_retest",
