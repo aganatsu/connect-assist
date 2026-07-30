@@ -3773,6 +3773,9 @@ Deno.serve(async (req: Request) => {
     // ── Action: warmup — pre-fetch FOTSI timeline in a dedicated invocation ──
     if (action === "warmup") {
       const { runId } = body;
+      // Internal-only: reachable exclusively from the service-role
+      // self-invocation chain, never from an external caller.
+      if (!serviceCaller) return respond({ error: "Forbidden" }, 403);
       if (!runId) return respond({ error: "runId is required" }, 400);
       const warmupJob = async () => {
         try {
@@ -3855,6 +3858,9 @@ Deno.serve(async (req: Request) => {
     // ── Action: chunk — run a specific chunk in the background ──
     if (action === "chunk") {
       const { runId, chunkIndex } = body;
+      // Internal-only: reachable exclusively from the service-role
+      // self-invocation chain, never from an external caller.
+      if (!serviceCaller) return respond({ error: "Forbidden" }, 403);
       if (!runId) return respond({ error: "runId is required" }, 400);
       if (typeof chunkIndex !== "number") return respond({ error: "chunkIndex required" }, 400);
       const job = runBacktestJob(runId, body, chunkIndex);
