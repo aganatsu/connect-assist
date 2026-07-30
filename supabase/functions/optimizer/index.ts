@@ -19,6 +19,10 @@
  */
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
+import {
+  resolveAuthenticatedUserId,
+  resolveCallerScopedUserId,
+} from "../_shared/callerAuth.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { TPEOptimizer } from "./lib/tpe.ts";
 import type { Trial, TPEConfig } from "./lib/tpe.ts";
@@ -93,6 +97,7 @@ Deno.serve(async (req: Request) => {
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
   const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
+  const authenticatedUserId = await resolveAuthenticatedUserId(req);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -106,7 +111,21 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json().catch(() => ({}));
     const action = body.action || "start";
-    body._authHeader = req.headers.get("authorization") ?? "";
+    const callerScope = resolveCallerScopedUserId(
+      authenticatedUserId,
+      body.userId,
+    );
+    if (callerScope.forbidden) {
+      return respond({ error: "Cannot operate another user's optimizer" }, 403);
+    }
+    body._callerUserId = callerScope.userId;
+
+    if (
+      authenticatedUserId &&
+      ["poll-backtest", "start-trial", "finalize"].includes(action)
+    ) {
+      return respond({ error: "Internal optimizer action" }, 403);
+    }
 
     switch (action) {
       case "start":
@@ -118,9 +137,9 @@ Deno.serve(async (req: Request) => {
       case "finalize":
         return await handleFinalize(db, supabaseUrl, supabaseKey, body);
       case "status":
-        return await handleStatus(db, body);
+        return await handleStatus(db, body, authenticatedUserId);
       case "cancel":
-        return await handleCancel(db, body);
+        return await handleCancel(db, body, authenticatedUserId);
       default:
         return respond({ error: `Unknown action: ${action}` }, 400);
     }
@@ -139,23 +158,11 @@ async function handleStart(
   body: any,
 ): Promise<Response> {
   const {
-    userId,
     dryRun = false,
     trials,
     coreOnly = false,
     source = "unknown",
   } = body;
-
-  // Derive userId from JWT if not provided
-  let jwtUserId: string | undefined;
-  try {
-    const auth = (body._authHeader as string | undefined) ?? "";
-    const token = auth.replace(/^Bearer\s+/i, "");
-    if (token && token.split(".").length === 3) {
-      const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
-      if (payload?.sub) jwtUserId = payload.sub;
-    }
-  } catch { /* ignore */ }
 
   // Load file config
   let fileConfig: Partial<OptimizationConfig> = {};
@@ -164,7 +171,7 @@ async function handleStart(
     fileConfig = JSON.parse(configText);
   } catch { /* use defaults */ }
 
-  const targetUserId = userId || jwtUserId || fileConfig.userId;
+  const targetUserId = body._callerUserId || fileConfig.userId;
   if (!targetUserId) {
     return respond({ error: "userId is required (in body or config.json)" }, 400);
   }
@@ -727,14 +734,21 @@ async function handleFinalize(
 
 // ─── Action: STATUS ───
 
-async function handleStatus(db: SupabaseClient, body: any): Promise<Response> {
+async function handleStatus(
+  db: SupabaseClient,
+  body: any,
+  authenticatedUserId: string | null,
+): Promise<Response> {
   const { runId } = body;
   if (!runId) return respond({ error: "runId required" }, 400);
 
-  const { data: run } = await db.from("optimizer_runs")
+  let runQuery = db.from("optimizer_runs")
     .select("id, status, progress, progress_message, trials_count, baseline_score, best_score, improvement_percent, auto_applied, reject_reason, started_at, completed_at, error_message")
-    .eq("id", runId)
-    .single();
+    .eq("id", runId);
+  if (authenticatedUserId) {
+    runQuery = runQuery.eq("user_id", authenticatedUserId);
+  }
+  const { data: run } = await runQuery.maybeSingle();
 
   if (!run) return respond({ error: "Run not found" }, 404);
   return respond(run);
@@ -742,9 +756,22 @@ async function handleStatus(db: SupabaseClient, body: any): Promise<Response> {
 
 // ─── Action: CANCEL ───
 
-async function handleCancel(db: SupabaseClient, body: any): Promise<Response> {
+async function handleCancel(
+  db: SupabaseClient,
+  body: any,
+  authenticatedUserId: string | null,
+): Promise<Response> {
   const { runId } = body;
   if (!runId) return respond({ error: "runId required" }, 400);
+
+  let runQuery = db.from("optimizer_runs")
+    .select("id")
+    .eq("id", runId);
+  if (authenticatedUserId) {
+    runQuery = runQuery.eq("user_id", authenticatedUserId);
+  }
+  const { data: run } = await runQuery.maybeSingle();
+  if (!run) return respond({ error: "Run not found" }, 404);
 
   await db.from("optimizer_runs").update({
     status: "cancelled",

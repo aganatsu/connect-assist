@@ -7,6 +7,7 @@ import {
   type ClaimsVerifier,
   isServiceRoleCaller,
   resolveAuthenticatedUserId,
+  resolveCallerScopedUserId,
   secretsMatch,
 } from "./callerAuth.ts";
 
@@ -73,4 +74,30 @@ Deno.test("resolveAuthenticatedUserId: anon-role claims are rejected", async () 
     const anonVerifier: ClaimsVerifier = () => Promise.resolve({ sub: "anon-sub", role: "anon" });
     assertEquals(await resolveAuthenticatedUserId(req({ Authorization: "Bearer anon" }), anonVerifier), null);
   } finally { teardown(); }
+});
+
+Deno.test("resolveCallerScopedUserId: a user is always scoped to their JWT identity", () => {
+  assertEquals(
+    resolveCallerScopedUserId("user-abc", undefined),
+    { userId: "user-abc", forbidden: false },
+  );
+  assertEquals(
+    resolveCallerScopedUserId("user-abc", "user-abc"),
+    { userId: "user-abc", forbidden: false },
+  );
+  assertEquals(
+    resolveCallerScopedUserId("user-abc", "other-user"),
+    { userId: null, forbidden: true },
+  );
+});
+
+Deno.test("resolveCallerScopedUserId: a trusted server caller keeps its explicit target", () => {
+  assertEquals(
+    resolveCallerScopedUserId(null, "scheduled-user"),
+    { userId: "scheduled-user", forbidden: false },
+  );
+  assertEquals(
+    resolveCallerScopedUserId(null, undefined),
+    { userId: null, forbidden: false },
+  );
 });

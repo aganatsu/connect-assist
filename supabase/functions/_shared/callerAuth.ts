@@ -20,6 +20,11 @@ export interface VerifiedClaims {
   role?: string;
 }
 
+export interface CallerScopedUserId {
+  userId: string | null;
+  forbidden: boolean;
+}
+
 /** Verifier signature so tests can inject a deterministic implementation. */
 export type ClaimsVerifier = (token: string) => Promise<VerifiedClaims | null>;
 
@@ -93,4 +98,31 @@ export async function resolveAuthenticatedUserId(
   if (!claims?.sub) return null;
   if (claims.role === "service_role" || claims.role === "anon") return null;
   return claims.sub;
+}
+
+/**
+ * Scope a caller-supplied user id to the cryptographically verified user.
+ *
+ * Cron and service callers have no authenticated user id and may retain their
+ * explicit target. A user caller may omit the target (their own id is used) or
+ * repeat their own id, but may never select a different user.
+ */
+export function resolveCallerScopedUserId(
+  authenticatedUserId: string | null,
+  requestedUserId: unknown,
+): CallerScopedUserId {
+  const requested = typeof requestedUserId === "string" &&
+      requestedUserId.trim().length > 0
+    ? requestedUserId.trim()
+    : null;
+  if (
+    authenticatedUserId && requested &&
+    requested !== authenticatedUserId
+  ) {
+    return { userId: null, forbidden: true };
+  }
+  return {
+    userId: authenticatedUserId || requested,
+    forbidden: false,
+  };
 }

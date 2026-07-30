@@ -70,3 +70,42 @@ Deno.test("telegram-notify authorizes every send", () => {
   assertStringIncludes(src, "authorizeTelegramSend(req, String(chatId)");
   assertStringIncludes(src, "status: decision.status");
 });
+
+Deno.test("dual-path account-wide handlers scope user requests to the JWT owner", () => {
+  for (
+    const file of [
+      "../advisor/index.ts",
+      "../bot-daily-review/index.ts",
+      "../bot-weekly-advisor/index.ts",
+      "../optimizer/index.ts",
+    ]
+  ) {
+    const src = read(file);
+    assertStringIncludes(
+      src,
+      "await resolveAuthenticatedUserId(req)",
+      `${file} must resolve the verified user identity`,
+    );
+    assertStringIncludes(
+      src,
+      "resolveCallerScopedUserId(",
+      `${file} must reject a different caller-supplied user id`,
+    );
+  }
+});
+
+Deno.test("optimizer protects user-owned runs and internal state-machine actions", () => {
+  const src = read("../optimizer/index.ts");
+  assertStringIncludes(
+    src,
+    '["poll-backtest", "start-trial", "finalize"].includes(action)',
+  );
+  assertStringIncludes(
+    src,
+    'runQuery = runQuery.eq("user_id", authenticatedUserId)',
+  );
+  assert(
+    !src.includes("JSON.parse(atob(token.split"),
+    "optimizer must not derive identity from an unverified JWT payload",
+  );
+});

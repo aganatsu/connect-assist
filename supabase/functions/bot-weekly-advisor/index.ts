@@ -6,6 +6,10 @@
 // ============================================================
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  resolveAuthenticatedUserId,
+  resolveCallerScopedUserId,
+} from "../_shared/callerAuth.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
 import { fetchCandlesWithFallback, type BrokerConn } from "../_shared/candleSource.ts";
 import { classifyInstrumentRegime as classifyInstrumentRegimeShared, type InstrumentRegime } from "../_shared/smcAnalysis.ts";
@@ -1216,6 +1220,7 @@ Deno.serve(async (req) => {
   // Gate 0: Requires either cron-secret (scheduled) or valid user JWT (manual trigger).
   const authError = await verifyCronOrUserCaller(req);
   if (authError) return authError;
+  const authenticatedUserId = await resolveAuthenticatedUserId(req);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -1228,8 +1233,23 @@ Deno.serve(async (req) => {
     try {
       const body = await req.json();
       targetBotId = body.bot_id || null;
-      targetUserId = body.user_id || null;
-    } catch { /* No body */ }
+      const callerScope = resolveCallerScopedUserId(
+        authenticatedUserId,
+        body.user_id,
+      );
+      if (callerScope.forbidden) {
+        return new Response(
+          JSON.stringify({ error: "Cannot review another user's account" }),
+          {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+      targetUserId = callerScope.userId;
+    } catch {
+      targetUserId = authenticatedUserId;
+    }
 
     console.log("[Weekly Advisor] Starting weekly strategy review...");
 
