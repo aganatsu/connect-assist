@@ -75,7 +75,29 @@ export interface GoldenReplayInput {
     positionSize?: number | null;
     orderType?: string | null;
   };
+  lifecycle?: GoldenReplayLifecycleInput | null;
+  provenance?: GoldenReplayProvenanceInput | null;
   managementContractVersion?: string | null;
+}
+
+export interface GoldenReplayLifecycleInput {
+  route?: string | null;
+  stage?: string | null;
+  outcome?: string | null;
+  reason?: string | null;
+}
+
+export interface GoldenReplayProvenanceInput {
+  candidateId?: string | null;
+  orderId?: string | null;
+  positionId?: string | null;
+}
+
+export interface GoldenReplayFinalization {
+  evaluatedAt?: string;
+  execution: GoldenReplayInput["execution"];
+  lifecycle: GoldenReplayLifecycleInput;
+  provenance?: GoldenReplayProvenanceInput | null;
 }
 
 export interface GoldenReplaySnapshot {
@@ -89,6 +111,9 @@ export interface GoldenReplaySnapshot {
     gamePlanVersion: string | null;
     verdictVersion: string | null;
     verdictGamePlanVersion: string | null;
+    candidateId: string | null;
+    orderId: string | null;
+    positionId: string | null;
   };
   decision: {
     policy: {
@@ -151,6 +176,11 @@ export interface GoldenReplaySnapshot {
       positionSize: number | null;
       orderType: string | null;
     };
+    lifecycle: {
+      route: string | null;
+      stage: string | null;
+      outcome: string | null;
+    };
     managementContractVersion: string | null;
   };
   gateEvidence: Array<{
@@ -158,6 +188,9 @@ export interface GoldenReplaySnapshot {
     passed: boolean;
     reason: string;
   }>;
+  lifecycleEvidence: {
+    reason: string | null;
+  };
   coverage: {
     complete: boolean;
     missing: string[];
@@ -179,6 +212,7 @@ export interface GoldenReplayComparison {
 }
 
 function finiteOrNull(value: unknown, precision = 8): number | null {
+  if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   const factor = 10 ** precision;
@@ -231,6 +265,55 @@ function normalizeScenario(
       invalidation: candidate.invalidation || null,
     })),
   };
+}
+
+function normalizeExecution(
+  execution: GoldenReplayInput["execution"],
+): GoldenReplaySnapshot["decision"]["execution"] {
+  return {
+    eligible: execution.eligible,
+    entryPrice: finiteOrNull(execution.entryPrice),
+    stopLoss: finiteOrNull(execution.stopLoss),
+    takeProfit: finiteOrNull(execution.takeProfit),
+    riskReward: finiteOrNull(execution.riskReward, 4),
+    positionSize: finiteOrNull(execution.positionSize, 4),
+    orderType: execution.orderType || null,
+  };
+}
+
+function findMissingEvidence(
+  decision: GoldenReplaySnapshot["decision"],
+): string[] {
+  const required: Array<[string, unknown]> = [
+    ["policy.basePolicyHash", decision.policy.basePolicyHash],
+    ["direction.candidate", decision.direction.candidate],
+    ["gamePlan.state", decision.gamePlan.state],
+    ["gamePlan.bias", decision.gamePlan.bias],
+    ["zone.state", decision.zone.state],
+    ["scoring.effective", decision.scoring.effective],
+    ["execution.stopLoss", decision.execution.stopLoss],
+    ["execution.takeProfit", decision.execution.takeProfit],
+    ["lifecycle.route", decision.lifecycle.route],
+    ["lifecycle.stage", decision.lifecycle.stage],
+    ["lifecycle.outcome", decision.lifecycle.outcome],
+  ];
+  if (decision.execution.eligible) {
+    required.push(
+      ["execution.positionSize", decision.execution.positionSize],
+      ["execution.orderType", decision.execution.orderType],
+    );
+  }
+  return required
+    .filter(([, value]) => value === null)
+    .map(([path]) => String(path));
+}
+
+async function hashDecision(
+  symbol: string,
+  evaluatedAt: string,
+  decision: GoldenReplaySnapshot["decision"],
+): Promise<string> {
+  return await sha256({ symbol, evaluatedAt, decision });
 }
 
 /**
@@ -303,49 +386,84 @@ export async function buildGoldenReplaySnapshot(
       passedCodes,
       failedCodes,
     },
-    execution: {
-      eligible: input.execution.eligible,
-      entryPrice: finiteOrNull(input.execution.entryPrice),
-      stopLoss: finiteOrNull(input.execution.stopLoss),
-      takeProfit: finiteOrNull(input.execution.takeProfit),
-      riskReward: finiteOrNull(input.execution.riskReward, 4),
-      positionSize: finiteOrNull(input.execution.positionSize, 4),
-      orderType: input.execution.orderType || null,
+    execution: normalizeExecution(input.execution),
+    lifecycle: {
+      route: input.lifecycle?.route || "candidate",
+      stage: input.lifecycle?.stage || "evaluation",
+      outcome: input.lifecycle?.outcome ||
+        (input.execution.eligible ? "eligible" : "blocked"),
     },
     managementContractVersion: input.managementContractVersion || null,
   };
-  const missing = [
-    ["policy.basePolicyHash", decision.policy.basePolicyHash],
-    ["direction.candidate", decision.direction.candidate],
-    ["gamePlan.state", decision.gamePlan.state],
-    ["gamePlan.bias", decision.gamePlan.bias],
-    ["zone.state", decision.zone.state],
-    ["scoring.effective", decision.scoring.effective],
-    ["execution.stopLoss", decision.execution.stopLoss],
-    ["execution.takeProfit", decision.execution.takeProfit],
-    ["execution.positionSize", decision.execution.positionSize],
-  ].filter(([, value]) => value === null).map(([path]) => String(path));
+  const missing = findMissingEvidence(decision);
   const evaluatedAt = normalizeTimestamp(input.evaluatedAt);
-  const parityEnvelope = {
-    symbol: input.symbol,
-    evaluatedAt,
-    decision,
-  };
 
   return {
     contractVersion: GOLDEN_REPLAY_CONTRACT_VERSION,
     surface: input.surface,
     symbol: input.symbol,
     evaluatedAt,
-    decisionHash: await sha256(parityEnvelope),
+    decisionHash: await hashDecision(input.symbol, evaluatedAt, decision),
     provenance: {
       gamePlanId: input.gamePlan?.id || null,
       gamePlanVersion: input.gamePlan?.version || null,
       verdictVersion: input.directionVerdict?.version || null,
       verdictGamePlanVersion: input.directionVerdict?.gamePlanVersion || null,
+      candidateId: input.provenance?.candidateId || null,
+      orderId: input.provenance?.orderId || null,
+      positionId: input.provenance?.positionId || null,
     },
     decision,
     gateEvidence,
+    lifecycleEvidence: {
+      reason: input.lifecycle?.reason || null,
+    },
+    coverage: {
+      complete: missing.length === 0,
+      missing,
+    },
+  };
+}
+
+/**
+ * Replaces only the finalized execution/lifecycle portion of a snapshot.
+ * Candidate analysis evidence remains immutable, identifiers stay provenance,
+ * and the semantic hash is recalculated from the finalized decision.
+ */
+export async function finalizeGoldenReplaySnapshot(
+  snapshot: GoldenReplaySnapshot,
+  finalization: GoldenReplayFinalization,
+): Promise<GoldenReplaySnapshot> {
+  const evaluatedAt = normalizeTimestamp(
+    finalization.evaluatedAt || snapshot.evaluatedAt,
+  );
+  const decision: GoldenReplaySnapshot["decision"] = {
+    ...snapshot.decision,
+    execution: normalizeExecution(finalization.execution),
+    lifecycle: {
+      route: finalization.lifecycle.route || null,
+      stage: finalization.lifecycle.stage || null,
+      outcome: finalization.lifecycle.outcome || null,
+    },
+  };
+  const missing = findMissingEvidence(decision);
+  return {
+    ...snapshot,
+    evaluatedAt,
+    decisionHash: await hashDecision(snapshot.symbol, evaluatedAt, decision),
+    provenance: {
+      ...snapshot.provenance,
+      candidateId: finalization.provenance?.candidateId ||
+        snapshot.provenance.candidateId,
+      orderId: finalization.provenance?.orderId ||
+        snapshot.provenance.orderId,
+      positionId: finalization.provenance?.positionId ||
+        snapshot.provenance.positionId,
+    },
+    decision,
+    lifecycleEvidence: {
+      reason: finalization.lifecycle.reason || null,
+    },
     coverage: {
       complete: missing.length === 0,
       missing,

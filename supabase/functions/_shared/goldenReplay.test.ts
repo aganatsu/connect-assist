@@ -6,6 +6,7 @@ import {
 import {
   buildGoldenReplaySnapshot,
   compareGoldenReplaySnapshots,
+  finalizeGoldenReplaySnapshot,
   type GoldenReplayInput,
 } from "./goldenReplay.ts";
 
@@ -177,4 +178,104 @@ Deno.test("snapshot reports missing evidence instead of claiming parity", async 
   assert(snapshot.coverage.missing.includes("gamePlan.state"));
   assert(snapshot.coverage.missing.includes("gamePlan.bias"));
   assert(snapshot.coverage.missing.includes("zone.state"));
+});
+
+Deno.test("a blocked candidate does not require nonexistent order sizing", async () => {
+  const blocked = fixture("live");
+  blocked.execution = {
+    eligible: false,
+    entryPrice: 1.2845,
+    stopLoss: 1.281,
+    takeProfit: 1.292,
+    positionSize: null,
+    orderType: null,
+  };
+  blocked.lifecycle = {
+    route: "candidate",
+    stage: "gates",
+    outcome: "blocked",
+  };
+
+  const snapshot = await buildGoldenReplaySnapshot(blocked);
+
+  assertEquals(snapshot.coverage.complete, true);
+  assertEquals(snapshot.coverage.missing, []);
+});
+
+Deno.test("finalization records actual size and lifecycle without changing candidate evidence", async () => {
+  const candidateInput = fixture("live");
+  candidateInput.execution.positionSize = null;
+  candidateInput.execution.orderType = null;
+  const candidate = await buildGoldenReplaySnapshot(candidateInput);
+  assertEquals(candidate.decision.execution.positionSize, null);
+  assert(candidate.coverage.missing.includes("execution.positionSize"));
+  assert(candidate.coverage.missing.includes("execution.orderType"));
+
+  const finalized = await finalizeGoldenReplaySnapshot(candidate, {
+    execution: {
+      eligible: true,
+      entryPrice: 1.2845,
+      stopLoss: 1.281,
+      takeProfit: 1.292,
+      riskReward: 2.142857,
+      positionSize: 0.18,
+      orderType: "market",
+    },
+    lifecycle: {
+      route: "market",
+      stage: "position",
+      outcome: "opened",
+      reason: "Atomic position claim succeeded",
+    },
+    provenance: {
+      candidateId: "candidate-1",
+      orderId: "order-1",
+      positionId: "position-1",
+    },
+  });
+
+  assertEquals(finalized.decision.direction, candidate.decision.direction);
+  assertEquals(finalized.decision.execution.positionSize, 0.18);
+  assertEquals(finalized.decision.lifecycle, {
+    route: "market",
+    stage: "position",
+    outcome: "opened",
+  });
+  assertEquals(
+    finalized.lifecycleEvidence.reason,
+    "Atomic position claim succeeded",
+  );
+  assertEquals(finalized.provenance.candidateId, "candidate-1");
+  assertEquals(finalized.coverage.complete, true);
+  assert(finalized.decisionHash !== candidate.decisionHash);
+});
+
+Deno.test("lifecycle wording is evidence while lifecycle codes drive parity", async () => {
+  const live = await finalizeGoldenReplaySnapshot(
+    await buildGoldenReplaySnapshot(fixture("live")),
+    {
+      execution: fixture("live").execution,
+      lifecycle: {
+        route: "market",
+        stage: "authorization",
+        outcome: "blocked",
+        reason: "Current spread is too high",
+      },
+    },
+  );
+  const backtest = await finalizeGoldenReplaySnapshot(
+    await buildGoldenReplaySnapshot(fixture("backtest")),
+    {
+      execution: fixture("backtest").execution,
+      lifecycle: {
+        route: "market",
+        stage: "authorization",
+        outcome: "blocked",
+        reason: "Spread exceeded threshold",
+      },
+    },
+  );
+
+  assertEquals(compareGoldenReplaySnapshots(live, backtest).matches, true);
+  assert(live.lifecycleEvidence.reason !== backtest.lifecycleEvidence.reason);
 });
