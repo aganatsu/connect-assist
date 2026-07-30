@@ -137,11 +137,17 @@ import { checkTier1Minimum } from "../_shared/gateTier1Minimum.ts";
 import { getCorrelation, getDirectionalCorrelation } from "../_shared/portfolioCorrelation.ts";
 import { analyzeWeeklyBiasAndDOL, type WeeklyBiasResult } from "../_shared/weeklyBiasDOL.ts";
 import { checkMinRR } from "../_shared/gateMinRR.ts";
-import { computeManagementDecision, type StructureCheckResult } from "../_shared/computeManagementDecision.ts";
+import { computeManagementDecision } from "../_shared/computeManagementDecision.ts";
 import {
   resolveBacktestManagementPolicy,
   type ResolvedManagementPolicy,
 } from "../_shared/managementPolicy.ts";
+import {
+  buildStructureInvalidationEvidence,
+  computePartialCloseDecision,
+  type PartialCloseDecision,
+  type StructureInvalidationEvidence,
+} from "../_shared/exitParity.ts";
 import {
   generateInstrumentGamePlan,
   buildSessionGamePlan,
@@ -189,6 +195,10 @@ interface BacktestTrade {
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
   managementPolicy?: ResolvedManagementPolicy;
+  exitParityEvidence?: {
+    partialClose?: PartialCloseDecision | null;
+    structureInvalidation?: StructureInvalidationEvidence | null;
+  };
 }
 interface BlockedTrade {
   symbol: string;
@@ -281,6 +291,10 @@ interface OpenPosition {
   signalSource?: "cascade" | "unified" | "standalone";
   conviction?: { score: number; adjustment: number; cycleCount: number; degrading: boolean } | null;
   managementPolicy?: ResolvedManagementPolicy;
+  exitParityEvidence?: {
+    partialClose?: PartialCloseDecision | null;
+    structureInvalidation?: StructureInvalidationEvidence | null;
+  };
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -882,6 +896,7 @@ function processExits(
   btRateMap: Record<string, number>,
   commissionPerLot: number,
   allCandles?: Candle[],
+  dailyCandles?: Candle[],
 ): { closedTrades: BacktestTrade[]; updatedPositions: OpenPosition[] } {
   const closedTrades: BacktestTrade[] = [];
   const surviving: OpenPosition[] = [];
@@ -922,27 +937,22 @@ function processExits(
     };
 
     // ── Steps 1-2b: SL Management via computeManagementDecision (shared with live) ──
-    // Compute structure check if enabled and we have enough candles
-    let structureCheck: StructureCheckResult | null = null;
+    // Build the same structure + completed-daily regime evidence used live.
+    let structureEvidence: StructureInvalidationEvidence | null = null;
     if (
       managementConfig.structureInvalidationEnabled &&
       !pos.structureInvalidationFired &&
       allCandles &&
       barIndex >= 20
     ) {
-      const lookbackStart = Math.max(0, barIndex - 50);
+      const lookbackStart = Math.max(0, barIndex - 120);
       const recentCandles = allCandles.slice(lookbackStart, barIndex + 1);
-      if (recentCandles.length >= 20) {
-        const currentStructure = analyzeMarketStructure(recentCandles);
-        const chochAgainst = currentStructure.choch.filter((c: any) =>
-          (pos.direction === "long" && c.type === "bearish") ||
-          (pos.direction === "short" && c.type === "bullish")
-        );
-        structureCheck = {
-          trend: currentStructure.trend,
-          chochAgainstCount: chochAgainst.length,
-        };
-      }
+      structureEvidence = buildStructureInvalidationEvidence({
+        direction: pos.direction,
+        structureCandles: recentCandles,
+        regimeCandles: dailyCandles,
+        evaluatedAt: candle.datetime,
+      });
     }
 
     // Compute ATR for adaptive trailing (use entry candles up to current bar)
@@ -979,7 +989,7 @@ function processExits(
         takeProfit: pos.takeProfit,
         holdHours,
         exitFlags: pos.exitFlags,
-        structureCheck,
+        structureCheck: structureEvidence?.structureCheck || null,
         adaptiveTrailCandles,
         atrValue,
         regimeInfo: null,  // backtest doesn't have live regime info per-bar (acceptable simplification)
@@ -994,6 +1004,18 @@ function processExits(
     }
     // Persist updated exitFlags and structureInvalidationFired
     pos.exitFlags = decision.updatedExitFlags;
+    if (
+      structureEvidence &&
+      (
+        structureEvidence.chochAgainstCount > 0 ||
+        structureEvidence.regimeSuppressed
+      )
+    ) {
+      pos.exitParityEvidence = {
+        ...pos.exitParityEvidence,
+        structureInvalidation: structureEvidence,
+      };
+    }
     if (decision.action === "structure_invalidated") {
       pos.structureInvalidationFired = true;
     }
@@ -1031,8 +1053,6 @@ function processExits(
     // Live behavior does NOT force-close at max hold — it tightens SL to BE and lets the
     // market decide. Removing the old "time_exit" force-close to match live parity.
 
-    // ── Step 5: Partial TP (exit at trigger price, not candle close) ──
-    const partialTPEnabled = managementConfig.partialTPEnabled;
     const partialTPPercent = pos.managementPolicy?.partialTPPercent ??
       pos.exitFlags.partialTPPercent ??
       config.partialTPPercent ??
@@ -1041,52 +1061,63 @@ function processExits(
       pos.exitFlags.partialTPLevel ??
       config.partialTPLevel ??
       1;
-    if (
-      !closeReason &&
-      partialTPEnabled &&
-      !pos.partialTPFired &&
-      partialTPPercent > 0
-    ) {
-      const slDistPips = Math.abs(pos.entryPrice - pos.stopLoss) / spec.pipSize;
-      const triggerPips = slDistPips * partialTPLevel;
-      const triggerPrice = pos.direction === "long"
-        ? pos.entryPrice + triggerPips * spec.pipSize
-        : pos.entryPrice - triggerPips * spec.pipSize;
-      const triggerHit = pos.direction === "long"
-        ? candle.high >= triggerPrice
-        : candle.low <= triggerPrice;
-      if (triggerHit) {
-        const closeSize = pos.size * (partialTPPercent / 100);
-        const remainSize = pos.size - closeSize;
-        const { pnl: rawPnl, pnlPips } = calcPnl(pos.direction, pos.entryPrice, triggerPrice, closeSize, pos.symbol, btRateMap);
-        const partialComm = closeSize * commissionPerLot * 2;
-        const pnl = rawPnl - partialComm;
-        closedTrades.push({
-          id: `${pos.id}_partial`,
-          symbol: pos.symbol,
-          direction: pos.direction,
-          entryPrice: pos.entryPrice,
-          exitPrice: triggerPrice,
-          entryTime: pos.entryTime,
-          exitTime: candle.datetime,
-          size: closeSize,
-          pnl,
-          pnlPips,
-          commission: partialComm,
-          closeReason: "partial_tp",
-          confluenceScore: pos.confluenceScore,
-          effectiveScore: pos.effectiveScore,
-          factors: pos.factors,
-          gatesBlocked: [],
-          regime: pos.regime,
-          session: pos.session,
-          signalSource: pos.signalSource,
-          conviction: pos.conviction || null,
-          managementPolicy: pos.managementPolicy,
-        });
-        pos.size = remainSize;
-        pos.partialTPFired = true;
-      }
+    const partialDecision = computePartialCloseDecision({
+      symbol: pos.symbol,
+      direction: pos.direction,
+      entryPrice: pos.entryPrice,
+      originalSL: pos.stopLoss,
+      currentPrice: candle.close,
+      favorablePrice: pos.direction === "long" ? candle.high : candle.low,
+      positionSize: pos.size,
+      enabled: managementConfig.partialTPEnabled,
+      alreadyActivated: pos.partialTPFired,
+      partialTPPercent,
+      partialTPLevel,
+      executionPriceMode: "threshold",
+      rateMap: btRateMap,
+      commissionPerLot,
+    });
+    if (!closeReason && partialDecision.triggered) {
+      const partialExitPrice = partialDecision.executionPrice ??
+        partialDecision.triggerPrice ??
+        candle.close;
+      closedTrades.push({
+        id: `${pos.id}_partial`,
+        symbol: pos.symbol,
+        direction: pos.direction,
+        entryPrice: pos.entryPrice,
+        exitPrice: partialExitPrice,
+        entryTime: pos.entryTime,
+        exitTime: candle.datetime,
+        size: partialDecision.closeSize,
+        pnl: partialDecision.netPnl,
+        pnlPips: partialDecision.pnlPips,
+        commission: partialDecision.commission,
+        closeReason: "partial_tp",
+        confluenceScore: pos.confluenceScore,
+        effectiveScore: pos.effectiveScore,
+        factors: pos.factors,
+        gatesBlocked: [],
+        regime: pos.regime,
+        session: pos.session,
+        signalSource: pos.signalSource,
+        conviction: pos.conviction || null,
+        managementPolicy: pos.managementPolicy,
+        exitParityEvidence: {
+          ...pos.exitParityEvidence,
+          partialClose: partialDecision,
+        },
+      });
+      pos.size = partialDecision.remainingSize;
+      pos.partialTPFired = true;
+      pos.exitFlags = {
+        ...pos.exitFlags,
+        partialTPActivated: true,
+      };
+      pos.exitParityEvidence = {
+        ...pos.exitParityEvidence,
+        partialClose: partialDecision,
+      };
     }
 
     if (closeReason) {
@@ -1115,6 +1146,7 @@ function processExits(
         signalSource: pos.signalSource,
         conviction: pos.conviction || null,
         managementPolicy: pos.managementPolicy,
+        exitParityEvidence: pos.exitParityEvidence,
       });
     } else {
       pos.currentSL = sl;
@@ -2046,7 +2078,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         const symbolPositions = openPositions.filter(p => p.symbol === symbol);
         if (symbolPositions.length > 0) {
           const { closedTrades, updatedPositions } = processExits(
-            symbolPositions, candle, i, config, slippagePips, btRateMap, commissionPerLot, entryCandles,
+            symbolPositions, candle, i, config, slippagePips, btRateMap, commissionPerLot, entryCandles, dailyCandles,
           );
           // Remove old positions for this symbol, add updated
           const otherPositions = openPositions.filter(p => p.symbol !== symbol);
@@ -3257,6 +3289,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           signalSource: pos.signalSource,
           conviction: pos.conviction || null,
           managementPolicy: pos.managementPolicy,
+          exitParityEvidence: pos.exitParityEvidence,
         });
         balance += rawPnl - comm;
       }
