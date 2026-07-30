@@ -62,3 +62,19 @@ Deno.test("backtest result exposes bounded replay evidence", () => {
   assertStringIncludes(backtestEngine, 'contractVersion: "golden-replay.v1"');
   assertStringIncludes(backtestEngine, "snapshots: goldenReplaySnapshots");
 });
+
+Deno.test("backtest API exposes an authenticated bounded mismatch report", () => {
+  assertStringIncludes(
+    backtestEngine,
+    'action === "golden_replay_report"',
+  );
+  assertStringIncludes(backtestEngine, "buildGoldenReplayReport(");
+  assertStringIncludes(
+    backtestEngine,
+    "at most 1000 snapshots per surface",
+  );
+  assertStringIncludes(
+    backtestEngine,
+    "liveSnapshots.every(isGoldenReplaySnapshot)",
+  );
+});

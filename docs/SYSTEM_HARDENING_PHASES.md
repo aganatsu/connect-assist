@@ -12,7 +12,7 @@ functions and UI have been deployed and verified.
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
-| 7 | Backtest/live parity | Management parity deployed; Golden Replay capture in progress |
+| 7 | Backtest/live parity | Golden Replay evidence deployed; deterministic report harness in progress |
 | 8 | Strategy validation and controlled activation | Not started |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
@@ -232,6 +232,35 @@ calculated. A size mismatch is therefore visible evidence for the deterministic
 replay phase, not silently rewritten agreement. Phase 7 remains incomplete
 until identical candle fixtures drive both candidate engines and every
 intentional surface difference is classified.
+
+Phase 7C introduces `golden-replay-report.v1`. It pairs live and backtest
+observations by symbol and normalized candle timestamp, prefers exact decision
+hash matches when more than one lifecycle observation exists, and reports
+every mismatch by its precise decision path. A difference can be classified
+as intentional only through an explicit path-and-reason rule; it remains
+visible in the report.
+
+A matching decision is not deterministic proof by itself. Both surfaces must
+carry the same canonical `golden-replay-input.v1` fingerprint, built from the
+symbol, normalized timestamp, base policy, timeframe roles, exact candle
+arrays and configuration projection. Both snapshots must have complete
+coverage, neither surface may be missing, and every difference must either be
+absent or explicitly documented. The report separately counts input
+mismatches, unverified inputs, incomplete evidence, missing observations,
+unexpected mismatches and intentional differences.
+
+The authenticated backtest endpoint exposes this as the bounded
+`golden_replay_report` action. It validates `golden-replay.v1` inputs and
+accepts at most 1,000 observations per surface; it performs no scan, backtest,
+trade or database mutation.
+
+The shared decision-fixture runner proves the report contract with identical
+fingerprinted inputs, deliberate sizing drift, documented fill-model
+differences and missing/incomplete observations. This does not yet claim that
+the two monolithic runtime orchestrators consumed the same raw candles.
+Phase 7 becomes complete only when the live candidate and historical adapters
+both emit fingerprints from the same canonical candle/configuration fixture
+and the resulting report passes.
 
 ## Phase 3 implementation record
 

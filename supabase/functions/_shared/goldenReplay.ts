@@ -88,6 +88,7 @@ export interface GoldenReplayLifecycleInput {
 }
 
 export interface GoldenReplayProvenanceInput {
+  inputFingerprint?: string | null;
   candidateId?: string | null;
   orderId?: string | null;
   positionId?: string | null;
@@ -111,6 +112,7 @@ export interface GoldenReplaySnapshot {
     gamePlanVersion: string | null;
     verdictVersion: string | null;
     verdictGamePlanVersion: string | null;
+    inputFingerprint: string | null;
     candidateId: string | null;
     orderId: string | null;
     positionId: string | null;
@@ -409,6 +411,7 @@ export async function buildGoldenReplaySnapshot(
       gamePlanVersion: input.gamePlan?.version || null,
       verdictVersion: input.directionVerdict?.version || null,
       verdictGamePlanVersion: input.directionVerdict?.gamePlanVersion || null,
+      inputFingerprint: input.provenance?.inputFingerprint || null,
       candidateId: input.provenance?.candidateId || null,
       orderId: input.provenance?.orderId || null,
       positionId: input.provenance?.positionId || null,

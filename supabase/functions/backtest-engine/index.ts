@@ -154,6 +154,11 @@ import {
   type GoldenReplaySnapshot,
 } from "../_shared/goldenReplay.ts";
 import {
+  buildGoldenReplayReport,
+  isGoldenReplaySnapshot,
+  type GoldenReplayIntentionalDifference,
+} from "../_shared/goldenReplayReport.ts";
+import {
   generateInstrumentGamePlan,
   buildSessionGamePlan,
   type InstrumentGamePlan,
@@ -3575,6 +3580,47 @@ Deno.serve(async (req: Request) => {
       }
       const { data } = await db.auth.getUser(token);
       return data?.user?.id || null;
+    }
+
+    // ── Action: golden_replay_report — compare supplied evidence only ──
+    if (action === "golden_replay_report") {
+      const userId = await getUserId();
+      if (!userId) return respond({ error: "Unauthorized" }, 401);
+      const liveSnapshots = Array.isArray(body.liveSnapshots)
+        ? body.liveSnapshots
+        : [];
+      const backtestSnapshots = Array.isArray(body.backtestSnapshots)
+        ? body.backtestSnapshots
+        : [];
+      if (liveSnapshots.length > 1000 || backtestSnapshots.length > 1000) {
+        return respond({
+          error: "Golden Replay reports accept at most 1000 snapshots per surface",
+        }, 400);
+      }
+      if (
+        !liveSnapshots.every(isGoldenReplaySnapshot) ||
+        !backtestSnapshots.every(isGoldenReplaySnapshot)
+      ) {
+        return respond({
+          error: "Every supplied item must be a golden-replay.v1 snapshot",
+        }, 400);
+      }
+      const intentionalDifferences: GoldenReplayIntentionalDifference[] =
+        Array.isArray(body.intentionalDifferences)
+          ? body.intentionalDifferences.filter((difference: unknown) =>
+            !!difference &&
+            typeof difference === "object" &&
+            typeof (difference as Record<string, unknown>).path === "string" &&
+            typeof (difference as Record<string, unknown>).reason === "string"
+          )
+          : [];
+      return respond({
+        report: buildGoldenReplayReport(
+          liveSnapshots,
+          backtestSnapshots,
+          intentionalDifferences,
+        ),
+      });
     }
 
     // ── Action: status — poll a specific run ──
