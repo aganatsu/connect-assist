@@ -13,7 +13,7 @@ functions and UI have been deployed and verified.
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
 | 7 | Backtest/live parity | Complete and deterministic-fixture verified |
-| 8 | Strategy validation and controlled activation | Not started |
+| 8 | Strategy validation and controlled activation | Phase 8A in progress — controlled activation contract in review |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
 
@@ -392,3 +392,25 @@ advancing heartbeats and completion timestamps.
   observations, 10 resolved decision changes and 50% evidence coverage.
   Crossing that screening threshold can only mark it as a paper candidate; it
   does not alter scoring, authorization, sizing or execution.
+
+## Phase 8 implementation record
+
+- Phase 8A adds a durable activation registry and evidence-certificate history.
+  It separates a feature's decision authority (`shadow` → `log_only` →
+  `soft_adjustment` → `hard_block`) from where it is permitted to run
+  (`observation` → `paper` → `live_canary` → `live`).
+- Forward transitions can advance only one axis by one step. The database
+  requires minimum samples, decision changes, evidence coverage, useful rate,
+  out-of-sample and walk-forward agreement before Log-only; paper-forward
+  evidence before Soft adjustment; and live-canary evidence before Hard block.
+- Paper, live-canary and live scopes require explicit user approval in the
+  evidence certificate. Concurrent updates are protected by a revision check,
+  and an emergency rollback returns directly to Shadow / Observation.
+- Rejected Setups displays the registered authority, runtime scope and
+  enforcement state beside each Shadow Evidence feature. Missing registry rows
+  safely resolve to Shadow / Observation.
+- Phase 8A deliberately leaves `runtime_enforced=false` and does not wire the
+  scanner to this registry. Applying the migration and publishing the UI cannot
+  change scoring, authorization, sizing, order placement, management or broker
+  execution. Runtime activation will be a separate reviewed slice after the
+  evidence-certificate path is verified.
