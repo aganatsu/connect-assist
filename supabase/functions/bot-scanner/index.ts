@@ -130,6 +130,11 @@ import {
   type ScannerTriggerSource,
 } from "../_shared/scannerRuntime.ts";
 import {
+  classifyUnifiedWatch,
+  isPreZoneObservation,
+  requiresFreshCandidateHandoff,
+} from "../_shared/preZoneObservation.ts";
+import {
   checkNewsAlignment,
 } from "../_shared/newsImpact.ts";
 import {
@@ -4970,91 +4975,352 @@ async function runScanForUser(
         impulseSpanBars: izData?.impulse?.spanBars ?? null,
       },
     });
+
+    const stageUnifiedWatch = async (
+      executionEligible: boolean,
+    ): Promise<"created" | "updated" | "handoff" | "failed"> => {
+      if (!stagingEnabled || isPaused || !analysis.direction) return "failed";
+      const isCascade = (detail as any).signalSource === "cascade";
+      const unifiedZone = unifiedZoneData?.zone;
+      const cascadeZone = cascadeResult?.entryZone?.poi;
+      const unifiedEntry = unifiedZoneData?.entry;
+      const entryPrice = isCascade
+        ? cascadeResult?.entry ?? analysis.lastPrice
+        : unifiedEntry?.entryPrice ??
+          (unifiedZone
+            ? (unifiedZone.high + unifiedZone.low) / 2
+            : analysis.lastPrice);
+      const stopLoss = isCascade
+        ? cascadeResult?.sl ?? analysis.stopLoss
+        : unifiedEntry?.slPrice ??
+          (unifiedZoneData?.impulse
+            ? analysis.direction === "long"
+              ? unifiedZoneData.impulse.low
+              : unifiedZoneData.impulse.high
+            : analysis.stopLoss);
+      const takeProfit = isCascade
+        ? analysis.takeProfit
+        : unifiedEntry?.tpPrice ?? analysis.takeProfit;
+      const originatingZone = executionEligible
+        ? {
+          type: isCascade
+            ? cascadeZone?.type || "cascade_zone"
+            : unifiedZone?.type || "unified_zone",
+          low: isCascade ? cascadeZone?.low ?? null : unifiedZone?.low ?? null,
+          high: isCascade
+            ? cascadeZone?.high ?? null
+            : unifiedZone?.high ?? null,
+          entry: entryPrice,
+          stopLoss,
+          takeProfit,
+          selectedTimeframe: isCascade
+            ? "cascade"
+            : unifiedZoneData?.selectedTF || null,
+          unifiedState: isCascade
+            ? cascadeResult?.state || null
+            : unifiedZoneData?.state || null,
+          signalSource: isCascade ? "cascade" : "unified",
+          executionEligible: true,
+        }
+        : {
+          type: "pre_zone_observation",
+          low: null,
+          high: null,
+          entry: analysis.lastPrice,
+          unifiedState: unifiedZoneData?.state || "no_zone",
+          reason: unifiedZoneData?.reason || "No valid unified zone",
+          selectedTimeframe: unifiedZoneData?.selectedTF || null,
+          unifiedScore: unifiedZoneData?.unifiedScore ?? 0,
+          signalSource: "unified",
+          executionEligible: false,
+        };
+      const setupType = executionEligible
+        ? unifiedZoneData?.state === "waiting_for_sweep"
+          ? "sweep_watch"
+          : isCascade
+          ? "cascade_zone_watch"
+          : "unified_zone_watch"
+        : "waiting_for_unified_zone";
+      const observationReason = executionEligible
+        ? null
+        : "Directional candidate is visible for observation only; no valid unified zone exists";
+      const needsHandoff = requiresFreshCandidateHandoff(
+        existingStaged,
+        executionEligible,
+      );
+      const handoffParentId = needsHandoff ? existingStaged?.id || null : null;
+
+      if (needsHandoff && existingStaged) {
+        try {
+          await transitionStagedSetup(supabase, {
+            setupId: existingStaged.id,
+            userId,
+            status: "invalidated",
+            reason: executionEligible
+              ? "Pre-zone observation resolved; complete zone requires a fresh execution candidate"
+              : "Frozen execution zone is no longer valid; continuing as a new observe-only candidate",
+            evidence: {
+              lifecycleVersion: "phase4.v1",
+              setupId: existingStaged.id,
+              candidateId:
+                existingStaged.candidate_id || existingStaged.id,
+              handoff: {
+                fromExecutionEligible:
+                  !isPreZoneObservation(existingStaged),
+                toExecutionEligible: executionEligible,
+              },
+            },
+          });
+          stagedInvalidated++;
+          stagedMap.delete(stagedKey!);
+        } catch (error: any) {
+          console.warn(
+            `[staging] Failed to resolve ${pair} observation handoff: ${error?.message}`,
+          );
+          return "failed";
+        }
+      } else if (existingStaged) {
+        try {
+          const { error: updateError } = await supabase.from(
+            "staged_setups",
+          ).update({
+            current_score: analysis.score,
+            current_factors: analysis.factors
+              .filter((factor: any) => factor.present)
+              .map((factor: any) => ({
+                name: factor.name,
+                weight: factor.weight,
+                tier: factor.tier,
+              })),
+            missing_factors: analysis.factors
+              .filter((factor: any) => !factor.present && factor.weight > 0)
+              .map((factor: any) => ({
+                name: factor.name,
+                weight: factor.weight,
+                tier: factor.tier,
+              })),
+            scan_cycles: existingStaged.scan_cycles + 1,
+            last_eval_at: new Date().toISOString(),
+            analysis_snapshot: {
+              ...(existingStaged.analysis_snapshot || {}),
+              latestObservation: {
+                score: analysis.score,
+                unifiedState: unifiedZoneData?.state || null,
+                unifiedScore: unifiedZoneData?.unifiedScore ?? 0,
+                reason: unifiedZoneData?.reason || null,
+                observedAt: new Date().toISOString(),
+              },
+            },
+          }).eq("id", existingStaged.id).eq("user_id", userId);
+          if (updateError) throw new Error(updateError.message);
+          detail.staging = {
+            action: executionEligible
+              ? "execution_watch"
+              : "pre_zone_observation",
+            executionEligible,
+            cycles: existingStaged.scan_cycles + 1,
+          };
+          return "updated";
+        } catch (error: any) {
+          console.warn(
+            `[staging] Failed to update ${pair} unified watch: ${error?.message}`,
+          );
+          return "failed";
+        }
+      }
+
+      const presentFactors = analysis.factors
+        .filter((factor: any) => factor.present)
+        .map((factor: any) => ({
+          name: factor.name,
+          weight: factor.weight,
+          tier: factor.tier,
+        }));
+      const missingFactors = analysis.factors
+        .filter((factor: any) => !factor.present && factor.weight > 0)
+        .map((factor: any) => ({
+          name: factor.name,
+          weight: factor.weight,
+          tier: factor.tier,
+        }));
+      const tiered = analysis.tieredScoring;
+      const styleTTL = resolvedStyle === "scalper"
+        ? Math.min(stagingTTLMinutes, 120)
+        : resolvedStyle === "swing_trader"
+        ? Math.max(stagingTTLMinutes, 480)
+        : stagingTTLMinutes;
+      const decisionFields = stagedDecisionFields(originatingZone);
+      const { error } = await supabase.from("staged_setups").insert({
+        user_id: userId,
+        bot_id: BOT_ID,
+        symbol: pair,
+        direction: analysis.direction,
+        initial_score: analysis.score,
+        current_score: analysis.score,
+        watch_threshold: watchThreshold,
+        initial_factors: presentFactors,
+        current_factors: presentFactors,
+        missing_factors: missingFactors,
+        entry_price: entryPrice,
+        // A pre-zone row has no executable price structure yet. Keep projected
+        // protection levels empty so the ordinary SL-breach lifecycle cannot
+        // treat an observation as though it were an armed setup.
+        sl_level: executionEligible ? stopLoss : null,
+        tp_level: executionEligible ? takeProfit : null,
+        ...decisionFields,
+        authorization_result: {
+          ...decisionFields.authorization_result,
+          executionEligible,
+          observationParentId: handoffParentId,
+          observationReason,
+        },
+        scan_cycles: 1,
+        min_cycles: executionEligible ? 1 : minStagingCycles,
+        ttl_minutes: styleTTL,
+        setup_type: setupType,
+        execution_eligible: executionEligible,
+        observation_parent_id: handoffParentId,
+        observation_reason: observationReason,
+        tier1_count: tiered?.tier1Count ?? 0,
+        tier2_count: tiered?.tier2Count ?? 0,
+        tier3_count: tiered?.tier3Count ?? 0,
+        analysis_snapshot: {
+          score: analysis.score,
+          direction: analysis.direction,
+          executionEligible,
+          observationOnly: !executionEligible,
+          unifiedZone: {
+            state: unifiedZoneData?.state || null,
+            score: unifiedZoneData?.unifiedScore ?? 0,
+            selectedTF: unifiedZoneData?.selectedTF || null,
+            reason: unifiedZoneData?.reason || null,
+          },
+          originatingZone,
+          observationParentId: handoffParentId,
+        },
+      });
+      if (error) {
+        console.warn(
+          `[staging] Failed to create ${setupType} for ${pair}: ${error.message}`,
+        );
+        return "failed";
+      }
+      stagedNew++;
+      detail.staging = {
+        action: executionEligible
+          ? "execution_watch"
+          : "pre_zone_observation",
+        executionEligible,
+        setupId: decisionFields.id,
+        candidateId: decisionFields.candidate_id,
+        observationParentId: handoffParentId,
+      };
+      console.log(
+        `[staging] NEW ${executionEligible ? "EXECUTION" : "PRE-ZONE"} WATCH ${pair} ${analysis.direction} — ${unifiedZoneData?.state || "no_zone"}, score ${analysis.score.toFixed(1)}%`,
+      );
+      return needsHandoff ? "handoff" : "created";
+    };
+
+    const unifiedWatchDisposition = classifyUnifiedWatch({
+      requireUnifiedZone: !!pairConfig.requireUnifiedZone,
+      unifiedGatePassed,
+      unifiedState: unifiedZoneData?.state,
+      hasZone: unifiedZoneData?.hasZone === true,
+      stagingEnabled,
+      hasDirection: !!analysis.direction,
+      isPaused,
+      score: analysis.score,
+      watchThreshold,
+      tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
+    });
+
     if (unifiedGatePassed) {
       // Unified story is complete — use its entry/SL instead of impulse zone
       impulseZonePenaltyVal = +(pairConfig.impulseZoneBonus ?? 1.0);
       console.log(`[scan ${scanCycleId}] \u2705 ${pair}: Unified gate passed \u2014 bypassing impulse zone gate.`);
-    } else if (pairConfig.requireUnifiedZone) {
-      // requireUnifiedZone is ON — skip pair entirely if unified zone engine did not confirm
-      detail.status = "skipped_require_unified";
-      detail.skipReason = "Require Unified Zone: unified zone engine did not reach triggered/confirmed state \u2014 no standalone fallback allowed";
-      console.log(`[scan ${scanCycleId}] \u26d4 ${pair}: REQUIRE UNIFIED ZONE \u2014 unified gate not passed, standalone fallback disabled. Skipping.`);
+      if (
+        stagingEnabled &&
+        !isPaused &&
+        isPreZoneObservation(existingStaged)
+      ) {
+        const handoff = await stageUnifiedWatch(true);
+        detail.status = handoff === "failed"
+          ? "pre_zone_handoff_failed"
+          : "unified_zone_candidate_created";
+        detail.skipReason = handoff === "failed"
+          ? "Complete zone appeared, but the safe candidate handoff failed"
+          : "Complete zone appeared; created a fresh frozen execution candidate for the next scan";
+        scanDetails.push(detail);
+        continue;
+      }
+    } else if (unifiedWatchDisposition === "execution_watch") {
+      const watchResult = await stageUnifiedWatch(true);
+      detail.status = unifiedZoneData?.state === "waiting_for_sweep"
+        ? "waiting_for_sweep"
+        : "waiting_for_unified_confirmation";
+      detail.skipReason = unifiedZoneData?.state === "waiting_for_sweep"
+        ? "Unified zone is complete but liquidity has not swept and rejected yet"
+        : "Unified zone is complete but its entry trigger is not ready";
+      if (watchResult === "failed") {
+        detail.status = "unified_watch_insert_failed";
+      }
       scanDetails.push(detail);
       continue;
-    } else if (unifiedZoneData?.state === "waiting_for_sweep") {
-      // Liquidity Sweep Gate: entry-trigger pool exists but hasn't been swept yet — wait
-      detail.status = "waiting_for_sweep";
-      detail.skipReason = `Liquidity Sweep Gate: entry-trigger pool near zone is unswept \u2014 waiting for BSL/SSL sweep before entry`;
-      console.log(`[scan ${scanCycleId}] \u23f3 ${pair}: LIQUIDITY SWEEP GATE \u2014 entry-trigger pool unswept, waiting for sweep. Watchlisted.`);
-      // Stage this pair so it's auto-re-evaluated when the pool gets swept
-      if (stagingEnabled && analysis.direction && !isPaused) {
+    } else if (pairConfig.requireUnifiedZone) {
+      const watchResult = unifiedWatchDisposition === "pre_zone_observation"
+        ? await stageUnifiedWatch(false)
+        : null;
+      if (
+        !watchResult &&
+        existingStaged &&
+        (
+          unifiedZoneData?.state === "no_zone" ||
+          unifiedZoneData?.state === "no_impulse"
+        )
+      ) {
         try {
-          const existingStagedForSweep = existingStaged;
-          if (!existingStagedForSweep) {
-            const presentFactors = analysis.factors.filter((f: any) => f.present).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-            const missingFactors = analysis.factors.filter((f: any) => !f.present && f.weight > 0).map((f: any) => ({ name: f.name, weight: f.weight, tier: f.tier }));
-            const ts = analysis.tieredScoring;
-            const styleTTL = resolvedStyle === "scalper" ? Math.min(stagingTTLMinutes, 120)
-              : resolvedStyle === "swing_trader" ? Math.max(stagingTTLMinutes, 480)
-              : stagingTTLMinutes;
-            const uzEntry = unifiedZoneData.entry ?? analysis.lastPrice;
-            const uzSL = unifiedZoneData.sl ?? (analysis.direction === "long" ? analysis.lastPrice - 0.0050 : analysis.lastPrice + 0.0050);
-            await supabase.from("staged_setups").insert({
-              user_id: userId,
-              bot_id: BOT_ID,
-              symbol: pair,
-              direction: analysis.direction,
-              initial_score: analysis.score,
-              current_score: analysis.score,
-              watch_threshold: watchThreshold,
-              initial_factors: presentFactors,
-              current_factors: presentFactors,
-              missing_factors: missingFactors,
-              entry_price: uzEntry,
-              sl_level: uzSL,
-              tp_level: analysis.takeProfit,
-              ...stagedDecisionFields({
-                type: "sweep_watch",
-                entry: uzEntry,
-                stopLoss: uzSL,
-                selectedTimeframe: unifiedZoneData.selectedTF || null,
-                liquidityState:
-                  unifiedZoneData.zoneLiquidity?.entryTriggerState || null,
-              }),
-              scan_cycles: 1,
-              min_cycles: 1,
-              ttl_minutes: styleTTL,
-              setup_type: "sweep_watch",
-              tier1_count: ts?.tier1Count ?? 0,
-              tier2_count: ts?.tier2Count ?? 0,
-              tier3_count: ts?.tier3Count ?? 0,
-              analysis_snapshot: {
-                score: analysis.score,
-                direction: analysis.direction,
-                unifiedZone: { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF },
-                liquiditySweep: { entryTriggerState: unifiedZoneData.zoneLiquidity?.entryTriggerState },
-              },
-            });
-            stagedNew++;
-            console.log(`[staging] NEW SWEEP WATCH ${pair} ${analysis.direction} \u2014 waiting for liquidity sweep, score ${analysis.score.toFixed(1)}%`);
-          } else {
-            // Update existing staged with latest data
-            await supabase.from("staged_setups").update({
-              current_score: analysis.score,
-              scan_cycles: existingStagedForSweep.scan_cycles + 1,
-              last_eval_at: new Date().toISOString(),
-            }).eq("id", existingStagedForSweep.id);
-            console.log(`[staging] Updated SWEEP WATCH ${pair} ${analysis.direction} \u2014 cycle ${existingStagedForSweep.scan_cycles + 1}`);
-          }
-        } catch (e: any) {
-          if (e?.message?.includes("unique") || e?.message?.includes("duplicate")) {
-            console.log(`[staging] ${pair} ${analysis.direction} already staged for sweep watch`);
-          } else {
-            console.warn(`[staging] Failed to stage sweep watch ${pair}: ${e?.message}`);
-          }
+          await transitionStagedSetup(supabase, {
+            setupId: existingStaged.id,
+            userId,
+            status: "invalidated",
+            reason:
+              "Candidate no longer meets the pre-zone Watchlist quality floor",
+            evidence: {
+              lifecycleVersion: "phase4.v1",
+              setupId: existingStaged.id,
+              candidateId:
+                existingStaged.candidate_id || existingStaged.id,
+              executionEligible:
+                existingStaged.execution_eligible !== false,
+              unifiedState: unifiedZoneData?.state,
+              score: analysis.score,
+              watchThreshold,
+              tier1Count: analysis.tieredScoring?.tier1Count ?? 0,
+            },
+          });
+          stagedInvalidated++;
+          stagedMap.delete(stagedKey!);
+        } catch (error: any) {
+          console.warn(
+            `[staging] Failed to invalidate stale ${pair} unified watch: ${error?.message}`,
+          );
         }
-        detail.staging = { action: "sweep_watch" };
       }
+      detail.status = watchResult === "failed"
+        ? "pre_zone_observation_failed"
+        : watchResult
+        ? "waiting_for_unified_zone"
+        : "skipped_require_unified";
+      detail.skipReason = watchResult
+        ? "Observe only: directional candidate is waiting for a valid unified zone and cannot execute"
+        : "Require Unified Zone: unified zone engine did not reach triggered/confirmed state — no standalone fallback allowed";
+      console.log(
+        `[scan ${scanCycleId}] ${watchResult ? "👁️" : "⛔"} ${pair}: REQUIRE UNIFIED ZONE — ${
+          watchResult
+            ? "candidate recorded as observe-only"
+            : "candidate below observation floor"
+        }.`,
+      );
       scanDetails.push(detail);
       continue;
     } else if (pairConfig.impulseZoneEnabled !== false && izGateMode === "hard") {
@@ -5622,7 +5888,14 @@ async function runScanForUser(
     // The durable "qualified" transition happens only after the remaining
     // candidate gates have passed and exact decision evidence is available.
     let isPromotedFromStaging = false;
-    if (existingStaged && effectiveScore >= conflictAdjustedMinConfluence && analysis.direction && !isPaused && stagingEnabled) {
+    if (
+      existingStaged &&
+      existingStaged.execution_eligible !== false &&
+      effectiveScore >= conflictAdjustedMinConfluence &&
+      analysis.direction &&
+      !isPaused &&
+      stagingEnabled
+    ) {
       const cyclesMet = existingStaged.scan_cycles >= (existingStaged.min_cycles || minStagingCycles);
       if (cyclesMet) {
         isPromotedFromStaging = true;
@@ -5682,7 +5955,11 @@ async function runScanForUser(
       };
       authorizationResult: Record<string, unknown> | null;
     }) | null => {
-      if (!isPromotedFromStaging || !existingStaged?.id) return null;
+      if (
+        !isPromotedFromStaging ||
+        !existingStaged?.id ||
+        existingStaged.execution_eligible === false
+      ) return null;
       const identity = {
         setupId: existingStaged.id,
         candidateId: existingStaged.candidate_id || existingStaged.id,

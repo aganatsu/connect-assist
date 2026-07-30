@@ -1909,6 +1909,7 @@ export type Database = {
           direction_verdict: Json | null
           direction_verdict_id: string | null
           entry_price: number | null
+          execution_eligible: boolean
           frozen_strategy_context: Json | null
           frozen_strategy_hash: string | null
           game_plan_id: string | null
@@ -1923,6 +1924,8 @@ export type Database = {
           min_cycles: number
           missing_factors: Json
           originating_zone: Json | null
+          observation_parent_id: string | null
+          observation_reason: string | null
           pending_order_id: string | null
           policy_frozen_at: string | null
           position_id: string | null
@@ -1963,6 +1966,7 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
+          execution_eligible?: boolean
           frozen_strategy_context?: Json | null
           frozen_strategy_hash?: string | null
           game_plan_id?: string | null
@@ -1977,6 +1981,8 @@ export type Database = {
           min_cycles?: number
           missing_factors?: Json
           originating_zone?: Json | null
+          observation_parent_id?: string | null
+          observation_reason?: string | null
           pending_order_id?: string | null
           policy_frozen_at?: string | null
           position_id?: string | null
@@ -2017,6 +2023,7 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
+          execution_eligible?: boolean
           frozen_strategy_context?: Json | null
           frozen_strategy_hash?: string | null
           game_plan_id?: string | null
@@ -2031,6 +2038,8 @@ export type Database = {
           min_cycles?: number
           missing_factors?: Json
           originating_zone?: Json | null
+          observation_parent_id?: string | null
+          observation_reason?: string | null
           pending_order_id?: string | null
           policy_frozen_at?: string | null
           position_id?: string | null
@@ -2070,6 +2079,13 @@ export type Database = {
             columns: ["game_plan_id"]
             isOneToOne: false
             referencedRelation: "active_game_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "staged_setups_observation_parent_id_fkey"
+            columns: ["observation_parent_id"]
+            isOneToOne: false
+            referencedRelation: "staged_setups"
             referencedColumns: ["id"]
           },
           {
