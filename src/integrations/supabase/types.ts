@@ -1923,9 +1923,9 @@ export type Database = {
           lifecycle_version: string
           min_cycles: number
           missing_factors: Json
-          originating_zone: Json | null
           observation_parent_id: string | null
           observation_reason: string | null
+          originating_zone: Json | null
           pending_order_id: string | null
           policy_frozen_at: string | null
           position_id: string | null
@@ -1980,9 +1980,9 @@ export type Database = {
           lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
-          originating_zone?: Json | null
           observation_parent_id?: string | null
           observation_reason?: string | null
+          originating_zone?: Json | null
           pending_order_id?: string | null
           policy_frozen_at?: string | null
           position_id?: string | null
@@ -2037,9 +2037,9 @@ export type Database = {
           lifecycle_version?: string
           min_cycles?: number
           missing_factors?: Json
-          originating_zone?: Json | null
           observation_parent_id?: string | null
           observation_reason?: string | null
+          originating_zone?: Json | null
           pending_order_id?: string | null
           policy_frozen_at?: string | null
           position_id?: string | null
