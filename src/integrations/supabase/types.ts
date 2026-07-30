@@ -1841,6 +1841,146 @@ export type Database = {
         }
         Relationships: []
       }
+      strategy_activation_events: {
+        Row: {
+          activation_id: string
+          actor_id: string | null
+          bot_id: string
+          created_at: string
+          evidence_contract_version: string
+          evidence_hash: string
+          evidence_snapshot: Json
+          feature_key: string
+          from_authority_stage: string | null
+          from_runtime_scope: string | null
+          id: string
+          reason: string
+          revision: number
+          to_authority_stage: string
+          to_runtime_scope: string
+          user_id: string
+          variant_key: string
+        }
+        Insert: {
+          activation_id: string
+          actor_id?: string | null
+          bot_id: string
+          created_at?: string
+          evidence_contract_version: string
+          evidence_hash: string
+          evidence_snapshot: Json
+          feature_key: string
+          from_authority_stage?: string | null
+          from_runtime_scope?: string | null
+          id?: string
+          reason: string
+          revision: number
+          to_authority_stage: string
+          to_runtime_scope: string
+          user_id: string
+          variant_key: string
+        }
+        Update: {
+          activation_id?: string
+          actor_id?: string | null
+          bot_id?: string
+          created_at?: string
+          evidence_contract_version?: string
+          evidence_hash?: string
+          evidence_snapshot?: Json
+          feature_key?: string
+          from_authority_stage?: string | null
+          from_runtime_scope?: string | null
+          id?: string
+          reason?: string
+          revision?: number
+          to_authority_stage?: string
+          to_runtime_scope?: string
+          user_id?: string
+          variant_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "strategy_activation_events_activation_id_fkey"
+            columns: ["activation_id"]
+            isOneToOne: false
+            referencedRelation: "strategy_activation_registry"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      strategy_activation_registry: {
+        Row: {
+          activation_scope: Json
+          activation_scope_hash: string
+          approved_at: string | null
+          approved_by: string | null
+          authority_stage: string
+          bot_id: string
+          created_at: string
+          evidence_contract_version: string
+          evidence_hash: string
+          evidence_snapshot: Json
+          evidence_window_end: string | null
+          evidence_window_start: string | null
+          feature_key: string
+          id: string
+          revision: number
+          runtime_enforced: boolean
+          runtime_scope: string
+          transition_reason: string | null
+          updated_at: string
+          user_id: string
+          variant_key: string
+        }
+        Insert: {
+          activation_scope?: Json
+          activation_scope_hash: string
+          approved_at?: string | null
+          approved_by?: string | null
+          authority_stage?: string
+          bot_id?: string
+          created_at?: string
+          evidence_contract_version?: string
+          evidence_hash: string
+          evidence_snapshot?: Json
+          evidence_window_end?: string | null
+          evidence_window_start?: string | null
+          feature_key: string
+          id?: string
+          revision?: number
+          runtime_enforced?: boolean
+          runtime_scope?: string
+          transition_reason?: string | null
+          updated_at?: string
+          user_id: string
+          variant_key?: string
+        }
+        Update: {
+          activation_scope?: Json
+          activation_scope_hash?: string
+          approved_at?: string | null
+          approved_by?: string | null
+          authority_stage?: string
+          bot_id?: string
+          created_at?: string
+          evidence_contract_version?: string
+          evidence_hash?: string
+          evidence_snapshot?: Json
+          evidence_window_end?: string | null
+          evidence_window_start?: string | null
+          feature_key?: string
+          id?: string
+          revision?: number
+          runtime_enforced?: boolean
+          runtime_scope?: string
+          transition_reason?: string | null
+          updated_at?: string
+          user_id?: string
+          variant_key?: string
+        }
+        Relationships: []
+      }
       setup_lifecycle_events: {
         Row: {
           bot_id: string
@@ -2462,6 +2602,30 @@ export type Database = {
           p_session_plan: Json
           p_source: string
           p_user_id: string
+        }
+        Returns: Json
+      }
+      strategy_activation_json_hash: {
+        Args: {
+          p_value: Json
+        }
+        Returns: string
+      }
+      transition_strategy_activation: {
+        Args: {
+          p_activation_scope: Json
+          p_actor_id?: string
+          p_bot_id: string
+          p_evidence_snapshot: Json
+          p_evidence_window_end?: string
+          p_evidence_window_start?: string
+          p_expected_revision?: number
+          p_feature_key: string
+          p_reason: string
+          p_to_authority_stage: string
+          p_to_runtime_scope: string
+          p_user_id: string
+          p_variant_key: string
         }
         Returns: Json
       }

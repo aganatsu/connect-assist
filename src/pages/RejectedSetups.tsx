@@ -35,6 +35,10 @@ import {
   type ShadowEvidenceBreakdown,
   type ShadowFeatureEvidenceSummary,
 } from "@/lib/shadowEvidenceAnalytics";
+import {
+  getStrategyActivationDisplay,
+  type StrategyActivationRecord,
+} from "@/lib/strategyActivation";
 
 // ── Types ──
 interface ShadowAudit {
@@ -186,6 +190,20 @@ async function fetchClosedTradeEvidence(
   return rows;
 }
 
+async function fetchStrategyActivations(
+  userId: string,
+): Promise<StrategyActivationRecord[]> {
+  const { data, error } = await supabase
+    .from("strategy_activation_registry")
+    .select(
+      "feature_key, variant_key, authority_stage, runtime_scope, runtime_enforced, revision, transition_reason, evidence_hash, updated_at",
+    )
+    .eq("user_id", userId)
+    .eq("bot_id", "smc");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
 // ── Summary Stats ──
 function computeStats(setups: RejectedSetup[]) {
   const resolved = setups.filter(s => s.outcome_status !== "pending" && s.outcome_status !== "inconclusive");
@@ -284,6 +302,15 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
+  const {
+    data: strategyActivations = [],
+    isLoading: isLoadingStrategyActivations,
+  } = useQuery({
+    queryKey: ["strategy-activation-registry", user?.id],
+    queryFn: () => fetchStrategyActivations(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+  });
 
   // Collapse repeated scanner observations before applying outcome filters so
   // analytics measure distinct market opportunities instead of scan frequency.
@@ -316,6 +343,12 @@ export default function RejectedSetups() {
   const shadowEvidenceReport = useMemo(
     () => buildShadowEvidenceReport(opportunities, filteredClosedTradeEvidence),
     [opportunities, filteredClosedTradeEvidence],
+  );
+  const activationByFeature = useMemo(
+    () => new Map(
+      strategyActivations.map((record) => [record.feature_key, record]),
+    ),
+    [strategyActivations],
   );
 
   const symbols = useMemo(
@@ -834,7 +867,7 @@ export default function RejectedSetups() {
               </CardContent>
             </Card>
 
-            {isLoading || isLoadingClosedTrades ? (
+            {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ? (
               <Card className="border-border/50">
                 <CardContent className="py-10 text-center text-sm text-muted-foreground">
                   Loading shadow evidence…
@@ -842,8 +875,14 @@ export default function RejectedSetups() {
               </Card>
             ) : (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <ShadowFeatureEvidenceCard summary={shadowEvidenceReport.gameplanHierarchy} />
-                <ShadowFeatureEvidenceCard summary={shadowEvidenceReport.thesisConviction} />
+                <ShadowFeatureEvidenceCard
+                  summary={shadowEvidenceReport.gameplanHierarchy}
+                  activation={activationByFeature.get("gameplan_hierarchy")}
+                />
+                <ShadowFeatureEvidenceCard
+                  summary={shadowEvidenceReport.thesisConviction}
+                  activation={activationByFeature.get("thesis_conviction")}
+                />
               </div>
             )}
           </TabsContent>
@@ -1055,10 +1094,13 @@ function EvidenceBreakdownTable({
 
 function ShadowFeatureEvidenceCard({
   summary,
+  activation,
 }: {
   summary: ShadowFeatureEvidenceSummary;
+  activation?: StrategyActivationRecord;
 }) {
   const status = SHADOW_STATUS_CONFIG[summary.status];
+  const activationDisplay = getStrategyActivationDisplay(activation);
   return (
     <Card className="border-border/50">
       <CardHeader className="px-4 pt-3 pb-2">
@@ -1075,6 +1117,23 @@ function ShadowFeatureEvidenceCard({
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
+        <div className="rounded border border-primary/25 bg-primary/5 p-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
+              {activationDisplay.authorityLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px]">
+              {activationDisplay.scopeLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px] border-warning/40 text-warning">
+              {activationDisplay.runtimeLabel}
+            </Badge>
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            {activationDisplay.description}
+          </p>
+        </div>
+
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="rounded border border-border/40 p-2">
             <p className="text-[9px] text-muted-foreground uppercase">Coverage</p>
