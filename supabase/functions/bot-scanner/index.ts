@@ -33,6 +33,7 @@ import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
 } from "../_shared/gamePlanShadowAudit.ts";
+import { buildGoldenReplaySnapshot } from "../_shared/goldenReplay.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -6228,6 +6229,97 @@ async function runScanForUser(
         state: shadowPairPlan.state,
         stateReason: shadowPairPlan.stateReason,
       } : null;
+      const replayZone = unifiedZoneData?.hasZone
+        ? {
+          source: (detail as any).signalSource || "unified",
+          state: unifiedZoneData.state || null,
+          hasZone: true,
+          entryReady: unifiedZoneData.confirmation?.entryReady === true,
+          score: unifiedZoneData.unifiedScore ?? null,
+          timeframe: unifiedZoneData.selectedTF ??
+            unifiedZoneData.multiTFResult?.selectedTF ??
+            null,
+          low: unifiedZoneData.zone?.low ?? null,
+          high: unifiedZoneData.zone?.high ?? null,
+          entry: unifiedZoneData.entry?.entryPrice ?? null,
+        }
+        : {
+          source: (detail as any).signalSource || "standalone",
+          state: izData?.hasZone
+            ? (izData.bestZone?.priceAtZone ? "triggered" : "waiting_for_price")
+            : "no_zone",
+          hasZone: izData?.hasZone === true,
+          entryReady: izData?.bestZone?.priceAtZone === true,
+          score: izData?.bestZone?.totalScore ?? null,
+          timeframe: izData?.selectedTF ?? null,
+          low: izData?.bestZone?.low ?? null,
+          high: izData?.bestZone?.high ?? null,
+          entry: izData?.bestZone?.refinedEntry ?? null,
+        };
+      (detail as any).goldenReplaySnapshot = await buildGoldenReplaySnapshot({
+        surface: "live",
+        symbol: pair,
+        evaluatedAt: candles[candles.length - 1]?.datetime ||
+          new Date().toISOString(),
+        stylePolicy: pairStylePolicy,
+        direction: analysis.direction,
+        directionVerdict: {
+          verdict: directionVerdict?.verdict || null,
+          confidence: directionVerdict?.confidence ?? null,
+          shouldBlock: directionVerdict?.shouldBlock ?? null,
+          version: activeDirectionVerdict?.verdictVersion || null,
+          gamePlanVersion:
+            activeDirectionVerdict?.gamePlanVersion || null,
+        },
+        gamePlan: shadowPairPlan
+          ? {
+            id: shadowPairPlan.gamePlanId || null,
+            version: shadowPairPlan.planVersion ||
+              activeGamePlan?.planVersion ||
+              null,
+            state: shadowPairPlan.state || null,
+            bias: shadowPairPlan.bias || null,
+            confidence: shadowPairPlan.biasConfidence ?? null,
+          }
+          : null,
+        zone: replayZone,
+        scenario: {
+          enforcement: "observe_only",
+          selectedScenarioIndex: null,
+          candidates: (shadowPairPlan?.scenarios || []).map(
+            (scenario: any, index: number) => ({
+              index,
+              direction: scenario.direction || null,
+              condition: scenario.condition || null,
+              action: scenario.action || null,
+              target: scenario.targetLevel ?? null,
+              invalidation: scenario.invalidation || null,
+            }),
+          ),
+        },
+        scoring: {
+          raw: analysis.score,
+          effective: effectiveScore,
+          threshold: conflictAdjustedMinConfluence,
+          passed: effectiveScore >= conflictAdjustedMinConfluence,
+        },
+        gates,
+        execution: {
+          eligible: allPassed &&
+            !!analysis.stopLoss &&
+            !!analysis.takeProfit,
+          entryPrice: analysis.lastPrice,
+          stopLoss: analysis.stopLoss,
+          takeProfit: analysis.takeProfit,
+          riskReward: analysis.stopLoss && analysis.takeProfit
+            ? Math.abs(analysis.takeProfit - analysis.lastPrice) /
+              Math.abs(analysis.lastPrice - analysis.stopLoss)
+            : null,
+          positionSize: null,
+          orderType: null,
+        },
+        managementContractVersion: "management-policy.v1",
+      });
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs

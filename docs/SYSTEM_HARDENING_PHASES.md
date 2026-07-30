@@ -12,7 +12,7 @@ functions and UI have been deployed and verified.
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
-| 7 | Backtest/live parity | Slice 8A deployed; corrective Slice 8B in progress |
+| 7 | Backtest/live parity | Management parity deployed; Golden Replay capture in progress |
 | 8 | Strategy validation and controlled activation | Not started |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
@@ -197,6 +197,26 @@ positions retain the evidence in their management history, and backtest trades
 retain the same evidence in their results. Slice 8 is complete only after 8B
 is merged, deployed and verified against a natural management event or a
 controlled paper/backtest parity fixture.
+
+The next Phase 7 slice introduces the observational `golden-replay.v1`
+candidate snapshot. Live scans and historical runs now emit the same
+timestamped decision shape for style policy, direction, Gameplan, zone story,
+scenario evidence, score, normalized gates, entry eligibility, stop and
+target. Surface-specific gate wording remains visible as evidence but is not
+allowed to create false mismatches; normalized gate codes drive the parity
+hash. Database and in-memory Gameplan/Direction Verdict IDs remain attached as
+provenance, but do not affect the semantic decision hash because those record
+identities can legitimately differ between live and replay surfaces.
+
+Backtests retain the latest 500 candidate snapshots through chunk
+continuations and expose them in the completed result. Live scans attach the
+same snapshot to the pair detail. Missing fields are reported as incomplete
+coverage instead of being treated as agreement. Scenario candidates remain
+`observe_only` and cannot authorize, block, size or place a trade in this
+slice. Phase 7 is not complete until deterministic candle fixtures exercise
+both engines and the remaining execution-size and lifecycle fields are
+captured and compared. Until position size is captured, coverage is explicitly
+reported as incomplete.
 
 ## Phase 3 implementation record
 
