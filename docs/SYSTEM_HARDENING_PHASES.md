@@ -11,7 +11,7 @@ functions and UI have been deployed and verified.
 | 3 | Unify Gameplan, Direction Verdict and thesis | Complete and production-verified |
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
-| 6 | Rejected Setups and shadow evidence | Not started |
+| 6 | Rejected Setups and shadow evidence | Phase 6A in review |
 | 7 | Backtest/live parity | Not started |
 | 8 | Strategy validation and controlled activation | Not started |
 
@@ -236,3 +236,24 @@ advancing heartbeats and completion timestamps.
   drift.
 - Scheduled Tasks displays the active alerts and their repeat count. Alerts
   resolve automatically when the underlying condition recovers.
+
+## Phase 6 implementation record
+
+- Phase 6A adds a read-only Shadow Evidence report to Rejected Setups. It
+  compares the current system decision with the Gameplan Hierarchy and Thesis
+  Conviction proposal across distinct rejected opportunities and completed
+  trades.
+- The report separately counts rescued winners, avoided losses, admitted
+  losses and blocked winners. It reports evidence coverage, resolved samples,
+  changed decisions and breakdowns by trading style and pair.
+- Repeated rejected-setup scans and partial-close history rows are collapsed
+  before evaluation so scanner frequency and partial exits do not inflate the
+  sample.
+- Thesis Conviction evidence, exact style policy, candidate decision context,
+  effective score and threshold are now persisted on new rejected setups.
+  Existing historical rows without those fields remain visible as missing
+  coverage rather than being guessed or backfilled.
+- A feature remains `COLLECTING` until it has at least 30 resolved
+  observations, 10 resolved decision changes and 50% evidence coverage.
+  Crossing that screening threshold can only mark it as a paper candidate; it
+  does not alter scoring, authorization, sizing or execution.
