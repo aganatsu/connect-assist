@@ -12,7 +12,7 @@ functions and UI have been deployed and verified.
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
-| 7 | Backtest/live parity | Golden Replay evidence deployed; deterministic report harness in progress |
+| 7 | Backtest/live parity | Complete and deterministic-fixture verified |
 | 8 | Strategy validation and controlled activation | Not started |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
@@ -291,6 +291,18 @@ Live prop-firm sizing remains current-account evidence that a historical
 fixture cannot reconstruct. A controlled parity fixture must therefore either
 disable that context on both surfaces or record its difference explicitly.
 The phase is still not complete until the identical-input report passes.
+
+Phase 7 completion was verified on 2026-07-30 with the controlled EUR/USD
+fixture at `2026-07-22T09:45:00Z`. Both surface adapters independently produced
+input fingerprint
+`golden-replay-input.v1:72342b915f418c19ada025b9ce705f37fe08636028747e12492c6330018c8c34`
+and decision hash
+`3e07d8887e7fa21209a7af099f2cf86f9aa2de3615fed97ea6cd6019631327f8`.
+Both snapshots had complete coverage, the finalized position size was `0.29`,
+and `golden-replay-report.v1` returned one match with zero input, decision,
+coverage or missing-surface failures and `deterministicPass=true`. Those values
+are locked into the regression fixture so later behavioral drift must be
+reviewed explicitly.
 
 ## Phase 3 implementation record
 
