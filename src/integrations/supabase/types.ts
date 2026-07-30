@@ -746,6 +746,8 @@ export type Database = {
           entry_price: number | null
           entry_price_old: string | null
           final_authorization: Json | null
+          frozen_strategy_context: Json | null
+          frozen_strategy_hash: string | null
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
@@ -755,6 +757,7 @@ export type Database = {
           order_type: string | null
           originating_zone: Json | null
           partial_tp_fired: boolean
+          policy_frozen_at: string | null
           position_id: string
           position_status: string
           signal_reason: string | null
@@ -796,6 +799,8 @@ export type Database = {
           entry_price?: number | null
           entry_price_old?: string | null
           final_authorization?: Json | null
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -805,6 +810,7 @@ export type Database = {
           order_type?: string | null
           originating_zone?: Json | null
           partial_tp_fired?: boolean
+          policy_frozen_at?: string | null
           position_id: string
           position_status?: string
           signal_reason?: string | null
@@ -846,6 +852,8 @@ export type Database = {
           entry_price?: number | null
           entry_price_old?: string | null
           final_authorization?: Json | null
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -855,6 +863,7 @@ export type Database = {
           order_type?: string | null
           originating_zone?: Json | null
           partial_tp_fired?: boolean
+          policy_frozen_at?: string | null
           position_id?: string
           position_status?: string
           signal_reason?: string | null
@@ -1013,6 +1022,8 @@ export type Database = {
           filled_at: string | null
           final_authorization: Json | null
           from_watchlist: boolean
+          frozen_strategy_context: Json | null
+          frozen_strategy_hash: string | null
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
@@ -1021,6 +1032,7 @@ export type Database = {
           order_type: string
           originating_zone: Json | null
           placed_at: string
+          policy_frozen_at: string | null
           refined_zone_high: number | null
           refined_zone_low: number | null
           resolved_at: string | null
@@ -1072,6 +1084,8 @@ export type Database = {
           filled_at?: string | null
           final_authorization?: Json | null
           from_watchlist?: boolean
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -1080,6 +1094,7 @@ export type Database = {
           order_type?: string
           originating_zone?: Json | null
           placed_at?: string
+          policy_frozen_at?: string | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -1131,6 +1146,8 @@ export type Database = {
           filled_at?: string | null
           final_authorization?: Json | null
           from_watchlist?: boolean
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -1139,6 +1156,7 @@ export type Database = {
           order_type?: string
           originating_zone?: Json | null
           placed_at?: string
+          policy_frozen_at?: string | null
           refined_zone_high?: number | null
           refined_zone_low?: number | null
           resolved_at?: string | null
@@ -1891,6 +1909,8 @@ export type Database = {
           direction_verdict: Json | null
           direction_verdict_id: string | null
           entry_price: number | null
+          frozen_strategy_context: Json | null
+          frozen_strategy_hash: string | null
           game_plan_id: string | null
           game_plan_version: string | null
           id: string
@@ -1904,6 +1924,7 @@ export type Database = {
           missing_factors: Json
           originating_zone: Json | null
           pending_order_id: string | null
+          policy_frozen_at: string | null
           position_id: string | null
           promotion_reason: string | null
           qualified_at: string | null
@@ -1942,6 +1963,8 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -1955,6 +1978,7 @@ export type Database = {
           missing_factors?: Json
           originating_zone?: Json | null
           pending_order_id?: string | null
+          policy_frozen_at?: string | null
           position_id?: string | null
           promotion_reason?: string | null
           qualified_at?: string | null
@@ -1993,6 +2017,8 @@ export type Database = {
           direction_verdict?: Json | null
           direction_verdict_id?: string | null
           entry_price?: number | null
+          frozen_strategy_context?: Json | null
+          frozen_strategy_hash?: string | null
           game_plan_id?: string | null
           game_plan_version?: string | null
           id?: string
@@ -2006,6 +2032,7 @@ export type Database = {
           missing_factors?: Json
           originating_zone?: Json | null
           pending_order_id?: string | null
+          policy_frozen_at?: string | null
           position_id?: string | null
           promotion_reason?: string | null
           qualified_at?: string | null
