@@ -11,8 +11,8 @@ functions and UI have been deployed and verified.
 | 3 | Unify Gameplan, Direction Verdict and thesis | Complete and production-verified |
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
-| 6 | Rejected Setups and shadow evidence | Phase 6A in review |
-| 7 | Backtest/live parity | Not started |
+| 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
+| 7 | Backtest/live parity | Foundation in progress — corrective Slice 8A in review |
 | 8 | Strategy validation and controlled activation | Not started |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
@@ -31,7 +31,7 @@ the same way. It must finish before Phase 6 begins.
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Complete and production-verified |
 | 6 | Make Gameplan validity windows style-aware | Merged; deployment verification pending |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Direct-entry path production-verified; Slice 7.1 in review |
-| 8 | Use one style-frozen management engine in live and backtest paths | Not started |
+| 8 | Use one style-frozen management engine in live and backtest paths | Slice 8A in review |
 
 Slice 1 is observe-only. It assigns two stable fingerprints: a base-policy hash
 for comparing shared style/configuration across surfaces, and an exact policy
@@ -168,6 +168,21 @@ chain, but they are activated in controlled phases:
 - Slice 8 uses the same frozen evidence in live and backtest management. Only
   after parity and rejected-setup evidence demonstrate value can a scenario
   matcher move from observation to a configurable execution gate.
+
+Slice 8A introduces `management-policy.v1` and upgrades the style snapshot to
+`style-policy.v1.3`. The snapshot now includes every break-even and adaptive
+trailing input, not only the visible on/off settings. Live position management
+prefers the immutable setup policy that existed when the trade opened; entry
+intent is the compatibility source for legacy positions, and an explicit
+per-trade override is the only supported way to change an open trade.
+
+The backtest freezes the same pair-specific management projection on every
+position and retains it through chunk continuation and the completed trade
+record. Break-even, trailing, max-hold and session-close calculations now call
+the same pure decision engine in live and backtest paths. Partial-close
+accounting and structure-data preparation remain surface-specific adapters;
+their arithmetic and execution sequencing require separate parity fixtures
+before Slice 8 can be marked complete.
 
 ## Phase 3 implementation record
 
