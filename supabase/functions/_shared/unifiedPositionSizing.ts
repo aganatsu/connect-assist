@@ -11,9 +11,8 @@
  *   5. **Commission-aware sizing** — Deduct expected round-trip commission from risk budget
  *   6. **Consistent rounding** — All paths produce 0.01 lot increments
  *
- * This module does NOT replace calculatePositionSize() in smcAnalysis.ts.
- * Instead, it wraps it with additional safety layers. The raw function
- * remains available for backtesting where speed > safety.
+ * This module wraps calculatePositionSize() in smcAnalysis.ts with the safety
+ * and adjustment layers shared by live execution and historical replay.
  *
  * Usage:
  *   import { computePositionSize } from "../_shared/unifiedPositionSizing.ts";
@@ -21,7 +20,7 @@
  *   // result.lots, result.riskUSD, result.adjustments[]
  */
 
-import { SPECS, calculatePositionSize, getQuoteToUSDRate } from "./smcAnalysis.ts";
+import { calculatePositionSize, getQuoteToUSDRate, SPECS } from "./smcAnalysis.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -104,11 +103,33 @@ export interface SizingResult {
 }
 
 export interface SizingAdjustment {
-  type: "portfolio_heat" | "correlation" | "volatility" | "prop_firm" | "max_lot_cap" | "min_lot_floor";
+  type:
+    | "portfolio_heat"
+    | "correlation"
+    | "volatility"
+    | "prop_firm"
+    | "max_lot_cap"
+    | "min_lot_floor";
   /** Multiplier applied (e.g., 0.5 = halved) */
   multiplier: number;
   /** Human-readable reason */
   reason: string;
+}
+
+export type CandidateSignalSource = "cascade" | "unified" | "standalone";
+
+export interface FinalCandidateSizeInput {
+  lots: number;
+  correlationMultiplier?: number;
+  signalSource?: CandidateSignalSource | null;
+  standaloneMultiplier?: number;
+}
+
+export interface FinalCandidateSizeResult {
+  lots: number;
+  afterCorrelationLots: number;
+  correlationMultiplier: number;
+  signalSourceMultiplier: number;
 }
 
 // ─── Correlation Map ─────────────────────────────────────────────────
@@ -116,10 +137,34 @@ export interface SizingAdjustment {
 /** Known high-correlation pairs (|r| > 0.7 historically) */
 const CORRELATION_GROUPS: Record<string, string[]> = {
   "USD_STRENGTH": ["EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD"],
-  "JPY_WEAKNESS": ["USD/JPY", "EUR/JPY", "GBP/JPY", "AUD/JPY", "CAD/JPY", "CHF/JPY", "NZD/JPY"],
+  "JPY_WEAKNESS": [
+    "USD/JPY",
+    "EUR/JPY",
+    "GBP/JPY",
+    "AUD/JPY",
+    "CAD/JPY",
+    "CHF/JPY",
+    "NZD/JPY",
+  ],
   "COMMODITY": ["AUD/USD", "NZD/USD", "AUD/NZD", "AUD/CAD"],
-  "EUR_CROSS": ["EUR/USD", "EUR/GBP", "EUR/JPY", "EUR/AUD", "EUR/NZD", "EUR/CAD", "EUR/CHF"],
-  "GBP_CROSS": ["GBP/USD", "GBP/JPY", "GBP/AUD", "GBP/NZD", "GBP/CAD", "GBP/CHF", "EUR/GBP"],
+  "EUR_CROSS": [
+    "EUR/USD",
+    "EUR/GBP",
+    "EUR/JPY",
+    "EUR/AUD",
+    "EUR/NZD",
+    "EUR/CAD",
+    "EUR/CHF",
+  ],
+  "GBP_CROSS": [
+    "GBP/USD",
+    "GBP/JPY",
+    "GBP/AUD",
+    "GBP/NZD",
+    "GBP/CAD",
+    "GBP/CHF",
+    "EUR/GBP",
+  ],
   // Crypto, metals, energy, equities — previously had zero correlation coverage.
   "METALS": ["XAU/USD", "XAG/USD"],
   "CRYPTO_MAJORS": ["BTC/USD", "ETH/USD"],
@@ -141,11 +186,71 @@ function areCorrelated(symbolA: string, symbolB: string): boolean {
 // ─── Volatility Scaling ──────────────────────────────────────────────
 
 const VOLATILITY_MULTIPLIERS: Record<string, number> = {
-  low: 1.0,      // Normal sizing in low vol
-  normal: 1.0,   // Normal sizing
-  high: 0.75,    // Reduce 25% in high vol
-  extreme: 0.5,  // Halve size in extreme vol
+  low: 1.0, // Normal sizing in low vol
+  normal: 1.0, // Normal sizing
+  high: 0.75, // Reduce 25% in high vol
+  extreme: 0.5, // Halve size in extreme vol
 };
+
+export function resolveSizingVolatilityContext(
+  regimeInfo?: {
+    regime?: string | null;
+    atrTrend?: string | null;
+  } | null,
+): VolatilityContext | undefined {
+  if (!regimeInfo) return undefined;
+  return {
+    regime: regimeInfo.atrTrend === "expanding" ||
+        regimeInfo.regime === "choppy_range"
+      ? "high"
+      : regimeInfo.atrTrend === "contracting"
+      ? "low"
+      : "normal",
+    atrPercentile: undefined,
+  };
+}
+
+export function resolveCorrelationSizeMultiplier(
+  concentrationScore: number,
+): number {
+  if (!Number.isFinite(concentrationScore) || concentrationScore <= 0.5) {
+    return 1;
+  }
+  return Math.max(0.5, 1 - (concentrationScore - 0.5));
+}
+
+/**
+ * Applies the post-engine candidate adjustments shared by live and replay.
+ * Correlation is applied first, then the signal-source multiplier, matching
+ * the historical live execution order and its 0.01-lot rounding floor.
+ */
+export function applyFinalCandidateSizeAdjustments(
+  input: FinalCandidateSizeInput,
+): FinalCandidateSizeResult {
+  const correlationMultiplier = Math.max(
+    0,
+    Math.min(1, input.correlationMultiplier ?? 1),
+  );
+  let lots = input.lots;
+  if (correlationMultiplier < 1) {
+    lots = Math.round(lots * correlationMultiplier * 100) / 100;
+    if (lots < 0.01) lots = 0.01;
+  }
+  const afterCorrelationLots = lots;
+
+  const signalSourceMultiplier = input.signalSource === "unified" ? 1 : Math.max(0.1, Math.min(1, input.standaloneMultiplier ?? 0.5));
+  if (signalSourceMultiplier < 1) {
+    lots = Math.round(lots * signalSourceMultiplier * 100) / 100;
+    if (lots < 0.01) lots = 0.01;
+  }
+
+  return {
+    lots,
+    afterCorrelationLots,
+    correlationMultiplier,
+    signalSourceMultiplier,
+  };
+}
 
 // ─── Main Sizing Function ────────────────────────────────────────────
 
@@ -189,7 +294,10 @@ export function computePositionSize(
   // Step 2: Portfolio heat check
   if (portfolio) {
     const maxHeat = portfolio.maxPortfolioHeat ?? 6.0;
-    const currentHeat = portfolio.openPositions.reduce((sum, p) => sum + p.riskUSD, 0);
+    const currentHeat = portfolio.openPositions.reduce(
+      (sum, p) => sum + p.riskUSD,
+      0,
+    );
     const currentHeatPercent = input.balance > 0 ? (currentHeat / input.balance) * 100 : 0;
 
     if (currentHeatPercent >= maxHeat) {
@@ -215,7 +323,10 @@ export function computePositionSize(
       const heatMultiplier = remainingHeatPercent / thisTradeHeatPercent;
       lots = Math.round(lots * heatMultiplier * 100) / 100;
       // This cap represents a real USD ceiling — remember it.
-      hardCapUSD = Math.min(hardCapUSD, (remainingHeatPercent / 100) * input.balance);
+      hardCapUSD = Math.min(
+        hardCapUSD,
+        (remainingHeatPercent / 100) * input.balance,
+      );
       adjustments.push({
         type: "portfolio_heat",
         multiplier: heatMultiplier,
@@ -253,7 +364,10 @@ export function computePositionSize(
     if (input.riskPercent > remainingCorrelated && remainingCorrelated > 0) {
       const corrMultiplier = remainingCorrelated / input.riskPercent;
       lots = Math.round(lots * corrMultiplier * 100) / 100;
-      hardCapUSD = Math.min(hardCapUSD, (remainingCorrelated / 100) * input.balance);
+      hardCapUSD = Math.min(
+        hardCapUSD,
+        (remainingCorrelated / 100) * input.balance,
+      );
       adjustments.push({
         type: "correlation",
         multiplier: corrMultiplier,
@@ -278,7 +392,9 @@ export function computePositionSize(
   // Step 5: Prop firm compliance
   if (propFirm?.enabled) {
     // Apply size multiplier from prop firm gate
-    if (propFirm.sizeMultiplier !== undefined && propFirm.sizeMultiplier < 1.0) {
+    if (
+      propFirm.sizeMultiplier !== undefined && propFirm.sizeMultiplier < 1.0
+    ) {
       lots = Math.round(lots * propFirm.sizeMultiplier * 100) / 100;
       adjustments.push({
         type: "prop_firm",
@@ -288,7 +404,10 @@ export function computePositionSize(
     }
 
     // Cap risk to daily loss remaining
-    if (propFirm.dailyLossRemaining !== undefined && propFirm.dailyLossRemaining > 0) {
+    if (
+      propFirm.dailyLossRemaining !== undefined &&
+      propFirm.dailyLossRemaining > 0
+    ) {
       const slDistance = Math.abs(input.entryPrice - input.stopLoss);
       const quoteToUSD = getQuoteToUSDRate(input.symbol, input.rateMap);
       const riskPerLot = slDistance * spec.lotUnits * quoteToUSD;
@@ -323,9 +442,15 @@ export function computePositionSize(
       // (portfolio heat, correlation, or prop-firm daily loss). Reject instead
       // of silently taking on more risk than that cap allows.
       return {
-        lots: 0, riskUSD: 0, riskPercent: 0, baseLots,
-        adjustments: [...adjustments, { type: "min_lot_floor", multiplier: 0,
-          reason: `Min lot (0.01) would risk $${riskAtMinLot.toFixed(2)}, exceeding remaining budget of $${hardCapUSD.toFixed(2)}` }],
+        lots: 0,
+        riskUSD: 0,
+        riskPercent: 0,
+        baseLots,
+        adjustments: [...adjustments, {
+          type: "min_lot_floor",
+          multiplier: 0,
+          reason: `Min lot (0.01) would risk $${riskAtMinLot.toFixed(2)}, exceeding remaining budget of $${hardCapUSD.toFixed(2)}`,
+        }],
         rejected: true,
         rejectionReason: `Cannot size down to fit remaining risk budget ($${hardCapUSD.toFixed(2)}) without going below min lot`,
       };
@@ -396,7 +521,10 @@ export function canOpenNewTrade(
   const currentHeatPercent = balance > 0 ? (currentHeat / balance) * 100 : 0;
 
   if (currentHeatPercent >= maxPortfolioHeat) {
-    return { allowed: false, reason: `Portfolio heat ${currentHeatPercent.toFixed(1)}% >= ${maxPortfolioHeat}%` };
+    return {
+      allowed: false,
+      reason: `Portfolio heat ${currentHeatPercent.toFixed(1)}% >= ${maxPortfolioHeat}%`,
+    };
   }
 
   const correlatedRisk = openPositions
@@ -405,7 +533,10 @@ export function canOpenNewTrade(
   const correlatedPercent = balance > 0 ? (correlatedRisk / balance) * 100 : 0;
 
   if (correlatedPercent >= maxCorrelatedExposure) {
-    return { allowed: false, reason: `Correlated exposure ${correlatedPercent.toFixed(1)}% >= ${maxCorrelatedExposure}%` };
+    return {
+      allowed: false,
+      reason: `Correlated exposure ${correlatedPercent.toFixed(1)}% >= ${maxCorrelatedExposure}%`,
+    };
   }
 
   return { allowed: true };

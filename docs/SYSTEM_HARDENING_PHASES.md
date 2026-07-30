@@ -279,6 +279,19 @@ Phase 7 is operationally complete only after one controlled identical-input
 fixture produces matching fingerprints, complete evidence and a deterministic
 passing report.
 
+Phase 7E closes the position-size calculation gap exposed by the runtime
+fingerprints. Historical entries now use the same commission-aware unified
+sizing engine as live entries, with the same volatility-regime mapping,
+portfolio-concentration advisory multiplier, signal-source multiplier,
+rounding order and minimum-lot floor. The live path calls those same shared
+post-sizing helpers, preserving its existing behavior while preventing the two
+surfaces from drifting independently.
+
+Live prop-firm sizing remains current-account evidence that a historical
+fixture cannot reconstruct. A controlled parity fixture must therefore either
+disable that context on both surfaces or record its difference explicitly.
+The phase is still not complete until the identical-input report passes.
+
 ## Phase 3 implementation record
 
 - Phase 3A moved active Gameplans into dedicated immutable versioned storage

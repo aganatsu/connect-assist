@@ -1,13 +1,16 @@
-import { assertEquals, assertAlmostEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertAlmostEquals, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  computePositionSize,
+  applyFinalCandidateSizeAdjustments,
   calculatePositionRisk,
   canOpenNewTrade,
-  type SizingInput,
-  type PortfolioContext,
-  type VolatilityContext,
-  type PropFirmContext,
+  computePositionSize,
   type OpenPositionRisk,
+  type PortfolioContext,
+  type PropFirmContext,
+  resolveCorrelationSizeMultiplier,
+  resolveSizingVolatilityContext,
+  type SizingInput,
+  type VolatilityContext,
 } from "./unifiedPositionSizing.ts";
 
 // ─── Base Sizing Tests ───────────────────────────────────────────────
@@ -33,7 +36,11 @@ Deno.test("computePositionSize calculates correct base size for EUR/USD", () => 
 });
 
 Deno.test("computePositionSize handles fixed_lot method", () => {
-  const input: SizingInput = { ...baseInput, method: "fixed_lot", fixedLotSize: 0.25 };
+  const input: SizingInput = {
+    ...baseInput,
+    method: "fixed_lot",
+    fixedLotSize: 0.25,
+  };
   const result = computePositionSize(input);
   assertEquals(result.lots, 0.25);
   assertEquals(result.baseLots, 0.25);
@@ -99,7 +106,10 @@ Deno.test("computePositionSize reduces size when trade exceeds remaining heat", 
   const result = computePositionSize(baseInput, portfolio);
   assertEquals(result.rejected, false);
   assertEquals(result.lots < 0.5, true); // Less than base 0.5 lots
-  assertEquals(result.adjustments.some(a => a.type === "portfolio_heat"), true);
+  assertEquals(
+    result.adjustments.some((a) => a.type === "portfolio_heat"),
+    true,
+  );
 });
 
 // ─── Correlation Tests ───────────────────────────────────────────────
@@ -143,11 +153,14 @@ Deno.test("computePositionSize reduces size in high volatility", () => {
   const result = computePositionSize(baseInput, undefined, volatility);
 
   assertEquals(result.lots, 0.38); // 0.5 * 0.75 = 0.375 → Math.round(0.375*100)/100 = 0.38
-  assertEquals(result.adjustments.some(a => a.type === "volatility"), true);
+  assertEquals(result.adjustments.some((a) => a.type === "volatility"), true);
 });
 
 Deno.test("computePositionSize halves size in extreme volatility", () => {
-  const volatility: VolatilityContext = { regime: "extreme", atrPercentile: 95 };
+  const volatility: VolatilityContext = {
+    regime: "extreme",
+    atrPercentile: 95,
+  };
   const result = computePositionSize(baseInput, undefined, volatility);
 
   assertEquals(result.lots, 0.25); // 0.5 * 0.5 = 0.25
@@ -161,6 +174,62 @@ Deno.test("computePositionSize does not adjust in normal volatility", () => {
   assertEquals(result.adjustments.length, 0);
 });
 
+Deno.test("resolveSizingVolatilityContext matches live regime mapping", () => {
+  assertEquals(
+    resolveSizingVolatilityContext({
+      regime: "trending",
+      atrTrend: "expanding",
+    })?.regime,
+    "high",
+  );
+  assertEquals(
+    resolveSizingVolatilityContext({
+      regime: "choppy_range",
+      atrTrend: "stable",
+    })?.regime,
+    "high",
+  );
+  assertEquals(
+    resolveSizingVolatilityContext({
+      regime: "trending",
+      atrTrend: "contracting",
+    })?.regime,
+    "low",
+  );
+});
+
+Deno.test("final candidate sizing applies correlation before source multiplier", () => {
+  const result = applyFinalCandidateSizeAdjustments({
+    lots: 0.5,
+    correlationMultiplier: 0.75,
+    signalSource: "standalone",
+    standaloneMultiplier: 0.5,
+  });
+
+  assertEquals(result.afterCorrelationLots, 0.38);
+  assertEquals(result.lots, 0.19);
+  assertEquals(result.signalSourceMultiplier, 0.5);
+});
+
+Deno.test("unified source keeps the correlation-adjusted size", () => {
+  const result = applyFinalCandidateSizeAdjustments({
+    lots: 0.5,
+    correlationMultiplier: 0.75,
+    signalSource: "unified",
+    standaloneMultiplier: 0.5,
+  });
+
+  assertEquals(result.afterCorrelationLots, 0.38);
+  assertEquals(result.lots, 0.38);
+  assertEquals(result.signalSourceMultiplier, 1);
+});
+
+Deno.test("correlation concentration maps to the historical live multiplier", () => {
+  assertEquals(resolveCorrelationSizeMultiplier(0.5), 1);
+  assertEquals(resolveCorrelationSizeMultiplier(0.75), 0.75);
+  assertEquals(resolveCorrelationSizeMultiplier(1), 0.5);
+});
+
 // ─── Prop Firm Tests ─────────────────────────────────────────────────
 
 Deno.test("computePositionSize applies prop firm size multiplier", () => {
@@ -171,7 +240,7 @@ Deno.test("computePositionSize applies prop firm size multiplier", () => {
 
   const result = computePositionSize(baseInput, undefined, undefined, propFirm);
   assertEquals(result.lots, 0.25); // 0.5 * 0.5
-  assertEquals(result.adjustments.some(a => a.type === "prop_firm"), true);
+  assertEquals(result.adjustments.some((a) => a.type === "prop_firm"), true);
 });
 
 Deno.test("computePositionSize caps to daily loss remaining", () => {
@@ -207,7 +276,12 @@ Deno.test("computePositionSize applies multiple adjustments in sequence", () => 
   const volatility: VolatilityContext = { regime: "high", atrPercentile: 80 };
   const propFirm: PropFirmContext = { enabled: true, sizeMultiplier: 0.8 };
 
-  const result = computePositionSize(baseInput, portfolio, volatility, propFirm);
+  const result = computePositionSize(
+    baseInput,
+    portfolio,
+    volatility,
+    propFirm,
+  );
   // Multiple adjustments should stack
   assertEquals(result.adjustments.length >= 2, true);
   assertEquals(result.lots < 0.5, true); // Definitely reduced from base
@@ -278,7 +352,7 @@ Deno.test("areCorrelated: XAU/USD and XAG/USD are in METALS group", () => {
   };
   const result = computePositionSize(input, portfolio);
   // Should have a correlation adjustment since 2.5% + 1% > 3%
-  assertEquals(result.adjustments.some(a => a.type === "correlation"), true);
+  assertEquals(result.adjustments.some((a) => a.type === "correlation"), true);
 });
 
 Deno.test("areCorrelated: BTC/USD and ETH/USD are in CRYPTO_MAJORS group", () => {
@@ -341,7 +415,7 @@ Deno.test("areCorrelated: XAU/USD not correlated with BTC/USD (different groups)
   };
   const result = computePositionSize(input, portfolio);
   // XAU/USD is in METALS and USD_HAVENS, BTC/USD is in CRYPTO_MAJORS — no overlap
-  assertEquals(result.adjustments.some(a => a.type === "correlation"), false);
+  assertEquals(result.adjustments.some((a) => a.type === "correlation"), false);
 });
 
 // ─── Fix 2: Min-Lot Floor Budget Guard Tests ────────────────────────
@@ -372,7 +446,10 @@ Deno.test("min-lot floor rejects when 0.01 lots would exceed portfolio heat budg
   const result = computePositionSize(input, portfolio);
   assertEquals(result.rejected, true);
   assertEquals(result.rejectionReason?.includes("remaining risk budget"), true);
-  assertEquals(result.adjustments.some(a => a.type === "min_lot_floor"), true);
+  assertEquals(
+    result.adjustments.some((a) => a.type === "min_lot_floor"),
+    true,
+  );
 });
 
 Deno.test("min-lot floor rejects when 0.01 lots would exceed prop-firm daily loss budget", () => {
@@ -398,7 +475,10 @@ Deno.test("min-lot floor rejects when 0.01 lots would exceed prop-firm daily los
   const result = computePositionSize(input, undefined, undefined, propFirm);
   assertEquals(result.rejected, true);
   assertEquals(result.rejectionReason?.includes("remaining risk budget"), true);
-  assertEquals(result.adjustments.some(a => a.type === "min_lot_floor"), true);
+  assertEquals(
+    result.adjustments.some((a) => a.type === "min_lot_floor"),
+    true,
+  );
 });
 
 Deno.test("min-lot floor allows when 0.01 lots is within budget (EUR/USD + heat)", () => {
@@ -433,5 +513,8 @@ Deno.test("min-lot floor allows when 0.01 lots is within budget (EUR/USD + heat)
   // Let's just verify the rejection path works and the allow path is the normal case.
   assertEquals(result.lots > 0, true);
   assertEquals(result.rejected, false);
-  assertEquals(result.adjustments.some(a => a.type === "portfolio_heat"), true);
+  assertEquals(
+    result.adjustments.some((a) => a.type === "portfolio_heat"),
+    true,
+  );
 });
