@@ -408,8 +408,15 @@ export default function RejectedSetups() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
-            <p className="text-sm text-muted-foreground">Counterfactual outcomes of gate-blocked and below-threshold setups</p>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-foreground">Rejected Setups Analytics</h1>
+              <Badge variant="outline" className="text-[9px] border-info-c/40 text-info-c">
+                MONITORING
+              </Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Counterfactual outcomes of blocked setups. This page measures what happened afterward; it never reopens or executes a trade.
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>

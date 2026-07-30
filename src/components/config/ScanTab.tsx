@@ -411,7 +411,33 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         badge={config.gamePlan?.enabled ? <Badge variant="outline" className="text-[9px] text-success border-success/40">ON</Badge> : <Badge variant="outline" className="text-[9px] text-muted-foreground">OFF</Badge>}
         defaultOpen={false}
       >
-        <ToggleField label="Enable Game Plan" description="Generate pre-session game plan with key levels and bias" checked={config.gamePlan?.enabled ?? false} onChange={v => updateField('gamePlan', 'enabled', v)} />
+        <ToggleField
+          label="Enable Game Plan"
+          description="Generate pre-session game plan with key levels and bias"
+          checked={config.gamePlan?.enabled ?? false}
+          onChange={v => updateField('gamePlan', 'enabled', v)}
+          status={config.gamePlan?.enabled ? "active" : "inactive"}
+        />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <FieldGroup
+            label="Direction Verdict Authority"
+            description="The live pre-zone direction authority used by final trade authorization."
+            status="active"
+          >
+            <p className="text-[10px] text-muted-foreground">
+              Can permit or block a direction before the zone and entry paths continue.
+            </p>
+          </FieldGroup>
+          <FieldGroup
+            label="Gameplan Hierarchy Audit"
+            description="Compares the proposed hierarchy decision with the current system for later evaluation."
+            status="shadow"
+          >
+            <p className="text-[10px] text-muted-foreground">
+              Recorded as evidence only; it does not change scoring, risk, sizing, or execution.
+            </p>
+          </FieldGroup>
+        </div>
         {config.gamePlan?.enabled && (
           <>
             <div className="border border-border/60 rounded-md p-3 space-y-3">
