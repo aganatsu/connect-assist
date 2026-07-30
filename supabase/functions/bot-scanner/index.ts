@@ -38,6 +38,9 @@ import {
   finalizeGoldenReplaySnapshot,
   type GoldenReplayFinalization,
 } from "../_shared/goldenReplay.ts";
+import {
+  buildGoldenReplayRuntimeInputFingerprint,
+} from "../_shared/goldenReplayReport.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -6260,11 +6263,23 @@ async function runScanForUser(
           high: izData?.bestZone?.high ?? null,
           entry: izData?.bestZone?.refinedEntry ?? null,
         };
+      const replayEvaluatedAt = candles[candles.length - 1]?.datetime || null;
+      const replayInputFingerprint = replayEvaluatedAt
+        ? await buildGoldenReplayRuntimeInputFingerprint({
+          symbol: pair,
+          evaluatedAt: replayEvaluatedAt,
+          stylePolicy: pairStylePolicy,
+          roleCandles,
+          runtimeConfig: pairConfig,
+        })
+        : null;
       (detail as any).goldenReplaySnapshot = await buildGoldenReplaySnapshot({
         surface: "live",
         symbol: pair,
-        evaluatedAt: candles[candles.length - 1]?.datetime ||
-          new Date().toISOString(),
+        evaluatedAt: replayEvaluatedAt || new Date().toISOString(),
+        provenance: {
+          inputFingerprint: replayInputFingerprint,
+        },
         stylePolicy: pairStylePolicy,
         direction: analysis.direction,
         directionVerdict: {

@@ -154,6 +154,7 @@ import {
   type GoldenReplaySnapshot,
 } from "../_shared/goldenReplay.ts";
 import {
+  buildGoldenReplayRuntimeInputFingerprint,
   buildGoldenReplayReport,
   isGoldenReplaySnapshot,
   type GoldenReplayIntentionalDifference,
@@ -3073,6 +3074,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           effectiveMinConfluence: conflictAdjustedMinConfluence,
           resolvedAt: candle.datetime,
         });
+        const replayInputFingerprint =
+          await buildGoldenReplayRuntimeInputFingerprint({
+            symbol,
+            evaluatedAt: candle.datetime,
+            stylePolicy: replayStylePolicy,
+            roleCandles,
+            runtimeConfig: pairConfig,
+          });
         const replayZone = unifiedResult?.hasZone
           ? {
             source: signalSource,
@@ -3104,6 +3113,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           surface: "backtest",
           symbol,
           evaluatedAt: candle.datetime,
+          provenance: {
+            inputFingerprint: replayInputFingerprint,
+          },
           stylePolicy: replayStylePolicy,
           direction: analysis.direction,
           directionVerdict: {

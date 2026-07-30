@@ -262,6 +262,23 @@ Phase 7 becomes complete only when the live candidate and historical adapters
 both emit fingerprints from the same canonical candle/configuration fixture
 and the resulting report passes.
 
+Phase 7D wires those fingerprints into both runtime adapters. Each live and
+historical candidate snapshot now hashes the exact role-bound candle arrays
+used for bias, structure, setup, confirmation, refinement, runtime entry and
+runtime HTF decisions, together with the resolved style policy and public
+runtime configuration consumed by that surface. Pair scratch fields beginning
+with `_` are excluded because they are derived evidence already represented
+by the canonical candle/decision contracts; wall-clock policy resolution time
+is also excluded.
+
+This remains observational and changes no scan, gate, sizing, order or
+management behavior. Production live and historical fingerprints are allowed
+to disagree when their candle windows or runtime overrides genuinely differ;
+the report must label that as `input_mismatch`, not manufacture parity.
+Phase 7 is operationally complete only after one controlled identical-input
+fixture produces matching fingerprints, complete evidence and a deterministic
+passing report.
+
 ## Phase 3 implementation record
 
 - Phase 3A moved active Gameplans into dedicated immutable versioned storage

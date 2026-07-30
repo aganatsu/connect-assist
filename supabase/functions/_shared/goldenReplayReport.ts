@@ -7,6 +7,8 @@ import {
   type GoldenReplayMismatch,
   type GoldenReplaySnapshot,
 } from "./goldenReplay.ts";
+import type { RuntimeConfig } from "./configMapper.ts";
+import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 
 export const GOLDEN_REPLAY_REPORT_VERSION = "golden-replay-report.v1";
 export const GOLDEN_REPLAY_INPUT_VERSION = "golden-replay-input.v1";
@@ -27,6 +29,24 @@ export interface GoldenReplayInputFingerprintSource {
   timeframeRoles: Record<string, string>;
   candlesByRole: Record<string, GoldenReplayInputCandle[]>;
   config: Record<string, unknown>;
+}
+
+export interface GoldenReplayRuntimeRoleCandles {
+  bias: GoldenReplayInputCandle[];
+  structure: GoldenReplayInputCandle[];
+  setup: GoldenReplayInputCandle[];
+  confirmation: GoldenReplayInputCandle[];
+  refinement: GoldenReplayInputCandle[];
+  runtimeEntry: GoldenReplayInputCandle[];
+  runtimeHTF: GoldenReplayInputCandle[];
+}
+
+export interface GoldenReplayRuntimeInput {
+  symbol: string;
+  evaluatedAt: string;
+  stylePolicy: ResolvedStylePolicy;
+  roleCandles: GoldenReplayRuntimeRoleCandles;
+  runtimeConfig: RuntimeConfig;
 }
 
 export interface GoldenReplayIntentionalDifference {
@@ -137,6 +157,48 @@ function normalizeCandle(
   };
 }
 
+function sanitizeRuntimeValue(value: unknown): unknown {
+  if (
+    value === null || typeof value === "string" ||
+    typeof value === "number" || typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeRuntimeValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key, child]) =>
+          !key.startsWith("_") &&
+          child !== undefined &&
+          typeof child !== "function"
+        )
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, child]) => [key, sanitizeRuntimeValue(child)]),
+    );
+  }
+  return null;
+}
+
+/**
+ * Produces the stable, decision-facing runtime configuration used by the
+ * Golden Replay input proof. Scanner scratch fields are deliberately excluded:
+ * they contain derived candle evidence already represented by candlesByRole
+ * and would otherwise serialize large surface-specific objects.
+ */
+export function projectGoldenReplayRuntimeConfig(
+  stylePolicy: ResolvedStylePolicy,
+  runtimeConfig: RuntimeConfig,
+): Record<string, unknown> {
+  const { resolvedAt: _resolvedAt, ...stableStylePolicy } = stylePolicy;
+  return {
+    stylePolicy: sanitizeRuntimeValue(stableStylePolicy),
+    runtime: sanitizeRuntimeValue(runtimeConfig),
+  };
+}
+
 export async function buildGoldenReplayInputFingerprint(
   source: GoldenReplayInputFingerprintSource,
 ): Promise<string> {
@@ -162,6 +224,38 @@ export async function buildGoldenReplayInputFingerprint(
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
   return `${GOLDEN_REPLAY_INPUT_VERSION}:${hash}`;
+}
+
+/**
+ * Builds the canonical input proof directly from the role-bound candles and
+ * resolved runtime configuration consumed by one engine observation.
+ */
+export async function buildGoldenReplayRuntimeInputFingerprint(
+  source: GoldenReplayRuntimeInput,
+): Promise<string> {
+  return await buildGoldenReplayInputFingerprint({
+    symbol: source.symbol,
+    evaluatedAt: source.evaluatedAt,
+    policyBaseHash: source.stylePolicy.basePolicyHash,
+    timeframeRoles: {
+      ...source.stylePolicy.timeframes.roles,
+      runtimeEntry: source.stylePolicy.timeframes.runtimeEntry,
+      runtimeHTF: source.stylePolicy.timeframes.runtimeHTF,
+    },
+    candlesByRole: {
+      bias: source.roleCandles.bias,
+      structure: source.roleCandles.structure,
+      setup: source.roleCandles.setup,
+      confirmation: source.roleCandles.confirmation,
+      refinement: source.roleCandles.refinement,
+      runtimeEntry: source.roleCandles.runtimeEntry,
+      runtimeHTF: source.roleCandles.runtimeHTF,
+    },
+    config: projectGoldenReplayRuntimeConfig(
+      source.stylePolicy,
+      source.runtimeConfig,
+    ),
+  });
 }
 
 export function isGoldenReplayInputFingerprint(

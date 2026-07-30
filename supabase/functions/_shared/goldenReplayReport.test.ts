@@ -11,8 +11,12 @@ import {
 import {
   buildGoldenReplayInputFingerprint,
   buildGoldenReplayReport,
+  buildGoldenReplayRuntimeInputFingerprint,
   runGoldenReplayDecisionFixture,
 } from "./goldenReplayReport.ts";
+import { RUNTIME_DEFAULTS } from "./configMapper.ts";
+import { buildResolvedStylePolicy } from "./stylePolicy.ts";
+import { applyTradingStyleProfile } from "./tradingStyleConfig.ts";
 
 function candidate(): Omit<GoldenReplayInput, "surface" | "provenance"> {
   return {
@@ -103,6 +107,52 @@ const canonicalFingerprint = await buildGoldenReplayInputFingerprint({
   },
 });
 
+const runtimeConfig = {
+  ...RUNTIME_DEFAULTS,
+  instruments: [...RUNTIME_DEFAULTS.instruments],
+  enabledSessions: [...RUNTIME_DEFAULTS.enabledSessions],
+  enabledDays: [...RUNTIME_DEFAULTS.enabledDays],
+  _currentSymbol: "GBP/USD",
+};
+const runtimeResolution = applyTradingStyleProfile(runtimeConfig, "scalper");
+const runtimeStylePolicy = await buildResolvedStylePolicy({
+  resolution: runtimeResolution,
+  config: runtimeResolution.config,
+  baseConfig: runtimeResolution.config,
+  symbol: "GBP/USD",
+  resolvedAt: "2026-07-30T14:00:00Z",
+});
+const runtimeRoleCandles = {
+  bias: [{
+    datetime: "2026-07-30T13:00:00Z",
+    open: 1.28,
+    high: 1.29,
+    low: 1.27,
+    close: 1.285,
+    volume: 1000,
+  }],
+  structure: [{
+    datetime: "2026-07-30T13:45:00Z",
+    open: 1.283,
+    high: 1.286,
+    low: 1.282,
+    close: 1.285,
+    volume: 500,
+  }],
+  setup: [{
+    datetime: "2026-07-30T14:00:00Z",
+    open: 1.284,
+    high: 1.285,
+    low: 1.2835,
+    close: 1.2845,
+    volume: 100,
+  }],
+  confirmation: [],
+  refinement: [],
+  runtimeEntry: [],
+  runtimeHTF: [],
+};
+
 Deno.test("input fingerprint canonicalizes object keys and timestamps", async () => {
   const reordered = await buildGoldenReplayInputFingerprint({
     symbol: "GBP/USD",
@@ -131,6 +181,72 @@ Deno.test("input fingerprint canonicalizes object keys and timestamps", async ()
 
   assertEquals(reordered, canonicalFingerprint);
   assert(canonicalFingerprint.startsWith("golden-replay-input.v1:"));
+});
+
+Deno.test("runtime adapter fingerprints exact role candles and stable config", async () => {
+  const first = await buildGoldenReplayRuntimeInputFingerprint({
+    symbol: "GBP/USD",
+    evaluatedAt: "2026-07-30T14:00:00Z",
+    stylePolicy: runtimeStylePolicy,
+    roleCandles: runtimeRoleCandles,
+    runtimeConfig: {
+      ...runtimeResolution.config,
+      _currentSymbol: "GBP/USD",
+      _smtResult: { transient: "live-derived" },
+    },
+  });
+  const transientlyDifferent = await buildGoldenReplayRuntimeInputFingerprint({
+    symbol: "GBP/USD",
+    evaluatedAt: "2026-07-30T10:00:00-04:00",
+    stylePolicy: {
+      ...runtimeStylePolicy,
+      resolvedAt: "2026-07-30T14:05:00Z",
+    },
+    roleCandles: runtimeRoleCandles,
+    runtimeConfig: {
+      ...runtimeResolution.config,
+      _currentSymbol: "GBPUSD",
+      _smtResult: { transient: "backtest-derived" },
+    },
+  });
+
+  assertEquals(transientlyDifferent, first);
+});
+
+Deno.test("runtime adapter changes fingerprint for a consumed config or candle", async () => {
+  const baseline = await buildGoldenReplayRuntimeInputFingerprint({
+    symbol: "GBP/USD",
+    evaluatedAt: "2026-07-30T14:00:00Z",
+    stylePolicy: runtimeStylePolicy,
+    roleCandles: runtimeRoleCandles,
+    runtimeConfig: runtimeResolution.config,
+  });
+  const configChanged = await buildGoldenReplayRuntimeInputFingerprint({
+    symbol: "GBP/USD",
+    evaluatedAt: "2026-07-30T14:00:00Z",
+    stylePolicy: runtimeStylePolicy,
+    roleCandles: runtimeRoleCandles,
+    runtimeConfig: {
+      ...runtimeResolution.config,
+      minRiskReward: runtimeResolution.config.minRiskReward + 0.25,
+    },
+  });
+  const candleChanged = await buildGoldenReplayRuntimeInputFingerprint({
+    symbol: "GBP/USD",
+    evaluatedAt: "2026-07-30T14:00:00Z",
+    stylePolicy: runtimeStylePolicy,
+    roleCandles: {
+      ...runtimeRoleCandles,
+      setup: [{
+        ...runtimeRoleCandles.setup[0],
+        close: runtimeRoleCandles.setup[0].close + 0.0001,
+      }],
+    },
+    runtimeConfig: runtimeResolution.config,
+  });
+
+  assert(baseline !== configChanged);
+  assert(baseline !== candleChanged);
 });
 
 Deno.test("identical fingerprinted decision fixture is deterministic proof", async () => {

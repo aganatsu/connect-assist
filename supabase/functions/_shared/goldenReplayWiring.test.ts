@@ -16,6 +16,14 @@ Deno.test("live scanner captures the canonical Golden Replay snapshot", () => {
     "goldenReplaySnapshot = await buildGoldenReplaySnapshot({",
   );
   assertStringIncludes(liveScanner, 'surface: "live"');
+  assertStringIncludes(
+    liveScanner,
+    "await buildGoldenReplayRuntimeInputFingerprint({",
+  );
+  assertStringIncludes(
+    liveScanner,
+    "inputFingerprint: replayInputFingerprint",
+  );
   assertStringIncludes(liveScanner, 'enforcement: "observe_only"');
   assertStringIncludes(liveScanner, "positionSize: null");
   assertStringIncludes(
@@ -40,6 +48,14 @@ Deno.test("backtest captures and retains the same snapshot contract", () => {
     "let replaySnapshot = await buildGoldenReplaySnapshot({",
   );
   assertStringIncludes(backtestEngine, 'surface: "backtest"');
+  assertStringIncludes(
+    backtestEngine,
+    "await buildGoldenReplayRuntimeInputFingerprint({",
+  );
+  assertStringIncludes(
+    backtestEngine,
+    "inputFingerprint: replayInputFingerprint",
+  );
   assertStringIncludes(backtestEngine, "goldenReplaySnapshots.push");
   assertStringIncludes(backtestEngine, "goldenReplaySnapshot: replaySnapshot");
   assertStringIncludes(
