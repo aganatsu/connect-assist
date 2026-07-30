@@ -13,7 +13,7 @@ functions and UI have been deployed and verified.
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
 | 7 | Backtest/live parity | Complete and deterministic-fixture verified |
-| 8 | Strategy validation and controlled activation | Phase 8A in progress — controlled activation contract in review |
+| 8 | Strategy validation and controlled activation | Phase 8A production-verified; Phase 8B evidence certificates in review |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
 
@@ -414,3 +414,20 @@ advancing heartbeats and completion timestamps.
   change scoring, authorization, sizing, order placement, management or broker
   execution. Runtime activation will be a separate reviewed slice after the
   evidence-certificate path is verified.
+- Phase 8A was production-verified on 2026-07-30 after merge `b406977`.
+  Rejected Setups displayed both Gameplan Hierarchy and Thesis Conviction as
+  `SHADOW · OBSERVATION · NOT ENFORCED`, with no activation rows present.
+- Phase 8B introduces immutable `strategy-evidence.v1` certificates generated
+  server-side from distinct rejected opportunities and completed trades. The
+  engine normalizes outcomes into R, collapses repeated scans and partial
+  closes, then measures expectancy, maximum drawdown, useful decision changes
+  and good-trade retention.
+- Each certificate uses a chronological 70/30 train/test split. Log-only
+  eligibility requires the Phase 6 sample and coverage floors, positive
+  out-of-sample results, consistent train/test direction, and either improved
+  expectancy or materially lower drawdown without discarding too many winning
+  trades.
+- Certificate publication is service-role-only, immutable and owner-readable.
+  It records a recommendation but never calls the activation transition RPC.
+  Rejected Setups exposes a manual Certify action and clearly labels every
+  result as observational.
