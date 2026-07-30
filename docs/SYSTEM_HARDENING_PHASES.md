@@ -214,9 +214,24 @@ same snapshot to the pair detail. Missing fields are reported as incomplete
 coverage instead of being treated as agreement. Scenario candidates remain
 `observe_only` and cannot authorize, block, size or place a trade in this
 slice. Phase 7 is not complete until deterministic candle fixtures exercise
-both engines and the remaining execution-size and lifecycle fields are
-captured and compared. Until position size is captured, coverage is explicitly
-reported as incomplete.
+both engines and the remaining event-lifecycle fields are captured and
+compared.
+
+Phase 7B finalizes that snapshot after the existing engine has made its actual
+execution decision. Live market and limit paths now record the final entry,
+SL, TP, risk-to-reward, computed position size, order type and lifecycle
+outcome. The durable pending/position signal evidence retains the authorized
+snapshot, while scan detail records the subsequent created, opened, blocked or
+failed result. Backtests finalize the same contract after their existing
+position-sizing calculation and retain it on the opened and completed trade.
+
+This slice does not unify or alter the sizing algorithms. Live sizing still
+applies its configured volatility, prop-firm, correlation and signal-source
+adjustments; the historical engine still records the size it actually
+calculated. A size mismatch is therefore visible evidence for the deterministic
+replay phase, not silently rewritten agreement. Phase 7 remains incomplete
+until identical candle fixtures drive both candidate engines and every
+intentional surface difference is classified.
 
 ## Phase 3 implementation record
 

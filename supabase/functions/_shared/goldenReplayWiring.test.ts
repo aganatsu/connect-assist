@@ -18,12 +18,26 @@ Deno.test("live scanner captures the canonical Golden Replay snapshot", () => {
   assertStringIncludes(liveScanner, 'surface: "live"');
   assertStringIncludes(liveScanner, 'enforcement: "observe_only"');
   assertStringIncludes(liveScanner, "positionSize: null");
+  assertStringIncludes(
+    liveScanner,
+    "await finalizeGoldenReplaySnapshot(",
+  );
+  assertStringIncludes(
+    liveScanner,
+    "goldenReplaySnapshot: authorizedMarketReplaySnapshot",
+  );
+  assertStringIncludes(
+    liveScanner,
+    "goldenReplaySnapshot: pendingReplaySnapshot",
+  );
+  assertStringIncludes(liveScanner, 'outcome: "opened"');
+  assertStringIncludes(liveScanner, 'outcome: "created"');
 });
 
 Deno.test("backtest captures and retains the same snapshot contract", () => {
   assertStringIncludes(
     backtestEngine,
-    "const replaySnapshot = await buildGoldenReplaySnapshot({",
+    "let replaySnapshot = await buildGoldenReplaySnapshot({",
   );
   assertStringIncludes(backtestEngine, 'surface: "backtest"');
   assertStringIncludes(backtestEngine, "goldenReplaySnapshots.push");
@@ -32,6 +46,12 @@ Deno.test("backtest captures and retains the same snapshot contract", () => {
     backtestEngine,
     "goldenReplaySnapshot: pos.goldenReplaySnapshot",
   );
+  assertStringIncludes(
+    backtestEngine,
+    "replaySnapshot = await finalizeGoldenReplaySnapshot(",
+  );
+  assertStringIncludes(backtestEngine, "positionSize: posSize");
+  assertStringIncludes(backtestEngine, 'outcome: "opened"');
 });
 
 Deno.test("backtest result exposes bounded replay evidence", () => {

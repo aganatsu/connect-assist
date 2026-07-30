@@ -150,6 +150,7 @@ import {
 } from "../_shared/exitParity.ts";
 import {
   buildGoldenReplaySnapshot,
+  finalizeGoldenReplaySnapshot,
   type GoldenReplaySnapshot,
 } from "../_shared/goldenReplay.ts";
 import {
@@ -3094,7 +3095,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             high: izData?.bestZone?.high ?? null,
             entry: izData?.bestZone?.refinedEntry ?? null,
           };
-        const replaySnapshot = await buildGoldenReplaySnapshot({
+        let replaySnapshot = await buildGoldenReplaySnapshot({
           surface: "backtest",
           symbol,
           evaluatedAt: candle.datetime,
@@ -3154,12 +3155,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           },
           managementContractVersion: "management-policy.v1",
         });
-        goldenReplaySnapshots.push(replaySnapshot);
-        if (goldenReplaySnapshots.length > 500) {
-          goldenReplaySnapshots.shift();
-        }
-
         if (!allPassed) {
+          replaySnapshot = await finalizeGoldenReplaySnapshot(
+            replaySnapshot,
+            {
+              execution: replaySnapshot.decision.execution,
+              lifecycle: {
+                route: "candidate",
+                stage: "gates",
+                outcome: "blocked",
+                reason: failedGates.map((gate) => gate.reason).join("; "),
+              },
+            },
+          );
+          goldenReplaySnapshots.push(replaySnapshot);
+          if (goldenReplaySnapshots.length > 500) {
+            goldenReplaySnapshots.shift();
+          }
           diagnostics.skippedGateBlocked++;
           for (const gate of failedGates) {
             const label = gate.reason.split(":")[0] || gate.reason;
@@ -3273,6 +3285,36 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // ── Open Position ──
         tradeCounter++;
         const posId = `bt_${runId.slice(0, 8)}_${tradeCounter}`;
+        replaySnapshot = await finalizeGoldenReplaySnapshot(
+          replaySnapshot,
+          {
+            execution: {
+              eligible: true,
+              entryPrice: candle.close,
+              stopLoss: analysis.stopLoss,
+              takeProfit: analysis.takeProfit,
+              riskReward: analysis.stopLoss && analysis.takeProfit
+                ? Math.abs(analysis.takeProfit - candle.close) /
+                  Math.abs(candle.close - analysis.stopLoss)
+                : null,
+              positionSize: posSize,
+              orderType: "market",
+            },
+            lifecycle: {
+              route: "market",
+              stage: "position",
+              outcome: "opened",
+              reason: "Backtest position opened after final sizing",
+            },
+            provenance: {
+              positionId: posId,
+            },
+          },
+        );
+        goldenReplaySnapshots.push(replaySnapshot);
+        if (goldenReplaySnapshots.length > 500) {
+          goldenReplaySnapshots.shift();
+        }
         const positionStylePolicy = await buildResolvedStylePolicy({
           resolution: styleResolution,
           config: pairConfig,

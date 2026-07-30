@@ -33,7 +33,11 @@ import {
   evaluateGamePlanShadowAudit,
   finalizeShadowCurrentDecision,
 } from "../_shared/gamePlanShadowAudit.ts";
-import { buildGoldenReplaySnapshot } from "../_shared/goldenReplay.ts";
+import {
+  buildGoldenReplaySnapshot,
+  finalizeGoldenReplaySnapshot,
+  type GoldenReplayFinalization,
+} from "../_shared/goldenReplay.ts";
 import { fetchCandlesWithFallback, beginScanSourceTally, endScanSourceTally, resetThrottleStats, type BrokerConn } from "../_shared/candleSource.ts";
 import {
   computeFOTSI, getCurrencyAlignment, checkOverboughtOversoldVeto,
@@ -6320,6 +6324,16 @@ async function runScanForUser(
         },
         managementContractVersion: "management-policy.v1",
       });
+      const finalizeDetailGoldenReplay = async (
+        finalization: GoldenReplayFinalization,
+      ) => {
+        (detail as any).goldenReplaySnapshot =
+          await finalizeGoldenReplaySnapshot(
+            (detail as any).goldenReplaySnapshot,
+            finalization,
+          );
+        return (detail as any).goldenReplaySnapshot;
+      };
 
       if (allPassed && analysis.stopLoss && analysis.takeProfit) {
         // Adjust SL buffer for JPY pairs
@@ -6546,6 +6560,24 @@ async function runScanForUser(
           console.log(`[${pair}] TP too small: ${actualTpPips.toFixed(1)} pips < min ${minTpPips} pips. Trade not worth the spread cost. SKIPPING.`);
           detail.status = "skipped_tp_too_small";
           detail.skipReason = `TP ${actualTpPips.toFixed(1)}p < min ${minTpPips}p`;
+          await finalizeDetailGoldenReplay({
+            execution: {
+              eligible: false,
+              entryPrice: analysis.lastPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              riskReward: Math.abs(tp - analysis.lastPrice) /
+                Math.abs(analysis.lastPrice - sl),
+              positionSize: null,
+              orderType: null,
+            },
+            lifecycle: {
+              route: "candidate",
+              stage: "protection",
+              outcome: "blocked",
+              reason: detail.skipReason,
+            },
+          });
           scanDetails.push(detail);
           continue;
         }
@@ -6794,6 +6826,26 @@ async function runScanForUser(
             detail.status = "skipped_expiry_cooldown";
             detail.skipReason = `Post-expiry cooldown: same setup expired at ${recentExpired[0].resolved_at} (within ${cooldownMinutes}min cooldown)`;
             console.log(`[scan ${scanCycleId}] ⏳ ${pair}: PENDING ORDER COOLDOWN — same ${analysis.direction} setup expired recently (${recentExpired[0].order_id} @ ${recentExpired[0].entry_price}). Waiting ${cooldownMinutes}min before re-placing.`);
+            await finalizeDetailGoldenReplay({
+              execution: {
+                eligible: false,
+                entryPrice: limitEntry.price,
+                stopLoss: sl,
+                takeProfit: computeTP(
+                  limitEntry.price,
+                  sl,
+                  analysis.direction,
+                ),
+                positionSize: null,
+                orderType: "limit",
+              },
+              lifecycle: {
+                route: "limit",
+                stage: "cooldown",
+                outcome: "blocked",
+                reason: detail.skipReason,
+              },
+            });
             scanDetails.push(detail);
             continue;
           }
@@ -6864,6 +6916,22 @@ async function runScanForUser(
               console.error(`[GUARD] ${pair} ${analysis.direction} LIMIT REJECTED — SL/TP orientation mismatch. entry=${eNum} sl=${sNum} tp=${tNum}`);
               detail.status = "zone_setup_rejected_orientation";
               detail.skipReason = `SL/TP orientation mismatch for ${analysis.direction} (entry=${eNum} sl=${sNum} tp=${tNum})`;
+              await finalizeDetailGoldenReplay({
+                execution: {
+                  eligible: false,
+                  entryPrice: eNum,
+                  stopLoss: sNum,
+                  takeProfit: tNum,
+                  positionSize: limitSize,
+                  orderType: "limit",
+                },
+                lifecycle: {
+                  route: "limit",
+                  stage: "protection",
+                  outcome: "blocked",
+                  reason: detail.skipReason,
+                },
+              });
               scanDetails.push(detail);
               continue;
             }
@@ -6990,6 +7058,26 @@ async function runScanForUser(
             detail.skipReason =
               `[decision-contract:${pendingHierarchy.code}] ${pendingHierarchy.reason}`;
             detail.decisionContext = pendingDecisionContext;
+            await finalizeDetailGoldenReplay({
+              execution: {
+                eligible: false,
+                entryPrice: limitEntry.price,
+                stopLoss: limitSL,
+                takeProfit: limitTP,
+                positionSize: limitSize,
+                orderType: "limit",
+              },
+              lifecycle: {
+                route: "limit",
+                stage: "authorization",
+                outcome: "blocked",
+                reason: detail.skipReason,
+              },
+              provenance: {
+                candidateId: pendingCandidateId,
+                orderId: pendingOrderId,
+              },
+            });
             await blockQualifiedSetup(
               pendingLifecycleEvidence,
               detail.skipReason,
@@ -6998,6 +7086,29 @@ async function runScanForUser(
             continue;
           }
 
+          const pendingReplaySnapshot =
+            await finalizeDetailGoldenReplay({
+              execution: {
+                eligible: true,
+                entryPrice: limitEntry.price,
+                stopLoss: limitSL,
+                takeProfit: limitTP,
+                riskReward: Math.abs(limitTP - limitEntry.price) /
+                  Math.abs(limitEntry.price - limitSL),
+                positionSize: limitSize,
+                orderType: "limit",
+              },
+              lifecycle: {
+                route: "limit",
+                stage: "pending",
+                outcome: "requested",
+                reason: "Pending zone order passed creation checks",
+              },
+              provenance: {
+                candidateId: pendingCandidateId,
+                orderId: pendingOrderId,
+              },
+            });
           const { error: pendingInsertErr } = await supabase.from("pending_orders").insert({
             user_id: userId,
             bot_id: BOT_ID,
@@ -7020,7 +7131,7 @@ async function runScanForUser(
             status: "pending",
             expiry_minutes: expiryMinutes,
             expires_at: expiresAt,
-              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
+              signal_reason: JSON.stringify({ bot: BOT_ID, candidateId: pendingCandidateId, summary: analysis.summary, setupType: setupClassification.setupType, setupConfidence: setupClassification.confidence, entryTimeframe: pairConfig.entryTimeframe, originalSL: limitSL, originalTP: limitTP, originatingZone: pendingOriginatingZone, exitFlags, factorScores: analysis.factors, tieredScoring: analysis.tieredScoring || null, regimeData: detail.regimeData || null, confluenceStacking: detail.confluenceStacking || null, sweepReclaim: detail.sweepReclaim || null, pullbackHealth: detail.pullbackHealth || null, structureIntel: detail.structureIntel || null, entityLifecycles: detail.analysis_snapshot?.entityLifecycles || null, gates: detail.gates || null, setupClassification: detail.setupClassification || null, fibLevels: detail.fibLevels || null, impulseZone: (detail as any).impulseZone || null, directionVerdict: (detail as any).directionVerdict || null, gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null, gamePlanShadowAudit: (detail as any).gamePlanShadowAudit || null, signalSource: (detail as any).signalSource || null, unifiedZone: (detail as any).unifiedZone || null, thesisVersion: THESIS_VALIDATION_VERSION, confirmationMethod: pendingFrozenStrategyContext.confirmation.method, indicatorMinCount: pendingFrozenStrategyContext.confirmation.indicatorMinCount, tpMethod: pairConfig.tpMethod || "rr_ratio", decisionContext: pendingDecisionContext, frozenStrategyContext: pendingFrozenStrategyContext, goldenReplaySnapshot: pendingReplaySnapshot, ...(pendingLifecycleEvidence ? { watchlistLifecycle: pendingLifecycleEvidence } : {}), ...(isPromotedFromStaging && existingStaged ? { promotedFromWatchlist: true, watchlistOrigin: { initialScore: parseFloat(existingStaged.initial_score), cyclesWatched: existingStaged.scan_cycles + 1, stagedAt: existingStaged.staged_at } } : {}) }),
             signal_score: analysis.score,
             setup_type: setupClassification.setupType,
             setup_confidence: setupClassification.confidence,
@@ -7053,6 +7164,19 @@ async function runScanForUser(
             detail.skipReason = /duplicate key/i.test(pendingInsertErr.message)
               ? "Zone setup already active (see Zone Setups panel)"
               : `Zone setup insert failed: ${pendingInsertErr.message}`;
+            await finalizeDetailGoldenReplay({
+              execution: pendingReplaySnapshot.decision.execution,
+              lifecycle: {
+                route: "limit",
+                stage: "pending",
+                outcome: "failed",
+                reason: detail.skipReason,
+              },
+              provenance: {
+                candidateId: pendingCandidateId,
+                orderId: pendingOrderId,
+              },
+            });
             await blockQualifiedSetup(
               pendingLifecycleEvidence,
               detail.skipReason,
@@ -7090,6 +7214,19 @@ async function runScanForUser(
           detail.entryPrice = limitEntry.price;
           detail.stopLoss = limitSL;
           detail.takeProfit = limitTP;
+          await finalizeDetailGoldenReplay({
+            execution: pendingReplaySnapshot.decision.execution,
+            lifecycle: {
+              route: "limit",
+              stage: "pending",
+              outcome: "created",
+              reason: "Pending zone order was created",
+            },
+            provenance: {
+              candidateId: pendingCandidateId,
+              orderId: pendingOrderId,
+            },
+          });
 
           // Telegram notification for zone setup activation
           if (telegramChatIds.length > 0 && shouldNotify("zone_setup_active")) {
@@ -7161,6 +7298,26 @@ async function runScanForUser(
           detail.status = "skipped_sl_sanity";
           detail.skipReason = `Market entry ${marketEntryPrice} already past SL ${sl} for ${analysis.direction} — trade would be instant loss`;
           console.log(`[scan ${scanCycleId}] ⛔ ${pair}: SL SANITY FAILED — entry ${marketEntryPrice} vs SL ${sl} (${analysis.direction}). Skipping.`);
+          await finalizeDetailGoldenReplay({
+            execution: {
+              eligible: false,
+              entryPrice: marketEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              positionSize: size,
+              orderType: "market",
+            },
+            lifecycle: {
+              route: "market",
+              stage: "protection",
+              outcome: "blocked",
+              reason: detail.skipReason,
+            },
+            provenance: {
+              orderId,
+              positionId,
+            },
+          });
           scanDetails.push(detail);
           continue;
         }
@@ -7424,6 +7581,27 @@ async function runScanForUser(
             detail.status = "market_entry_lifecycle_claim_failed";
             detail.skipReason = lifecycleError?.message ||
               "Watchlist lifecycle qualification failed";
+            await finalizeDetailGoldenReplay({
+              execution: {
+                eligible: false,
+                entryPrice: marketEntryPrice,
+                stopLoss: sl,
+                takeProfit: tp,
+                positionSize: size,
+                orderType: "market",
+              },
+              lifecycle: {
+                route: "market",
+                stage: "qualification",
+                outcome: "failed",
+                reason: detail.skipReason,
+              },
+              provenance: {
+                candidateId: directCandidateId,
+                orderId,
+                positionId,
+              },
+            });
             scanDetails.push(detail);
             continue;
           }
@@ -7438,6 +7616,27 @@ async function runScanForUser(
             `[market] ${pair} ${analysis.direction}: FINAL AUTH BLOCKED `
             + `${directAuthorization.code} — ${directAuthorization.reason}`,
           );
+          await finalizeDetailGoldenReplay({
+            execution: {
+              eligible: false,
+              entryPrice: marketEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              positionSize: size,
+              orderType: "market",
+            },
+            lifecycle: {
+              route: "market",
+              stage: "authorization",
+              outcome: "blocked",
+              reason: detail.skipReason,
+            },
+            provenance: {
+              candidateId: directCandidateId,
+              orderId,
+              positionId,
+            },
+          });
           await blockQualifiedSetup(
             directLifecycleEvidence,
             detail.skipReason,
@@ -7562,6 +7761,27 @@ async function runScanForUser(
             detail.skipReason =
               `SL/TP orientation mismatch for ${analysis.direction} `
               + `(entry=${entryRef} sl=${slNum} tp=${tpNum})`;
+            await finalizeDetailGoldenReplay({
+              execution: {
+                eligible: false,
+                entryPrice: entryRef,
+                stopLoss: slNum,
+                takeProfit: tpNum,
+                positionSize: size,
+                orderType: "market",
+              },
+              lifecycle: {
+                route: "market",
+                stage: "protection",
+                outcome: "blocked",
+                reason: detail.skipReason,
+              },
+              provenance: {
+                candidateId: directCandidateId,
+                orderId,
+                positionId,
+              },
+            });
             await blockQualifiedSetup(
               directLifecycleEvidence,
               detail.skipReason,
@@ -7605,6 +7825,30 @@ async function runScanForUser(
           shadowAudit: (detail as any).gamePlanShadowAudit || null,
           capturedAt: nowStr,
         } : null;
+        const authorizedMarketReplaySnapshot =
+          await finalizeDetailGoldenReplay({
+            execution: {
+              eligible: true,
+              entryPrice: marketEntryPrice,
+              stopLoss: sl,
+              takeProfit: tp,
+              riskReward: Math.abs(tp - marketEntryPrice) /
+                Math.abs(marketEntryPrice - sl),
+              positionSize: size,
+              orderType: "market",
+            },
+            lifecycle: {
+              route: "market",
+              stage: "authorization",
+              outcome: "authorized",
+              reason: "Final market-entry authorization passed",
+            },
+            provenance: {
+              candidateId: directCandidateId,
+              orderId,
+              positionId,
+            },
+          });
         const directSignalReason = {
           bot: BOT_ID,
           candidateId: directCandidateId,
@@ -7656,6 +7900,7 @@ async function runScanForUser(
           finalAuthorization: directAuthorization,
           decisionContext: directAuthorization.decisionContext,
           frozenStrategyContext: directFrozenStrategyContext,
+          goldenReplaySnapshot: authorizedMarketReplaySnapshot,
           confirmationMethod:
             directFrozenStrategyContext.confirmation.method,
           indicatorMinCount:
@@ -7724,6 +7969,20 @@ async function runScanForUser(
             `[market] ${pair} ${analysis.direction}: atomic entry rejected — `
             + `${directFillError?.message || directFill?.code || "unknown"}`,
           );
+          await finalizeDetailGoldenReplay({
+            execution: authorizedMarketReplaySnapshot.decision.execution,
+            lifecycle: {
+              route: "market",
+              stage: "position",
+              outcome: "failed",
+              reason: detail.skipReason,
+            },
+            provenance: {
+              candidateId: directCandidateId,
+              orderId,
+              positionId,
+            },
+          });
           await blockQualifiedSetup(
             directLifecycleEvidence,
             detail.skipReason,
@@ -7732,6 +7991,20 @@ async function runScanForUser(
           continue;
         }
 
+        await finalizeDetailGoldenReplay({
+          execution: authorizedMarketReplaySnapshot.decision.execution,
+          lifecycle: {
+            route: "market",
+            stage: "position",
+            outcome: "opened",
+            reason: "Atomic market-entry claim succeeded",
+          },
+          provenance: {
+            candidateId: directCandidateId,
+            orderId,
+            positionId,
+          },
+        });
         if (directLifecycleEvidence) {
           stagedPromoted++;
           stagedMap.delete(stagedKey!);
