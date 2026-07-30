@@ -12,7 +12,7 @@ functions and UI have been deployed and verified.
 | 4 | Watchlist and Zone Setup lifecycle | Implementation complete; deployment verification pending |
 | 5 | Operations and scanner reliability | In progress — Phase 5A merged; Phase 5B in review |
 | 6 | Rejected Setups and shadow evidence | Phase 6A deployed; collecting evidence |
-| 7 | Backtest/live parity | Foundation in progress — corrective Slice 8A in review |
+| 7 | Backtest/live parity | Slice 8A deployed; corrective Slice 8B in progress |
 | 8 | Strategy validation and controlled activation | Not started |
 
 ## Corrective Phase 2C / 3C — style-aware policy consistency
@@ -31,7 +31,7 @@ the same way. It must finish before Phase 6 begins.
 | 5 | Rewire Gameplan, Direction Verdict, thesis and conviction to those roles | Complete and production-verified |
 | 6 | Make Gameplan validity windows style-aware | Merged; deployment verification pending |
 | 7 | Freeze the policy through Watchlist, pending, confirmation and fill | Direct-entry path production-verified; Slice 7.1 in review |
-| 8 | Use one style-frozen management engine in live and backtest paths | Slice 8A in review |
+| 8 | Use one style-frozen management engine in live and backtest paths | Slice 8A deployed; Slice 8B in progress |
 
 Slice 1 is observe-only. It assigns two stable fingerprints: a base-policy hash
 for comparing shared style/configuration across surfaces, and an exact policy
@@ -179,10 +179,24 @@ per-trade override is the only supported way to change an open trade.
 The backtest freezes the same pair-specific management projection on every
 position and retains it through chunk continuation and the completed trade
 record. Break-even, trailing, max-hold and session-close calculations now call
-the same pure decision engine in live and backtest paths. Partial-close
-accounting and structure-data preparation remain surface-specific adapters;
-their arithmetic and execution sequencing require separate parity fixtures
-before Slice 8 can be marked complete.
+the same pure decision engine in live and backtest paths.
+
+Slice 8B introduces `exit-parity.v1` for the two remaining decision gaps.
+Partial closes now use one pure trigger, size-rounding and P&L/commission
+calculation. The fill model remains explicit: live uses the observed market
+fill, while candle backtests use the exact R threshold instead of receiving
+unrealistic full-candle price improvement. Database and broker writes remain
+surface adapters; the shared contract records the trigger, fill, closed and
+remaining size, gross P&L, commission and net P&L.
+
+Structure invalidation now uses the same 120-candle entry-timeframe window and
+252-completed-daily-candle regime window in both paths. Both surfaces apply
+the same rule that suppresses internal-only opposing CHoCH in ranging or
+transitional conditions before calling the common SL calculator. Live
+positions retain the evidence in their management history, and backtest trades
+retain the same evidence in their results. Slice 8 is complete only after 8B
+is merged, deployed and verified against a natural management event or a
+controlled paper/backtest parity fixture.
 
 ## Phase 3 implementation record
 
