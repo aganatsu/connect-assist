@@ -60,7 +60,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
         {config.risk?.positionSizingMethod === "volatility_adjusted" && (
           <>
             <p className="text-[10px] text-muted-foreground italic">Lot size scales inversely with ATR — smaller positions in volatile markets, larger in calm markets. Uses Risk% as the base.</p>
-            <FieldGroup label={`ATR Multiplier: ${config.risk?.atrVolatilityMultiplier ?? 1.5}×`} description="ATR is multiplied by this factor to set the volatility-based risk distance. Lower = larger lots (more aggressive), higher = smaller lots (more conservative)" status="active">
+            <FieldGroup label="ATR Volatility Multiplier" description="ATR is multiplied by this factor to set the volatility-based risk distance. Lower = larger lots (more aggressive), higher = smaller lots (more conservative)" status="active">
               <Slider
                 value={[config.risk?.atrVolatilityMultiplier ?? 1.5]}
                 onValueChange={([v]) => updateField('risk', 'atrVolatilityMultiplier', Math.round(v * 10) / 10)}
@@ -69,7 +69,7 @@ export function RiskTab({ config, setConfig, updateField }: ConfigTabProps) {
               />
               <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
                 <span>0.5× (aggressive)</span>
-                <span>1.5× (default)</span>
+                <span>{config.risk?.atrVolatilityMultiplier ?? 1.5}× selected</span>
                 <span>3.0× (conservative)</span>
               </div>
             </FieldGroup>

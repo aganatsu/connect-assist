@@ -409,6 +409,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
         subtitle="Pre-session planning: key levels, bias, ICT concepts"
         icon={<Crosshair className="h-4 w-4" />}
         badge={config.gamePlan?.enabled ? <Badge variant="outline" className="text-[9px] text-success border-success/40">ON</Badge> : <Badge variant="outline" className="text-[9px] text-muted-foreground">OFF</Badge>}
+        searchLabels={["Bias Enforcement", "Game Plan Enforcement", "Minimum Plan Confidence"]}
         defaultOpen={false}
       >
         <ToggleField
@@ -448,7 +449,7 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">Mode</Label>
+                <Label className="text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">Game Plan Enforcement</Label>
                 <Select
                   value={config.gamePlan?.enforcementMode ?? "hard"}
                   onValueChange={(v: "off" | "soft" | "hard") => updateField("gamePlan", "enforcementMode", v)}
@@ -547,6 +548,15 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
             {ictActiveGates > 0 && <Badge variant="outline" className="text-[9px] font-mono">{ictActiveGates} gate{ictActiveGates === 1 ? "" : "s"}</Badge>}
           </div>
         }
+        searchLabels={[
+          ...ICT2022_MODULES.map(module => module.label),
+          "Gate Mode",
+          "Min Bias Strength",
+          "Min Displacement Ratio",
+          "Min Sweep (pips)",
+          "Min Body Ratio",
+          "KZ Buffer (min)",
+        ]}
         defaultOpen={false}
       >
         {/* Info banner */}
@@ -685,6 +695,19 @@ export function ScanTab({ config, setConfig, updateField }: ConfigTabProps) {
             {smcActiveGates > 0 && <Badge variant="outline" className="text-[9px] font-mono">{smcActiveGates} gate{smcActiveGates === 1 ? "" : "s"}</Badge>}
           </div>
         }
+        searchLabels={[
+          ...SMC_ENHANCEMENT_MODULES.map(module => module.label),
+          "Gate Mode",
+          "Consolidation Threshold",
+          "Trend Threshold",
+          "Max Retests",
+          "Confidence Decay",
+          "Min Displacement",
+          "Size Multiplier",
+          "Primary TP Level",
+          "Min Touches",
+          "Trap Touch #",
+        ]}
         defaultOpen={false}
       >
         {/* Info banner */}
