@@ -256,6 +256,48 @@ export type Database = {
         }
         Relationships: []
       }
+      bot_config_change_log: {
+        Row: {
+          change_type: string
+          changed_at: string
+          changed_by: string | null
+          config_id: string | null
+          connection_id: string | null
+          id: string
+          next_config: Json | null
+          next_hash: string | null
+          previous_config: Json | null
+          previous_hash: string | null
+          user_id: string
+        }
+        Insert: {
+          change_type: string
+          changed_at?: string
+          changed_by?: string | null
+          config_id?: string | null
+          connection_id?: string | null
+          id?: string
+          next_config?: Json | null
+          next_hash?: string | null
+          previous_config?: Json | null
+          previous_hash?: string | null
+          user_id: string
+        }
+        Update: {
+          change_type?: string
+          changed_at?: string
+          changed_by?: string | null
+          config_id?: string | null
+          connection_id?: string | null
+          id?: string
+          next_config?: Json | null
+          next_hash?: string | null
+          previous_config?: Json | null
+          previous_hash?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       bot_configs: {
         Row: {
           config_json: Json
