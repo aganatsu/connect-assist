@@ -18,6 +18,7 @@ import {
   mapImpulsePOIs,
   overlayFibOnPOIs,
   checkHistoricalSR,
+  checkHTFConfluence,
   refineLowerTF,
   rankAndSelectBestZone,
   findBestEntryZone,
@@ -26,7 +27,9 @@ import {
   type ImpulseLeg,
   type ImpulsePOI,
   type RankedPOI,
+  type HTFConfluenceData,
 } from "./impulseZoneEngine.ts";
+import { buildConceptEvidence } from "./conceptEvidence.ts";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -335,6 +338,161 @@ Deno.test("overlayFibOnPOIs — filters POIs outside OTE zone", () => {
   const ranked = overlayFibOnPOIs(impulse, pois);
   // Should be filtered out (not near any key Fib level and not in OTE zone)
   assertEquals(ranked.length, 0);
+});
+
+Deno.test("overlayFibOnPOIs — observes named Fib 15 pips outside without changing legacy score", () => {
+  const impulse: ImpulseLeg = {
+    high: 1.3,
+    low: 1.2,
+    direction: "bullish",
+    startIndex: 1,
+    endIndex: 20,
+    isValid: true,
+    bosPrice: 1.3,
+    startDate: "2025-01-01T00:00:00Z",
+    endDate: "2025-01-02T00:00:00Z",
+  };
+  const evidence = buildConceptEvidence({
+    concept: "order_block",
+    detector: { name: "test.poi", version: "1" },
+    symbol: "GBP/USD",
+    timeframe: "1H",
+    sourceCandleStart: "2025-01-01T12:00:00Z",
+    observedAt: "2025-01-02T00:00:00Z",
+    direction: "bullish",
+    bounds: { low: 1.2129, high: 1.2139 },
+  });
+  const pois: ImpulsePOI[] = [{
+    type: "ob",
+    high: 1.2139,
+    low: 1.2129,
+    candleIndex: 10,
+    direction: "bullish",
+    evidence,
+  }];
+
+  const legacy = overlayFibOnPOIs(impulse, pois, {
+    fibMaxRetracement: 0.886,
+  });
+  const observed = overlayFibOnPOIs(impulse, pois, {
+    fibMaxRetracement: 0.886,
+    pipSize: 0.0001,
+    atr: 0.01,
+    evidenceContext: {
+      symbol: "GBP/USD",
+      timeframe: "1H",
+      observedAt: "2025-01-02T00:00:00Z",
+    },
+  });
+
+  assertEquals(observed.length, 1);
+  assertEquals(observed[0].fibScore, legacy[0].fibScore);
+  assertEquals(observed[0].totalScore, legacy[0].totalScore);
+  assertEquals(observed[0].fibLevel, 0.886);
+  assertEquals(observed[0].fibPrice, 1.2114);
+  const fibObservation = observed[0].localConfluence?.items[0];
+  assertExists(fibObservation);
+  assertEquals(fibObservation.enforcement, "observe_only");
+  assertEquals(fibObservation.measurement?.proximityClass, "context_only");
+  assertEquals(fibObservation.measurement?.qualifiedLocally, false);
+  assert(
+    Math.abs((fibObservation.measurement?.distancePips || 0) - 15) <
+      0.000001,
+  );
+  assertEquals(fibObservation.qualification?.scoreContribution, 0);
+  assertEquals(
+    fibObservation.legacyScoreContribution,
+    observed[0].fibScore,
+  );
+});
+
+Deno.test("checkHTFConfluence — records partial overlap without changing legacy HTF score", () => {
+  const impulse: ImpulseLeg = {
+    high: 1.3,
+    low: 1.2,
+    direction: "bullish",
+    startIndex: 1,
+    endIndex: 20,
+    isValid: true,
+    bosPrice: 1.3,
+    startDate: "2025-01-01T00:00:00Z",
+    endDate: "2025-01-02T00:00:00Z",
+  };
+  const evidence = buildConceptEvidence({
+    concept: "order_block",
+    detector: { name: "test.poi", version: "1" },
+    symbol: "GBP/USD",
+    timeframe: "1H",
+    sourceCandleStart: "2025-01-01T12:00:00Z",
+    observedAt: "2025-01-02T00:00:00Z",
+    direction: "bullish",
+    bounds: { low: 1.2129, high: 1.2139 },
+  });
+  const baseZones = overlayFibOnPOIs(impulse, [{
+    type: "ob",
+    high: 1.2139,
+    low: 1.2129,
+    candleIndex: 10,
+    direction: "bullish",
+    evidence,
+  }], {
+    fibMaxRetracement: 0.886,
+    pipSize: 0.0001,
+    atr: 0.002,
+    evidenceContext: {
+      symbol: "GBP/USD",
+      timeframe: "1H",
+      observedAt: "2025-01-02T00:00:00Z",
+    },
+  });
+  const htfData: HTFConfluenceData = {
+    h4OBs: [{
+      index: 4,
+      high: 1.2147,
+      low: 1.2137,
+      type: "bullish",
+      datetime: "2025-01-01T08:00:00Z",
+      mitigated: false,
+      mitigatedPercent: 0,
+      state: "fresh",
+      testedCount: 0,
+    }],
+    h4FVGs: [],
+    h4Breakers: [],
+    htfFibLevels: null,
+    htfPD: null,
+    direction: "bullish",
+  };
+  const legacyZones = structuredClone(baseZones);
+  const observedZones = structuredClone(baseZones);
+
+  checkHTFConfluence(legacyZones, htfData);
+  checkHTFConfluence(observedZones, htfData, {
+    evidenceContext: {
+      symbol: "GBP/USD",
+      timeframe: "1H",
+      observedAt: "2025-01-02T00:00:00Z",
+    },
+  });
+
+  assertEquals(observedZones[0].htfConfluenceScore, 1);
+  assertEquals(
+    observedZones[0].htfConfluenceScore,
+    legacyZones[0].htfConfluenceScore,
+  );
+  assertEquals(observedZones[0].totalScore, legacyZones[0].totalScore);
+  const htfObservation = observedZones[0].localConfluence?.items.find(
+    (item) => item.source === "htf_order_block",
+  );
+  assertExists(htfObservation);
+  assertEquals(htfObservation.measurement?.reasonCode, "partial_overlap");
+  assertEquals(htfObservation.measurement?.fullCreditEligible, false);
+  assert(
+    Math.abs((htfObservation.measurement?.overlapPercent || 0) - 20) <
+      0.000001,
+  );
+  assertEquals(htfObservation.qualification?.scoreContribution, 0);
+  assertEquals(htfObservation.legacyScoreContribution, 1);
 });
 
 Deno.test("checkHistoricalSR — confirms S/R when closes cluster at zone", () => {

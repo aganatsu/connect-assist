@@ -4457,6 +4457,7 @@ async function runScanForUser(
             high: multiTF.bestZone.zone.poi.high,
             low: multiTF.bestZone.zone.poi.low,
             fibLevel: multiTF.bestZone.zone.fibLevel,
+            fibPrice: multiTF.bestZone.zone.fibPrice ?? null,
             fibDepth: multiTF.bestZone.zone.fibDepth,
             totalScore: multiTF.bestZone.zone.totalScore,
             srConfirmed: multiTF.bestZone.zone.srConfirmed,
@@ -4467,6 +4468,8 @@ async function runScanForUser(
             htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
             htfLayers: multiTF.bestZone.zone.htfLayers,
             evidence: multiTF.bestZone.zone.poi.evidence ?? null,
+            localConfluence:
+              multiTF.bestZone.zone.localConfluence ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4480,9 +4483,11 @@ async function runScanForUser(
             high: candidate.poi.high,
             low: candidate.poi.low,
             fibLevel: candidate.fibLevel,
+            fibPrice: candidate.fibPrice ?? null,
             fibDepth: candidate.fibDepth,
             totalScore: candidate.totalScore,
             evidence: candidate.poi.evidence ?? null,
+            localConfluence: candidate.localConfluence ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
@@ -4819,9 +4824,19 @@ async function runScanForUser(
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
     const selectedZoneConceptEvidence = () => {
-      const evidence = (detail as any).impulseZone?.bestZone?.evidence;
-      return evidence ? [evidence] : [];
+      const bestZone = (detail as any).impulseZone?.bestZone;
+      const evidence = [
+        bestZone?.evidence,
+        ...(bestZone?.localConfluence?.items || []).map(
+          (item: any) => item?.evidence,
+        ),
+      ].filter(Boolean);
+      return Array.from(
+        new Map(evidence.map((item: any) => [item.evidenceId, item])).values(),
+      );
     };
+    const selectedZoneLocalConfluence = () =>
+      (detail as any).impulseZone?.bestZone?.localConfluence ?? null;
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4840,6 +4855,7 @@ async function runScanForUser(
         gamePlan: activeGamePlan,
         directionVerdict: activeDirectionVerdict,
         conceptEvidence: selectedZoneConceptEvidence(),
+        zoneLocalConfluence: selectedZoneLocalConfluence(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -6023,6 +6039,7 @@ async function runScanForUser(
           gamePlan: activeGamePlan,
           directionVerdict: activeDirectionVerdict,
           conceptEvidence: selectedZoneConceptEvidence(),
+          zoneLocalConfluence: selectedZoneLocalConfluence(),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -7083,6 +7100,7 @@ async function runScanForUser(
               gamePlan: activeGamePlan,
               directionVerdict: activeDirectionVerdict,
               conceptEvidence: selectedZoneConceptEvidence(),
+              zoneLocalConfluence: selectedZoneLocalConfluence(),
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -7617,6 +7635,7 @@ async function runScanForUser(
             gamePlan: activeGamePlan,
             directionVerdict: activeDirectionVerdict,
             conceptEvidence: selectedZoneConceptEvidence(),
+            zoneLocalConfluence: selectedZoneLocalConfluence(),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
