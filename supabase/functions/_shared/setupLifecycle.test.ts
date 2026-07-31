@@ -245,12 +245,33 @@ Deno.test("frozen setup preserves observe-only primitive evidence", () => {
       atr: 0.002,
       items: [],
     },
+    zoneCandidateShadowRanking: {
+      contractVersion: "zone-candidate-shadow-ranking.v1",
+      enforcement: "observe_only",
+      candidateId: "candidate-evidence",
+      legacyZoneScore: 2,
+      legacyComparableScore: 2,
+      shadowLocalScore: 1,
+      legacyRank: 1,
+      shadowRank: 2,
+      rankDelta: -1,
+      selectedEvidence: [],
+      excludedEvidence: [],
+      summary: {
+        observedItems: 1,
+        locallyQualifiedItems: 1,
+        contextOnlyItems: 0,
+        uniqueEntities: 1,
+        creditedFamilies: 1,
+      },
+    },
     confirmationMethod: "choch",
   });
 
   assertEquals(frozen.conceptEvidence, [evidence]);
   assertEquals(frozen.zoneLocalConfluence?.candidateId, "candidate-evidence");
   assertEquals(frozen.zoneLocalConfluence?.enforcement, "observe_only");
+  assertEquals(frozen.zoneCandidateShadowRanking?.shadowRank, 2);
 });
 
 Deno.test("an in-flight setup keeps its original style after runtime style changes", () => {

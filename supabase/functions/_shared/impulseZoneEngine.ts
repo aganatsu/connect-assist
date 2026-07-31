@@ -27,6 +27,7 @@ import {
   observeZoneLocalRange,
   type ZoneLocalConfluenceObservation,
 } from "./zoneLocalConfluence.ts";
+import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,8 @@ export interface RankedPOI {
   totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1) + htfConfluenceScore
   /** Observe-only proximity evidence. It never participates in ranking or gates. */
   localConfluence?: ZoneLocalConfluenceObservation;
+  /** Alternative candidate ordering for audit only. */
+  shadowRanking?: ZoneCandidateShadowRanking;
 }
 
 export interface BestZone {
@@ -1136,6 +1139,9 @@ export function checkHTFConfluence(
 export function refineLowerTF(
   entryCandles: Candle[],
   zone: RankedPOI,
+  options?: {
+    evidenceContext?: ZoneEvidenceContext;
+  },
 ): RankedPOI {
   if (entryCandles.length < 10) return zone;
 
@@ -1172,14 +1178,28 @@ export function refineLowerTF(
   const ltfOBs = detectOrderBlocks(entryCandles, fullBreaks);
 
   // Find the best LTF POI aligned with the impulse direction
-  let bestLTF: { type: "ob" | "fvg"; high: number; low: number } | null = null;
+  let bestLTF: {
+    type: "ob" | "fvg";
+    high: number;
+    low: number;
+    datetime: string;
+    sourceIndex: number;
+    lifecycle: string;
+  } | null = null;
 
   // Prefer OBs over FVGs for precision
   for (const ob of ltfOBs) {
     if (ob.type === zone.poi.direction && ob.state !== "broken" && ob.state !== "mitigated") {
       // Ensure the OB is actually inside the zone boundaries
       if (ob.high <= zoneHigh && ob.low >= zoneLow) {
-        bestLTF = { type: "ob", high: ob.high, low: ob.low };
+        bestLTF = {
+          type: "ob",
+          high: ob.high,
+          low: ob.low,
+          datetime: ob.datetime,
+          sourceIndex: ob.index,
+          lifecycle: ob.state,
+        };
         break;
       }
     }
@@ -1190,7 +1210,14 @@ export function refineLowerTF(
     for (const fvg of ltfFVGs) {
       if (fvg.type === zone.poi.direction && fvg.state !== "filled") {
         if (fvg.high <= zoneHigh && fvg.low >= zoneLow) {
-          bestLTF = { type: "fvg", high: fvg.high, low: fvg.low };
+          bestLTF = {
+            type: "fvg",
+            high: fvg.high,
+            low: fvg.low,
+            datetime: fvg.datetime,
+            sourceIndex: fvg.index,
+            lifecycle: fvg.state,
+          };
           break;
         }
       }
@@ -1214,6 +1241,40 @@ export function refineLowerTF(
   zone.refinedSL = refinedSL;
   zone.ltfType = bestLTF.type;
   zone.totalScore = zone.fibScore + zone.htfConfluenceScore + (zone.srConfirmed ? 1 : 0) + 1; // +1 for LTF refinement
+  if (zone.localConfluence && options?.evidenceContext) {
+    const observedAt = options.evidenceContext.observedAt ||
+      entryCandles[entryCandles.length - 1]?.datetime ||
+      bestLTF.datetime;
+    const evidence = buildConceptEvidence({
+      concept: bestLTF.type === "ob" ? "order_block" : "fvg",
+      detector: {
+        name: bestLTF.type === "ob"
+          ? "smcAnalysis.detectOrderBlocks"
+          : "smcAnalysis.detectFVGs",
+        version: "1",
+      },
+      symbol: options.evidenceContext.symbol,
+      timeframe: "LTF",
+      sourceCandleStart: bestLTF.datetime,
+      observedAt,
+      direction: zone.poi.direction,
+      bounds: { low: bestLTF.low, high: bestLTF.high },
+      lifecycle: bestLTF.lifecycle,
+      discriminator: bestLTF.sourceIndex,
+      attributes: {
+        parentTimeframe: options.evidenceContext.timeframe,
+        refinementType: bestLTF.type,
+      },
+    });
+    zone.localConfluence.items.push(observeZoneLocalRange({
+      source: "ltf_refinement",
+      label: `LTF ${bestLTF.type.toUpperCase()} refinement`,
+      evidence,
+      candidate: zone.localConfluence,
+      bounds: { low: bestLTF.low, high: bestLTF.high },
+      legacyScoreContribution: 1,
+    }));
+  }
 
   return zone;
 }
@@ -1365,7 +1426,9 @@ export function findBestEntryZone(
   // Step 6: LTF refinement on top zones (only refine top 3 to save compute)
   const topZones = rankedZones.slice(0, 3);
   for (let i = 0; i < topZones.length; i++) {
-    topZones[i] = refineLowerTF(entryCandles, topZones[i]);
+    topZones[i] = refineLowerTF(entryCandles, topZones[i], {
+      evidenceContext: options?.evidenceContext,
+    });
   }
   // Replace in full array
   for (let i = 0; i < topZones.length; i++) {

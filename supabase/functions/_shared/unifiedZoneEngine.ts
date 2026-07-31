@@ -32,6 +32,7 @@ import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts"
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
 import { buildConceptEvidence } from "./conceptEvidence.ts";
 import { observeZoneLocalPoint } from "./zoneLocalConfluence.ts";
+import { rankZoneCandidatesShadow } from "./zoneCandidateShadowRanking.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -220,6 +221,22 @@ export function findUnifiedZone(
     liquidityPools,
     sweptAbsorbedPenalty: cfg.sweptAbsorbedPenalty,
   });
+  const shadowRankings = rankZoneCandidatesShadow(
+    multiTFResult.allZones.map((candidate) => ({
+      candidateId: candidate.localConfluence?.candidateId ||
+        candidate.poi.evidence?.entityId ||
+        `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`,
+      legacyZoneScore: candidate.totalScore,
+      fibDepth: candidate.fibDepth,
+      localConfluence: candidate.localConfluence,
+    })),
+  );
+  for (const candidate of multiTFResult.allZones) {
+    const candidateId = candidate.localConfluence?.candidateId ||
+      candidate.poi.evidence?.entityId ||
+      `${candidate.poi.type}:${candidate.poi.low}:${candidate.poi.high}`;
+    candidate.shadowRanking = shadowRankings.get(candidateId);
+  }
 
   // No zone found
   if (!multiTFResult.bestZone) {
