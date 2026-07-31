@@ -58,6 +58,7 @@ interface CollapsibleSectionProps {
   icon?: React.ReactNode;
   badge?: React.ReactNode;
   defaultOpen?: boolean;
+  searchLabels?: string[];
   children: React.ReactNode;
 }
 
@@ -68,6 +69,7 @@ export function CollapsibleSection({
   icon,
   badge,
   defaultOpen = false,
+  searchLabels = [],
   children,
 }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
@@ -75,6 +77,7 @@ export function CollapsibleSection({
   const hasMatch =
     highlighted.size > 0 &&
     (highlighted.has(title.toLowerCase()) ||
+      searchLabels.some((label) => highlighted.has(label.toLowerCase())) ||
       collectLabels(children).some((l) => highlighted.has(l)));
 
   useEffect(() => {
@@ -83,6 +86,7 @@ export function CollapsibleSection({
 
   return (
     <div
+      data-config-match={hasMatch ? "true" : undefined}
       className={`border rounded-lg overflow-hidden ${hasMatch ? "border-primary/60 ring-1 ring-primary/30" : "border-border"}`}
     >
       <button

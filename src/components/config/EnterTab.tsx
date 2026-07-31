@@ -189,6 +189,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         title="Factor Weights"
         subtitle="Fine-tune how much each confluence factor contributes to the overall score"
         icon={<SlidersHorizontal className="h-4 w-4" />}
+        searchLabels={FACTOR_WEIGHT_DEFS.map(factor => factor.name)}
         defaultOpen={false}
       >
         <div className="flex items-center justify-between">
@@ -408,6 +409,7 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
         subtitle="Set symbol-specific gate thresholds. Empty fields use the global setting."
         icon={<Shield className="h-4 w-4" />}
         badge={Object.keys(overrides).length > 0 ? <Badge variant="outline" className="text-[9px] text-primary border-primary/40">{Object.keys(overrides).length} pairs</Badge> : undefined}
+        searchLabels={OVERRIDE_FIELDS.map(field => field.label)}
         defaultOpen={false}
       >
         {/* Quick Apply Recommendations */}

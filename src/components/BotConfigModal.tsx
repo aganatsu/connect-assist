@@ -21,134 +21,7 @@ import { EnterTab } from "@/components/config/EnterTab";
 import { ExitTab } from "@/components/config/ExitTab";
 import { RiskTab } from "@/components/config/RiskTab";
 import { normalizeBotConfigForEditor } from "@/lib/botConfigEditor";
-
-// ─── Search Index ─────────────────────────────────────────────────────────────
-// Maps every searchable setting to a tab ID and keywords for the search bar.
-const SEARCH_INDEX: { tab: string; label: string; keywords: string[] }[] = [
-  // SCAN tab
-  { tab: "scan", label: "Trading Style", keywords: ["scalper", "day trader", "swing", "style", "mode"] },
-  { tab: "scan", label: "Auto Scan Interval", keywords: ["scan", "interval", "scanner", "frequency"] },
-  { tab: "scan", label: "Confluence Threshold", keywords: ["confluence", "score", "threshold", "minimum"] },
-  { tab: "scan", label: "Order Blocks", keywords: ["ob", "order block", "smc", "institutional"] },
-  { tab: "scan", label: "Fair Value Gaps", keywords: ["fvg", "imbalance", "gap"] },
-  { tab: "scan", label: "Liquidity Sweeps", keywords: ["liquidity", "sweep", "equal highs", "equal lows"] },
-  { tab: "scan", label: "Market Structure", keywords: ["bos", "choch", "structure", "break", "shift"] },
-  { tab: "scan", label: "Displacement", keywords: ["displacement", "impulse", "institutional candle"] },
-  { tab: "scan", label: "Breaker Blocks", keywords: ["breaker", "failed ob", "flip"] },
-  { tab: "scan", label: "Unicorn Model", keywords: ["unicorn", "breaker fvg", "overlap"] },
-  { tab: "scan", label: "Session Quality", keywords: ["session", "kill zone", "silver bullet", "macro"] },
-  { tab: "scan", label: "SMT Divergence", keywords: ["smt", "divergence", "correlated", "pair"] },
-  { tab: "scan", label: "Volume Profile", keywords: ["volume", "profile", "tpo", "poc", "hvn", "lvn"] },
-  { tab: "scan", label: "Trend Direction", keywords: ["trend", "direction", "bias", "higher timeframe"] },
-  { tab: "scan", label: "Daily Bias", keywords: ["daily", "bias", "htf", "direction"] },
-  { tab: "scan", label: "AMD Model", keywords: ["amd", "accumulation", "manipulation", "distribution"] },
-  { tab: "scan", label: "Currency Strength", keywords: ["fotsi", "currency", "strength", "weakness"] },
-  { tab: "scan", label: "HTF Bias Hard Veto", keywords: ["htf", "bias", "veto", "hard", "block"] },
-  { tab: "scan", label: "Only Buy in Discount", keywords: ["discount", "buy", "premium", "sell", "zone"] },
-  { tab: "scan", label: "Only Sell in Premium", keywords: ["premium", "sell", "discount", "buy", "zone"] },
-  { tab: "scan", label: "Require Liquidity Sweep", keywords: ["require", "liquidity", "sweep", "entry trigger"] },
-  { tab: "scan", label: "Impulse Zone Gate Mode", keywords: ["impulse", "zone", "gate", "mode", "hard", "soft", "off"] },
-  { tab: "scan", label: "Max Fib Retracement", keywords: ["fib", "retracement", "max", "ote", "deep"] },
-  { tab: "scan", label: "Normalized Scoring", keywords: ["normalized", "scoring", "percentage", "scale"] },
-  { tab: "scan", label: "Structural Conviction", keywords: ["structural", "conviction", "bonus", "multi-tf"] },
-  { tab: "scan", label: "Regime Scoring", keywords: ["regime", "scoring", "trending", "ranging", "volatile"] },
-  { tab: "scan", label: "Structure Lookback", keywords: ["structure", "lookback", "bos", "choch", "bars"] },
-  { tab: "scan", label: "FVG Min Size", keywords: ["fvg", "min", "size", "pips", "filter"] },
-  { tab: "scan", label: "FVG Only Unfilled", keywords: ["fvg", "unfilled", "mitigated"] },
-  { tab: "scan", label: "Liquidity Pool Min Touches", keywords: ["liquidity", "pool", "touches", "equal highs"] },
-  { tab: "scan", label: "Tier 1 Gate Enabled", keywords: ["tier 1", "gate", "toggle", "disable", "enable", "core factors"] },
-  { tab: "scan", label: "Min Tier 1 Core Factors", keywords: ["tier 1", "core", "factors", "minimum"] },
-  { tab: "scan", label: "Instruments", keywords: ["instruments", "pairs", "forex", "crypto", "gold", "indices"] },
-  { tab: "scan", label: "Spread Filter", keywords: ["spread", "filter", "max", "pips"] },
-  { tab: "scan", label: "ATR Filter", keywords: ["atr", "filter", "volatility", "min", "max"] },
-  { tab: "scan", label: "Correlation Filter", keywords: ["correlation", "filter", "correlated", "positions"] },
-  { tab: "scan", label: "Asian Session", keywords: ["asian", "session", "tokyo", "hong kong"] },
-  { tab: "scan", label: "London Session", keywords: ["london", "session", "uk", "europe"] },
-  { tab: "scan", label: "New York Session", keywords: ["new york", "session", "ny", "us"] },
-  { tab: "scan", label: "Kill Zone Only", keywords: ["kill zone", "only", "trading", "window"] },
-  { tab: "scan", label: "News Filter", keywords: ["news", "filter", "nfp", "fomc", "cpi", "event"] },
-  { tab: "scan", label: "News Pause (minutes)", keywords: ["news", "pause", "minutes", "before"] },
-  { tab: "scan", label: "Opening Range", keywords: ["opening range", "or", "candle", "bias", "judas"] },
-  { tab: "scan", label: "Game Plan", keywords: ["game plan", "session", "dol", "ipda", "bias"] },
-  { tab: "scan", label: "Game Plan Enforcement", keywords: ["game plan", "hard", "soft", "off", "block", "reject", "enforcement"] },
-  { tab: "scan", label: "Minimum Plan Confidence", keywords: ["game plan", "confidence", "threshold", "hard block", "alignment"] },
-  { tab: "scan", label: "Precision Filters", keywords: ["precision", "filters", "htf", "displacement", "judas", "fvg", "kill zone", "validation", "gates"] },
-  { tab: "scan", label: "HTF Framework", keywords: ["ict", "htf", "framework", "weekly", "daily", "containment"] },
-  { tab: "scan", label: "Displacement-Validated MSS", keywords: ["ict", "displacement", "mss", "market structure shift"] },
-  { tab: "scan", label: "Judas Swing / Liquidity Sweep", keywords: ["ict", "judas", "sweep", "false move"] },
-  { tab: "scan", label: "FVG Invalidation Rules", keywords: ["ict", "fvg", "invalidation", "rule of 2", "encroachment"] },
-  { tab: "scan", label: "Kill Zones & Silver Bullet", keywords: ["ict", "kill zone", "silver bullet", "window"] },
-  { tab: "scan", label: "SMC Enhancements", keywords: ["smc", "enhancement", "phase", "breaker", "zone lifecycle", "trendline", "monthly"] },
-  { tab: "scan", label: "Phase Detection", keywords: ["phase", "consolidation", "expansion", "trend", "regime"] },
-  { tab: "scan", label: "Zone Lifecycle v2", keywords: ["zone", "lifecycle", "invalidation", "close", "retest"] },
-  { tab: "scan", label: "Trendline Liquidity", keywords: ["trendline", "liquidity", "trap", "4th touch"] },
-  { tab: "scan", label: "Monthly Containment", keywords: ["monthly", "containment", "htf", "structural"] },
-  { tab: "scan", label: "Direction Engine", keywords: ["direction", "engine", "consensus", "strict", "veto", "htf", "mtf"] },
-  { tab: "scan", label: "Zone Engine Fine-Tuning", keywords: ["zone", "quality", "threshold", "age", "body", "ratio", "displacement"] },
-  { tab: "scan", label: "Thesis Conviction Tracker", keywords: ["thesis", "conviction", "decay", "evidence", "stale"] },
-  { tab: "scan", label: "SMT Opposite Veto", keywords: ["smt", "veto", "opposite", "block"] },
-  { tab: "scan", label: "Swept-Absorbed Penalty", keywords: ["swept", "absorbed", "penalty", "liquidity"] },
-  { tab: "scan", label: "OB Lookback Candles", keywords: ["ob", "order block", "lookback", "advanced"] },
-  { tab: "scan", label: "Per-Instrument SL Buffer", keywords: ["sl buffer", "per-instrument", "gold", "xau", "btc"] },
-  // ENTER tab
-  { tab: "enter", label: "Factor Weights", keywords: ["factor", "weight", "scoring", "tier", "points"] },
-  { tab: "enter", label: "Market Structure Weight", keywords: ["market structure", "weight", "factor"] },
-  { tab: "enter", label: "Order Block Weight", keywords: ["order block", "weight", "factor"] },
-  { tab: "enter", label: "FVG Weight", keywords: ["fvg", "weight", "factor", "fair value"] },
-  { tab: "enter", label: "Premium/Discount Weight", keywords: ["premium", "discount", "fib", "weight"] },
-  { tab: "enter", label: "Pending Zone Orders", keywords: ["zone", "setup", "pending", "order", "confirmation", "entry type", "limit"] },
-  { tab: "enter", label: "Confirmation Method", keywords: ["confirmation", "method", "choch", "indicators", "bollinger", "stochastic", "macd"] },
-  { tab: "enter", label: "Indicator Min Count", keywords: ["indicator", "min", "count", "confirmation", "required"] },
-  { tab: "enter", label: "Market Fill at Zone", keywords: ["market", "fill", "zone", "immediate", "atr", "proximity"] },
-  { tab: "enter", label: "Zone Proximity (ATR)", keywords: ["atr", "multiplier", "proximity", "zone", "distance"] },
-  { tab: "enter", label: "Zone Watch Expiry", keywords: ["zone", "expiry", "watch", "cancel", "minutes"] },
-  { tab: "enter", label: "Zone Setup Distance", keywords: ["zone", "distance", "pips", "max", "min"] },
-  { tab: "enter", label: "Zone Preference", keywords: ["zone", "ob", "fvg", "nearest", "prefer"] },
-  { tab: "enter", label: "Per-Pair Gate Overrides", keywords: ["pair", "override", "gate", "symbol", "per-pair"] },
-  { tab: "enter", label: "Cooldown Between Trades (minutes)", keywords: ["cooldown", "wait", "between", "delay"] },
-  { tab: "enter", label: "Staging Mode", keywords: ["staging", "persist", "cycles", "ttl", "fleeting"] },
-  { tab: "enter", label: "Watch Threshold", keywords: ["watch", "threshold", "watchlist", "minimum"] },
-  { tab: "enter", label: "Limit Order Distance", keywords: ["limit", "order", "distance", "pips", "pending"] },
-  { tab: "enter", label: "Pending Order Cooldown", keywords: ["pending", "cooldown", "expiry", "re-place", "wait"] },
-  // EXIT tab
-  { tab: "exit", label: "SL Method", keywords: ["sl", "stop loss", "method", "structure", "atr", "fixed pips"] },
-  { tab: "exit", label: "SL Buffer (pips)", keywords: ["sl", "stop loss", "buffer", "pips"] },
-  { tab: "exit", label: "Fixed SL Pips", keywords: ["sl", "fixed", "pips"] },
-  { tab: "exit", label: "ATR Multiple (SL)", keywords: ["atr", "multiple", "sl"] },
-  { tab: "exit", label: "ATR Period", keywords: ["atr", "period", "candles"] },
-  { tab: "exit", label: "TP Method", keywords: ["tp", "take profit", "method", "rr", "next level"] },
-  { tab: "exit", label: "Fixed TP Pips", keywords: ["tp", "fixed", "pips"] },
-  { tab: "exit", label: "R:R Ratio", keywords: ["rr", "risk reward", "ratio", "tp"] },
-  { tab: "exit", label: "TP ATR Multiple", keywords: ["tp", "atr", "multiple"] },
-  { tab: "exit", label: "Trailing Stop", keywords: ["trailing", "stop", "trail", "ratchet", "management"] },
-  { tab: "exit", label: "Break Even", keywords: ["break even", "breakeven", "be", "management"] },
-  { tab: "exit", label: "Partial Take Profit", keywords: ["partial", "tp", "close", "percent", "level"] },
-  { tab: "exit", label: "Close on Reverse Signal", keywords: ["reverse", "close", "opposite"] },
-  { tab: "exit", label: "Max Trade Duration", keywords: ["max", "duration", "hours", "time", "hold"] },
-  { tab: "exit", label: "Friday Close", keywords: ["friday", "close", "weekend", "gap"] },
-  { tab: "exit", label: "Adaptive Trailing", keywords: ["adaptive", "trailing", "atr", "tighten", "widen", "momentum"] },
-  { tab: "exit", label: "Regime-Adaptive TP", keywords: ["regime", "adaptive", "tp", "trending", "ranging", "multiplier"] },
-  { tab: "exit", label: "Structure Invalidation", keywords: ["structure", "invalidation", "choch", "reversal", "protection"] },
-  { tab: "exit", label: "Time-Based Exit", keywords: ["time", "exit", "hours", "auto close", "max hold"] },
-  // RISK tab
-  { tab: "risk", label: "Risk per Trade (%)", keywords: ["risk", "size", "percent", "percentage"] },
-  { tab: "risk", label: "Standalone Size Multiplier", keywords: ["standalone", "multiplier", "size", "half", "conviction"] },
-  { tab: "risk", label: "Max Daily Drawdown (%)", keywords: ["drawdown", "daily", "loss", "halt"] },
-  { tab: "risk", label: "Max Concurrent Trades", keywords: ["concurrent", "open", "positions", "max"] },
-  { tab: "risk", label: "Min R:R Ratio", keywords: ["rr", "risk reward", "ratio", "minimum"] },
-  { tab: "risk", label: "Portfolio Heat (%)", keywords: ["portfolio", "heat", "exposure", "total"] },
-  { tab: "risk", label: "Max Per Symbol", keywords: ["per symbol", "instrument", "max", "duplicate"] },
-  { tab: "risk", label: "Same-Direction Stacking", keywords: ["stacking", "duplicate", "same direction", "pyramid"] },
-  { tab: "risk", label: "Max Total Drawdown (%)", keywords: ["drawdown", "kill switch", "total", "max"] },
-  { tab: "risk", label: "Position Sizing Method", keywords: ["sizing", "lot", "fixed", "volatility", "atr", "position size"] },
-  { tab: "risk", label: "Conflict Threshold Raise", keywords: ["conflict", "opposing", "threshold", "raise", "counter"] },
-  { tab: "risk", label: "Conflict Hard Block", keywords: ["conflict", "block", "opposing", "veto", "counter"] },
-  { tab: "risk", label: "Fixed Lot Size", keywords: ["lot", "fixed", "size", "volume"] },
-  { tab: "risk", label: "ATR Volatility Multiplier", keywords: ["atr", "multiplier", "volatility", "sizing"] },
-  { tab: "risk", label: "Max Daily Loss ($)", keywords: ["daily", "loss", "dollar", "protection", "halt"] },
-  { tab: "risk", label: "Max Consecutive Losses", keywords: ["consecutive", "losses", "pause", "protection"] },
-  { tab: "risk", label: "Equity Circuit Breaker", keywords: ["circuit", "breaker", "equity", "emergency", "override"] },
-];
+import { searchBotConfigSettings } from "@/lib/botConfigSearch";
 
 // ─── Legacy Tab ID → New Tab ID Mapping ───────────────────────────────────────
 // Used to translate defaultTab props from other components that still use old IDs.
@@ -429,12 +302,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   ];
 
   const query = search.trim().toLowerCase();
-  const matches = query
-    ? SEARCH_INDEX.filter(item =>
-        item.label.toLowerCase().includes(query) ||
-        item.keywords.some(k => k.toLowerCase().includes(query))
-      )
-    : [];
+  const matches = searchBotConfigSettings(query);
   const matchedTabIds = new Set(matches.map(m => m.tab));
   const matchedLabels = new Set(matches.map(m => m.label.toLowerCase()));
   const filteredTabs = query ? tabs.filter(t => matchedTabIds.has(t.id)) : tabs;
