@@ -63,10 +63,12 @@ Deno.test("rejected setups exposes read-only historical zone ranking validation"
     '.from("zone_candidate_shadow_validation_summary")',
   );
   assertStringIncludes(rejectedSetups, "Zone-Local Candidate Validation");
-  assertStringIncludes(rejectedSetups, "HISTORICAL EVIDENCE ONLY");
+  assertStringIncludes(rejectedSetups, "SOURCE SEPARATED");
+  assertStringIncludes(rejectedSetups, "ACTIVATION EVIDENCE");
+  assertStringIncludes(rejectedSetups, "RESEARCH ONLY");
   assertStringIncludes(rejectedSetups, "zone_local_confluence");
   assert(
-    rejectedSetups.indexOf("The table below never activates") >
+    rejectedSetups.indexOf("permanently") >
       rejectedSetups.indexOf("Zone-Local Candidate Validation"),
   );
 });

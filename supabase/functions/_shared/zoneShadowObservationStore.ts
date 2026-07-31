@@ -11,6 +11,30 @@ export interface ZoneShadowObservationContext {
   stylePolicyHash: string | null;
   observedAt: string;
   candidates: RankedPOI[];
+  evidenceSource?: "forward_observation" | "retrospective_replay";
+  replayRunId?: string | null;
+  replayContractVersion?: string | null;
+  activationEligible?: boolean;
+}
+
+export function zoneShadowDisagreementKey(
+  candidates: RankedPOI[],
+): string | null {
+  const eligible = candidates.filter((candidate) =>
+    candidate.localConfluence &&
+    candidate.shadowRanking &&
+    candidate.validationTrade
+  );
+  const legacyWinner = eligible.find((candidate) =>
+    candidate.shadowRanking?.legacyRank === 1
+  );
+  const shadowWinner = eligible.find((candidate) =>
+    candidate.shadowRanking?.shadowRank === 1
+  );
+  const legacyId = legacyWinner?.localConfluence?.candidateId;
+  const shadowId = shadowWinner?.localConfluence?.candidateId;
+  if (!legacyId || !shadowId || legacyId === shadowId) return null;
+  return `${legacyId}:${shadowId}`;
 }
 
 export function buildZoneShadowObservationRows(
@@ -70,6 +94,11 @@ export function buildZoneShadowObservationRows(
       shadow_local_score: ranking.shadowLocalScore,
       local_confluence: local,
       shadow_ranking: ranking,
+      evidence_source: input.evidenceSource ?? "forward_observation",
+      replay_run_id: input.replayRunId ?? null,
+      replay_contract_version: input.replayContractVersion ?? null,
+      activation_eligible: input.activationEligible ??
+        (input.evidenceSource !== "retrospective_replay"),
     };
   });
 }

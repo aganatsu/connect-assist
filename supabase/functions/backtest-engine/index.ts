@@ -30,6 +30,7 @@
  *   commissionPerLot?: number,
  *   walkForwardFolds?: number,
  *   researchMode?: boolean,      // enable counterfactual tracking + rich analytics
+ *   zoneLocalReplayEvidence?: boolean, // persist source-separated retrospective zone evidence
  *   maxTradesStored?: number,     // max trades in DB result (default 500)
  *   maxBlockedStored?: number,    // max blocked trades in research analytics (default 200)
  * }
@@ -121,6 +122,13 @@ import {
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
+import {
+  persistZoneReplayEvidence,
+  ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
+} from "../_shared/zoneReplayEvidence.ts";
+import {
+  zoneShadowDisagreementKey,
+} from "../_shared/zoneShadowObservationStore.ts";
 import {
   evaluateZoneLocalEnforcement,
 } from "../_shared/zoneLocalEnforcement.ts";
@@ -1685,6 +1693,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       commissionPerLot = 0,
       walkForwardFolds = 0,
       researchMode = false,
+      zoneLocalReplayEvidence = false,
       maxTradesStored = 500,
       maxBlockedStored = 200,
     } = body;
@@ -2515,6 +2524,52 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
             // ── Derive izData from unified result (backward compat with downstream code) ──
             const multiTF = unifiedResult.multiTFResult;
+            if (
+              zoneLocalReplayEvidence === true &&
+              backtestOwner?.user_id &&
+              zoneShadowDisagreementKey(multiTF.allZones)
+            ) {
+              try {
+                const replayZoneStylePolicy = await buildResolvedStylePolicy({
+                  resolution: styleResolution,
+                  config: {
+                    ...pairConfig,
+                    scanIntervalMinutes:
+                      canonicalRuntimeConfig.scanIntervalMinutes,
+                  },
+                  baseConfig: canonicalRuntimeConfig,
+                  symbol,
+                  effectiveMinConfluence: pairConfig.minConfluence,
+                  resolvedAt: candle.datetime,
+                });
+                const replayEvidence = await persistZoneReplayEvidence(db, {
+                  userId: backtestOwner.user_id,
+                  botId: "smc",
+                  replayRunId: runId,
+                  symbol,
+                  tradingStyle: resolvedTradingStyle,
+                  stylePolicyVersion: replayZoneStylePolicy.contractVersion,
+                  styleBasePolicyHash: replayZoneStylePolicy.basePolicyHash,
+                  stylePolicyHash: replayZoneStylePolicy.policyHash,
+                  observedAt: candle.datetime,
+                  candidates: multiTF.allZones,
+                  candles: entryCandles,
+                  pipSize: spec.pipSize,
+                });
+                if (replayEvidence.inserted > 0) {
+                  console.log(
+                    `[backtest:${runId}] Retrospective zone-local evidence`
+                      + ` ${symbol}: ${replayEvidence.inserted} candidates`,
+                  );
+                }
+              } catch (error) {
+                console.warn(
+                  `[backtest:${runId}] Retrospective zone-local evidence`
+                    + ` failed for ${symbol} (non-fatal):`,
+                  error instanceof Error ? error.message : error,
+                );
+              }
+            }
             izData = {
               hasZone: !!multiTF.bestZone,
               selectedTF: multiTF.selectedTF,
@@ -3646,6 +3701,33 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
     // ── Persist Results ──
     await updateProgress(95, "Saving results...");
+    let zoneLocalReplay: {
+      contractVersion: string;
+      evidenceSource: "retrospective_replay";
+      observations: number;
+      activationEligible: false;
+    } | null = null;
+    if (zoneLocalReplayEvidence === true && backtestOwner?.user_id) {
+      const { count, error } = await db
+        .from("zone_candidate_shadow_observations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", backtestOwner.user_id)
+        .eq("bot_id", "smc")
+        .eq("replay_run_id", runId)
+        .eq("evidence_source", "retrospective_replay");
+      if (error) {
+        console.warn(
+          `[backtest:${runId}] Could not count retrospective zone-local`
+            + ` evidence: ${error.message}`,
+        );
+      }
+      zoneLocalReplay = {
+        contractVersion: ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
+        evidenceSource: "retrospective_replay",
+        observations: count ?? 0,
+        activationEligible: false,
+      };
+    }
     const result = {
       stats,
       trades: allTrades.slice(0, maxTradesStored),
@@ -3672,6 +3754,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         snapshotCount: goldenReplaySnapshots.length,
         snapshots: goldenReplaySnapshots,
       },
+      zoneLocalReplay,
     };
 
     await db.from("backtest_runs").update({
@@ -3988,6 +4071,8 @@ Deno.serve(async (req: Request) => {
             body.tradingStyle,
           ),
           walkForwardFolds: body.walkForwardFolds ?? 0,
+          researchMode: body.researchMode === true,
+          zoneLocalReplayEvidence: body.zoneLocalReplayEvidence === true,
         },
       })
       .select("id")
