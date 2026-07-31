@@ -19,6 +19,7 @@ import {
   analyzeMarketStructure, detectOrderBlocks, detectFVGs, calculateATR,
 } from "./smcAnalysis.ts";
 import { evaluateZoneLifecycle, type ZoneLifecycleConfig, type ZoneLifecycleResult } from "./zoneLifecycle.ts";
+import { buildConceptEvidence, type MarketConceptEvidence } from "./conceptEvidence.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,8 @@ export interface ImpulsePOI {
   candleIndex: number;
   direction: "bullish" | "bearish";
   isOriginOB?: boolean;   // True if this OB was synthesized as the impulse-origin re-test candidate
+  /** Observe-only canonical identity; absent when no evidence context is supplied. */
+  evidence?: MarketConceptEvidence;
 }
 
 export interface RankedPOI {
@@ -277,6 +280,7 @@ export function mapImpulsePOIs(
   options?: {
     originOBRetest?: boolean;
     zoneLifecycleV2?: { enabled: boolean; config?: Partial<ZoneLifecycleConfig>; allCandles?: Candle[] };
+    evidenceContext?: ZoneEvidenceContext;
   },
 ): ImpulsePOI[] {
   if (!impulse.isValid) return [];
@@ -310,12 +314,32 @@ export function mapImpulsePOIs(
   // Map FVGs — only include those aligned with impulse direction
   for (const fvg of fvgs) {
     if (fvg.type === impulse.direction && fvg.state !== "filled") {
+      const candleIndex = start + fvg.index;
+      const sourceStart = candles[Math.max(0, candleIndex - 1)]?.datetime ?? fvg.datetime;
+      const sourceEnd = candles[Math.min(candles.length - 1, candleIndex + 1)]?.datetime ?? fvg.datetime;
       pois.push({
         type: "fvg",
         high: fvg.high,
         low: fvg.low,
-        candleIndex: start + fvg.index,
+        candleIndex,
         direction: fvg.type,
+        evidence: options?.evidenceContext ? buildConceptEvidence({
+          concept: "fvg",
+          detector: { name: "smcAnalysis.detectFVGs", version: "1" },
+          symbol: options.evidenceContext.symbol,
+          timeframe: options.evidenceContext.timeframe,
+          sourceCandleStart: sourceStart,
+          sourceCandleEnd: sourceEnd,
+          observedAt: options.evidenceContext.observedAt ?? candles[candles.length - 1]?.datetime ?? sourceEnd,
+          direction: fvg.type,
+          bounds: { high: fvg.high, low: fvg.low },
+          lifecycle: fvg.state,
+          attributes: {
+            sourceIndex: candleIndex,
+            quality: fvg.quality ?? null,
+            fillPercent: fvg.fillPercent,
+          },
+        }) : undefined,
       });
     }
   }
@@ -350,6 +374,7 @@ export function mapImpulsePOIs(
           low: ob.low,
           candleIndex: fullIndex,
           direction: ob.type,
+          evidence: buildPOIEvidence("smcAnalysis.detectOrderBlocks", ob.datetime, fullIndex, ob.high, ob.low, ob.type, ob.state, options?.evidenceContext, candles),
         });
       }
     } else {
@@ -361,6 +386,7 @@ export function mapImpulsePOIs(
           low: ob.low,
           candleIndex: fullIndex,
           direction: ob.type,
+          evidence: buildPOIEvidence("smcAnalysis.detectOrderBlocks", ob.datetime, fullIndex, ob.high, ob.low, ob.type, ob.state, options?.evidenceContext, candles),
         });
       }
     }
@@ -409,12 +435,39 @@ export function mapImpulsePOIs(
           candleIndex: originCandleIdx,
           direction: impulse.direction,
           isOriginOB: true,
+          evidence: buildPOIEvidence("impulseZone.originOBRetest", oc.datetime, originCandleIdx, oc.high, oc.low, impulse.direction, "synthetic_origin_candidate", options?.evidenceContext, candles),
         });
       }
     }
   }
 
   return pois;
+}
+
+function buildPOIEvidence(
+  detectorName: string,
+  sourceDatetime: string,
+  sourceIndex: number,
+  high: number,
+  low: number,
+  direction: "bullish" | "bearish",
+  lifecycle: string,
+  context: ZoneEvidenceContext | undefined,
+  candles: Candle[],
+): MarketConceptEvidence | undefined {
+  if (!context) return undefined;
+  return buildConceptEvidence({
+    concept: "order_block",
+    detector: { name: detectorName, version: "1" },
+    symbol: context.symbol,
+    timeframe: context.timeframe,
+    sourceCandleStart: sourceDatetime,
+    observedAt: context.observedAt ?? candles[candles.length - 1]?.datetime ?? sourceDatetime,
+    direction,
+    bounds: { high, low },
+    lifecycle,
+    attributes: { sourceIndex },
+  });
 }
 
 /**
@@ -982,6 +1035,7 @@ export function findBestEntryZone(
   const mappedPOIs = mapImpulsePOIs(htfCandles, impulse, {
     originOBRetest: options?.originOBRetest,
     zoneLifecycleV2: options?.zoneLifecycleV2,
+    evidenceContext: options?.evidenceContext,
   });
   const qualification = qualifyImpulsePOIs(htfCandles, impulse, mappedPOIs, options);
   const pois = qualification.accepted;
@@ -1199,6 +1253,8 @@ export interface ZoneEngineOptions {
    * zones at fib 1.0 (re-tests of the block that caused the impulse). Default false.
    */
   originOBRetest?: boolean;
+  /** Observe-only identity context. It never participates in scoring or gates. */
+  evidenceContext?: ZoneEvidenceContext;
   /**
    * Zone Lifecycle v2: When enabled, replaces the default 50% penetration invalidation
    * with close-based invalidation. Zones survive wick penetration and can be traded
@@ -1211,6 +1267,12 @@ export interface ZoneEngineOptions {
     /** All candles available AFTER zone formation for lifecycle evaluation */
     allCandles?: Candle[];
   };
+}
+
+export interface ZoneEvidenceContext {
+  symbol: string;
+  timeframe: string;
+  observedAt?: string;
 }
 
 // ─── Multi-Timeframe Zone Engine ──────────────────────────────────────────────
@@ -1275,10 +1337,17 @@ export function findBestEntryZoneMultiTF(
   tfLabels?: TFSlotLabels,
 ): MultiTFZoneResult {
   const labels = tfLabels ?? DEFAULT_TF_LABELS;
+  const optionsFor = (timeframe: string): ZoneEngineOptions | undefined => {
+    if (!options || !options.evidenceContext) return options;
+    return {
+      ...options,
+      evidenceContext: { ...options.evidenceContext, timeframe },
+    };
+  };
   // ── WATERFALL: Try Daily first (A+ setup) ──
   let dailyResult: ZoneEngineResult | null = null;
   if (dailyCandles && dailyCandles.length >= 20) {
-    dailyResult = findBestEntryZone(dailyCandles, entryCandles, direction, currentPrice, htfData, options);
+    dailyResult = findBestEntryZone(dailyCandles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.top));
     // If Daily produces a valid zone, it wins immediately (highest conviction)
     if (dailyResult.bestZone) {
       const allZones: RankedPOI[] = [...dailyResult.allZones];
@@ -1286,8 +1355,8 @@ export function findBestEntryZoneMultiTF(
         bestZone: dailyResult.bestZone,
         selectedTF: labels.top,
         reason: `${labels.top} zone selected (A+ setup): ${dailyResult.reason}`,
-        h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options),
-        h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options) : null,
+        h1Result: findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.low)),
+        h4Result: h4Candles.length >= 20 ? findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.mid)) : null,
         dailyResult,
         allZones,
       };
@@ -1296,12 +1365,12 @@ export function findBestEntryZoneMultiTF(
 
   // ── FALLBACK: Run 1H and 4H (existing logic) ──
   // Always run 1H
-  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, options);
+  const h1Result = findBestEntryZone(h1Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.low));
 
   // Run 4H only if sufficient candles
   let h4Result: ZoneEngineResult | null = null;
   if (h4Candles.length >= 20) {
-    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, options);
+    h4Result = findBestEntryZone(h4Candles, entryCandles, direction, currentPrice, htfData, optionsFor(labels.mid));
   }
 
   // Combine all zones from all TFs for transparency

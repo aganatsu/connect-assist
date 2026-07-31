@@ -210,6 +210,38 @@ Deno.test("frozen setup captures only matching directional scenarios and zone st
   assertEquals(frozen.confirmation.maxAttempts, 2);
 });
 
+Deno.test("frozen setup preserves observe-only primitive evidence", () => {
+  const evidence = {
+    contractVersion: "concept-evidence.v1" as const,
+    entityId: "fvg:entity1-test",
+    evidenceId: "fvg:ce1-test",
+    concept: "fvg" as const,
+    detector: { name: "smcAnalysis.detectFVGs", version: "1" },
+    symbol: "GBP/USD",
+    timeframe: "1H",
+    observedAt: "2026-07-31T14:00:00.000Z",
+    sourceCandleStart: "2026-07-31T12:00:00.000Z",
+    sourceCandleEnd: "2026-07-31T13:00:00.000Z",
+    direction: "bullish" as const,
+    bounds: { low: 1.274, high: 1.275 },
+    level: null,
+    lifecycle: "open",
+    attributes: {},
+  };
+  const frozen = buildFrozenSetupStrategyContext({
+    identity: { setupId: "setup-evidence", candidateId: "candidate-evidence" },
+    symbol: "GBP/USD",
+    direction: "long",
+    stylePolicy: stylePolicy("scalper"),
+    gamePlan: null,
+    directionVerdict: null,
+    conceptEvidence: [evidence],
+    confirmationMethod: "choch",
+  });
+
+  assertEquals(frozen.conceptEvidence, [evidence]);
+});
+
 Deno.test("an in-flight setup keeps its original style after runtime style changes", () => {
   const frozen = buildFrozenSetupStrategyContext({
     identity: {
