@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -10,6 +10,19 @@ export type { FeatureState } from "@/lib/featureState";
 
 // ─── Context for search highlighting ────────────────────────────────────────
 export const HighlightContext = createContext<Set<string>>(new Set());
+
+// Collects every `label` prop found anywhere in a React subtree, so a
+// collapsible section can tell whether it contains a search match.
+function collectLabels(node: React.ReactNode, out: string[] = []): string[] {
+  React.Children.forEach(node, (child) => {
+    if (!React.isValidElement(child)) return;
+    const props: any = child.props;
+    if (typeof props?.label === "string") out.push(props.label.toLowerCase());
+    if (typeof props?.title === "string") out.push(props.title.toLowerCase());
+    if (props?.children) collectLabels(props.children, out);
+  });
+  return out;
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 export interface ConfigTabProps {
@@ -58,9 +71,20 @@ export function CollapsibleSection({
   children,
 }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const highlighted = useContext(HighlightContext);
+  const hasMatch =
+    highlighted.size > 0 &&
+    (highlighted.has(title.toLowerCase()) ||
+      collectLabels(children).some((l) => highlighted.has(l)));
+
+  useEffect(() => {
+    if (hasMatch) setIsOpen(true);
+  }, [hasMatch]);
 
   return (
-    <div className="border border-border rounded-lg overflow-hidden">
+    <div
+      className={`border rounded-lg overflow-hidden ${hasMatch ? "border-primary/60 ring-1 ring-primary/30" : "border-border"}`}
+    >
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
@@ -114,7 +138,10 @@ export function FieldGroup({
   const isHighlighted = highlighted.has(label.toLowerCase());
 
   return (
-    <div className={`space-y-1.5 ${isHighlighted ? "ring-1 ring-primary/50 rounded-md p-2 -m-2 bg-primary/5" : ""}`}>
+    <div
+      data-config-match={isHighlighted ? "true" : undefined}
+      className={`space-y-1.5 scroll-mt-6 ${isHighlighted ? "ring-2 ring-primary rounded-md p-2 -m-2 bg-primary/10" : ""}`}
+    >
       <div>
         <label className="text-xs font-medium text-foreground">
           {label}
@@ -147,7 +174,10 @@ export function ToggleField({
   const isHighlighted = highlighted.has(label.toLowerCase());
 
   return (
-    <div className={`flex items-center justify-between gap-4 py-1.5 ${isHighlighted ? "ring-1 ring-primary/50 rounded-md p-2 -m-1 bg-primary/5" : ""}`}>
+    <div
+      data-config-match={isHighlighted ? "true" : undefined}
+      className={`flex items-center justify-between gap-4 py-1.5 scroll-mt-6 ${isHighlighted ? "ring-2 ring-primary rounded-md p-2 -m-1 bg-primary/10" : ""}`}
+    >
       <div className="min-w-0">
         <span className="text-xs font-medium text-foreground">
           {label}
