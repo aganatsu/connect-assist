@@ -19,6 +19,7 @@ import {
   overlayFibOnPOIs,
   checkHistoricalSR,
   checkHTFConfluence,
+  buildZoneValidationTrade,
   refineLowerTF,
   rankAndSelectBestZone,
   findBestEntryZone,
@@ -619,6 +620,79 @@ Deno.test("refineLowerTF — refines zone when LTF structure exists inside", () 
 Deno.test("rankAndSelectBestZone — returns null for empty array", () => {
   const result = rankAndSelectBestZone([]);
   assertEquals(result, null);
+});
+
+Deno.test("buildZoneValidationTrade mirrors existing zone-bound entries without authorizing them", () => {
+  const bullishZone: RankedPOI = {
+    poi: {
+      type: "ob",
+      high: 1.275,
+      low: 1.274,
+      candleIndex: 1,
+      direction: "bullish",
+    },
+    fibLevel: 0.618,
+    fibDepth: 0.618,
+    fibScore: 1.5,
+    srConfirmed: false,
+    ltfRefined: false,
+    htfConfluenceScore: 0,
+    htfLayers: [],
+    totalScore: 1.5,
+  };
+  const impulse: ImpulseLeg = {
+    high: 1.28,
+    low: 1.27,
+    direction: "bullish",
+    startIndex: 1,
+    endIndex: 5,
+    isValid: true,
+    bosPrice: 1.28,
+  };
+  const result = buildZoneValidationTrade(bullishZone, impulse);
+  assertEquals(result.direction, "long");
+  assertEquals(result.entryPrice, 1.274);
+  assertEquals(result.stopLoss, 1.2735);
+  assertEquals(result.takeProfit, 1.28);
+  assertEquals(result.source, "zone_bounds");
+});
+
+Deno.test("buildZoneValidationTrade preserves LTF refinement levels", () => {
+  const bearishZone: RankedPOI = {
+    poi: {
+      type: "fvg",
+      high: 1.275,
+      low: 1.274,
+      candleIndex: 1,
+      direction: "bearish",
+    },
+    fibLevel: 0.786,
+    fibDepth: 0.786,
+    fibScore: 2,
+    srConfirmed: false,
+    ltfRefined: true,
+    refinedEntry: 1.2742,
+    refinedSL: 1.2748,
+    ltfType: "fvg",
+    htfConfluenceScore: 0,
+    htfLayers: [],
+    totalScore: 3,
+  };
+  const impulse: ImpulseLeg = {
+    high: 1.28,
+    low: 1.26,
+    direction: "bearish",
+    startIndex: 1,
+    endIndex: 5,
+    isValid: true,
+    bosPrice: 1.26,
+  };
+  const result = buildZoneValidationTrade(bearishZone, impulse);
+  assertEquals(result.direction, "short");
+  assertEquals(result.entryPrice, 1.2742);
+  assertEquals(result.stopLoss, 1.2748);
+  assertEquals(result.takeProfit, 1.26);
+  assertEquals(result.source, "ltf_refinement");
 });
 
 Deno.test("rankAndSelectBestZone — selects highest-scoring zone", () => {

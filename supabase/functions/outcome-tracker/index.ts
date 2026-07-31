@@ -22,8 +22,10 @@ import { SPECS } from "../_shared/smcAnalysis.ts";
 
 // ── Constants ──
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation
+const SHADOW_BATCH_SIZE = 100;    // Disagreement winners only; cached by symbol
 const MIN_AGE_MS = 60 * 60 * 1000;  // 1 hour minimum age before checking
 const OUTCOME_WINDOW_HOURS = 24;     // Look 24h ahead for outcome
+const SHADOW_MIN_AGE_MS = OUTCOME_WINDOW_HOURS * 60 * 60 * 1000;
 const RETENTION_DAYS = 30;           // Delete records older than this
 const ALERT_THRESHOLD = 0.50;        // Alert if >50% would have won
 const ALERT_ROLLING_DAYS = 7;        // Rolling window for alert calculation
@@ -215,7 +217,16 @@ Deno.serve(async (req: Request) => {
   );
 
   try {
-    const results: Record<string, any> = { processed: 0, updated: 0, errors: 0, cleaned: 0 };
+    const results: Record<string, any> = {
+      processed: 0,
+      updated: 0,
+      errors: 0,
+      cleaned: 0,
+      shadow_processed: 0,
+      shadow_updated: 0,
+      shadow_errors: 0,
+      shadow_cleaned: 0,
+    };
 
     // ── Step 1: Fetch pending outcomes older than 1 hour ──
     const cutoff = new Date(Date.now() - MIN_AGE_MS).toISOString();
@@ -297,7 +308,102 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── Step 3: Check rolling 7-day winner-block rate and alert ──
+    // ── Step 3: Resolve observe-only zone-ranking disagreement outcomes ──
+    try {
+      const shadowCutoff = new Date(
+        Date.now() - SHADOW_MIN_AGE_MS,
+      ).toISOString();
+      const { data: shadowRows, error: shadowFetchErr } = await supabase
+        .from("zone_candidate_shadow_observations")
+        .select(
+          "id, symbol, direction, entry_price, stop_loss, take_profit, observed_at",
+        )
+        .eq("outcome_status", "pending")
+        .lt("observed_at", shadowCutoff)
+        .order("observed_at", { ascending: true })
+        .limit(SHADOW_BATCH_SIZE);
+
+      if (shadowFetchErr) {
+        console.warn(
+          `[outcome-tracker] Zone shadow fetch error: ${
+            shadowFetchErr.message
+          }`,
+        );
+        results.shadow_errors++;
+      } else if (shadowRows && shadowRows.length > 0) {
+        const candleCache = new Map<string, any[]>();
+        for (const row of shadowRows) {
+          results.shadow_processed++;
+          try {
+            let candles = candleCache.get(row.symbol);
+            if (!candles) {
+              const fetched = await fetchCandlesWithFallback({
+                symbol: row.symbol,
+                interval: "1h",
+                limit: 72,
+              });
+              candles = fetched.candles;
+              candleCache.set(row.symbol, candles);
+            }
+            if (candles.length < 24) {
+              results.shadow_errors++;
+              continue;
+            }
+            const outcome = simulateOutcome(
+              candles,
+              row.direction as "long" | "short",
+              Number(row.entry_price),
+              row.stop_loss == null ? null : Number(row.stop_loss),
+              row.take_profit == null ? null : Number(row.take_profit),
+              row.observed_at,
+            );
+            const pipSize = getPipSize(row.symbol);
+            const status = outcome.price_reached_entry
+              ? outcome.outcome_status
+              : "no_entry";
+            const { error: shadowUpdateErr } = await supabase
+              .from("zone_candidate_shadow_observations")
+              .update({
+                outcome_status: status,
+                outcome_checked_at: new Date().toISOString(),
+                price_reached_entry: outcome.price_reached_entry,
+                tp_hit: outcome.tp_hit,
+                sl_hit: outcome.sl_hit,
+                tp_hit_time_minutes: outcome.tp_hit_time_minutes,
+                mfe_pips: Number(
+                  (outcome.mfe_pips / pipSize).toFixed(2),
+                ),
+                mae_pips: Number(
+                  (outcome.mae_pips / pipSize).toFixed(2),
+                ),
+              })
+              .eq("id", row.id);
+            if (shadowUpdateErr) {
+              console.warn(
+                `[outcome-tracker] Zone shadow update error ${row.id}:`
+                + ` ${shadowUpdateErr.message}`,
+              );
+              results.shadow_errors++;
+            } else {
+              results.shadow_updated++;
+            }
+          } catch (shadowErr: any) {
+            console.warn(
+              `[outcome-tracker] Zone shadow error ${row.symbol}:`
+              + ` ${shadowErr?.message}`,
+            );
+            results.shadow_errors++;
+          }
+        }
+      }
+    } catch (shadowErr: any) {
+      console.warn(
+        `[outcome-tracker] Zone shadow batch error: ${shadowErr?.message}`,
+      );
+      results.shadow_errors++;
+    }
+
+    // ── Step 4: Check rolling 7-day winner-block rate and alert ──
     try {
       const sevenDaysAgo = new Date(Date.now() - ALERT_ROLLING_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { data: recentResolved, error: alertErr } = await supabase
@@ -385,7 +491,7 @@ Deno.serve(async (req: Request) => {
       console.warn(`[outcome-tracker] Alert check error: ${alertErr?.message}`);
     }
 
-    // ── Step 4: 30-day retention cleanup ──
+    // ── Step 5: 30-day retention cleanup ──
     try {
       const retentionCutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
       const { count: cleaned, error: cleanErr } = await supabase
@@ -397,6 +503,21 @@ Deno.serve(async (req: Request) => {
         console.warn(`[outcome-tracker] Cleanup error: ${cleanErr.message}`);
       } else {
         results.cleaned = cleaned || 0;
+      }
+
+      const { count: shadowCleaned, error: shadowCleanErr } =
+        await supabase
+          .from("zone_candidate_shadow_observations")
+          .delete({ count: "exact" })
+          .lt("observed_at", retentionCutoff);
+      if (shadowCleanErr) {
+        console.warn(
+          `[outcome-tracker] Zone shadow cleanup error: ${
+            shadowCleanErr.message
+          }`,
+        );
+      } else {
+        results.shadow_cleaned = shadowCleaned || 0;
       }
     } catch (cleanErr: any) {
       console.warn(`[outcome-tracker] Cleanup error: ${cleanErr?.message}`);
