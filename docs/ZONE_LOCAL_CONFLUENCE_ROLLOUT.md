@@ -46,6 +46,24 @@ Rejected Setups displays style-and-pair outcome evidence for scans where the
 legacy winner and local-evidence winner disagreed. “Ready” means the minimum
 sample exists for human review; it does not mean the strategy is active.
 
+## Historical replay
+
+The Backtest page can explicitly collect retrospective zone-local evidence
+from historical candles. The engine runs the same unified-zone candidate
+ranking used by the scanner, stores only legacy-vs-local disagreements, and
+resolves their entry, MFE, MAE, TP, and SL outcomes from the later candles.
+
+Historical replay and forward scanner observations are separate datasets:
+
+- `forward_observation` is natural out-of-sample evidence and is the only
+  source that can become activation-ready.
+- `retrospective_replay` is faster research evidence tied to its Backtest run.
+  Database constraints permanently set it to `activation_eligible = false`.
+- Rejected Setups labels and reports both sources independently. Replay totals
+  cannot inflate the forward sample threshold.
+- Running an ordinary Backtest does not collect this evidence. The operator
+  must enable **Collect zone-local replay evidence** for that run.
+
 ## Merge order
 
 Merge and deploy one phase at a time. After each parent is on `main`, rebase

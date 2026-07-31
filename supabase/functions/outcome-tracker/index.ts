@@ -19,6 +19,11 @@ import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import { fetchCandlesWithFallback } from "../_shared/candleSource.ts";
 import { SPECS } from "../_shared/smcAnalysis.ts";
+import {
+  simulateOutcome,
+} from "../_shared/outcomeSimulation.ts";
+
+export { simulateOutcome } from "../_shared/outcomeSimulation.ts";
 
 // ── Constants ──
 const BATCH_SIZE = 20;           // Process up to 20 setups per invocation
@@ -36,168 +41,6 @@ const ALERT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // Max one gate-effectiveness ale
 
 function getPipSize(symbol: string): number {
   return (SPECS as any)[symbol]?.pipSize ?? 0.0001;
-}
-
-export interface OutcomeResult {
-  outcome_status: "inconclusive" | "would_have_won" | "would_have_lost";
-  price_reached_entry: boolean;
-  tp_hit: boolean;
-  sl_hit: boolean;
-  tp_hit_time_minutes: number | null;
-  sl_hit_time_minutes: number | null;
-  mfe_pips: number;
-  mae_pips: number;
-}
-
-/**
- * Simulate the outcome of a rejected setup using candle data.
- *
- * Fixed logic (v2):
- *   1. Once SL is hit, the trade is OVER — loop breaks immediately.
- *      MFE/MAE stop accumulating after SL breach.
- *   2. Both TP and SL timing are recorded. If both are hit in the same
- *      candle, outcome is "inconclusive" (can't determine intra-bar order
- *      with 1H resolution).
- *   3. If neither TP nor SL hit within the 24h window, outcome is always
- *      "inconclusive" — no MFE>MAE guessing.
- *   4. MFE is capped once TP is hit (trade would have closed at TP).
- */
-export function simulateOutcome(
-  candles: Array<{ datetime: string; open: number; high: number; low: number; close: number }>,
-  direction: "long" | "short",
-  entryPrice: number,
-  stopLoss: number | null,
-  takeProfit: number | null,
-  rejectedAt: string,
-): OutcomeResult {
-  const result: OutcomeResult = {
-    outcome_status: "inconclusive",
-    price_reached_entry: false,
-    tp_hit: false,
-    sl_hit: false,
-    tp_hit_time_minutes: null,
-    sl_hit_time_minutes: null,
-    mfe_pips: 0,
-    mae_pips: 0,
-  };
-
-  const rejectedTime = new Date(rejectedAt).getTime();
-  let entryReachedTime: number | null = null;
-  let maxFavorable = 0;
-  let maxAdverse = 0;
-
-  for (const candle of candles) {
-    const candleTime = new Date(candle.datetime).getTime();
-    // Only look at candles after rejection
-    if (candleTime <= rejectedTime) continue;
-    // Only look within the outcome window (24h)
-    if (candleTime > rejectedTime + OUTCOME_WINDOW_HOURS * 60 * 60 * 1000) break;
-
-    // Check if price reached entry
-    if (!result.price_reached_entry) {
-      if (direction === "long" && candle.low <= entryPrice) {
-        result.price_reached_entry = true;
-        entryReachedTime = candleTime;
-      } else if (direction === "short" && candle.high >= entryPrice) {
-        result.price_reached_entry = true;
-        entryReachedTime = candleTime;
-      }
-      // If entry wasn't reached on this candle, continue to next
-      if (!result.price_reached_entry) continue;
-    }
-
-    // Once entry is reached, track MFE/MAE and check TP/SL
-    if (result.price_reached_entry && entryReachedTime !== null) {
-      // ── Check TP and SL for this candle ──
-      let tpHitThisCandle = false;
-      let slHitThisCandle = false;
-
-      if (direction === "long") {
-        const favorable = candle.high - entryPrice;
-        const adverse = entryPrice - candle.low;
-        maxFavorable = Math.max(maxFavorable, favorable);
-        maxAdverse = Math.max(maxAdverse, adverse);
-
-        if (takeProfit !== null && candle.high >= takeProfit) {
-          tpHitThisCandle = true;
-        }
-        if (stopLoss !== null && candle.low <= stopLoss) {
-          slHitThisCandle = true;
-        }
-      } else {
-        // Short
-        const favorable = entryPrice - candle.low;
-        const adverse = candle.high - entryPrice;
-        maxFavorable = Math.max(maxFavorable, favorable);
-        maxAdverse = Math.max(maxAdverse, adverse);
-
-        if (takeProfit !== null && candle.low <= takeProfit) {
-          tpHitThisCandle = true;
-        }
-        if (stopLoss !== null && candle.high >= stopLoss) {
-          slHitThisCandle = true;
-        }
-      }
-
-      // ── Determine outcome based on what happened this candle ──
-
-      if (tpHitThisCandle && slHitThisCandle) {
-        // Both TP and SL hit in the SAME candle — can't determine order with 1H data
-        result.tp_hit = true;
-        result.sl_hit = true;
-        result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
-        result.sl_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
-        // Outcome is inconclusive — we don't know which was hit first
-        result.outcome_status = "inconclusive";
-        break; // Trade is over either way
-      }
-
-      if (slHitThisCandle && !result.tp_hit) {
-        // SL hit BEFORE TP was ever reached — trade is a loss, STOP immediately
-        result.sl_hit = true;
-        result.sl_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
-        // Cap MAE at SL distance for the final result
-        if (stopLoss !== null) {
-          maxAdverse = Math.abs(entryPrice - stopLoss);
-        }
-        result.outcome_status = "would_have_lost";
-        break; // Trade is OVER — no further candles matter
-      }
-
-      if (tpHitThisCandle && !result.sl_hit) {
-        // TP hit BEFORE SL was ever reached — trade is a win
-        result.tp_hit = true;
-        result.tp_hit_time_minutes = Math.round((candleTime - entryReachedTime) / 60000);
-        // Cap MFE at TP distance for the final result
-        if (takeProfit !== null) {
-          maxFavorable = Math.abs(takeProfit - entryPrice);
-        }
-        result.outcome_status = "would_have_won";
-        break; // Trade is OVER — closed at TP
-      }
-
-      // Neither hit this candle — continue to next
-    }
-  }
-
-  // ── Final classification ──
-  // If we exited the loop without hitting TP or SL:
-  if (!result.tp_hit && !result.sl_hit) {
-    if (result.price_reached_entry) {
-      // Entry was reached but neither TP nor SL hit within 24h window
-      // This is genuinely inconclusive — we do NOT guess based on MFE>MAE
-      result.outcome_status = "inconclusive";
-    } else {
-      // Price never even reached entry — inconclusive
-      result.outcome_status = "inconclusive";
-    }
-  }
-
-  // Assign MFE/MAE in raw price units (caller converts to pips)
-  result.mfe_pips = maxFavorable;
-  result.mae_pips = maxAdverse;
-
-  return result;
 }
 
 // ── Main Handler ──
@@ -318,6 +161,7 @@ Deno.serve(async (req: Request) => {
         .select(
           "id, symbol, direction, entry_price, stop_loss, take_profit, observed_at",
         )
+        .eq("evidence_source", "forward_observation")
         .eq("outcome_status", "pending")
         .lt("observed_at", shadowCutoff)
         .order("observed_at", { ascending: true })
@@ -509,6 +353,7 @@ Deno.serve(async (req: Request) => {
         await supabase
           .from("zone_candidate_shadow_observations")
           .delete({ count: "exact" })
+          .eq("evidence_source", "forward_observation")
           .lt("observed_at", retentionCutoff);
       if (shadowCleanErr) {
         console.warn(

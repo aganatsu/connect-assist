@@ -1,5 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildZoneShadowObservationRows } from "./zoneShadowObservationStore.ts";
+import {
+  buildZoneShadowObservationRows,
+  zoneShadowDisagreementKey,
+} from "./zoneShadowObservationStore.ts";
 
 function candidate(
   candidateId: string,
@@ -111,4 +114,31 @@ Deno.test("zone shadow store preserves style provenance and validation levels", 
   assertEquals(rows[0].entry_price, 1.274);
   assertEquals(rows[0].stop_loss, 1.2735);
   assertEquals(rows[0].take_profit, 1.28);
+  assertEquals(rows[0].evidence_source, "forward_observation");
+  assertEquals(rows[0].activation_eligible, true);
+});
+
+Deno.test("zone shadow store separates retrospective evidence from activation", () => {
+  const candidates = [
+    candidate("legacy", 1, 2),
+    candidate("shadow", 2, 1),
+  ];
+  assertEquals(
+    zoneShadowDisagreementKey(candidates),
+    "legacy:shadow",
+  );
+  const rows = buildZoneShadowObservationRows({
+    ...context,
+    candidates,
+    evidenceSource: "retrospective_replay",
+    replayRunId: "0d2c5a6c-82ad-40a4-8e1f-0ffc7ee73afb",
+    replayContractVersion: "zone-local-retrospective-replay.v1",
+    activationEligible: false,
+  });
+  assertEquals(rows[0].evidence_source, "retrospective_replay");
+  assertEquals(rows[0].activation_eligible, false);
+  assertEquals(
+    rows[0].replay_run_id,
+    "0d2c5a6c-82ad-40a4-8e1f-0ffc7ee73afb",
+  );
 });

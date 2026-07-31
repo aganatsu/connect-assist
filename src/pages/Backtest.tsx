@@ -25,6 +25,7 @@ import { botConfigApi, backtestApi } from "@/lib/api";
 import { STYLE_META, TRADING_STYLE_MODES } from "@/lib/botStyleClassifier";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getChartTheme } from "@/lib/chartTheme";
+import { useSearchParams } from "react-router-dom";
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface BacktestTrade {
@@ -97,6 +98,12 @@ interface BacktestResponse {
       verdict: "robust" | "moderate" | "fragile";
     };
   };
+  zoneLocalReplay?: {
+    contractVersion: string;
+    evidenceSource: "retrospective_replay";
+    observations: number;
+    activationEligible: false;
+  } | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -178,6 +185,7 @@ function Toggle({ label, description, checked, onChange }: { label: string; desc
 
 // ── Main Component ─────────────────────────────────────────────────────
 export default function Backtest() {
+  const [searchParams] = useSearchParams();
   const { resolvedTheme } = useTheme();
   const ct = getChartTheme(resolvedTheme);
 
@@ -197,6 +205,9 @@ export default function Backtest() {
   const [spreadPips, setSpreadPips] = useState(0); // 0 = use per-instrument typicalSpread from SPECS
   const [commissionPerLot, setCommissionPerLot] = useState(0); // USD per standard lot round-trip (e.g. 7 for ECN)
   const [walkForwardFolds, setWalkForwardFolds] = useState(0); // 0=disabled, 2-20 folds
+  const [zoneLocalReplayEvidence, setZoneLocalReplayEvidence] = useState(
+    () => searchParams.get("zoneLocalReplay") === "1",
+  );
   const [selectedSymbols, setSelectedSymbols] = useState(["EUR/USD", "GBP/USD", "XAU/USD"]);
 
   // UI state
@@ -356,6 +367,9 @@ export default function Backtest() {
         instruments: selectedSymbols, startDate, endDate, startingBalance,
         config, tradingStyle, slippagePips, spreadPips, commissionPerLot,
         ...(walkForwardFolds >= 2 ? { walkForwardFolds } : {}),
+        ...(zoneLocalReplayEvidence
+          ? { researchMode: true, zoneLocalReplayEvidence: true }
+          : {}),
       });
       if ((response as any)?.error) throw new Error((response as any).error);
       const runId = response.runId;
@@ -370,7 +384,7 @@ export default function Backtest() {
       setProgressPct(0);
       setIsRunning(false);
     }
-  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, config, startPolling]);
+  }, [selectedSymbols, startDate, endDate, startingBalance, tradingStyle, slippagePips, spreadPips, commissionPerLot, walkForwardFolds, zoneLocalReplayEvidence, config, startPolling]);
 
   // ── Derived Data ──
   const monthlyPnl = useMemo(() => {
@@ -535,7 +549,28 @@ export default function Backtest() {
                   <Switch checked={useCurrentConfig} onCheckedChange={setUseCurrentConfig} className="scale-90" />
                   <span className="text-[10px] text-muted-foreground">Use live bot config</span>
                 </div>
+                <Separator orientation="vertical" className="h-5" />
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={zoneLocalReplayEvidence}
+                    onCheckedChange={setZoneLocalReplayEvidence}
+                    className="scale-90"
+                  />
+                  <span className="text-[10px] text-muted-foreground">
+                    Collect zone-local replay evidence
+                  </span>
+                </div>
               </div>
+
+              {zoneLocalReplayEvidence && (
+                <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-2">
+                  <p className="text-[10px] leading-relaxed text-muted-foreground">
+                    Historical research only. This run compares the legacy and
+                    nearby-evidence zone rankings, but its results cannot
+                    activate Soft or Hard enforcement.
+                  </p>
+                </div>
+              )}
 
               <Separator />
 
@@ -1205,6 +1240,20 @@ export default function Backtest() {
             RESULTS DASHBOARD
             ═══════════════════════════════════════════════════════════════ */}
         {results && (
+          <div className="space-y-3">
+            {results.zoneLocalReplay && (
+              <div className="rounded border border-cyan-500/30 bg-cyan-500/5 px-3 py-2">
+                <p className="text-xs font-medium">
+                  Zone-local historical replay collected
+                </p>
+                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                  {results.zoneLocalReplay.observations} candidate observations
+                  were stored as research-only evidence. View the separate
+                  Retrospective Replay section on Rejected Setups; these rows
+                  cannot activate runtime enforcement.
+                </p>
+              </div>
+            )}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="bg-secondary/50 border border-border">
               <TabsTrigger value="overview" className="text-xs gap-1"><BarChart3 className="h-3 w-3" /> Overview</TabsTrigger>
@@ -1636,6 +1685,7 @@ export default function Backtest() {
               </Card>
             </TabsContent>
           </Tabs>
+          </div>
         )}
 
         {/* Empty State */}

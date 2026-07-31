@@ -425,6 +425,8 @@ export const backtestApi = {
     spreadPips?: number;
     commissionPerLot?: number;
     walkForwardFolds?: number;
+    researchMode?: boolean;
+    zoneLocalReplayEvidence?: boolean;
   }) => invokeFunction<{ runId: string; status: string; message: string }>("backtest-engine", { action: "start", ...params }),
   status: (runId: string) => invokeFunction<{
     id: string; status: string; progress: number; progress_message: string;

@@ -23,6 +23,7 @@ import {
   RefreshCw, Filter, ArrowUpDown, Sparkles, Download,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 import { StrategyAdvisor } from "@/components/StrategyAdvisor";
 import { TradeDetailCard } from "@/components/TradeDetailCard";
 import {
@@ -111,6 +112,9 @@ interface ZoneLocalValidationSummary {
   shadow_winner_avg_mae_pips: number | null;
   minimum_sample_ready: boolean;
   enforcement: "observe_only";
+  evidence_source: "forward_observation" | "retrospective_replay";
+  activation_eligible: boolean;
+  replay_runs: number;
 }
 
 // ── Constants ──
@@ -251,7 +255,7 @@ async function fetchZoneLocalValidation(
   const { data, error } = await (supabase as any)
     .from("zone_candidate_shadow_validation_summary")
     .select(
-      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement",
+      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement, evidence_source, activation_eligible, replay_runs",
     )
     .eq("user_id", userId)
     .eq("bot_id", "smc")
@@ -1237,7 +1241,13 @@ function ZoneLocalValidationCard({
   activation?: StrategyActivationRecord;
 }) {
   const activationDisplay = getStrategyActivationDisplay(activation);
-  const totals = rows.reduce(
+  const forwardRows = rows.filter(
+    (row) => row.evidence_source === "forward_observation",
+  );
+  const replayRows = rows.filter(
+    (row) => row.evidence_source === "retrospective_replay",
+  );
+  const totals = forwardRows.reduce(
     (acc, row) => ({
       scans: acc.scans + Number(row.observed_scans || 0),
       disagreements: acc.disagreements + Number(row.disagreement_scans || 0),
@@ -1259,9 +1269,16 @@ function ZoneLocalValidationCard({
               better than the legacy-selected zone.
             </p>
           </div>
-          <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-            {activationDisplay.runtimeLabel}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Button asChild size="sm" variant="outline" className="h-7 text-[10px]">
+              <Link to="/backtest?zoneLocalReplay=1">
+                Run Historical Replay
+              </Link>
+            </Button>
+            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+              {activationDisplay.runtimeLabel}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
@@ -1274,12 +1291,13 @@ function ZoneLocalValidationCard({
               {activationDisplay.scopeLabel}
             </Badge>
             <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
-              HISTORICAL EVIDENCE ONLY
+              SOURCE SEPARATED
             </Badge>
           </div>
           <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-            {activationDisplay.description} The table below never activates
-            Soft or Hard enforcement by itself.
+            {activationDisplay.description} Forward observations and historical
+            replay are reported separately. Replay data is permanently
+            ineligible to activate Soft or Hard enforcement.
           </p>
         </div>
 
@@ -1298,59 +1316,103 @@ function ZoneLocalValidationCard({
           </div>
         </div>
 
-        {rows.length === 0 ? (
-          <div className="rounded border border-dashed border-border/60 p-4 text-center">
-            <p className="text-xs text-muted-foreground">
-              No legacy-vs-local rank disagreement has completed outcome
-              tracking yet.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded border border-border/40">
-            <table className="w-full min-w-[760px] text-[10px]">
-              <thead className="bg-muted/30 text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1.5 text-left font-medium">Style / Pair</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Disagreements</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Resolved</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Legacy win</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Local win</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Local MFE</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Local MAE</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Readiness</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={`${row.trading_style}:${row.symbol}`}
-                    className="border-t border-border/30"
-                  >
-                    <td className="px-2 py-1.5">
-                      <span className="font-medium">{row.symbol}</span>
-                      <span className="ml-1 text-muted-foreground">
-                        {row.trading_style}
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-right">
-                      {Number(row.disagreement_scans || 0)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right">
-                      {Number(row.resolved_candidates || 0)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right">
-                      {formatValidationPercent(row.legacy_disagreement_win_rate)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-medium text-primary">
-                      {formatValidationPercent(row.shadow_disagreement_win_rate)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right text-success">
-                      {formatValidationPips(row.shadow_winner_avg_mfe_pips, row.symbol)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right text-destructive">
-                      {formatValidationPips(row.shadow_winner_avg_mae_pips, row.symbol)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right">
+        <ZoneLocalDatasetTable
+          title="Forward Observation"
+          description="Natural scanner evidence. This is the only dataset that may become activation-ready."
+          rows={forwardRows}
+          retrospective={false}
+        />
+        <ZoneLocalDatasetTable
+          title="Retrospective Replay"
+          description="Backtest-derived research for faster learning. It can inform review, but never runtime activation."
+          rows={replayRows}
+          retrospective
+        />
+        <p className="text-[9px] text-muted-foreground">
+          “Ready” applies only to forward observations and still means review,
+          not automatic permission to change live or paper execution.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ZoneLocalDatasetTable({
+  title,
+  description,
+  rows,
+  retrospective,
+}: {
+  title: string;
+  description: string;
+  rows: ZoneLocalValidationSummary[];
+  retrospective: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[11px] font-medium">{title}</p>
+          <p className="text-[9px] text-muted-foreground">{description}</p>
+        </div>
+        <Badge
+          variant="outline"
+          className={`text-[8px] ${
+            retrospective
+              ? "border-cyan-500/40 text-cyan-500"
+              : "border-success/40 text-success"
+          }`}
+        >
+          {retrospective ? "RESEARCH ONLY" : "ACTIVATION EVIDENCE"}
+        </Badge>
+      </div>
+      {rows.length === 0 ? (
+        <div className="rounded border border-dashed border-border/60 p-3 text-center">
+          <p className="text-[10px] text-muted-foreground">
+            {retrospective
+              ? "No historical replay evidence yet. Use Run Historical Replay to collect it."
+              : "No forward rank disagreement has completed outcome tracking yet."}
+          </p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded border border-border/40">
+          <table className="w-full min-w-[760px] text-[10px]">
+            <thead className="bg-muted/30 text-muted-foreground">
+              <tr>
+                <th className="px-2 py-1.5 text-left font-medium">Style / Pair</th>
+                <th className="px-2 py-1.5 text-right font-medium">Disagreements</th>
+                <th className="px-2 py-1.5 text-right font-medium">Resolved</th>
+                <th className="px-2 py-1.5 text-right font-medium">Legacy win</th>
+                <th className="px-2 py-1.5 text-right font-medium">Local win</th>
+                <th className="px-2 py-1.5 text-right font-medium">Local MFE</th>
+                <th className="px-2 py-1.5 text-right font-medium">Local MAE</th>
+                <th className="px-2 py-1.5 text-right font-medium">
+                  {retrospective ? "Replay runs" : "Readiness"}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr
+                  key={`${row.evidence_source}:${row.trading_style}:${row.symbol}`}
+                  className="border-t border-border/30"
+                >
+                  <td className="px-2 py-1.5">
+                    <span className="font-medium">{row.symbol}</span>
+                    <span className="ml-1 text-muted-foreground">
+                      {row.trading_style}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1.5 text-right">{Number(row.disagreement_scans || 0)}</td>
+                  <td className="px-2 py-1.5 text-right">{Number(row.resolved_candidates || 0)}</td>
+                  <td className="px-2 py-1.5 text-right">{formatValidationPercent(row.legacy_disagreement_win_rate)}</td>
+                  <td className="px-2 py-1.5 text-right font-medium text-primary">{formatValidationPercent(row.shadow_disagreement_win_rate)}</td>
+                  <td className="px-2 py-1.5 text-right text-success">{formatValidationPips(row.shadow_winner_avg_mfe_pips, row.symbol)}</td>
+                  <td className="px-2 py-1.5 text-right text-destructive">{formatValidationPips(row.shadow_winner_avg_mae_pips, row.symbol)}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    {retrospective ? (
+                      <span>{Number(row.replay_runs || 0)}</span>
+                    ) : (
                       <Badge
                         variant="outline"
                         className={`text-[8px] ${
@@ -1361,19 +1423,15 @@ function ZoneLocalValidationCard({
                       >
                         {row.minimum_sample_ready ? "30+ READY" : "COLLECTING"}
                       </Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <p className="text-[9px] text-muted-foreground">
-          “Ready” means enough resolved disagreement samples for review. It is
-          not permission to change live or paper execution.
-        </p>
-      </CardContent>
-    </Card>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
