@@ -95,6 +95,24 @@ interface RejectedSetup {
   rejected_at: string;
 }
 
+interface ZoneLocalValidationSummary {
+  user_id: string;
+  bot_id: string;
+  trading_style: string;
+  symbol: string;
+  observed_scans: number;
+  disagreement_scans: number;
+  resolved_candidates: number;
+  legacy_disagreement_samples: number;
+  shadow_disagreement_samples: number;
+  legacy_disagreement_win_rate: number | null;
+  shadow_disagreement_win_rate: number | null;
+  shadow_winner_avg_mfe_pips: number | null;
+  shadow_winner_avg_mae_pips: number | null;
+  minimum_sample_ready: boolean;
+  enforcement: "observe_only";
+}
+
 // ── Constants ──
 const OUTCOME_COLORS: Record<string, string> = {
   would_have_won: "#22c55e",
@@ -225,6 +243,23 @@ async function fetchStrategyEvidenceCertificates(
   return (data || []) as unknown as StrategyEvidenceCertificateRecord[];
 }
 
+async function fetchZoneLocalValidation(
+  userId: string,
+): Promise<ZoneLocalValidationSummary[]> {
+  // Generated Supabase types intentionally lag additive migrations.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any)
+    .from("zone_candidate_shadow_validation_summary")
+    .select(
+      "user_id, bot_id, trading_style, symbol, observed_scans, disagreement_scans, resolved_candidates, legacy_disagreement_samples, shadow_disagreement_samples, legacy_disagreement_win_rate, shadow_disagreement_win_rate, shadow_winner_avg_mfe_pips, shadow_winner_avg_mae_pips, minimum_sample_ready, enforcement",
+    )
+    .eq("user_id", userId)
+    .eq("bot_id", "smc")
+    .order("resolved_candidates", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data || []) as ZoneLocalValidationSummary[];
+}
+
 // ── Summary Stats ──
 function computeStats(setups: RejectedSetup[]) {
   const resolved = setups.filter(s => s.outcome_status !== "pending" && s.outcome_status !== "inconclusive");
@@ -343,6 +378,15 @@ export default function RejectedSetups() {
     enabled: !!user?.id,
     refetchInterval: 60_000,
   });
+  const {
+    data: zoneLocalValidation = [],
+    isLoading: isLoadingZoneLocalValidation,
+  } = useQuery({
+    queryKey: ["zone-local-validation", user?.id],
+    queryFn: () => fetchZoneLocalValidation(user!.id),
+    enabled: !!user?.id,
+    refetchInterval: 60_000,
+  });
 
   // Collapse repeated scanner observations before applying outcome filters so
   // analytics measure distinct market opportunities instead of scan frequency.
@@ -391,6 +435,12 @@ export default function RejectedSetups() {
     ),
     [strategyEvidenceCertificates],
   );
+  const filteredZoneLocalValidation = useMemo(
+    () => symbolFilter === "all"
+      ? zoneLocalValidation
+      : zoneLocalValidation.filter((row) => row.symbol === symbolFilter),
+    [symbolFilter, zoneLocalValidation],
+  );
 
   const generateStrategyEvidenceCertificate = async () => {
     setIsGeneratingCertificate(true);
@@ -419,8 +469,9 @@ export default function RejectedSetups() {
     () => [...new Set([
       ...rawSetups.map((setup) => setup.symbol),
       ...closedTradeEvidence.map((trade) => trade.symbol),
+      ...zoneLocalValidation.map((row) => row.symbol),
     ])].sort(),
-    [rawSetups, closedTradeEvidence],
+    [rawSetups, closedTradeEvidence, zoneLocalValidation],
   );
   const stats = useMemo(() => computeStats(setups), [setups]);
   const gateBreakdown = useMemo(() => computeGateBreakdown(setups), [setups]);
@@ -945,24 +996,30 @@ export default function RejectedSetups() {
             </Card>
 
             {isLoading || isLoadingClosedTrades || isLoadingStrategyActivations ||
-                isLoadingStrategyEvidenceCertificates ? (
+                isLoadingStrategyEvidenceCertificates || isLoadingZoneLocalValidation ? (
               <Card className="border-border/50">
                 <CardContent className="py-10 text-center text-sm text-muted-foreground">
                   Loading shadow evidence…
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <ShadowFeatureEvidenceCard
-                  summary={shadowEvidenceReport.gameplanHierarchy}
-                  activation={activationByFeature.get("gameplan_hierarchy")}
-                  certificate={certificateByFeature.get("gameplan_hierarchy")}
+              <div className="space-y-4">
+                <ZoneLocalValidationCard
+                  rows={filteredZoneLocalValidation}
+                  activation={activationByFeature.get("zone_local_confluence")}
                 />
-                <ShadowFeatureEvidenceCard
-                  summary={shadowEvidenceReport.thesisConviction}
-                  activation={activationByFeature.get("thesis_conviction")}
-                  certificate={certificateByFeature.get("thesis_conviction")}
-                />
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <ShadowFeatureEvidenceCard
+                    summary={shadowEvidenceReport.gameplanHierarchy}
+                    activation={activationByFeature.get("gameplan_hierarchy")}
+                    certificate={certificateByFeature.get("gameplan_hierarchy")}
+                  />
+                  <ShadowFeatureEvidenceCard
+                    summary={shadowEvidenceReport.thesisConviction}
+                    activation={activationByFeature.get("thesis_conviction")}
+                    certificate={certificateByFeature.get("thesis_conviction")}
+                  />
+                </div>
               </div>
             )}
           </TabsContent>
@@ -1170,6 +1227,168 @@ function EvidenceBreakdownTable({
       )}
     </div>
   );
+}
+
+function ZoneLocalValidationCard({
+  rows,
+  activation,
+}: {
+  rows: ZoneLocalValidationSummary[];
+  activation?: StrategyActivationRecord;
+}) {
+  const activationDisplay = getStrategyActivationDisplay(activation);
+  const totals = rows.reduce(
+    (acc, row) => ({
+      scans: acc.scans + Number(row.observed_scans || 0),
+      disagreements: acc.disagreements + Number(row.disagreement_scans || 0),
+      resolved: acc.resolved + Number(row.resolved_candidates || 0),
+    }),
+    { scans: 0, disagreements: 0, resolved: 0 },
+  );
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="px-4 pt-3 pb-2">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <CardTitle className="text-sm font-medium">
+              Zone-Local Candidate Validation
+            </CardTitle>
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              Tests whether the zone with the strongest nearby evidence performs
+              better than the legacy-selected zone.
+            </p>
+          </div>
+          <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+            {activationDisplay.runtimeLabel}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 pb-4 space-y-3">
+        <div className="rounded border border-primary/25 bg-primary/5 p-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" className="text-[9px] border-primary/40 text-primary">
+              {activationDisplay.authorityLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px]">
+              {activationDisplay.scopeLabel}
+            </Badge>
+            <Badge variant="outline" className="text-[9px] border-cyan-500/40 text-cyan-500">
+              HISTORICAL EVIDENCE ONLY
+            </Badge>
+          </div>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            {activationDisplay.description} The table below never activates
+            Soft or Hard enforcement by itself.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-sm font-semibold">{totals.scans}</p>
+            <p className="text-[9px] text-muted-foreground">observed scans</p>
+          </div>
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-sm font-semibold text-warning">{totals.disagreements}</p>
+            <p className="text-[9px] text-muted-foreground">rank disagreements</p>
+          </div>
+          <div className="rounded border border-border/40 p-2">
+            <p className="text-sm font-semibold">{totals.resolved}</p>
+            <p className="text-[9px] text-muted-foreground">resolved candidates</p>
+          </div>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="rounded border border-dashed border-border/60 p-4 text-center">
+            <p className="text-xs text-muted-foreground">
+              No legacy-vs-local rank disagreement has completed outcome
+              tracking yet.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded border border-border/40">
+            <table className="w-full min-w-[760px] text-[10px]">
+              <thead className="bg-muted/30 text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-1.5 text-left font-medium">Style / Pair</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Disagreements</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Resolved</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Legacy win</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Local win</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Local MFE</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Local MAE</th>
+                  <th className="px-2 py-1.5 text-right font-medium">Readiness</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr
+                    key={`${row.trading_style}:${row.symbol}`}
+                    className="border-t border-border/30"
+                  >
+                    <td className="px-2 py-1.5">
+                      <span className="font-medium">{row.symbol}</span>
+                      <span className="ml-1 text-muted-foreground">
+                        {row.trading_style}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {Number(row.disagreement_scans || 0)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {Number(row.resolved_candidates || 0)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {formatValidationPercent(row.legacy_disagreement_win_rate)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-medium text-primary">
+                      {formatValidationPercent(row.shadow_disagreement_win_rate)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-success">
+                      {formatValidationPips(row.shadow_winner_avg_mfe_pips, row.symbol)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right text-destructive">
+                      {formatValidationPips(row.shadow_winner_avg_mae_pips, row.symbol)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      <Badge
+                        variant="outline"
+                        className={`text-[8px] ${
+                          row.minimum_sample_ready
+                            ? "border-success/40 text-success"
+                            : "border-warning/40 text-warning"
+                        }`}
+                      >
+                        {row.minimum_sample_ready ? "30+ READY" : "COLLECTING"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-[9px] text-muted-foreground">
+          “Ready” means enough resolved disagreement samples for review. It is
+          not permission to change live or paper execution.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatValidationPercent(value: number | null): string {
+  if (value == null) return "—";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${parsed.toFixed(1)}%` : "—";
+}
+
+function formatValidationPips(value: number | null, symbol: string): string {
+  if (value == null) return "—";
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? formatPipDisplay(parsed, symbol, { showSign: false })
+    : "—";
 }
 
 function ShadowFeatureEvidenceCard({
