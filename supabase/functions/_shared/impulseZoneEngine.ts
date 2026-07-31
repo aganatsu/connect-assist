@@ -20,6 +20,13 @@ import {
 } from "./smcAnalysis.ts";
 import { evaluateZoneLifecycle, type ZoneLifecycleConfig, type ZoneLifecycleResult } from "./zoneLifecycle.ts";
 import { buildConceptEvidence, type MarketConceptEvidence } from "./conceptEvidence.ts";
+import {
+  createZoneLocalConfluenceObservation,
+  observeContextOnly,
+  observeZoneLocalPoint,
+  observeZoneLocalRange,
+  type ZoneLocalConfluenceObservation,
+} from "./zoneLocalConfluence.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +58,8 @@ export interface ImpulsePOI {
 export interface RankedPOI {
   poi: ImpulsePOI;
   fibLevel: number;       // Nearest Fib ratio (e.g. 0.618, 0.786)
+  /** Actual price of the named Fib level. Kept separate from POI fibDepth. */
+  fibPrice?: number;
   fibDepth: number;       // How deep into the retracement (higher = better)
   fibScore: number;       // 1-4 score based on depth
   srConfirmed: boolean;   // Historical S/R overlaps this zone
@@ -62,6 +71,8 @@ export interface RankedPOI {
   htfConfluenceScore: number; // Score from HTF confluence layers (4H OB/FVG/Breaker, HTF Fib, P/D)
   htfLayers: string[];        // Labels of HTF layers that overlap this zone
   totalScore: number;     // fibScore + srConfirmed(+1) + ltfRefined(+1) + htfConfluenceScore
+  /** Observe-only proximity evidence. It never participates in ranking or gates. */
+  localConfluence?: ZoneLocalConfluenceObservation;
 }
 
 export interface BestZone {
@@ -559,7 +570,13 @@ export function zoneQualityPercent(zone: RankedPOI): number {
 export function overlayFibOnPOIs(
   impulse: ImpulseLeg,
   pois: ImpulsePOI[],
-  options?: { fibMaxRetracement?: number; originOBRetest?: boolean },
+  options?: {
+    fibMaxRetracement?: number;
+    originOBRetest?: boolean;
+    pipSize?: number;
+    atr?: number;
+    evidenceContext?: ZoneEvidenceContext;
+  },
 ): RankedPOI[] {
   if (pois.length === 0) return [];
 
@@ -596,6 +613,7 @@ export function overlayFibOnPOIs(
 
     // Find the nearest Fib level
     let nearestFib = 0;
+    let nearestFibPrice = 0;
     let nearestDist = Infinity;
     for (const level of FIB_LEVELS) {
       const fibPrice = impulse.direction === "bullish"
@@ -605,6 +623,7 @@ export function overlayFibOnPOIs(
       if (dist < nearestDist) {
         nearestDist = dist;
         nearestFib = level;
+        nearestFibPrice = fibPrice;
       }
     }
 
@@ -623,9 +642,10 @@ export function overlayFibOnPOIs(
       fibDepth >= 0.5 ? 1 : 0
     );
 
-    ranked.push({
+    const rankedPOI: RankedPOI = {
       poi,
       fibLevel: nearestFib,
+      fibPrice: nearestFibPrice,
       fibDepth,
       fibScore,
       srConfirmed: false,
@@ -633,7 +653,56 @@ export function overlayFibOnPOIs(
       htfConfluenceScore: 0,
       htfLayers: [],
       totalScore: fibScore, // Will be updated by subsequent steps
-    });
+    };
+
+    if (options?.evidenceContext && poi.evidence) {
+      const observedAt = options.evidenceContext.observedAt ||
+        impulse.endDate ||
+        impulse.startDate ||
+        "unknown";
+      const fibEvidence = buildConceptEvidence({
+        concept: "fib_level",
+        detector: { name: "impulseZone.overlayFibOnPOIs", version: "1" },
+        symbol: options.evidenceContext.symbol,
+        timeframe: options.evidenceContext.timeframe,
+        sourceCandleStart: impulse.startDate || observedAt,
+        sourceCandleEnd: impulse.endDate || observedAt,
+        observedAt,
+        direction: impulse.direction,
+        level: nearestFibPrice,
+        discriminator: nearestFib,
+        attributes: {
+          ratio: nearestFib,
+          rawFibDepth: fibDepth,
+          nearestDistance: nearestDist,
+          legacyTolerance: tolerance,
+          admittedByOTEWindow: inOTE,
+          admittedByNamedFibTolerance: nearFib,
+        },
+      });
+      const localConfluence = createZoneLocalConfluenceObservation({
+        candidateId: poi.evidence.entityId,
+        zone: { low: poi.low, high: poi.high },
+        pipSize: options.pipSize ?? 0.0001,
+        atr: options.atr ?? 0,
+      });
+      localConfluence.items.push(observeZoneLocalPoint({
+        source: "impulse_fib",
+        label: `Impulse Fib ${(nearestFib * 100).toFixed(1)}%`,
+        evidence: fibEvidence,
+        candidate: localConfluence,
+        level: nearestFibPrice,
+        legacyScoreContribution: fibScore,
+        attributes: {
+          rawFibDepth: fibDepth,
+          poiMid,
+          nearestDistance: nearestDist,
+        },
+      }));
+      rankedPOI.localConfluence = localConfluence;
+    }
+
+    ranked.push(rankedPOI);
   }
 
   // Sort by fibDepth descending (deepest first = best)
@@ -660,6 +729,9 @@ export function checkHistoricalSR(
   candles: Candle[],
   zones: RankedPOI[],
   impulseStartIndex: number,
+  options?: {
+    evidenceContext?: ZoneEvidenceContext;
+  },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
 
@@ -694,6 +766,44 @@ export function checkHistoricalSR(
         zone.srConfirmed = true;
         zone.srLevel = sr;
         zone.totalScore = zone.fibScore + zone.htfConfluenceScore + 1; // +1 for S/R confirmation
+        if (
+          zone.localConfluence &&
+          options?.evidenceContext
+        ) {
+          const observedAt = options.evidenceContext.observedAt ||
+            candles[candles.length - 1]?.datetime ||
+            "unknown";
+          const srEvidence = buildConceptEvidence({
+            concept: "support_resistance",
+            detector: {
+              name: "impulseZone.findCloseClusters",
+              version: "1",
+            },
+            symbol: options.evidenceContext.symbol,
+            timeframe: options.evidenceContext.timeframe,
+            sourceCandleStart: candles[lookbackStart]?.datetime || observedAt,
+            sourceCandleEnd: candles[Math.max(lookbackStart, lookbackEnd - 1)]
+              ?.datetime || observedAt,
+            observedAt,
+            direction: "neutral",
+            level: sr,
+            discriminator: `${lookbackStart}:${lookbackEnd}`,
+            attributes: {
+              minimumTouches: SR_MIN_TOUCHES,
+              clusterTolerance,
+              lookbackStart,
+              lookbackEnd,
+            },
+          });
+          zone.localConfluence.items.push(observeZoneLocalPoint({
+            source: "historical_sr",
+            label: "Historical close S/R",
+            evidence: srEvidence,
+            candidate: zone.localConfluence,
+            level: sr,
+            legacyScoreContribution: 1,
+          }));
+        }
         break;
       }
     }
@@ -758,6 +868,9 @@ function findCloseClusters(
 export function checkHTFConfluence(
   zones: RankedPOI[],
   htfData: HTFConfluenceData,
+  options?: {
+    evidenceContext?: ZoneEvidenceContext;
+  },
 ): RankedPOI[] {
   if (zones.length === 0) return zones;
 
@@ -779,6 +892,32 @@ export function checkHTFConfluence(
       if (Math.max(zoneLow, ob.low) <= Math.min(zoneHigh, ob.high)) {
         score += 1;
         layers.push("4H_OB");
+        if (zone.localConfluence && options?.evidenceContext) {
+          const evidence = buildConceptEvidence({
+            concept: "order_block",
+            detector: { name: "smcAnalysis.detectOrderBlocks", version: "1" },
+            symbol: options.evidenceContext.symbol,
+            timeframe: "4H",
+            sourceCandleStart: ob.datetime,
+            observedAt: options.evidenceContext.observedAt || ob.datetime,
+            direction: ob.type,
+            bounds: { low: ob.low, high: ob.high },
+            lifecycle: ob.state,
+            discriminator: ob.index,
+            attributes: {
+              testedCount: ob.testedCount,
+              mitigatedPercent: ob.mitigatedPercent,
+            },
+          });
+          zone.localConfluence.items.push(observeZoneLocalRange({
+            source: "htf_order_block",
+            label: "4H Order Block",
+            evidence,
+            candidate: zone.localConfluence,
+            bounds: { low: ob.low, high: ob.high },
+            legacyScoreContribution: 1,
+          }));
+        }
         break; // Count at most once per layer type
       }
     }
@@ -793,6 +932,32 @@ export function checkHTFConfluence(
       if (Math.max(zoneLow, fvg.low) <= Math.min(zoneHigh, fvg.high)) {
         score += 1;
         layers.push("4H_FVG");
+        if (zone.localConfluence && options?.evidenceContext) {
+          const evidence = buildConceptEvidence({
+            concept: "fvg",
+            detector: { name: "smcAnalysis.detectFVGs", version: "1" },
+            symbol: options.evidenceContext.symbol,
+            timeframe: "4H",
+            sourceCandleStart: fvg.datetime,
+            observedAt: options.evidenceContext.observedAt || fvg.datetime,
+            direction: fvg.type,
+            bounds: { low: fvg.low, high: fvg.high },
+            lifecycle: fvg.state,
+            discriminator: fvg.index,
+            attributes: {
+              fillPercent: fvg.fillPercent,
+              respectedCount: fvg.respectedCount,
+            },
+          });
+          zone.localConfluence.items.push(observeZoneLocalRange({
+            source: "htf_fvg",
+            label: "4H Fair Value Gap",
+            evidence,
+            candidate: zone.localConfluence,
+            bounds: { low: fvg.low, high: fvg.high },
+            legacyScoreContribution: 1,
+          }));
+        }
         break;
       }
     }
@@ -808,6 +973,39 @@ export function checkHTFConfluence(
       if (Math.max(zoneLow, bb.low) <= Math.min(zoneHigh, bb.high)) {
         score += 1;
         layers.push("4H_BREAKER");
+        if (zone.localConfluence && options?.evidenceContext) {
+          const observedAt = options.evidenceContext.observedAt || "unknown";
+          const evidence = buildConceptEvidence({
+            concept: "breaker",
+            detector: {
+              name: "smcAnalysis.detectBreakerBlocks",
+              version: "1",
+            },
+            symbol: options.evidenceContext.symbol,
+            timeframe: "4H",
+            sourceCandleStart: observedAt,
+            observedAt,
+            direction: bb.type === "bullish_breaker"
+              ? "bullish"
+              : "bearish",
+            bounds: { low: bb.low, high: bb.high },
+            lifecycle: bb.state,
+            discriminator: bb.mitigatedAt,
+            attributes: {
+              subtype: bb.subtype,
+              testedCount: bb.testedCount,
+              sourceIndex: bb.mitigatedAt,
+            },
+          });
+          zone.localConfluence.items.push(observeZoneLocalRange({
+            source: "htf_breaker",
+            label: "4H Breaker",
+            evidence,
+            candidate: zone.localConfluence,
+            bounds: { low: bb.low, high: bb.high },
+            legacyScoreContribution: 1,
+          }));
+        }
         break;
       }
     }
@@ -820,6 +1018,7 @@ export function checkHTFConfluence(
 
     let bestFibScore = 0;
     let bestFibLabel = "";
+    let bestFib: { fib: FibLevel; prefix: string } | null = null;
     for (const { levels, prefix } of fibSources) {
       for (const fib of levels.retracements) {
         if (fib.price >= zoneLow && fib.price <= zoneHigh) {
@@ -828,6 +1027,7 @@ export function checkHTFConfluence(
             if (1.5 > bestFibScore) {
               bestFibScore = 1.5;
               bestFibLabel = `${prefix}_FIB_${(fib.ratio * 100).toFixed(1)}`;
+              bestFib = { fib, prefix };
             }
           }
           // 50% Fib gets +0.5
@@ -835,6 +1035,7 @@ export function checkHTFConfluence(
             if (0.5 > bestFibScore) {
               bestFibScore = 0.5;
               bestFibLabel = `${prefix}_FIB_50.0`;
+              bestFib = { fib, prefix };
             }
           }
         }
@@ -843,6 +1044,46 @@ export function checkHTFConfluence(
     if (bestFibScore > 0) {
       score += bestFibScore;
       layers.push(bestFibLabel);
+      if (
+        bestFib &&
+        zone.localConfluence &&
+        options?.evidenceContext
+      ) {
+        const levels = bestFib.prefix === "D1"
+          ? htfData.dailyFibLevels
+          : htfData.htfFibLevels;
+        const observedAt = options.evidenceContext.observedAt || "unknown";
+        const sourceStart = levels?.pivotLow?.datetime ||
+          levels?.pivotHigh?.datetime ||
+          observedAt;
+        const sourceEnd = levels?.pivotHigh?.datetime ||
+          levels?.pivotLow?.datetime ||
+          observedAt;
+        const evidence = buildConceptEvidence({
+          concept: "fib_level",
+          detector: { name: "smcAnalysis.calculateFibLevels", version: "1" },
+          symbol: options.evidenceContext.symbol,
+          timeframe: bestFib.prefix === "D1" ? "D1" : "4H",
+          sourceCandleStart: sourceStart,
+          sourceCandleEnd: sourceEnd,
+          observedAt,
+          direction: levels?.direction === "up" ? "bullish" : "bearish",
+          level: bestFib.fib.price,
+          discriminator: bestFib.fib.ratio,
+          attributes: {
+            ratio: bestFib.fib.ratio,
+            prefix: bestFib.prefix,
+          },
+        });
+        zone.localConfluence.items.push(observeZoneLocalPoint({
+          source: "htf_fib",
+          label: bestFibLabel,
+          evidence,
+          candidate: zone.localConfluence,
+          level: bestFib.fib.price,
+          legacyScoreContribution: bestFibScore,
+        }));
+      }
     }
 
     // ── Premium/Discount Alignment ──
@@ -854,6 +1095,21 @@ export function checkHTFConfluence(
       ) {
         score += 0.5;
         layers.push("PD_ALIGNED");
+        if (zone.localConfluence) {
+          zone.localConfluence.items.push(observeContextOnly({
+            source: "premium_discount",
+            label: "Premium/Discount alignment",
+            evidence: null,
+            candidate: zone.localConfluence,
+            legacyScoreContribution: 0.5,
+            reasonCode: "directional_context_not_price_local",
+            attributes: {
+              currentZone: pd.currentZone,
+              zonePercent: pd.zonePercent,
+              oteZone: pd.oteZone,
+            },
+          }));
+        }
       }
     }
 
@@ -1055,9 +1311,13 @@ export function findBestEntryZone(
   }
 
   // Step 3: Overlay Fib and score by depth
+  const zoneATR = calculateATR(htfCandles);
   let rankedZones = overlayFibOnPOIs(impulse, pois, {
     fibMaxRetracement: options?.fibMaxRetracement,
     originOBRetest: options?.originOBRetest,
+    pipSize: options?.pipSize,
+    atr: zoneATR,
+    evidenceContext: options?.evidenceContext,
   });
   if (rankedZones.length === 0) {
     return {
@@ -1088,11 +1348,18 @@ export function findBestEntryZone(
   }
 
   // Step 4: Check historical S/R
-  rankedZones = checkHistoricalSR(htfCandles, rankedZones, impulse.startIndex);
+  rankedZones = checkHistoricalSR(
+    htfCandles,
+    rankedZones,
+    impulse.startIndex,
+    { evidenceContext: options?.evidenceContext },
+  );
 
   // Step 5: HTF confluence scoring (if data available)
   if (htfData) {
-    rankedZones = checkHTFConfluence(rankedZones, htfData);
+    rankedZones = checkHTFConfluence(rankedZones, htfData, {
+      evidenceContext: options?.evidenceContext,
+    });
   }
 
   // Step 6: LTF refinement on top zones (only refine top 3 to save compute)
@@ -1127,7 +1394,7 @@ export function findBestEntryZone(
   }
 
   // Step 7: Check if current price is at the zone
-  const atr = calculateATR(htfCandles);
+  const atr = zoneATR;
   const looseThreshold = atr * PRICE_AT_ZONE_ATR_MULT;       // 1.5×ATR (watchlist)
   const effectiveStrictMult = options?.strictATRMult ?? PRICE_AT_ZONE_STRICT_ATR_MULT;
   const strictThreshold = atr * effectiveStrictMult; // configurable (default 0.3×ATR)

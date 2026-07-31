@@ -7,6 +7,7 @@ import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 import type { FrozenRuntimeConfigSnapshot } from "./runtimeConfigStore.ts";
 import type { MarketConceptEvidence } from "./conceptEvidence.ts";
+import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
@@ -68,6 +69,8 @@ export interface FrozenSetupStrategyContext {
   directionVerdict: DirectionVerdictDecision | null;
   /** Observe-only primitive evidence attached to this candidate. */
   conceptEvidence?: MarketConceptEvidence[];
+  /** Observe-only zone-local qualifications frozen with the candidate. */
+  zoneLocalConfluence?: ZoneLocalConfluenceObservation | null;
   scenarioZoneStory: {
     contractVersion: typeof SCENARIO_ZONE_STORY_VERSION;
     enforcement: "observe_only";
@@ -198,6 +201,7 @@ export function buildFrozenSetupStrategyContext(input: {
   gamePlan: SessionGamePlan | null;
   directionVerdict: DirectionVerdictDecision | null;
   conceptEvidence?: MarketConceptEvidence[];
+  zoneLocalConfluence?: ZoneLocalConfluenceObservation | null;
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
@@ -245,6 +249,7 @@ export function buildFrozenSetupStrategyContext(input: {
       ? { ...input.directionVerdict }
       : null,
     conceptEvidence: input.conceptEvidence || [],
+    zoneLocalConfluence: input.zoneLocalConfluence || null,
     scenarioZoneStory: {
       contractVersion: SCENARIO_ZONE_STORY_VERSION,
       enforcement: "observe_only",

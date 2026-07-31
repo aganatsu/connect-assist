@@ -236,10 +236,21 @@ Deno.test("frozen setup preserves observe-only primitive evidence", () => {
     gamePlan: null,
     directionVerdict: null,
     conceptEvidence: [evidence],
+    zoneLocalConfluence: {
+      policyVersion: "zone-local-confluence.v1",
+      enforcement: "observe_only",
+      candidateId: "candidate-evidence",
+      zone: { low: 1.274, high: 1.275 },
+      pipSize: 0.0001,
+      atr: 0.002,
+      items: [],
+    },
     confirmationMethod: "choch",
   });
 
   assertEquals(frozen.conceptEvidence, [evidence]);
+  assertEquals(frozen.zoneLocalConfluence?.candidateId, "candidate-evidence");
+  assertEquals(frozen.zoneLocalConfluence?.enforcement, "observe_only");
 });
 
 Deno.test("an in-flight setup keeps its original style after runtime style changes", () => {

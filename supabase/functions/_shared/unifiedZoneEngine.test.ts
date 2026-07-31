@@ -165,6 +165,50 @@ Deno.test("findUnifiedZone — liquidity pools contribute to score", () => {
   }
 });
 
+Deno.test("findUnifiedZone — observe-only local evidence does not change the decision", () => {
+  const h4 = generateBearishImpulseCandles(40, 1.1000, 0.0200);
+  const h1 = generateBearishImpulseCandles(50, 1.1000, 0.0150);
+  const entry = generateFlatCandles(50, 1.1100);
+  const pools: LiquidityPool[] = [
+    makePool(1.1150, "buy-side", 3),
+    makePool(1.0850, "sell-side", 3),
+  ];
+  const withoutObservation = findUnifiedZone(
+    h1,
+    h4,
+    entry,
+    "bearish",
+    1.1100,
+    pools,
+  );
+  const withObservation = findUnifiedZone(
+    h1,
+    h4,
+    entry,
+    "bearish",
+    1.1100,
+    pools,
+    undefined,
+    {
+      pipSize: 0.0001,
+      evidenceContext: {
+        symbol: "GBP/USD",
+        timeframe: "1H",
+        observedAt: "2026-01-28T00:00:00Z",
+      },
+    },
+  );
+
+  assertEquals(withObservation.hasZone, withoutObservation.hasZone);
+  assertEquals(withObservation.state, withoutObservation.state);
+  assertEquals(withObservation.selectedTF, withoutObservation.selectedTF);
+  assertEquals(withObservation.unifiedScore, withoutObservation.unifiedScore);
+  assertEquals(
+    withObservation.multiTFResult.bestZone?.zone.totalScore,
+    withoutObservation.multiTFResult.bestZone?.zone.totalScore,
+  );
+});
+
 Deno.test("findUnifiedZone — entry direction matches impulse direction (continuation)", () => {
   const h4 = generateBearishImpulseCandles(40, 1.1000, 0.0200);
   const h1 = generateBearishImpulseCandles(50, 1.1000, 0.0150);

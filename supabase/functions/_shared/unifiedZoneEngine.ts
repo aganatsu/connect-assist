@@ -30,6 +30,8 @@ import {
 } from "./impulseZoneEngine.ts";
 import { findZoneLiquidity, type ZoneLiquidityResult } from "./zoneLiquidity.ts";
 import { evaluateConfirmation, type ConfirmationResult, type ConfirmationInput } from "./confirmationHierarchy.ts";
+import { buildConceptEvidence } from "./conceptEvidence.ts";
+import { observeZoneLocalPoint } from "./zoneLocalConfluence.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -208,6 +210,16 @@ export function findUnifiedZone(
   const multiTFResult = findBestEntryZoneMultiTF(
     h1Candles, h4Candles, entryCandles, direction, currentPrice, htfData, options, dailyCandles, labels,
   );
+  annotateZoneLiquidityObservations({
+    multiTFResult,
+    h1Candles,
+    h4Candles,
+    dailyCandles,
+    labels,
+    direction,
+    liquidityPools,
+    sweptAbsorbedPenalty: cfg.sweptAbsorbedPenalty,
+  });
 
   // No zone found
   if (!multiTFResult.bestZone) {
@@ -358,6 +370,83 @@ export function findUnifiedZone(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
+
+function annotateZoneLiquidityObservations(input: {
+  multiTFResult: MultiTFZoneResult;
+  h1Candles: Candle[];
+  h4Candles: Candle[];
+  dailyCandles?: Candle[];
+  labels: TFSlotLabels;
+  direction: "bullish" | "bearish";
+  liquidityPools: LiquidityPool[];
+  sweptAbsorbedPenalty: number;
+}): void {
+  if (input.liquidityPools.length === 0) return;
+
+  for (const candidate of input.multiTFResult.allZones) {
+    const local = candidate.localConfluence;
+    const source = candidate.poi.evidence;
+    if (!local || !source) continue;
+    const timeframe = source.timeframe;
+    const candles = timeframe === input.labels.top
+      ? (input.dailyCandles ?? input.h4Candles)
+      : timeframe === input.labels.mid
+      ? input.h4Candles
+      : input.h1Candles;
+    if (candles.length === 0) continue;
+
+    const result = findZoneLiquidity(
+      candles,
+      candidate.poi.high,
+      candidate.poi.low,
+      input.direction,
+      input.liquidityPools,
+      { sweptAbsorbedPenalty: input.sweptAbsorbedPenalty },
+    );
+    const creditedTrigger = result.nearbyPools.find((pool) =>
+      pool.relevance === "entry_trigger"
+    );
+    for (const nearby of result.nearbyPools) {
+      const pool = nearby.pool;
+      const evidence = buildConceptEvidence({
+        concept: "liquidity_pool",
+        detector: { name: "smcAnalysis.detectLiquidityPools", version: "1" },
+        symbol: source.symbol,
+        timeframe: "mixed_htf",
+        sourceCandleStart: pool.datetime,
+        observedAt: source.observedAt,
+        direction: "neutral",
+        level: pool.price,
+        lifecycle: pool.state,
+        discriminator: `${pool.type}:${pool.strength}`,
+        attributes: {
+          type: pool.type,
+          strength: pool.strength,
+          swept: pool.swept,
+          relevance: nearby.relevance,
+          legacyNearbyAtrMultiple: 1.5,
+          legacyZoneLiquidityScore: result.liquidityScore,
+        },
+      });
+      local.items.push(observeZoneLocalPoint({
+        source: "liquidity_pool",
+        label: `${pool.type === "buy-side" ? "BSL" : "SSL"} ${
+          nearby.relevance
+        }`,
+        evidence,
+        candidate: local,
+        level: pool.price,
+        legacyScoreContribution: nearby === creditedTrigger ? 1 : 0,
+        attributes: {
+          relevance: nearby.relevance,
+          legacyDistanceToZone: nearby.distanceToZone,
+          legacyLiquidityScoreTotal: result.liquidityScore,
+          entryTriggerState: result.entryTriggerState,
+        },
+      }));
+    }
+  }
+}
 
 function buildNoZoneResult(
   multiTFResult: MultiTFZoneResult,

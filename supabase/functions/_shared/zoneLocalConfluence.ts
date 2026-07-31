@@ -8,7 +8,9 @@
  */
 
 import {
+  type ConceptQualification,
   distanceToBounds,
+  type MarketConceptEvidence,
   overlapMetrics,
   type PriceBounds,
   type ProximityClass,
@@ -53,6 +55,182 @@ export interface ZoneLocalMeasurement {
     | "partial_overlap"
     | "within_local_buffer"
     | "outside_local_buffer";
+}
+
+export type ZoneLocalEvidenceSource =
+  | "impulse_fib"
+  | "historical_sr"
+  | "htf_order_block"
+  | "htf_fvg"
+  | "htf_breaker"
+  | "htf_fib"
+  | "premium_discount"
+  | "liquidity_pool";
+
+export interface ZoneLocalEvidenceObservation {
+  source: ZoneLocalEvidenceSource;
+  label: string;
+  evidence: MarketConceptEvidence | null;
+  measurement: ZoneLocalMeasurement | null;
+  qualification: ConceptQualification | null;
+  /** Existing score attached by the legacy engine. Never changed in observe-only mode. */
+  legacyScoreContribution: number;
+  enforcement: "observe_only";
+  attributes: Record<string, unknown>;
+}
+
+export interface ZoneLocalConfluenceObservation {
+  policyVersion: typeof ZONE_LOCAL_CONFLUENCE_VERSION;
+  enforcement: "observe_only";
+  candidateId: string;
+  zone: PriceBounds;
+  pipSize: number;
+  atr: number;
+  items: ZoneLocalEvidenceObservation[];
+}
+
+export function createZoneLocalConfluenceObservation(input: {
+  candidateId: string;
+  zone: PriceBounds;
+  pipSize: number;
+  atr: number;
+}): ZoneLocalConfluenceObservation {
+  return {
+    policyVersion: ZONE_LOCAL_CONFLUENCE_VERSION,
+    enforcement: "observe_only",
+    candidateId: input.candidateId,
+    zone: {
+      low: Math.min(input.zone.low, input.zone.high),
+      high: Math.max(input.zone.low, input.zone.high),
+    },
+    pipSize: safePositive(input.pipSize, 0.0001),
+    atr: Number.isFinite(input.atr) && input.atr > 0 ? input.atr : 0,
+    items: [],
+  };
+}
+
+export function qualificationFromMeasurement(input: {
+  evidenceId: string;
+  candidateId: string;
+  measurement: ZoneLocalMeasurement;
+}): ConceptQualification {
+  return {
+    evidenceId: input.evidenceId,
+    candidateId: input.candidateId,
+    role: "zone_layer",
+    qualified: input.measurement.qualifiedLocally,
+    policyVersion: input.measurement.policyVersion,
+    reasonCode: input.measurement.reasonCode,
+    // Observe-only means the new policy contributes no score yet.
+    scoreContribution: 0,
+    proximityClass: input.measurement.proximityClass,
+    distanceToZone: input.measurement.distanceToZone,
+    distancePips: input.measurement.distancePips,
+    overlapAmount: input.measurement.overlapAmount,
+    overlapPercent: input.measurement.overlapPercent,
+  };
+}
+
+export function observeZoneLocalPoint(input: {
+  source: ZoneLocalEvidenceSource;
+  label: string;
+  evidence: MarketConceptEvidence;
+  candidate: ZoneLocalConfluenceObservation;
+  level: number;
+  legacyScoreContribution: number;
+  policy?: Partial<ZoneLocalProximityPolicy>;
+  attributes?: Record<string, unknown>;
+}): ZoneLocalEvidenceObservation {
+  const measurement = measurePointAgainstZone({
+    zone: input.candidate.zone,
+    level: input.level,
+    pipSize: input.candidate.pipSize,
+    atr: input.candidate.atr,
+    policy: input.policy,
+  });
+  return {
+    source: input.source,
+    label: input.label,
+    evidence: input.evidence,
+    measurement,
+    qualification: qualificationFromMeasurement({
+      evidenceId: input.evidence.evidenceId,
+      candidateId: input.candidate.candidateId,
+      measurement,
+    }),
+    legacyScoreContribution: input.legacyScoreContribution,
+    enforcement: "observe_only",
+    attributes: input.attributes || {},
+  };
+}
+
+export function observeZoneLocalRange(input: {
+  source: ZoneLocalEvidenceSource;
+  label: string;
+  evidence: MarketConceptEvidence;
+  candidate: ZoneLocalConfluenceObservation;
+  bounds: PriceBounds;
+  legacyScoreContribution: number;
+  policy?: Partial<ZoneLocalProximityPolicy>;
+  attributes?: Record<string, unknown>;
+}): ZoneLocalEvidenceObservation {
+  const measurement = measureRangeAgainstZone({
+    zone: input.candidate.zone,
+    evidence: input.bounds,
+    pipSize: input.candidate.pipSize,
+    atr: input.candidate.atr,
+    policy: input.policy,
+  });
+  return {
+    source: input.source,
+    label: input.label,
+    evidence: input.evidence,
+    measurement,
+    qualification: qualificationFromMeasurement({
+      evidenceId: input.evidence.evidenceId,
+      candidateId: input.candidate.candidateId,
+      measurement,
+    }),
+    legacyScoreContribution: input.legacyScoreContribution,
+    enforcement: "observe_only",
+    attributes: input.attributes || {},
+  };
+}
+
+export function observeContextOnly(input: {
+  source: ZoneLocalEvidenceSource;
+  label: string;
+  evidence: MarketConceptEvidence | null;
+  candidate: ZoneLocalConfluenceObservation;
+  legacyScoreContribution: number;
+  reasonCode: string;
+  attributes?: Record<string, unknown>;
+}): ZoneLocalEvidenceObservation {
+  return {
+    source: input.source,
+    label: input.label,
+    evidence: input.evidence,
+    measurement: null,
+    qualification: input.evidence
+      ? {
+        evidenceId: input.evidence.evidenceId,
+        candidateId: input.candidate.candidateId,
+        role: "gameplan_context",
+        qualified: false,
+        policyVersion: ZONE_LOCAL_CONFLUENCE_VERSION,
+        reasonCode: input.reasonCode,
+        scoreContribution: 0,
+        proximityClass: "context_only",
+        distanceToZone: null,
+        distancePips: null,
+        overlapAmount: null,
+        overlapPercent: null,
+      }
+      : null,
+    legacyScoreContribution: input.legacyScoreContribution,
+    enforcement: "observe_only",
+    attributes: input.attributes || {},
+  };
 }
 
 function safePositive(value: number, fallback: number): number {
