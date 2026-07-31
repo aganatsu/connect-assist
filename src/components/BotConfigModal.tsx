@@ -189,6 +189,18 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const [activeTab, setActiveTab] = useState(resolvedDefaultTab);
   const [search, setSearch] = useState(defaultSearch || "");
   const searchRef = useRef<HTMLInputElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const searchQuery = search.trim().toLowerCase();
+
+  // Scroll the first highlighted setting into view whenever the search changes.
+  useEffect(() => {
+    if (!open || !searchQuery) return;
+    const t = setTimeout(() => {
+      const el = contentRef.current?.querySelector('[data-config-match="true"]');
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [searchQuery, open, activeTab, config]);
 
   useEffect(() => {
     if (rawConfig && open) {
