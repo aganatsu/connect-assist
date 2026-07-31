@@ -120,6 +120,43 @@ interface ImpulseGateData {
     priceAtZoneStrict?: boolean;
     sideOk?: boolean;
     distancePips?: number;
+    localConfluence?: {
+      policyVersion: string;
+      enforcement: "observe_only";
+      candidateId: string;
+      items: Array<{
+        source: string;
+        label: string;
+        legacyScoreContribution: number;
+        measurement: {
+          proximityClass: string;
+          qualifiedLocally: boolean;
+          fullCreditEligible: boolean;
+          distancePips: number;
+          overlapPercent: number;
+          permittedBufferPips: number;
+          reasonCode: string;
+        } | null;
+        qualification: {
+          qualified: boolean;
+          role: string;
+          proximityClass: string;
+        } | null;
+      }>;
+    } | null;
+    shadowRanking?: {
+      enforcement: "observe_only";
+      legacyRank: number;
+      shadowRank: number;
+      legacyComparableScore: number;
+      shadowLocalScore: number;
+      summary: {
+        observedItems: number;
+        locallyQualifiedItems: number;
+        contextOnlyItems: number;
+        creditedFamilies: number;
+      };
+    } | null;
   } | null;
   scoringEnabled?: boolean;
   directionDetail?: {
@@ -131,9 +168,24 @@ interface ImpulseGateData {
   } | null;
 }
 
+interface ZoneLocalEnforcementData {
+  mode: {
+    requestedMode: "observe" | "soft" | "hard";
+    effectiveMode: "observe" | "soft" | "hard";
+    certifiedMaximum: "observe" | "soft" | "hard";
+    activationTrusted: boolean;
+    reason: string;
+  };
+  allowed: boolean;
+  scoreAdjustment: number;
+  minimumLocalScore: number;
+  reason: string;
+}
+
 interface Props {
   unifiedData: ZoneStoryData | null | undefined;
   gateData?: ImpulseGateData | null | undefined;
+  zoneLocalEnforcement?: ZoneLocalEnforcementData | null | undefined;
   isLiveContext?: boolean;
   symbol?: string;
 }
@@ -160,7 +212,13 @@ const STATE_LABELS: Record<string, string> = {
   error: "⚠ Error",
 };
 
-export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, symbol }: Props) {
+export function ZoneStoryPanel({
+  unifiedData,
+  gateData,
+  zoneLocalEnforcement,
+  isLiveContext = false,
+  symbol,
+}: Props) {
   if (!unifiedData) return null;
 
   const fmtPips = (raw: number | null | undefined, opts: { showSign?: boolean; absolute?: boolean; decimals?: number } = {}) => {
@@ -319,8 +377,8 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
               {unifiedData.zone ? (
                 <div>
                   <span>{unifiedData.zone.type} @ Fib {unifiedData.zone.fibLabel}</span>
-                  <span className={unifiedData.zone.srConfirmed ? "text-green-400 ml-1" : "text-zinc-400 ml-1"}>
-                    (S/R {unifiedData.zone.srConfirmed ? `✓ ${unifiedData.zone.srLevel ? fmt(unifiedData.zone.srLevel) : ""}` : "✗"})
+                  <span className="text-zinc-400 ml-1">
+                    (Legacy S/R {unifiedData.zone.srConfirmed ? `detected ${unifiedData.zone.srLevel ? fmt(unifiedData.zone.srLevel) : ""}` : "not detected"})
                   </span>
                   <span className="text-zinc-300 ml-1">[{fmt(unifiedData.zone.low)}–{fmt(unifiedData.zone.high)}]</span>
                 </div>
@@ -330,20 +388,20 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
             </td>
           </tr>
 
-          {/* HTF Row */}
+          {/* Legacy HTF Row */}
           {unifiedData.zone && unifiedData.zone.htfLayers.length > 0 && (
             <tr className="border-b border-zinc-800/50">
               <td className="py-1 pr-2"></td>
-              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">HTF</td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Legacy HTF</td>
               <td className="py-1 text-blue-400 font-mono text-[10px]">{unifiedData.zone.htfLayers.join(" + ")}</td>
             </tr>
           )}
 
-          {/* LTF + Gate Score Row */}
+          {/* LTF + Legacy Gate Score Row */}
           {gateData?.bestZone && (
             <tr className="border-b border-zinc-800/50">
               <td className="py-1 pr-2"></td>
-              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Gate Score</td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Legacy score</td>
               <td className="py-1">
                 <span className={`font-mono px-1 py-0.5 rounded text-[10px] ${
                   gateData.bestZone.totalScore >= 5 ? "bg-green-500/15 text-green-400"
@@ -367,6 +425,120 @@ export function ZoneStoryPanel({ unifiedData, gateData, isLiveContext = false, s
                     SL: {fmt(gateData.bestZone.refinedSL)}
                   </span>
                 )}
+              </td>
+            </tr>
+          )}
+
+          {/* Canonical zone-local evidence. This is the trustworthy proximity
+              explanation; legacy labels above remain visible for comparison. */}
+          {gateData?.bestZone?.localConfluence && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1.5 pr-2 align-top">
+                <Bullet
+                  filled={gateData.bestZone.localConfluence.items.some(
+                    (item) => item.measurement?.qualifiedLocally === true,
+                  )}
+                />
+              </td>
+              <td className="py-1.5 pr-2 align-top text-zinc-200 font-medium whitespace-nowrap">
+                Local evidence
+              </td>
+              <td className="py-1.5">
+                {gateData.bestZone.localConfluence.items.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {gateData.bestZone.localConfluence.items.map((item, index) => {
+                      const display = localEvidenceDisplay(item);
+                      const distance = item.measurement?.distancePips ?? null;
+                      const overlap = item.measurement?.overlapPercent ?? null;
+                      return (
+                        <span
+                          key={`${item.source}:${item.label}:${index}`}
+                          className={`rounded border px-1.5 py-0.5 text-[9px] font-mono ${display.className}`}
+                          title={`Legacy contribution: ${item.legacyScoreContribution}; local policy: ${item.measurement?.reasonCode || "context only"}`}
+                        >
+                          {item.label}: {display.label}
+                          {distance != null && distance > 0
+                            ? ` · ${fmtPips(distance, { absolute: true })} away`
+                            : overlap != null && overlap > 0 && overlap < 100
+                              ? ` · ${overlap.toFixed(0)}% overlap`
+                              : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <span className="text-zinc-400">No local evidence measured</span>
+                )}
+                <p className="mt-1 text-[9px] text-zinc-400">
+                  Only evidence inside, overlapping, or within the local buffer supports this exact zone.
+                </p>
+              </td>
+            </tr>
+          )}
+
+          {gateData?.bestZone?.shadowRanking && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Candidate rank</td>
+              <td className="py-1">
+                <span className="text-[10px] font-mono text-zinc-300">
+                  Legacy #{gateData.bestZone.shadowRanking.legacyRank}
+                </span>
+                <span className="mx-1 text-zinc-500">→</span>
+                <span className={`text-[10px] font-mono font-bold ${
+                  gateData.bestZone.shadowRanking.shadowRank === 1
+                    ? "text-green-400"
+                    : "text-orange-400"
+                }`}>
+                  Local #{gateData.bestZone.shadowRanking.shadowRank}
+                </span>
+                <span className="ml-2 text-[10px] font-mono text-zinc-400">
+                  local score {gateData.bestZone.shadowRanking.shadowLocalScore.toFixed(1)}
+                </span>
+                {gateData.bestZone.shadowRanking.legacyRank !==
+                    gateData.bestZone.shadowRanking.shadowRank && (
+                  <span className="ml-2 rounded bg-orange-500/15 px-1 py-0.5 text-[9px] font-bold text-orange-400">
+                    RANK DISAGREEMENT
+                  </span>
+                )}
+              </td>
+            </tr>
+          )}
+
+          {zoneLocalEnforcement && (
+            <tr className="border-b border-zinc-800/50">
+              <td className="py-1 pr-2"></td>
+              <td className="py-1 pr-2 align-top text-zinc-400 whitespace-nowrap">Local policy</td>
+              <td className="py-1">
+                <span className="text-[10px] text-zinc-300">
+                  Requested <strong>{zoneLocalEnforcement.mode.requestedMode.toUpperCase()}</strong>
+                  {" · "}Effective{" "}
+                  <strong className={
+                    zoneLocalEnforcement.mode.effectiveMode === "observe"
+                      ? "text-cyan-400"
+                      : zoneLocalEnforcement.mode.effectiveMode === "soft"
+                        ? "text-yellow-400"
+                        : "text-red-400"
+                  }>
+                    {zoneLocalEnforcement.mode.effectiveMode.toUpperCase()}
+                  </strong>
+                  {" · "}Certified max {zoneLocalEnforcement.mode.certifiedMaximum.toUpperCase()}
+                </span>
+                <span className={`ml-2 rounded px-1 py-0.5 text-[9px] font-bold ${
+                  zoneLocalEnforcement.allowed
+                    ? "bg-green-500/15 text-green-400"
+                    : "bg-red-500/15 text-red-400"
+                }`}>
+                  {zoneLocalEnforcement.allowed ? "ALLOWED" : "BLOCKED"}
+                </span>
+                {zoneLocalEnforcement.scoreAdjustment !== 0 && (
+                  <span className="ml-2 text-[10px] font-mono text-orange-400">
+                    score {zoneLocalEnforcement.scoreAdjustment}
+                  </span>
+                )}
+                <p className="mt-1 text-[9px] text-zinc-400">
+                  {humanizePolicyReason(zoneLocalEnforcement.reason)}
+                </p>
               </td>
             </tr>
           )}
@@ -518,6 +690,55 @@ function Bullet({ filled, partial }: { filled: boolean; partial?: boolean }) {
   const color = filled ? "text-green-400" : partial ? "text-yellow-400" : "text-zinc-400";
   const char = filled ? "●" : partial ? "◐" : "○";
   return <span className={`${color} text-[11px]`}>{char}</span>;
+}
+
+function localEvidenceDisplay(item: {
+  measurement: {
+    proximityClass: string;
+    qualifiedLocally: boolean;
+    fullCreditEligible: boolean;
+  } | null;
+}): { label: string; className: string } {
+  if (!item.measurement) {
+    return {
+      label: "context only · 0 local credit",
+      className: "border-zinc-700 bg-zinc-800/50 text-zinc-400",
+    };
+  }
+  if (!item.measurement.qualifiedLocally) {
+    return {
+      label: "outside · 0 local credit",
+      className: "border-red-500/30 bg-red-500/10 text-red-300",
+    };
+  }
+  if (item.measurement.fullCreditEligible) {
+    return {
+      label: item.measurement.proximityClass === "inside"
+        ? "inside · full credit"
+        : "local overlap · full credit",
+      className: "border-green-500/30 bg-green-500/10 text-green-300",
+    };
+  }
+  return {
+    label: item.measurement.proximityClass === "buffered"
+      ? "near · partial credit"
+      : "partial overlap · partial credit",
+    className: "border-yellow-500/30 bg-yellow-500/10 text-yellow-300",
+  };
+}
+
+function humanizePolicyReason(reason: string): string {
+  const labels: Record<string, string> = {
+    observe_only: "Observation only: local evidence is recorded but does not change the trade.",
+    locally_supported: "The selected legacy zone is also the top locally supported candidate.",
+    soft_penalty_missing_evidence: "Soft penalty: no canonical local evidence was available.",
+    soft_penalty_rank_disagreement: "Soft penalty: the legacy winner was not the local-evidence winner.",
+    soft_penalty_insufficient_local_score: "Soft penalty: local evidence did not reach the configured minimum.",
+    hard_block_missing_evidence: "Hard block: canonical local evidence was missing.",
+    hard_block_rank_disagreement: "Hard block: the legacy winner was not the local-evidence winner.",
+    hard_block_insufficient_local_score: "Hard block: local evidence did not reach the configured minimum.",
+  };
+  return labels[reason] || reason.replaceAll("_", " ");
 }
 
 export default ZoneStoryPanel;

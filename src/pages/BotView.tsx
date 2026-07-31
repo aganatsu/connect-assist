@@ -1577,7 +1577,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       {hasRichData ? (
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
-                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} symbol={t.symbol} />
+                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} zoneLocalEnforcement={sr.zoneLocalEnforcement} symbol={t.symbol} />
                           {sr.decisionContext && (
                             <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">
                               <p className="text-[8px] text-primary uppercase tracking-wider font-bold">
@@ -2013,7 +2013,7 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} zoneLocalEnforcement={d.zoneLocalEnforcement} isLiveContext symbol={d.pair} />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2221,7 +2221,7 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
-      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} isLiveContext symbol={d.pair} />
+      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} zoneLocalEnforcement={d.zoneLocalEnforcement} isLiveContext symbol={d.pair} />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">
