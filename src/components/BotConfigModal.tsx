@@ -667,7 +667,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto p-3 md:p-6">
+          <div ref={contentRef} className="flex-1 overflow-y-auto p-3 md:p-6">
             <HighlightContext.Provider value={matchedLabels}>
               {config && filteredTabs.length > 0 && (
                 <>
