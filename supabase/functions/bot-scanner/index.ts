@@ -4,8 +4,9 @@ import {
   applyPairOverrides,
 } from "../_shared/configMapper.ts";
 import {
-  resolveEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigResolver.ts";
+  buildFrozenRuntimeConfigSnapshot,
+  loadEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import { shouldCreatePendingZoneOrder } from "../_shared/botConfigBehavior.ts";
 import { evaluateGamePlanGate } from "../_shared/gamePlanGate.ts";
@@ -473,19 +474,10 @@ async function fetchCandles(symbol: string, interval = "15m", _range = "5d"): Pr
 
 // ─── Load user config ───────────────────────────────────────────────
 async function loadConfig(supabase: any, userId: string, connectionId?: string) {
-  let data: any = null;
-  // Try connection-specific config first
-  if (connectionId) {
-    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).eq("connection_id", connectionId).maybeSingle();
-    data = res.data;
-  }
-  // Fall back to global config
-  if (!data) {
-    const res = await supabase.from("bot_configs").select("config_json").eq("user_id", userId).is("connection_id", null).maybeSingle();
-    data = res.data;
-  }
-  // Resolve mapping + trading style before any runtime gate reads config.
-  return resolveEffectiveRuntimeConfig(data?.config_json || null);
+  return await loadEffectiveRuntimeConfig(supabase, {
+    userId,
+    connectionId,
+  });
 }
 
 // ─── Safety Gates ───────────────────────────────────────────────────
@@ -1352,6 +1344,7 @@ async function runScanForUser(
   const styleResolution = await loadConfig(supabase, userId);
   const config = styleResolution.config;
   const resolvedStyle = styleResolution.style;
+  const runtimeConfigProvenance = styleResolution.provenance;
 
   // ── Scan Interval Gate ──
   // Skip this scan if not enough time has elapsed since the last scan.
@@ -3423,6 +3416,7 @@ async function runScanForUser(
               configSnapshot: buildGamePlanConfigSnapshot(
                 config,
                 scanStylePolicy,
+                runtimeConfigProvenance,
               ),
               marketDataSnapshot: {
                 hierarchy: ["Twelve Data", "Polygon"],
@@ -3585,6 +3579,10 @@ async function runScanForUser(
     let pairConfig = { ...config };
     // Apply per-pair gate overrides (if configured for this symbol)
     applyPairOverrides(pairConfig, pair);
+    const pairRuntimeConfigSnapshot = await buildFrozenRuntimeConfigSnapshot(
+      styleResolution,
+      pairConfig,
+    );
 
     // Determine entry TF based on style
     const entryInterval = getEntryInterval(pairConfig.entryTimeframe);
@@ -4426,6 +4424,13 @@ async function runScanForUser(
           entry: unifiedResult.entry,
           storySummary: unifiedResult.storySummary,
           reason: unifiedResult.reason,
+          entryTriggerState: unifiedResult.liquidity?.entryTriggerState || null,
+          hasUnsweptEntryTrigger:
+            unifiedResult.liquidity?.entryTriggerState === "unswept",
+          gatePolicy: {
+            requireLiquiditySweep:
+              pairConfig.requireLiquiditySweep === true,
+          },
         };
 
         // Derive izData (detail.impulseZone) from the unified result's multiTFResult
@@ -4811,6 +4816,7 @@ async function runScanForUser(
         symbol: pair,
         direction: analysis.direction as "long" | "short",
         stylePolicy: pairStylePolicy,
+        runtimeConfig: pairRuntimeConfigSnapshot,
         decisionContext: (detail as any).decisionContext || null,
         gamePlan: activeGamePlan,
         directionVerdict: activeDirectionVerdict,
@@ -5990,6 +5996,7 @@ async function runScanForUser(
           symbol: pair,
           direction: analysis.direction as "long" | "short",
           stylePolicy: savedPolicy,
+          runtimeConfig: pairRuntimeConfigSnapshot,
           decisionContext:
             existingStaged.authorization_result?.decisionContext ||
             null,
@@ -7050,6 +7057,7 @@ async function runScanForUser(
               symbol: pair,
               direction: analysis.direction as "long" | "short",
               stylePolicy: pairStylePolicy,
+              runtimeConfig: pairRuntimeConfigSnapshot,
               decisionContext: pendingDecisionContext,
               gamePlan: activeGamePlan,
               directionVerdict: activeDirectionVerdict,
@@ -7582,6 +7590,7 @@ async function runScanForUser(
             symbol: pair,
             direction: analysis.direction as "long" | "short",
             stylePolicy: pairStylePolicy,
+            runtimeConfig: pairRuntimeConfigSnapshot,
             decisionContext: directAuthorization.decisionContext,
             gamePlan: activeGamePlan,
             directionVerdict: activeDirectionVerdict,
@@ -8761,6 +8770,7 @@ async function runScanForUser(
                 symbol: pair,
                 direction: breakerDir,
                 stylePolicy: pairStylePolicy,
+                runtimeConfig: pairRuntimeConfigSnapshot,
                 decisionContext: breakerAuthorization.decisionContext,
                 gamePlan: activeGamePlan,
                 directionVerdict: activeDirectionVerdict,
@@ -9192,6 +9202,8 @@ async function runScanForUser(
       rejectionSummary,
       activeStyle: resolvedStyle,  // Trading style used for this scan cycle
       stylePolicy: scanStylePolicy,
+      runtimeConfigProvenance,
+      criticalRuntimeSettings: runtimeConfigProvenance.criticalSettings,
     },
     ...scanDetails,
   ];

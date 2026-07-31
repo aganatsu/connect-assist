@@ -1,9 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronOrUserCaller } from "../_shared/cronAuth.ts";
-import {
-  resolveEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigResolver.ts";
+import { loadEffectiveRuntimeConfig } from "../_shared/runtimeConfigStore.ts";
 import { buildResolvedStylePolicy } from "../_shared/stylePolicy.ts";
 import {
   bindTimeframeCandles,
@@ -92,16 +90,7 @@ async function getUserId(
 }
 
 async function loadConfig(adminClient: any, userId: string) {
-  const { data, error } = await adminClient
-    .from("bot_configs")
-    .select("config_json")
-    .eq("user_id", userId)
-    .is("connection_id", null)
-    .maybeSingle();
-  if (error) {
-    throw new Error(`Could not load bot configuration: ${error.message}`);
-  }
-  return resolveEffectiveRuntimeConfig(data?.config_json || null);
+  return await loadEffectiveRuntimeConfig(adminClient, { userId });
 }
 
 Deno.serve(async (req) => {
@@ -280,7 +269,11 @@ Deno.serve(async (req) => {
       userId,
       botId: BOT_ID,
       source: "manual_refresh",
-      configSnapshot: buildGamePlanConfigSnapshot(config, stylePolicy),
+      configSnapshot: buildGamePlanConfigSnapshot(
+        config,
+        stylePolicy,
+        styleResolution.provenance,
+      ),
       marketDataSnapshot: {
         hierarchy: ["Twelve Data", "Polygon"],
         source: sourceSummary,
@@ -310,6 +303,7 @@ Deno.serve(async (req) => {
       source: sourceSummary,
       planVersion: gamePlan.planVersion,
       validityPolicy: gamePlan.validityPolicy,
+      runtimeConfigProvenance: styleResolution.provenance,
       warnings: errors,
     });
   } catch (error: any) {

@@ -41,8 +41,8 @@ import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
 import type { RuntimeConfig } from "../_shared/configMapper.ts";
 import {
-  resolveEffectiveRuntimeConfig,
-} from "../_shared/runtimeConfigResolver.ts";
+  loadEffectiveRuntimeConfig,
+} from "../_shared/runtimeConfigStore.ts";
 import {
   buildResolvedStylePolicy,
   type ResolvedStylePolicy,
@@ -300,6 +300,7 @@ Deno.serve(async (req) => {
       gamePlan: SessionGamePlan | null;
       directionVerdicts: Map<string, DirectionVerdictDecision>;
     }> = {};
+    const configFailureUsers = new Map<string, Error>();
 
     for (const userId of userIds) {
       // Telegram chat IDs
@@ -329,10 +330,21 @@ Deno.serve(async (req) => {
         .from("paper_accounts").select("*")
         .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
 
-      // Bot config
-      const { data: botConfig } = await supabase
-        .from("bot_configs").select("config_json")
-        .eq("user_id", userId).eq("bot_id", BOT_ID).maybeSingle();
+      let styleResolution;
+      try {
+        styleResolution = await loadEffectiveRuntimeConfig(supabase, {
+          userId,
+        });
+      } catch (error: any) {
+        const configError = error instanceof Error
+          ? error
+          : new Error(String(error));
+        configFailureUsers.set(userId, configError);
+        console.error(
+          `[zone-confirm] Runtime configuration unavailable for ${userId}; pending fills remain untouched: ${configError.message}`,
+        );
+        continue;
+      }
 
       // Keep the candle connection scoped to this user. A module-global
       // connection can leak the last loaded user's feed into another account.
@@ -374,8 +386,6 @@ Deno.serve(async (req) => {
         );
       }
 
-      const rawConfig = botConfig?.config_json || {};
-      const styleResolution = resolveEffectiveRuntimeConfig(rawConfig);
       const stylePolicy = await buildResolvedStylePolicy({
         resolution: styleResolution,
         config: styleResolution.config,
@@ -416,11 +426,11 @@ Deno.serve(async (req) => {
             metadata: { current_order_id: pending.order_id, current_pair: pending.symbol },
           },
         );
+        const userData = userDataMap[userId];
+        if (!userData) { stillHunting++; continue; }
         await supabase.from("pending_orders").update({
           last_confirmation_checked_at: new Date().toISOString(),
         }).eq("id", pending.id).eq("status", "awaiting_confirmation");
-        const userData = userDataMap[userId];
-        if (!userData) { stillHunting++; continue; }
 
         const {
           telegramChatIds,
@@ -1289,17 +1299,22 @@ Deno.serve(async (req) => {
       reset_to_pending: resetToPending,
       cancelled,
       still_hunting: stillHunting,
+      config_failures: configFailureUsers.size,
       elapsed_ms: elapsed,
     };
     console.log(`[zone-confirm] Done in ${elapsed}ms: ${JSON.stringify(summary)}`);
-    await Promise.all([...operationRuns.entries()].map(([userId, runId]) =>
-      completeScannerOperation(supabase, runId, "zone_confirmation", {
+    await Promise.all([...operationRuns.entries()].map(([userId, runId]) => {
+      const configError = configFailureUsers.get(userId);
+      if (configError) {
+        return failScannerOperation(supabase, runId, configError);
+      }
+      return completeScannerOperation(supabase, runId, "zone_confirmation", {
         ...summary,
         user_processed: huntingOrders.filter((order: any) =>
           order.user_id === userId
         ).length,
-      })
-    ));
+      });
+    }));
 
     return new Response(JSON.stringify(summary), {
       status: 200,

@@ -6,6 +6,7 @@ import type {
 } from "./gamePlan.ts";
 import { analyzeNewsImpact, getNewsPairBias } from "./newsImpact.ts";
 import type { ResolvedStylePolicy } from "./stylePolicy.ts";
+import type { RuntimeConfigProvenance } from "./runtimeConfigStore.ts";
 
 export const GAME_PLAN_CONTRACT_VERSION = "phase3.v1";
 export const GAME_PLAN_VALIDITY_CONTRACT_VERSION =
@@ -59,6 +60,7 @@ function asNumber(value: number | string | null | undefined): number {
 export function buildGamePlanConfigSnapshot(
   config: any,
   stylePolicy?: ResolvedStylePolicy | null,
+  runtimeConfigProvenance?: RuntimeConfigProvenance | null,
 ): Record<string, unknown> {
   return {
     instruments: Array.isArray(config?.instruments)
@@ -72,7 +74,10 @@ export function buildGamePlanConfigSnapshot(
     ipdaRangesEnabled: config?.ipdaRangesEnabled !== false,
     equalHighsLowsSensitivity: config?.equalHighsLowsSensitivity,
     liquidityPoolMinTouches: config?.liquidityPoolMinTouches,
+    requireLiquiditySweep: config?.requireLiquiditySweep === true,
+    requireUnifiedZone: config?.requireUnifiedZone === true,
     stylePolicy: stylePolicy || null,
+    runtimeConfigProvenance: runtimeConfigProvenance || null,
   };
 }
 

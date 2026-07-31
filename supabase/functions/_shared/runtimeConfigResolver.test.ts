@@ -65,14 +65,17 @@ Deno.test("runtime surfaces resolve before consuming configuration", async () =>
       ["automatic scanner", scanner],
       ["fast confirmation scanner", fastScanner],
       ["manual Gameplan refresh", manualGamePlan],
-      ["backtest", backtest],
     ] as const
   ) {
     assert(
-      source.includes("resolveEffectiveRuntimeConfig"),
-      `${name} bypasses the canonical runtime-config resolver`,
+      source.includes("loadEffectiveRuntimeConfig"),
+      `${name} bypasses the fail-closed runtime-config store`,
     );
   }
+  assert(
+    backtest.includes("resolveEffectiveRuntimeConfig"),
+    "backtest bypasses the canonical runtime-config resolver",
+  );
 
   assert(
     scanner.indexOf("const config = styleResolution.config") <

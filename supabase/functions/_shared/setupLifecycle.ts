@@ -5,6 +5,7 @@ import {
 } from "./decisionContract.ts";
 import type { SessionGamePlan } from "./gamePlan.ts";
 import type { ResolvedStylePolicy } from "./stylePolicy.ts";
+import type { FrozenRuntimeConfigSnapshot } from "./runtimeConfigStore.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
@@ -56,6 +57,7 @@ export interface FrozenSetupStrategyContext {
   symbol: string;
   direction: "long" | "short";
   stylePolicy: ResolvedStylePolicy;
+  runtimeConfig: FrozenRuntimeConfigSnapshot | null;
   decisionContext: TradeDecisionContext | null;
   gamePlan: {
     id: string | null;
@@ -188,6 +190,7 @@ export function buildFrozenSetupStrategyContext(input: {
   symbol: string;
   direction: "long" | "short";
   stylePolicy: ResolvedStylePolicy;
+  runtimeConfig?: FrozenRuntimeConfigSnapshot | null;
   decisionContext?: TradeDecisionContext | null;
   gamePlan: SessionGamePlan | null;
   directionVerdict: DirectionVerdictDecision | null;
@@ -222,6 +225,7 @@ export function buildFrozenSetupStrategyContext(input: {
     symbol: input.symbol,
     direction: input.direction,
     stylePolicy: input.stylePolicy,
+    runtimeConfig: input.runtimeConfig || null,
     decisionContext: input.decisionContext || null,
     gamePlan: {
       id: pairPlan?.gamePlanId ||
