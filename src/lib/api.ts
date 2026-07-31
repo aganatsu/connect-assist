@@ -328,6 +328,7 @@ export const botConfigApi = {
           requireLiquiditySweep: boolean;
           requireUnifiedZone: boolean;
           impulseZoneGateMode: string;
+          zoneLocalEnforcementMode: string;
           minConfluence: number;
           riskPerTrade: number;
         };

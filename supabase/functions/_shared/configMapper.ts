@@ -222,6 +222,11 @@ export const RUNTIME_DEFAULTS = {
   requireUnifiedZone: false,  // When true, only take trades when Unified Zone Engine confirms (no standalone impulse zone fallback)
   requireLiquiditySweep: false, // Liquidity Sweep Gate: when true, block entry until entry-trigger BSL/SSL pool is swept+rejected
   sweptAbsorbedPenalty: 2.0, // Penalty applied to liquidity score when entry-trigger pool is swept but absorbed (broken through)
+  // Zone-local confluence is requested here, but the activation registry caps
+  // the effective mode. Missing/unapproved activation always resolves Observe.
+  zoneLocalEnforcementMode: "observe" as "observe" | "soft" | "hard",
+  zoneLocalSoftPenalty: 10,
+  zoneLocalMinimumScore: 1,
 
   // ── Simple Direction Engine ──
   useSimpleDirection: true,
@@ -516,6 +521,9 @@ export function mapNestedToFlat(raw: any): RuntimeConfig {
     requireUnifiedZone: strategy.requireUnifiedZone ?? raw.requireUnifiedZone ?? RUNTIME_DEFAULTS.requireUnifiedZone,
     requireLiquiditySweep: strategy.requireLiquiditySweep ?? strategy.liquiditySweepRequired ?? raw.requireLiquiditySweep ?? raw.liquiditySweepRequired ?? RUNTIME_DEFAULTS.requireLiquiditySweep,
     sweptAbsorbedPenalty: strategy.sweptAbsorbedPenalty ?? raw.sweptAbsorbedPenalty ?? RUNTIME_DEFAULTS.sweptAbsorbedPenalty,
+    zoneLocalEnforcementMode: (strategy.zoneLocalEnforcementMode ?? raw.zoneLocalEnforcementMode ?? RUNTIME_DEFAULTS.zoneLocalEnforcementMode) as "observe" | "soft" | "hard",
+    zoneLocalSoftPenalty: strategy.zoneLocalSoftPenalty ?? raw.zoneLocalSoftPenalty ?? RUNTIME_DEFAULTS.zoneLocalSoftPenalty,
+    zoneLocalMinimumScore: strategy.zoneLocalMinimumScore ?? raw.zoneLocalMinimumScore ?? RUNTIME_DEFAULTS.zoneLocalMinimumScore,
 
     // ── Simple Direction Engine ──
     useSimpleDirection: strategy.useSimpleDirection ?? raw.useSimpleDirection ?? RUNTIME_DEFAULTS.useSimpleDirection,

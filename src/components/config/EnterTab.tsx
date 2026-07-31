@@ -327,6 +327,65 @@ export function EnterTab({ config, setConfig, updateField }: ConfigTabProps) {
             </SelectContent>
           </Select>
         </FieldGroup>
+        <FieldGroup
+          label="Zone-Local Confluence Mode"
+          description="Requests how nearby Fib, S/R, HTF POIs and liquidity affect the selected zone. Evidence approval caps the effective mode; without it this remains Observe."
+        >
+          <Select
+            value={config.strategy?.zoneLocalEnforcementMode ?? "observe"}
+            onValueChange={(v: string) =>
+              updateField("strategy", "zoneLocalEnforcementMode", v)}
+          >
+            <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="observe">Observe — collect evidence, no trade impact</SelectItem>
+              <SelectItem value="soft">Soft — penalize unsupported selected zones</SelectItem>
+              <SelectItem value="hard">Hard — block unsupported selected zones</SelectItem>
+            </SelectContent>
+          </Select>
+        </FieldGroup>
+        {(config.strategy?.zoneLocalEnforcementMode ?? "observe") === "soft" && (
+          <FieldGroup
+            label="Zone-Local Soft Penalty"
+            description="Score points removed when the legacy winner lacks local support"
+          >
+            <div className="flex items-center gap-4">
+              <Slider
+                value={[config.strategy?.zoneLocalSoftPenalty ?? 10]}
+                onValueChange={v =>
+                  updateField("strategy", "zoneLocalSoftPenalty", v[0])}
+                min={0}
+                max={30}
+                step={1}
+                className="flex-1"
+              />
+              <span className="text-sm font-mono font-bold w-12 text-right">
+                -{config.strategy?.zoneLocalSoftPenalty ?? 10}
+              </span>
+            </div>
+          </FieldGroup>
+        )}
+        {(config.strategy?.zoneLocalEnforcementMode ?? "observe") !== "observe" && (
+          <FieldGroup
+            label="Minimum Local Evidence Score"
+            description="Minimum deduplicated local evidence score required for the selected zone"
+          >
+            <div className="flex items-center gap-4">
+              <Slider
+                value={[config.strategy?.zoneLocalMinimumScore ?? 1]}
+                onValueChange={v =>
+                  updateField("strategy", "zoneLocalMinimumScore", v[0])}
+                min={0}
+                max={9}
+                step={0.5}
+                className="flex-1"
+              />
+              <span className="text-sm font-mono font-bold w-12 text-right">
+                {config.strategy?.zoneLocalMinimumScore ?? 1}
+              </span>
+            </div>
+          </FieldGroup>
+        )}
         <FieldGroup label="Max Fib Retracement" description="How deep a zone can sit inside the impulse">
           <Select value={String(config.strategy?.fibMaxRetracement ?? 0.786)} onValueChange={(v: string) => updateField('strategy', 'fibMaxRetracement', parseFloat(v))}>
             <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>

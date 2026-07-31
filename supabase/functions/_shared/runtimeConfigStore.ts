@@ -25,6 +25,7 @@ export interface RuntimeConfigProvenance {
     requireLiquiditySweep: boolean;
     requireUnifiedZone: boolean;
     impulseZoneGateMode: string;
+    zoneLocalEnforcementMode: string;
     minConfluence: number;
     riskPerTrade: number;
   };
@@ -147,6 +148,9 @@ export async function loadEffectiveRuntimeConfig(
         requireUnifiedZone: effectiveConfig.requireUnifiedZone === true,
         impulseZoneGateMode: String(
           effectiveConfig.impulseZoneGateMode || "disabled",
+        ),
+        zoneLocalEnforcementMode: String(
+          effectiveConfig.zoneLocalEnforcementMode || "observe",
         ),
         minConfluence: Number(effectiveConfig.minConfluence),
         riskPerTrade: Number(effectiveConfig.riskPerTrade),

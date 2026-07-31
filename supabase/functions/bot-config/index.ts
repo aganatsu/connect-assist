@@ -280,6 +280,26 @@ function validateConfig(config: any): string[] {
     if (typeof s.fvgFillPercentInvalidate === "number" && (s.fvgFillPercentInvalidate < 0 || s.fvgFillPercentInvalidate > 100)) {
       errors.push("strategy.fvgFillPercentInvalidate must be between 0 and 100");
     }
+    if (
+      s.zoneLocalEnforcementMode !== undefined &&
+      !["observe", "soft", "hard"].includes(s.zoneLocalEnforcementMode)
+    ) {
+      errors.push(
+        "strategy.zoneLocalEnforcementMode must be observe, soft, or hard",
+      );
+    }
+    if (
+      typeof s.zoneLocalSoftPenalty === "number" &&
+      (s.zoneLocalSoftPenalty < 0 || s.zoneLocalSoftPenalty > 30)
+    ) {
+      errors.push("strategy.zoneLocalSoftPenalty must be between 0 and 30");
+    }
+    if (
+      typeof s.zoneLocalMinimumScore === "number" &&
+      (s.zoneLocalMinimumScore < 0 || s.zoneLocalMinimumScore > 9)
+    ) {
+      errors.push("strategy.zoneLocalMinimumScore must be between 0 and 9");
+    }
   }
 
   // Risk validations
@@ -419,6 +439,9 @@ function getDefaultConfig() {
       regimeScoringEnabled: true, regimeScoringStrength: 1.0,
       // Normalized scoring: percentage-based (auto-adjusts when factors are toggled)
       normalizedScoring: true,
+      zoneLocalEnforcementMode: "observe",
+      zoneLocalSoftPenalty: 10,
+      zoneLocalMinimumScore: 1,
 
       // ── ICT 2022 Mentorship modules ───────────────────────────────────
       // All gates default to "off" (log-only, no trade impact). Flip to

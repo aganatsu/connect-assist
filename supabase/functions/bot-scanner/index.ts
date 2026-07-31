@@ -159,6 +159,10 @@ import {
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
+import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
+import {
+  evaluateZoneLocalEnforcement,
+} from "../_shared/zoneLocalEnforcement.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -1466,6 +1470,15 @@ async function runScanForUser(
     await skipScannerOperation(supabase, opts?.operationRunId, "paper_account_missing");
     return { error: "No paper account" };
   }
+  const zoneLocalActivation = await loadZoneLocalActivation(supabase, {
+    userId,
+    botId: BOT_ID,
+  });
+  console.log(
+    `[scan ${scanCycleId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
+      + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
+      + ` runtimeEnforced=${zoneLocalActivation?.runtimeEnforced === true}`,
+  );
 
   // Fetch Telegram chat IDs for notifications (supports both new array + legacy single)
   const { data: userSettings } = await supabase.from("user_settings").select("preferences_json").eq("user_id", userId).maybeSingle();
@@ -4870,6 +4883,8 @@ async function runScanForUser(
       (detail as any).impulseZone?.bestZone?.localConfluence ?? null;
     const selectedZoneShadowRanking = () =>
       (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
+    const selectedZoneLocalEnforcement = () =>
+      (detail as any).zoneLocalEnforcement ?? null;
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4890,6 +4905,7 @@ async function runScanForUser(
         conceptEvidence: selectedZoneConceptEvidence(),
         zoneLocalConfluence: selectedZoneLocalConfluence(),
         zoneCandidateShadowRanking: selectedZoneShadowRanking(),
+        zoneLocalEnforcement: selectedZoneLocalEnforcement(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -5028,6 +5044,15 @@ async function runScanForUser(
     let impulseZonePenaltyVal = 0;
     const izGateMode = pairConfig.impulseZoneGateMode ?? "hard";
     const izData = (detail as any).impulseZone;
+    const zoneLocalDecision = evaluateZoneLocalEnforcement({
+      requestedMode: pairConfig.zoneLocalEnforcementMode,
+      runtimeTarget: account.execution_mode === "live" ? "live" : "paper",
+      activation: zoneLocalActivation,
+      ranking: izData?.bestZone?.shadowRanking ?? null,
+      softPenalty: pairConfig.zoneLocalSoftPenalty,
+      minimumLocalScore: pairConfig.zoneLocalMinimumScore,
+    });
+    (detail as any).zoneLocalEnforcement = zoneLocalDecision;
     // ── Gameplan hierarchy shadow audit ─────────────────────────────────────
     // Observability only: this result is persisted for later outcome analysis,
     // but it is never read by scoring, gates, sizing, or execution.
@@ -5809,6 +5834,21 @@ async function runScanForUser(
       }
     }
     // "off" mode: no adjustment at all
+    if (!zoneLocalDecision.allowed) {
+      detail.status = "skipped_zone_local_confluence";
+      detail.skipReason =
+        `Zone-Local Confluence (${zoneLocalDecision.mode.effectiveMode}): `
+        + zoneLocalDecision.reason;
+      console.log(
+        `[scan ${scanCycleId}] ⛔ ${pair}: ZONE-LOCAL HARD BLOCK — `
+          + `${zoneLocalDecision.reason}, shadowRank=`
+          + `${zoneLocalDecision.shadowRank ?? "missing"}, localScore=`
+          + `${zoneLocalDecision.shadowLocalScore ?? "missing"}.`,
+      );
+      scanDetails.push(detail);
+      continue;
+    }
+    const zoneLocalScoreAdj = zoneLocalDecision.scoreAdjustment;
     // When directionVerdict is active, its scoreAdjustment replaces the ICT HTF score adjustment
     // (the verdict already incorporates weekly bias, regime, and GP bias into one number).
     const ictHTFScoreAdj = directionVerdict ? 0 : (ictHTFResult?.scoreAdjustment ?? 0);
@@ -5825,7 +5865,9 @@ async function runScanForUser(
       ? (ictKZResult.isKillZone ? (ictKZResult.isPrime ? pairConfig.ictKillZonePrimeBonus : 0) : -pairConfig.ictKillZoneOutsidePenalty)
       : 0;
     const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
-    const effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+    const effectiveScore = analysis.score + fotsiPenalty +
+      impulseZonePenaltyVal + zoneLocalScoreAdj + ictTotalAdj +
+      verdictScoreAdj;
     if (impulseZonePenaltyVal !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Impulse Zone scoring: ${impulseZonePenaltyVal > 0 ? "+" : ""}${impulseZonePenaltyVal.toFixed(1)}% (raw ${analysis.score.toFixed(1)}% → effective ${effectiveScore.toFixed(1)}%)`);
     }
@@ -5837,6 +5879,13 @@ async function runScanForUser(
     }
     if (verdictScoreAdj !== 0) {
       console.log(`[scan ${scanCycleId}] ${pair} Direction Verdict scoring: ${verdictScoreAdj > 0 ? "+" : ""}${verdictScoreAdj.toFixed(1)}% (effective ${effectiveScore.toFixed(1)}%)`);
+    }
+    if (zoneLocalScoreAdj !== 0) {
+      console.log(
+        `[scan ${scanCycleId}] ${pair} Zone-local soft adjustment: `
+          + `${zoneLocalScoreAdj.toFixed(1)}% (${zoneLocalDecision.reason}, `
+          + `effective ${effectiveScore.toFixed(1)}%)`,
+      );
     }
     // ── Thesis Conviction Tracker (shadow mode: log only, no trade impact) ──
     const opposingFactorCount = analysis.tieredScoring?.opposingFactorCount ?? 0;
