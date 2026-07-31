@@ -89,6 +89,10 @@ Deno.test("saved liquidity-sweep requirement reaches effective config and frozen
     loaded.provenance.criticalSettings.requireLiquiditySweep,
     true,
   );
+  assertEquals(
+    loaded.provenance.criticalSettings.zoneLocalEnforcementMode,
+    "observe",
+  );
   const frozen = await buildFrozenRuntimeConfigSnapshot(loaded);
   assertEquals(frozen.effectiveConfig.requireLiquiditySweep, true);
   assertEquals(frozen.pairEffectiveConfigHash.length, 64);

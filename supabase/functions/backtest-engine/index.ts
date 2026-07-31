@@ -120,6 +120,10 @@ import {
 } from "../_shared/styleDecisionEvidence.ts";
 import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceData, type TFSlotLabels, type ZoneEngineOptions } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
+import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
+import {
+  evaluateZoneLocalEnforcement,
+} from "../_shared/zoneLocalEnforcement.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { computeDirectionVerdict, type DirectionVerdictResult } from "../_shared/directionVerdict.ts";
 import { runICTHTFAnalysis, type ICTHTFResult } from "../_shared/ictHTFIntegration.ts";
@@ -1700,6 +1704,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     // Backtest-specific overrides are applied after the common style profile.
     config.newsFilterEnabled = false;
     config.scanIntervalMinutes = 0;
+    const { data: backtestOwner } = await db.from("backtest_runs")
+      .select("user_id")
+      .eq("id", runId)
+      .maybeSingle();
+    const zoneLocalActivation = backtestOwner?.user_id
+      ? await loadZoneLocalActivation(db, {
+        userId: backtestOwner.user_id,
+        botId: "smc",
+      })
+      : null;
+    console.log(
+      `[backtest:${runId}] Zone-local requested=${config.zoneLocalEnforcementMode}`
+        + ` activation=${zoneLocalActivation?.authorityStage || "missing"}`
+        + ` runtimeEnforced=${zoneLocalActivation?.runtimeEnforced === true}`,
+    );
 
     const startMs = new Date(startDate).getTime();
     const endMs = new Date(endDate).getTime();
@@ -2928,8 +2947,57 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           : 0;
         const ictTotalAdj = ictHTFScoreAdj + ictMSSAdj + ictJudasAdj + ictFVGAdj + ictKZAdj;
 
+        const zoneLocalDecision = evaluateZoneLocalEnforcement({
+          requestedMode: config.zoneLocalEnforcementMode,
+          runtimeTarget: "paper",
+          activation: zoneLocalActivation,
+          ranking: izData?.bestZone?.shadowRanking ?? null,
+          softPenalty: config.zoneLocalSoftPenalty,
+          minimumLocalScore: config.zoneLocalMinimumScore,
+        });
+
         // ── Effective Score (now matches live scanner formula) ──
-        let effectiveScore = analysis.score + fotsiPenalty + impulseZonePenaltyVal + ictTotalAdj + verdictScoreAdj;
+        let effectiveScore = analysis.score + fotsiPenalty +
+          impulseZonePenaltyVal + zoneLocalDecision.scoreAdjustment +
+          ictTotalAdj + verdictScoreAdj;
+
+        if (!zoneLocalDecision.allowed) {
+          diagnostics.skippedGateBlocked++;
+          const label = "Zone-Local Confluence";
+          diagnostics.gateBlockReasons[label] =
+            (diagnostics.gateBlockReasons[label] || 0) + 1;
+          if (researchMode && analysis.stopLoss && analysis.takeProfit) {
+            const cf = computeCounterfactual(
+              symbol,
+              analysis.direction,
+              candle.close,
+              analysis.stopLoss,
+              analysis.takeProfit,
+              entryCandles,
+              i + 1,
+              200,
+            );
+            blockedTrades.push({
+              symbol,
+              direction: analysis.direction,
+              time: candle.datetime,
+              score: analysis.score,
+              effectiveScore,
+              blockedBy: [
+                `Zone-Local Confluence: ${zoneLocalDecision.reason}`,
+              ],
+              factors: analysis.factors.map((factor: any) => ({
+                name: factor.name,
+                present: factor.present,
+                weight: factor.weight,
+              })),
+              ...cf,
+              regime: analysis.regimeInfo?.regime || "unknown",
+              session: session.name,
+            });
+          }
+          continue;
+        }
 
         // ── Thesis Conviction: evaluate evidence and update state ──
         let convictionResult: ConvictionResult | null = null;

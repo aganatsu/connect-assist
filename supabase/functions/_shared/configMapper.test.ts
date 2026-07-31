@@ -777,6 +777,24 @@ Deno.test("mapNestedToFlat: strategy.requireUnifiedZone takes priority over raw"
   assertEquals(result.requireUnifiedZone, true);
 });
 
+Deno.test("mapNestedToFlat: zone-local controls default safe and map exactly", () => {
+  const defaults = mapNestedToFlat(null);
+  assertEquals(defaults.zoneLocalEnforcementMode, "observe");
+  assertEquals(defaults.zoneLocalSoftPenalty, 10);
+  assertEquals(defaults.zoneLocalMinimumScore, 1);
+
+  const mapped = mapNestedToFlat({
+    strategy: {
+      zoneLocalEnforcementMode: "soft",
+      zoneLocalSoftPenalty: 12,
+      zoneLocalMinimumScore: 2.5,
+    },
+  });
+  assertEquals(mapped.zoneLocalEnforcementMode, "soft");
+  assertEquals(mapped.zoneLocalSoftPenalty, 12);
+  assertEquals(mapped.zoneLocalMinimumScore, 2.5);
+});
+
 // ─── maxConfirmationAttempts ─────────────────────────────────────────────────
 
 Deno.test("maxConfirmationAttempts: defaults to 3 when no config is set", () => {
