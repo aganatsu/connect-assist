@@ -64,6 +64,7 @@ export type ZoneLocalEvidenceSource =
   | "htf_fvg"
   | "htf_breaker"
   | "htf_fib"
+  | "ltf_refinement"
   | "premium_discount"
   | "liquidity_pool";
 

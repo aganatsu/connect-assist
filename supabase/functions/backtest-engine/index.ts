@@ -2523,6 +2523,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 evidence: multiTF.bestZone.zone.poi.evidence ?? null,
                 localConfluence:
                   multiTF.bestZone.zone.localConfluence ?? null,
+                shadowRanking:
+                  multiTF.bestZone.zone.shadowRanking ?? null,
                 priceAtZone: multiTF.bestZone.priceAtZone,
                 priceInsideZone: multiTF.bestZone.priceInsideZone,
                 priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -2541,6 +2543,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 totalScore: candidate.totalScore,
                 evidence: candidate.poi.evidence ?? null,
                 localConfluence: candidate.localConfluence ?? null,
+                shadowRanking: candidate.shadowRanking ?? null,
               })),
               h1HasZone: !!multiTF.h1Result.bestZone,
               h4HasZone: !!multiTF.h4Result?.bestZone,

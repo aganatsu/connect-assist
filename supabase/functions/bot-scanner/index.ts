@@ -4470,6 +4470,8 @@ async function runScanForUser(
             evidence: multiTF.bestZone.zone.poi.evidence ?? null,
             localConfluence:
               multiTF.bestZone.zone.localConfluence ?? null,
+            shadowRanking:
+              multiTF.bestZone.zone.shadowRanking ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4488,6 +4490,7 @@ async function runScanForUser(
             totalScore: candidate.totalScore,
             evidence: candidate.poi.evidence ?? null,
             localConfluence: candidate.localConfluence ?? null,
+            shadowRanking: candidate.shadowRanking ?? null,
           })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
@@ -4837,6 +4840,8 @@ async function runScanForUser(
     };
     const selectedZoneLocalConfluence = () =>
       (detail as any).impulseZone?.bestZone?.localConfluence ?? null;
+    const selectedZoneShadowRanking = () =>
+      (detail as any).impulseZone?.bestZone?.shadowRanking ?? null;
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4856,6 +4861,7 @@ async function runScanForUser(
         directionVerdict: activeDirectionVerdict,
         conceptEvidence: selectedZoneConceptEvidence(),
         zoneLocalConfluence: selectedZoneLocalConfluence(),
+        zoneCandidateShadowRanking: selectedZoneShadowRanking(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -6040,6 +6046,7 @@ async function runScanForUser(
           directionVerdict: activeDirectionVerdict,
           conceptEvidence: selectedZoneConceptEvidence(),
           zoneLocalConfluence: selectedZoneLocalConfluence(),
+          zoneCandidateShadowRanking: selectedZoneShadowRanking(),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -7101,6 +7108,7 @@ async function runScanForUser(
               directionVerdict: activeDirectionVerdict,
               conceptEvidence: selectedZoneConceptEvidence(),
               zoneLocalConfluence: selectedZoneLocalConfluence(),
+              zoneCandidateShadowRanking: selectedZoneShadowRanking(),
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -7636,6 +7644,7 @@ async function runScanForUser(
             directionVerdict: activeDirectionVerdict,
             conceptEvidence: selectedZoneConceptEvidence(),
             zoneLocalConfluence: selectedZoneLocalConfluence(),
+            zoneCandidateShadowRanking: selectedZoneShadowRanking(),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",

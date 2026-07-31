@@ -8,6 +8,7 @@ import type { ResolvedStylePolicy } from "./stylePolicy.ts";
 import type { FrozenRuntimeConfigSnapshot } from "./runtimeConfigStore.ts";
 import type { MarketConceptEvidence } from "./conceptEvidence.ts";
 import type { ZoneLocalConfluenceObservation } from "./zoneLocalConfluence.ts";
+import type { ZoneCandidateShadowRanking } from "./zoneCandidateShadowRanking.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
@@ -71,6 +72,8 @@ export interface FrozenSetupStrategyContext {
   conceptEvidence?: MarketConceptEvidence[];
   /** Observe-only zone-local qualifications frozen with the candidate. */
   zoneLocalConfluence?: ZoneLocalConfluenceObservation | null;
+  /** Observe-only alternative candidate rank frozen for later outcomes. */
+  zoneCandidateShadowRanking?: ZoneCandidateShadowRanking | null;
   scenarioZoneStory: {
     contractVersion: typeof SCENARIO_ZONE_STORY_VERSION;
     enforcement: "observe_only";
@@ -202,6 +205,7 @@ export function buildFrozenSetupStrategyContext(input: {
   directionVerdict: DirectionVerdictDecision | null;
   conceptEvidence?: MarketConceptEvidence[];
   zoneLocalConfluence?: ZoneLocalConfluenceObservation | null;
+  zoneCandidateShadowRanking?: ZoneCandidateShadowRanking | null;
   originatingZone?: Record<string, unknown> | null;
   confirmationMethod: unknown;
   indicatorMinCount?: unknown;
@@ -250,6 +254,8 @@ export function buildFrozenSetupStrategyContext(input: {
       : null,
     conceptEvidence: input.conceptEvidence || [],
     zoneLocalConfluence: input.zoneLocalConfluence || null,
+    zoneCandidateShadowRanking:
+      input.zoneCandidateShadowRanking || null,
     scenarioZoneStory: {
       contractVersion: SCENARIO_ZONE_STORY_VERSION,
       enforcement: "observe_only",
