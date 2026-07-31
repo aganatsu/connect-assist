@@ -158,6 +158,7 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
+import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import { findCascadeZone, type CascadeResult } from "../_shared/cascadeZoneEngine.ts";
 import { detectZoneConfirmation, isPriceInZone, isImpulseBroken, formatConfirmationSummary, DEFAULT_ZONE_CONFIRMATION_CONFIG, type ConfirmationSignal } from "../_shared/zoneConfirmation.ts";
 import { type DirectionResult } from "../_shared/directionEngine.ts";
@@ -4497,6 +4498,33 @@ async function runScanForUser(
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
           scoringEnabled: pairConfig.impulseZoneEnabled !== false,
         };
+
+        try {
+          const persisted = await persistZoneShadowObservations(supabase, {
+            userId,
+            botId: BOT_ID,
+            scanCycleId,
+            symbol: pair,
+            tradingStyle: resolvedStyle,
+            stylePolicyVersion: pairStylePolicy.contractVersion,
+            styleBasePolicyHash: pairStylePolicy.basePolicyHash,
+            stylePolicyHash: pairStylePolicy.policyHash,
+            observedAt: candles[candles.length - 1]?.datetime ||
+              new Date().toISOString(),
+            candidates: multiTF.allZones,
+          });
+          if (persisted > 0) {
+            console.log(
+              `[scan ${scanCycleId}] ${pair} stored ${persisted}`
+              + ` observe-only zone-rank disagreement candidates`,
+            );
+          }
+        } catch (shadowStoreErr: any) {
+          console.warn(
+            `[scan ${scanCycleId}] ${pair} zone shadow evidence unavailable`
+            + ` (non-fatal): ${shadowStoreErr?.message}`,
+          );
+        }
 
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
       } catch (zoneErr: any) {

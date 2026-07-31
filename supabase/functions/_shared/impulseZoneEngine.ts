@@ -76,6 +76,16 @@ export interface RankedPOI {
   localConfluence?: ZoneLocalConfluenceObservation;
   /** Alternative candidate ordering for audit only. */
   shadowRanking?: ZoneCandidateShadowRanking;
+  /** Counterfactual levels used only for outcome validation. */
+  validationTrade?: ZoneValidationTrade;
+}
+
+export interface ZoneValidationTrade {
+  direction: "long" | "short";
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  source: "ltf_refinement" | "zone_bounds";
 }
 
 export interface BestZone {
@@ -1315,6 +1325,35 @@ export function rankAndSelectBestZone(
   return best || null;
 }
 
+export function buildZoneValidationTrade(
+  zone: RankedPOI,
+  impulse: ImpulseLeg,
+): ZoneValidationTrade {
+  const width = Math.max(0, zone.poi.high - zone.poi.low);
+  if (zone.poi.direction === "bullish") {
+    const entryPrice = zone.refinedEntry ?? zone.poi.low;
+    let stopLoss = zone.refinedSL ?? zone.poi.low - width * 0.5;
+    if (stopLoss < impulse.low) stopLoss = impulse.low;
+    return {
+      direction: "long",
+      entryPrice,
+      stopLoss,
+      takeProfit: impulse.bosPrice,
+      source: zone.ltfRefined ? "ltf_refinement" : "zone_bounds",
+    };
+  }
+  const entryPrice = zone.refinedEntry ?? zone.poi.high;
+  let stopLoss = zone.refinedSL ?? zone.poi.high + width * 0.5;
+  if (stopLoss > impulse.high) stopLoss = impulse.high;
+  return {
+    direction: "short",
+    entryPrice,
+    stopLoss,
+    takeProfit: impulse.bosPrice,
+    source: zone.ltfRefined ? "ltf_refinement" : "zone_bounds",
+  };
+}
+
 // ─── 7. Main Entry Point: findBestEntryZone ───────────────────────────────────
 
 /**
@@ -1433,6 +1472,9 @@ export function findBestEntryZone(
   // Replace in full array
   for (let i = 0; i < topZones.length; i++) {
     rankedZones[i] = topZones[i];
+  }
+  for (const zone of rankedZones) {
+    zone.validationTrade = buildZoneValidationTrade(zone, impulse);
   }
 
   // Step 6: Rank and select best
