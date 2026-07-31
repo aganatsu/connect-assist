@@ -2470,6 +2470,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
               pipSize,
               fibMaxRetracement: config.fibMaxRetracement,
               originOBRetest: config.originOBRetest,
+              evidenceContext: {
+                symbol,
+                timeframe: zoneTFLabels.low,
+                observedAt: analysisCandles[analysisCandles.length - 1]?.datetime,
+              },
             };
 
             // ── Call Unified Zone Engine ──
@@ -2514,6 +2519,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 refinedSL: multiTF.bestZone.zone.refinedSL || null,
                 htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
                 htfLayers: multiTF.bestZone.zone.htfLayers,
+                evidence: multiTF.bestZone.zone.poi.evidence ?? null,
                 priceAtZone: multiTF.bestZone.priceAtZone,
                 priceInsideZone: multiTF.bestZone.priceInsideZone,
                 priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -2522,6 +2528,15 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                 distancePips: multiTF.bestZone.distancePips,
               } : null,
               allZonesCount: multiTF.allZones.length,
+              zoneCandidates: multiTF.allZones.map((candidate: any) => ({
+                type: candidate.poi.type,
+                high: candidate.poi.high,
+                low: candidate.poi.low,
+                fibLevel: candidate.fibLevel,
+                fibDepth: candidate.fibDepth,
+                totalScore: candidate.totalScore,
+                evidence: candidate.poi.evidence ?? null,
+              })),
               h1HasZone: !!multiTF.h1Result.bestZone,
               h4HasZone: !!multiTF.h4Result?.bestZone,
               dailyHasZone: !!multiTF.dailyResult?.bestZone,

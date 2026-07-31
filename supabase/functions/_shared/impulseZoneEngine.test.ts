@@ -256,6 +256,30 @@ Deno.test("mapImpulsePOIs — finds POIs within valid impulse", () => {
   }
 });
 
+Deno.test("mapImpulsePOIs — observe-only evidence is deterministic and timeframe-scoped", () => {
+  const candles = generateBullishImpulseCandles(50);
+  const impulse = findImpulseLeg(candles, "bullish");
+  if (!impulse) return;
+  const options = {
+    evidenceContext: {
+      symbol: "GBP/USD",
+      timeframe: "1H",
+      observedAt: candles[candles.length - 1].datetime,
+    },
+  };
+  const first = mapImpulsePOIs(candles, impulse, options);
+  const second = mapImpulsePOIs(candles, impulse, options);
+  assert(first.length > 0, "fixture should produce at least one POI");
+  assertEquals(first.length, second.length);
+  for (let i = 0; i < first.length; i++) {
+    assertExists(first[i].evidence);
+    assertEquals(first[i].evidence?.evidenceId, second[i].evidence?.evidenceId);
+    assertEquals(first[i].evidence?.symbol, "GBP/USD");
+    assertEquals(first[i].evidence?.timeframe, "1H");
+    assertEquals(first[i].evidence?.bounds, { low: first[i].low, high: first[i].high });
+  }
+});
+
 Deno.test("overlayFibOnPOIs — returns empty for empty POIs", () => {
   const impulse: ImpulseLeg = {
     high: 1.05, low: 1.0, direction: "bullish",
@@ -526,6 +550,32 @@ Deno.test("findBestEntryZone — full pipeline with bullish impulse", () => {
     assert(result.bestZone.zone.totalScore >= 1, "Best zone should have score >= 1");
     assert(result.allZones.length > 0, "Should have at least one zone");
   }
+});
+
+Deno.test("findBestEntryZone — observe-only evidence does not change selection or score", () => {
+  const htfCandles = generateBullishImpulseCandles(50);
+  const entryCandles = generateBullishImpulseCandles(100);
+  const baseline = findBestEntryZone(htfCandles, entryCandles, "bullish", 1.03);
+  const observed = findBestEntryZone(
+    htfCandles,
+    entryCandles,
+    "bullish",
+    1.03,
+    undefined,
+    {
+      evidenceContext: {
+        symbol: "GBP/USD",
+        timeframe: "1H",
+        observedAt: htfCandles[htfCandles.length - 1].datetime,
+      },
+    },
+  );
+  assertExists(baseline.bestZone);
+  assertExists(observed.bestZone);
+  assertEquals(observed.bestZone.zone.totalScore, baseline.bestZone.zone.totalScore);
+  assertEquals(observed.bestZone.zone.poi.high, baseline.bestZone.zone.poi.high);
+  assertEquals(observed.bestZone.zone.poi.low, baseline.bestZone.zone.poi.low);
+  assertExists(observed.bestZone.zone.poi.evidence);
 });
 
 Deno.test("findBestEntryZone — full pipeline with bearish impulse", () => {

@@ -4386,6 +4386,11 @@ async function runScanForUser(
             pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
             fibMaxRetracement: pairConfig.fibMaxRetracement,
             originOBRetest: pairConfig.originOBRetest,
+            evidenceContext: {
+              symbol: pair,
+              timeframe: zoneTFLabels.low,
+              observedAt: candles[candles.length - 1]?.datetime,
+            },
           },
           zoneDailyCandles,
           zoneConfirmCandles,
@@ -4461,6 +4466,7 @@ async function runScanForUser(
             refinedSL: multiTF.bestZone.zone.refinedSL || null,
             htfConfluenceScore: multiTF.bestZone.zone.htfConfluenceScore,
             htfLayers: multiTF.bestZone.zone.htfLayers,
+            evidence: multiTF.bestZone.zone.poi.evidence ?? null,
             priceAtZone: multiTF.bestZone.priceAtZone,
             priceInsideZone: multiTF.bestZone.priceInsideZone,
             priceAtZoneStrict: multiTF.bestZone.priceAtZoneStrict,
@@ -4469,6 +4475,15 @@ async function runScanForUser(
             distancePips: multiTF.bestZone.distancePips,
           } : null,
           allZonesCount: multiTF.allZones.length,
+          zoneCandidates: multiTF.allZones.map((candidate: any) => ({
+            type: candidate.poi.type,
+            high: candidate.poi.high,
+            low: candidate.poi.low,
+            fibLevel: candidate.fibLevel,
+            fibDepth: candidate.fibDepth,
+            totalScore: candidate.totalScore,
+            evidence: candidate.poi.evidence ?? null,
+          })),
           h1HasZone: !!multiTF.h1Result.bestZone,
           h4HasZone: !!multiTF.h4Result?.bestZone,
           dailyHasZone: !!multiTF.dailyResult?.bestZone,
@@ -4803,6 +4818,10 @@ async function runScanForUser(
     }
 
     // ── Setup Staging: Check if this pair has a staged setup and handle promotion/invalidation ──
+    const selectedZoneConceptEvidence = () => {
+      const evidence = (detail as any).impulseZone?.bestZone?.evidence;
+      return evidence ? [evidence] : [];
+    };
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
     ) => {
@@ -4820,6 +4839,7 @@ async function runScanForUser(
         decisionContext: (detail as any).decisionContext || null,
         gamePlan: activeGamePlan,
         directionVerdict: activeDirectionVerdict,
+        conceptEvidence: selectedZoneConceptEvidence(),
         originatingZone,
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
@@ -6002,6 +6022,7 @@ async function runScanForUser(
             null,
           gamePlan: activeGamePlan,
           directionVerdict: activeDirectionVerdict,
+          conceptEvidence: selectedZoneConceptEvidence(),
           originatingZone:
             existingStaged.originating_zone || originatingZone,
           confirmationMethod:
@@ -7061,6 +7082,7 @@ async function runScanForUser(
               decisionContext: pendingDecisionContext,
               gamePlan: activeGamePlan,
               directionVerdict: activeDirectionVerdict,
+              conceptEvidence: selectedZoneConceptEvidence(),
               originatingZone: pendingOriginatingZone,
               confirmationMethod:
                 pairConfig.confirmationMethod || "choch",
@@ -7594,6 +7616,7 @@ async function runScanForUser(
             decisionContext: directAuthorization.decisionContext,
             gamePlan: activeGamePlan,
             directionVerdict: activeDirectionVerdict,
+            conceptEvidence: selectedZoneConceptEvidence(),
             originatingZone: directOriginatingZone,
             confirmationMethod:
               pairConfig.confirmationMethod || "choch",
