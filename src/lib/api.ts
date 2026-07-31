@@ -311,6 +311,28 @@ export const marketApi = {
 // ── Bot Config ──
 export const botConfigApi = {
   get: (connectionId?: string) => invokeFunction("bot-config", { action: "get", connectionId }),
+  getEffective: (connectionId?: string) =>
+    invokeFunction<{
+      effectiveConfig: any;
+      provenance: {
+        contractVersion: string;
+        source: "saved_connection" | "saved_global" | "built_in_defaults";
+        configId: string | null;
+        connectionId: string | null;
+        updatedAt: string | null;
+        rawConfigHash: string;
+        effectiveConfigHash: string;
+        loadedAt: string;
+        criticalSettings: {
+          tradingStyle: string;
+          requireLiquiditySweep: boolean;
+          requireUnifiedZone: boolean;
+          impulseZoneGateMode: string;
+          minConfluence: number;
+          riskPerTrade: number;
+        };
+      };
+    }>("bot-config", { action: "effective", connectionId }),
   getDefaults: () => invokeFunction("bot-config", { action: "defaults" }),
   update: (config: any, connectionId?: string) => invokeFunction("bot-config", { action: "update", config, connectionId }),
   reset: (connectionId?: string) => invokeFunction("bot-config", { action: "reset", connectionId }),

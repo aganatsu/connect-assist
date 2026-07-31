@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { loadEffectiveRuntimeConfig } from "../_shared/runtimeConfigStore.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -47,12 +48,26 @@ Deno.serve(async (req) => {
       if (error) throw error;
       // If no connection-specific config, fall back to global
       if (!data && connectionId) {
-        const { data: globalData } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        const { data: globalData, error: globalError } = await supabase.from("bot_configs").select("config_json").eq("user_id", user.id).is("connection_id", null).maybeSingle();
+        if (globalError) throw globalError;
         return new Response(JSON.stringify(globalData?.config_json || getDefaultConfig()), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       return new Response(JSON.stringify(data?.config_json || getDefaultConfig()), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (action === "effective") {
+      const loaded = await loadEffectiveRuntimeConfig(supabase, {
+        userId: user.id,
+        connectionId: connectionId || undefined,
+      });
+      return new Response(JSON.stringify({
+        effectiveConfig: loaded.config,
+        provenance: loaded.provenance,
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -71,7 +86,8 @@ Deno.serve(async (req) => {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
+      const { data: existing, error: existingError } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
+      if (existingError) throw existingError;
       if (existing) {
         const { error } = await supabase.from("bot_configs").update({ config_json: payload.config }).eq("id", existing.id);
         if (error) throw error;
@@ -81,20 +97,30 @@ Deno.serve(async (req) => {
         const { error } = await supabase.from("bot_configs").insert(insertData);
         if (error) throw error;
       }
-      return new Response(JSON.stringify({ success: true }), {
+      const verified = await loadEffectiveRuntimeConfig(supabase, {
+        userId: user.id,
+        connectionId: connectionId || undefined,
+      });
+      return new Response(JSON.stringify({
+        success: true,
+        provenance: verified.provenance,
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (action === "reset") {
       const defaultConfig = getDefaultConfig();
-      const { data: existing } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
+      const { data: existing, error: existingError } = await configQuery(supabase.from("bot_configs").select("id")).maybeSingle();
+      if (existingError) throw existingError;
       if (existing) {
-        await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("id", existing.id);
+        const { error } = await supabase.from("bot_configs").update({ config_json: defaultConfig }).eq("id", existing.id);
+        if (error) throw error;
       } else {
         const insertData: any = { user_id: user.id, config_json: defaultConfig };
         if (connectionId) insertData.connection_id = connectionId;
-        await supabase.from("bot_configs").insert(insertData);
+        const { error } = await supabase.from("bot_configs").insert(insertData);
+        if (error) throw error;
       }
       return new Response(JSON.stringify(defaultConfig), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },

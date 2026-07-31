@@ -63,9 +63,7 @@ Deno.test("known non-executable controls are visibly unavailable", () => {
 
 Deno.test("breaker size multiplier reaches executable position sizing", () => {
   assert(
-    scanner.includes(
-      "pairConfig as any).smcEnhancements?.breakerSizeMultiplier",
-    ),
+    scanner.includes("?.breakerSizeMultiplier ?? 0.5"),
   );
   assert(
     scanner.includes(

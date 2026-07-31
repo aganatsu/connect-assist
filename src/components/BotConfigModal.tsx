@@ -182,7 +182,20 @@ interface BotConfigModalProps {
 export function BotConfigModal({ open, onClose, connectionId, connectionName, defaultTab, defaultSearch, effectiveStylePolicy }: BotConfigModalProps) {
   const queryClient = useQueryClient();
   const queryKey = connectionId ? ["bot-config", connectionId] : ["bot-config"];
+  const effectiveQueryKey = connectionId
+    ? ["bot-config-effective", connectionId]
+    : ["bot-config-effective"];
   const { data: rawConfig } = useQuery({ queryKey, queryFn: () => botConfigApi.get(connectionId), enabled: open });
+  const {
+    data: effectiveRuntime,
+    error: effectiveRuntimeError,
+    isLoading: effectiveRuntimeLoading,
+  } = useQuery({
+    queryKey: effectiveQueryKey,
+    queryFn: () => botConfigApi.getEffective(connectionId),
+    enabled: open,
+    retry: false,
+  });
   const [config, setConfig] = useState<any>(null);
   // Map legacy tab IDs to new ones
   const resolvedDefaultTab = defaultTab ? (TAB_ID_MAP[defaultTab] || defaultTab) : "scan";
@@ -232,7 +245,12 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
       }
       return botConfigApi.update(clean, connectionId);
     },
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Config saved"); onClose(); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: effectiveQueryKey });
+      toast.success("Config saved and runtime-verified");
+      onClose();
+    },
     onError: (e: any) => {
       const msg = e?.message || "Failed to save config";
       if (msg.toLowerCase().includes("validation") || msg.toLowerCase().includes("invalid") || msg.toLowerCase().includes("must be")) {
@@ -247,6 +265,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
     mutationFn: () => botConfigApi.reset(connectionId),
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: effectiveQueryKey });
       if (data && typeof data === "object") {
         setConfig(normalizeBotConfigForEditor(data));
       }
@@ -453,6 +472,37 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
             <Button size="sm" className="text-xs" onClick={() => saveMut.mutate()}>Save Config</Button>
             <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-2"><X className="h-4 w-4" /></button>
           </div>
+        </div>
+
+        <div className="px-4 md:px-6 py-2 border-b border-border bg-muted/20">
+          {effectiveRuntimeError ? (
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-destructive">
+                Runtime configuration unavailable. Automated entries will fail
+                closed until the saved configuration can be verified.
+              </span>
+              <Badge variant="destructive">NOT VERIFIED</Badge>
+            </div>
+          ) : effectiveRuntime ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
+                RUNTIME VERIFIED
+              </Badge>
+              <span>Source: {effectiveRuntime.provenance.source.replaceAll("_", " ")}</span>
+              <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
+              <span>
+                Require sweep:{" "}
+                <strong className={effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "text-emerald-500" : "text-amber-500"}>
+                  {effectiveRuntime.provenance.criticalSettings.requireLiquiditySweep ? "ON" : "OFF"}
+                </strong>
+              </span>
+              <span>Config: {effectiveRuntime.provenance.effectiveConfigHash.slice(0, 12)}</span>
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted-foreground">
+              {effectiveRuntimeLoading ? "Verifying runtime configuration…" : "Runtime verification pending"}
+            </div>
+          )}
         </div>
 
         {/* Save Preset Dialog */}
