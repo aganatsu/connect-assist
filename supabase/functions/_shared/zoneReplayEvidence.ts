@@ -143,3 +143,15 @@ export async function persistZoneReplayEvidence(
     scanCycleId,
   };
 }
+
+export async function cleanupZoneReplayEvidence(
+  client: ReplayEvidenceClient,
+  replayRunId: string,
+): Promise<void> {
+  const { error } = await client
+    .from("zone_candidate_shadow_observations")
+    .delete()
+    .eq("replay_run_id", replayRunId)
+    .eq("evidence_source", "retrospective_replay");
+  if (error) throw new Error(error.message);
+}
