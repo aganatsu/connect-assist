@@ -94,6 +94,7 @@ import {
   resolvePendingIndicatorMinimum,
   resolvePendingMaxConfirmationAttempts,
   resolvePendingStylePolicy,
+  readFrozenSetupStrategyContext,
   validateFrozenSetupIdentity,
 } from "../_shared/setupLifecycle.ts";
 import {
@@ -653,18 +654,32 @@ Deno.serve(async (req) => {
           const attempt = await nextConfirmationAttempt(supabase, {
             userId,
             botId: BOT_ID,
-            scanCycleId: confirmScanCycleId,
             symbol: pending.symbol,
             direction: pending.direction === "long" ? "bullish" : "bearish",
             pendingOrderId: pending.id,
           });
-          const parentEvidenceId = await findParentEvidenceId(supabase, {
-            userId,
-            botId: BOT_ID,
-            symbol: pending.symbol,
-            direction: pending.direction === "long" ? "bullish" : "bearish",
-            before: pending.placed_at ?? undefined,
-          });
+          let parsedSignalReason: Record<string, any> = {};
+          try {
+            parsedSignalReason = typeof pending.signal_reason === "string"
+              ? JSON.parse(pending.signal_reason)
+              : (pending.signal_reason || {});
+          } catch {
+            parsedSignalReason = {};
+          }
+          const frozenContext = readFrozenSetupStrategyContext(pending);
+          // New orders carry the exact originating evidence UUID. The
+          // time-based lookup remains only as compatibility for orders created
+          // before this corrective release.
+          const parentEvidenceId =
+            parsedSignalReason.timeframeEvidenceId ||
+            frozenContext?.timeframeEvidenceId ||
+            await findParentEvidenceId(supabase, {
+              userId,
+              botId: BOT_ID,
+              symbol: pending.symbol,
+              direction: pending.direction === "long" ? "bullish" : "bearish",
+              before: pending.placed_at ?? undefined,
+            });
           const row = buildConfirmationEvidenceRow(
             {
               userId,
@@ -679,6 +694,10 @@ Deno.serve(async (req) => {
               stylePolicyVersion: evidencePolicy.contractVersion,
               styleBasePolicyHash: evidencePolicy.basePolicyHash,
               stylePolicyHash: evidencePolicy.policyHash,
+              stylePolicySnapshot: {
+                style: evidencePolicy.style,
+                timeframes: evidencePolicy.timeframes,
+              },
               parentEvidenceId,
               pendingOrderId: pending.id,
               confirmationAttempt: attempt,

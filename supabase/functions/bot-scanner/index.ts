@@ -160,6 +160,7 @@ import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZon
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import {
+  annotateEvidenceLifecycle,
   buildScanEvidenceRow,
   persistZoneTimeframeEvidence,
   type EvidenceRow,
@@ -4400,6 +4401,7 @@ async function runScanForUser(
           combinedLiqPools,
           htfConfluenceData ?? undefined,
           {
+            collectEvidence: true,
             strictATRMult: pairConfig.marketFillStrictATRMult,
             minQualityScore: pairConfig.zoneQualityThreshold,
             maxAgeBars: pairConfig.zoneMaxAgeBars,
@@ -4551,7 +4553,7 @@ async function runScanForUser(
         // Records what the engine saw on every slot. Never feeds scoring,
         // ranking, gating, configuration or execution.
         try {
-          zoneEvidenceRows.push(buildScanEvidenceRow(
+          const timeframeEvidenceRow = buildScanEvidenceRow(
             multiTF,
             {
               top: { timeframe: zoneTFLabels.top, candles: zoneDailyCandles ?? [] },
@@ -4571,6 +4573,10 @@ async function runScanForUser(
               stylePolicyVersion: pairStylePolicy.contractVersion,
               styleBasePolicyHash: pairStylePolicy.basePolicyHash,
               stylePolicyHash: pairStylePolicy.policyHash,
+              stylePolicySnapshot: {
+                style: pairStylePolicy.style,
+                timeframes: pairStylePolicy.timeframes,
+              },
               evidenceSource: "live_scan",
             },
             {
@@ -4588,7 +4594,14 @@ async function runScanForUser(
                 observedAt: candles[candles.length - 1]?.datetime,
               },
             },
-          ));
+          );
+          zoneEvidenceRows.push(timeframeEvidenceRow);
+          // Freeze the exact evidence identity into every downstream setup,
+          // order and history record. Historical UI must never fall back to
+          // "latest evidence for this symbol", which can describe a different
+          // market state.
+          (detail as any).timeframeEvidenceId = timeframeEvidenceRow.id;
+          (detail as any).timeframeEvidenceScanCycleId = scanCycleId;
         } catch (tfEvidenceErr: any) {
           console.warn(
             `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`
@@ -4952,6 +4965,7 @@ async function runScanForUser(
       );
       const frozenStrategyContext = buildFrozenSetupStrategyContext({
         identity: { setupId, candidateId },
+        timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
         symbol: pair,
         direction: analysis.direction as "long" | "short",
         stylePolicy: pairStylePolicy,
@@ -4967,6 +4981,7 @@ async function runScanForUser(
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
       });
+      (detail as any).linkedSetupId = setupId;
       return {
         id: setupId,
         candidate_id: candidateId,
@@ -6169,6 +6184,11 @@ async function runScanForUser(
         readFrozenSetupStrategyContext(existingStaged) ||
         buildFrozenSetupStrategyContext({
           identity,
+          timeframeEvidenceId:
+            readFrozenSetupStrategyContext(existingStaged)
+              ?.timeframeEvidenceId ||
+            (detail as any).timeframeEvidenceId ||
+            null,
           symbol: pair,
           direction: analysis.direction as "long" | "short",
           stylePolicy: savedPolicy,
@@ -7233,6 +7253,11 @@ async function runScanForUser(
                   crypto.randomUUID(),
                 candidateId: pendingCandidateId,
               },
+              timeframeEvidenceId:
+                pendingLifecycleEvidence?.frozenStrategyContext
+                  ?.timeframeEvidenceId ||
+                (detail as any).timeframeEvidenceId ||
+                null,
               symbol: pair,
               direction: analysis.direction as "long" | "short",
               stylePolicy: pairStylePolicy,
@@ -7248,6 +7273,8 @@ async function runScanForUser(
                 pairConfig.confirmationMethod || "choch",
               indicatorMinCount: pairConfig.indicatorMinCount || 3,
             });
+          (detail as any).linkedSetupId =
+            pendingFrozenStrategyContext.setupId;
           if (pendingLifecycleEvidence) {
             try {
               await qualifyPromotedSetup(
@@ -7769,6 +7796,11 @@ async function runScanForUser(
                 crypto.randomUUID(),
               candidateId: directCandidateId,
             },
+            timeframeEvidenceId:
+              directLifecycleEvidence?.frozenStrategyContext
+                ?.timeframeEvidenceId ||
+              (detail as any).timeframeEvidenceId ||
+              null,
             symbol: pair,
             direction: analysis.direction as "long" | "short",
             stylePolicy: pairStylePolicy,
@@ -7784,6 +7816,7 @@ async function runScanForUser(
               pairConfig.confirmationMethod || "choch",
             indicatorMinCount: pairConfig.indicatorMinCount || 3,
           });
+        (detail as any).linkedSetupId = directFrozenStrategyContext.setupId;
         if (directLifecycleEvidence) {
           try {
             await qualifyPromotedSetup(
@@ -8107,6 +8140,7 @@ async function runScanForUser(
           gamePlanShadowAudit:
             (detail as any).gamePlanShadowAudit || null,
           signalSource: (detail as any).signalSource || null,
+          timeframeEvidenceId: (detail as any).timeframeEvidenceId || null,
           unifiedZone: (detail as any).unifiedZone || null,
           originatingZone: directOriginatingZone,
           gamePlanSnapshot,
@@ -8952,6 +8986,8 @@ async function runScanForUser(
                   setupId: crypto.randomUUID(),
                   candidateId: breakerCandidateId,
                 },
+                timeframeEvidenceId:
+                  (detail as any).timeframeEvidenceId || null,
                 symbol: pair,
                 direction: breakerDir,
                 stylePolicy: pairStylePolicy,
@@ -8964,6 +9000,8 @@ async function runScanForUser(
                   pairConfig.confirmationMethod || "choch",
                 indicatorMinCount: pairConfig.indicatorMinCount || 3,
               });
+            (detail as any).linkedSetupId =
+              breakerFrozenStrategyContext.setupId;
 
             const { error: breakerInsertErr } = await supabase.from("pending_orders").insert({
               user_id: userId,
@@ -9008,6 +9046,8 @@ async function runScanForUser(
                 indicatorMinCount: pairConfig.indicatorMinCount || 3,
                 thesisVersion: THESIS_VALIDATION_VERSION,
                 tpMethod: config.tpMethod || "rr_ratio",
+                timeframeEvidenceId:
+                  (detail as any).timeframeEvidenceId || null,
                 directionVerdict: (detail as any).directionVerdict || null,
                 gamePlanSnapshot: activeGamePlan?.plans?.find((plan: any) => plan.symbol === pair) || null,
                 candidateAuthorization: breakerAuthorization,
@@ -9292,6 +9332,18 @@ async function runScanForUser(
   scanCache.clear();
   // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──
   if (zoneEvidenceRows.length > 0) {
+    // Retention annotations are derived only after the pair has completed. They
+    // never feed the pair decision. Event-linked evidence (watchlist, pending
+    // or filled trade) receives the longer raw-retention window.
+    const detailsByEvidenceId = new Map(
+      scanDetails
+        .filter((item: any) => item?.timeframeEvidenceId)
+        .map((item: any) => [item.timeframeEvidenceId, item]),
+    );
+    for (const evidenceRow of zoneEvidenceRows) {
+      const linkedDetail: any = detailsByEvidenceId.get(evidenceRow.id);
+      annotateEvidenceLifecycle(evidenceRow, linkedDetail);
+    }
     const evidenceResult = await persistZoneTimeframeEvidence(
       supabase,
       zoneEvidenceRows,

@@ -189,6 +189,8 @@ interface Props {
   zoneLocalEnforcement?: ZoneLocalEnforcementData | null | undefined;
   isLiveContext?: boolean;
   symbol?: string;
+  direction?: string | null;
+  timeframeEvidenceId?: string | null;
 }
 
 const STATE_COLORS: Record<string, string> = {
@@ -219,8 +221,19 @@ export function ZoneStoryPanel({
   zoneLocalEnforcement,
   isLiveContext = false,
   symbol,
+  direction,
+  timeframeEvidenceId,
 }: Props) {
-  if (!unifiedData) return null;
+  if (!unifiedData) {
+    return (
+      <TimeframeEvidencePanel
+        symbol={symbol}
+        direction={direction}
+        evidenceId={timeframeEvidenceId}
+        isLiveContext={isLiveContext}
+      />
+    );
+  }
 
   const fmtPips = (raw: number | null | undefined, opts: { showSign?: boolean; absolute?: boolean; decimals?: number } = {}) => {
     if (raw == null) return "—";
@@ -244,6 +257,12 @@ export function ZoneStoryPanel({
           <span className="text-xs font-bold text-red-400">⚠ Error</span>
         </div>
         <p className="text-[10px] text-red-400">{unifiedData.reason}</p>
+        <TimeframeEvidencePanel
+          symbol={symbol}
+          direction={direction}
+          evidenceId={timeframeEvidenceId}
+          isLiveContext={isLiveContext}
+        />
       </div>
     );
   }
@@ -287,6 +306,12 @@ export function ZoneStoryPanel({
         ) : (
           <p className="text-[10px] text-zinc-300">{unifiedData.reason}</p>
         )}
+        <TimeframeEvidencePanel
+          symbol={symbol}
+          direction={direction}
+          evidenceId={timeframeEvidenceId}
+          isLiveContext={isLiveContext}
+        />
       </div>
     );
   }
@@ -678,7 +703,12 @@ export function ZoneStoryPanel({
       </p>
 
       {/* Observation-only per-timeframe evidence */}
-      <TimeframeEvidencePanel symbol={symbol} />
+      <TimeframeEvidencePanel
+        symbol={symbol}
+        direction={direction}
+        evidenceId={timeframeEvidenceId}
+        isLiveContext={isLiveContext}
+      />
     </div>
   );
 }

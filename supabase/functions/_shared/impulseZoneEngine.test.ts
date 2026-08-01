@@ -787,7 +787,19 @@ Deno.test("findBestEntryZone — full pipeline with bullish impulse", () => {
 Deno.test("findBestEntryZone — observe-only evidence does not change selection or score", () => {
   const htfCandles = generateBullishImpulseCandles(50);
   const entryCandles = generateBullishImpulseCandles(100);
-  const baseline = findBestEntryZone(htfCandles, entryCandles, "bullish", 1.03);
+  const evidenceContext = {
+    symbol: "GBP/USD",
+    timeframe: "1H",
+    observedAt: htfCandles[htfCandles.length - 1].datetime,
+  };
+  const baseline = findBestEntryZone(
+    htfCandles,
+    entryCandles,
+    "bullish",
+    1.03,
+    undefined,
+    { evidenceContext, collectEvidence: false },
+  );
   const observed = findBestEntryZone(
     htfCandles,
     entryCandles,
@@ -795,11 +807,8 @@ Deno.test("findBestEntryZone — observe-only evidence does not change selection
     1.03,
     undefined,
     {
-      evidenceContext: {
-        symbol: "GBP/USD",
-        timeframe: "1H",
-        observedAt: htfCandles[htfCandles.length - 1].datetime,
-      },
+      evidenceContext,
+      collectEvidence: true,
     },
   );
   assertExists(baseline.bestZone);
@@ -808,6 +817,13 @@ Deno.test("findBestEntryZone — observe-only evidence does not change selection
   assertEquals(observed.bestZone.zone.poi.high, baseline.bestZone.zone.poi.high);
   assertEquals(observed.bestZone.zone.poi.low, baseline.bestZone.zone.poi.low);
   assertExists(observed.bestZone.zone.poi.evidence);
+  assertExists(observed.evidence);
+  assert(observed.evidence.impulses.length > 0);
+
+  // Exact parity: the collector may only add the top-level evidence snapshot.
+  const observedDecision = structuredClone(observed);
+  delete observedDecision.evidence;
+  assertEquals(observedDecision, baseline);
 });
 
 Deno.test("findBestEntryZone — full pipeline with bearish impulse", () => {

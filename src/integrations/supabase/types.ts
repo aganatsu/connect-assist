@@ -2847,6 +2847,30 @@ export type Database = {
           },
         ]
       }
+      zone_confirmation_evidence_counters: {
+        Row: {
+          bot_id: string
+          last_attempt: number
+          pending_order_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          last_attempt?: number
+          pending_order_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          last_attempt?: number
+          pending_order_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       zone_timeframe_evidence: {
         Row: {
           bot_id: string
@@ -2856,6 +2880,7 @@ export type Database = {
           direction: string
           engine_options: Json
           evaluated_at: string
+          event_linked: boolean
           evidence_source: string
           final_reason: string | null
           golden_replay_linked: boolean
@@ -2874,6 +2899,7 @@ export type Database = {
           slots: Json
           style_base_policy_hash: string | null
           style_policy_hash: string | null
+          style_policy_snapshot: Json | null
           style_policy_version: string | null
           symbol: string
           trading_style: string | null
@@ -2888,6 +2914,7 @@ export type Database = {
           direction: string
           engine_options?: Json
           evaluated_at?: string
+          event_linked?: boolean
           evidence_source?: string
           final_reason?: string | null
           golden_replay_linked?: boolean
@@ -2906,6 +2933,7 @@ export type Database = {
           slots?: Json
           style_base_policy_hash?: string | null
           style_policy_hash?: string | null
+          style_policy_snapshot?: Json | null
           style_policy_version?: string | null
           symbol: string
           trading_style?: string | null
@@ -2920,6 +2948,7 @@ export type Database = {
           direction?: string
           engine_options?: Json
           evaluated_at?: string
+          event_linked?: boolean
           evidence_source?: string
           final_reason?: string | null
           golden_replay_linked?: boolean
@@ -2938,68 +2967,100 @@ export type Database = {
           slots?: Json
           style_base_policy_hash?: string | null
           style_policy_hash?: string | null
+          style_policy_snapshot?: Json | null
           style_policy_version?: string | null
           symbol?: string
           trading_style?: string | null
           truncation_detail?: Json | null
           user_id?: string
         }
-        Relationships: [
-          {
-            foreignKeyName: "zone_timeframe_evidence_parent_evidence_id_fkey"
-            columns: ["parent_evidence_id"]
-            isOneToOne: false
-            referencedRelation: "zone_timeframe_evidence"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       zone_timeframe_evidence_summary: {
         Row: {
           bot_id: string
+          confirmation_attempt: number | null
+          contract_version: string | null
           created_at: string
           direction: string
+          event_linked: boolean
           evidence_hash: string
           evidence_id: string
+          evidence_source: string | null
           final_reason: string | null
+          golden_replay_linked: boolean
+          has_disagreement: boolean
           id: string
           observed_at: string
+          parent_evidence_id: string | null
+          pending_order_id: string | null
           rejection_code_counts: Json
           scan_cycle_id: string
           selected_timeframe: string | null
+          style_base_policy_hash: string | null
+          style_policy_hash: string | null
+          style_policy_snapshot: Json | null
+          style_policy_version: string | null
           symbol: string
+          trading_style: string | null
           user_id: string
           winner_candidate_id: string | null
         }
         Insert: {
           bot_id: string
+          confirmation_attempt?: number | null
+          contract_version?: string | null
           created_at?: string
           direction: string
+          event_linked?: boolean
           evidence_hash: string
           evidence_id: string
+          evidence_source?: string | null
           final_reason?: string | null
+          golden_replay_linked?: boolean
+          has_disagreement?: boolean
           id?: string
           observed_at: string
+          parent_evidence_id?: string | null
+          pending_order_id?: string | null
           rejection_code_counts?: Json
           scan_cycle_id: string
           selected_timeframe?: string | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_snapshot?: Json | null
+          style_policy_version?: string | null
           symbol: string
+          trading_style?: string | null
           user_id: string
           winner_candidate_id?: string | null
         }
         Update: {
           bot_id?: string
+          confirmation_attempt?: number | null
+          contract_version?: string | null
           created_at?: string
           direction?: string
+          event_linked?: boolean
           evidence_hash?: string
           evidence_id?: string
+          evidence_source?: string | null
           final_reason?: string | null
+          golden_replay_linked?: boolean
+          has_disagreement?: boolean
           id?: string
           observed_at?: string
+          parent_evidence_id?: string | null
+          pending_order_id?: string | null
           rejection_code_counts?: Json
           scan_cycle_id?: string
           selected_timeframe?: string | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_snapshot?: Json | null
+          style_policy_version?: string | null
           symbol?: string
+          trading_style?: string | null
           user_id?: string
           winner_candidate_id?: string | null
         }
@@ -3032,6 +3093,14 @@ export type Database = {
       }
     }
     Functions: {
+      allocate_zone_confirmation_evidence_attempt: {
+        Args: {
+          p_bot_id: string
+          p_pending_order_id: string
+          p_user_id: string
+        }
+        Returns: number
+      }
       activate_direction_verdict: {
         Args: {
           p_agreement: number

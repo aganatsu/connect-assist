@@ -85,20 +85,31 @@ Deno.serve(async (req) => {
 
     // 4. Zone timeframe evidence — adaptive retention.
     //    Raw payloads: 30 days, or 90 days when linked to a setup, trade,
-    //    disagreement or golden replay. Compact summaries are kept forever.
+    //    lifecycle event, disagreement or golden replay. Compact summaries
+    //    preserve lineage indefinitely.
     try {
       const linkedFilter =
-        "linked_setup_id.not.is.null,linked_trade_id.not.is.null,has_disagreement.eq.true,golden_replay_linked.eq.true";
-      const { data: expiring, error: expErr } = await supabase
-        .from("zone_timeframe_evidence")
-        .select("*")
-        .or(
-          `and(observed_at.lt.${thirtyDaysAgo},linked_setup_id.is.null,linked_trade_id.is.null,has_disagreement.eq.false,golden_replay_linked.eq.false),`
-          + `and(observed_at.lt.${ninetyDaysAgo},or(${linkedFilter}))`,
-        )
-        .limit(500);
-      if (expErr) throw new Error(expErr.message);
-      if (expiring && expiring.length > 0) {
+        "linked_setup_id.not.is.null,linked_trade_id.not.is.null,event_linked.eq.true,has_disagreement.eq.true,golden_replay_linked.eq.true";
+      const routineFilter =
+        "linked_setup_id.is.null,linked_trade_id.is.null,event_linked.eq.false,has_disagreement.eq.false,golden_replay_linked.eq.false";
+      let compacted = 0;
+      let batches = 0;
+      const maxBatches = 20;
+      const batchSize = 500;
+
+      while (batches < maxBatches) {
+        const { data: expiring, error: expErr } = await supabase
+          .from("zone_timeframe_evidence")
+          .select("*")
+          .or(
+            `and(observed_at.lt.${thirtyDaysAgo},${routineFilter}),`
+            + `and(observed_at.lt.${ninetyDaysAgo},or(${linkedFilter}))`,
+          )
+          .order("observed_at", { ascending: true })
+          .limit(batchSize);
+        if (expErr) throw new Error(expErr.message);
+        if (!expiring || expiring.length === 0) break;
+
         const summaries = expiring.map((row: EvidenceRow) => ({
           evidence_id: row.id,
           user_id: row.user_id,
@@ -107,6 +118,19 @@ Deno.serve(async (req) => {
           direction: row.direction,
           scan_cycle_id: row.scan_cycle_id,
           observed_at: row.observed_at,
+          parent_evidence_id: row.parent_evidence_id ?? null,
+          evidence_source: row.evidence_source,
+          contract_version: row.contract_version ?? null,
+          trading_style: row.trading_style ?? null,
+          style_policy_version: row.style_policy_version ?? null,
+          style_base_policy_hash: row.style_base_policy_hash ?? null,
+          style_policy_hash: row.style_policy_hash ?? null,
+          style_policy_snapshot: row.style_policy_snapshot ?? null,
+          pending_order_id: row.pending_order_id ?? null,
+          confirmation_attempt: row.confirmation_attempt ?? 0,
+          event_linked: row.event_linked ?? false,
+          has_disagreement: row.has_disagreement ?? false,
+          golden_replay_linked: row.golden_replay_linked ?? false,
           ...buildCompactSummary(row),
         }));
         const { error: sumErr } = await supabase
@@ -118,10 +142,20 @@ Deno.serve(async (req) => {
           .delete({ count: "exact" })
           .in("id", expiring.map((r: any) => r.id));
         if (delEvErr) throw new Error(delEvErr.message);
-        results.zone_evidence_compacted = evidenceDeleted || 0;
-      } else {
-        results.zone_evidence_compacted = 0;
+        compacted += evidenceDeleted || 0;
+        batches++;
+        if (expiring.length < batchSize) break;
       }
+      results.zone_evidence_compacted = compacted;
+      results.zone_evidence_compaction_batches = batches;
+      results.zone_evidence_backlog_possible = batches === maxBatches;
+
+      const { count: countersDeleted, error: counterErr } = await supabase
+        .from("zone_confirmation_evidence_counters")
+        .delete({ count: "exact" })
+        .lt("updated_at", ninetyDaysAgo);
+      if (counterErr) throw new Error(counterErr.message);
+      results.zone_confirmation_counters_deleted = countersDeleted || 0;
     } catch (evErr: any) {
       console.error("[data-cleanup] zone_timeframe_evidence error:", evErr?.message);
       results.zone_evidence_error = evErr?.message;
