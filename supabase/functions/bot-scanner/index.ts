@@ -159,6 +159,11 @@ import {
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
+import {
+  buildScanEvidenceRow,
+  persistZoneTimeframeEvidence,
+  type EvidenceRow,
+} from "../_shared/zoneTimeframeEvidence.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
   evaluateZoneLocalEnforcement,
