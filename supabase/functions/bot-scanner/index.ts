@@ -4547,6 +4547,55 @@ async function runScanForUser(
           );
         }
 
+        // ── Phase 1: per-timeframe evidence (observation only) ──
+        // Records what the engine saw on every slot. Never feeds scoring,
+        // ranking, gating, configuration or execution.
+        try {
+          zoneEvidenceRows.push(buildScanEvidenceRow(
+            multiTF,
+            {
+              top: { timeframe: zoneTFLabels.top, candles: zoneDailyCandles ?? [] },
+              mid: { timeframe: zoneTFLabels.mid, candles: zoneH4Candles ?? [] },
+              low: { timeframe: zoneTFLabels.low, candles: zoneH1Candles ?? [] },
+            },
+            {
+              userId,
+              botId: BOT_ID,
+              scanCycleId,
+              symbol: pair,
+              direction: unifiedDir as "bullish" | "bearish",
+              observedAt: candles[candles.length - 1]?.datetime ||
+                new Date().toISOString(),
+              evaluatedAt: new Date().toISOString(),
+              tradingStyle: resolvedStyle,
+              stylePolicyVersion: pairStylePolicy.contractVersion,
+              styleBasePolicyHash: pairStylePolicy.basePolicyHash,
+              stylePolicyHash: pairStylePolicy.policyHash,
+              evidenceSource: "live_scan",
+            },
+            {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              minQualityScore: pairConfig.zoneQualityThreshold,
+              maxAgeBars: pairConfig.zoneMaxAgeBars,
+              minBodyRatio: pairConfig.zoneMinBodyRatio,
+              minDisplacementATR: pairConfig.zoneMinDisplacementATR,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+              evidenceContext: {
+                symbol: pair,
+                timeframe: zoneTFLabels.low,
+                observedAt: candles[candles.length - 1]?.datetime,
+              },
+            },
+          ));
+        } catch (tfEvidenceErr: any) {
+          console.warn(
+            `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`
+            + ` (non-fatal): ${tfEvidenceErr?.message}`,
+          );
+        }
+
         console.log(`[scan ${scanCycleId}] ${pair} Zone Story [${unifiedResult.state}|${multiTF.selectedTF || "none"}]: score ${unifiedResult.unifiedScore}/14, zone ${multiTF.bestZone?.zone.totalScore.toFixed(1) ?? "—"}/9 — ${unifiedResult.reason.slice(0, 120)}`);
       } catch (zoneErr: any) {
         console.warn(`[scan ${scanCycleId}] ${pair} Zone Engine error (non-fatal): ${zoneErr?.message}`);
