@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TimeframeEvidencePanel } from "./TimeframeEvidencePanel";
+import { formatTimeframeLadder } from "./timeframeEvidenceFormat";
 
 const queryCalls = vi.hoisted(() => ({
   from: vi.fn(),
@@ -123,5 +124,21 @@ describe("TimeframeEvidencePanel evidence binding", () => {
     expect(queryCalls.eq).toHaveBeenCalledWith("symbol", "GBP/USD");
     expect(queryCalls.eq).toHaveBeenCalledWith("evidence_source", "live_scan");
     expect(queryCalls.eq).toHaveBeenCalledWith("direction", "bullish");
+  });
+
+  it("renders nested timeframe roles without stringifying the roles object", () => {
+    expect(formatTimeframeLadder({
+      roles: {
+        bias: "1h",
+        structure: "15min",
+        setup: "5min",
+        confirmation: "5min",
+        refinement: "1min",
+      },
+      runtimeHTF: "1h",
+      runtimeEntry: "5m",
+    })).toBe(
+      "Bias 1h → Structure 15min → Setup 5min → Confirmation 5min → Refinement 1min → Runtime HTF 1h → Runtime entry 5m",
+    );
   });
 });
