@@ -8,6 +8,7 @@
  */
 
 import { formatPipDisplay } from "@/lib/pipDisplay";
+import { TimeframeEvidencePanel } from "@/components/TimeframeEvidencePanel";
 
 /** Format ISO timestamp to readable AM/PM format: "Jul 15, 8:00 PM" */
 function formatTraceDate(iso: string): string {
