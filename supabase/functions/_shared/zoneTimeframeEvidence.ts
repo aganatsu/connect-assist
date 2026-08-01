@@ -511,6 +511,102 @@ export async function nextConfirmationAttempt(
 }
 
 /** Compact, indefinitely-retained summary written before raw payload pruning. */
+export interface ConfirmationObservation {
+  timeframe: string;
+  candleCount: number;
+  confirmationMethod: string;
+  confirmationPassed: boolean;
+  reason: string;
+  chochTier: number | null;
+  chochType: string | null;
+  indicatorsPassed: number | null;
+  indicatorsRequired: number | null;
+  hasRefinedZone: boolean;
+  zoneHigh: number | null;
+  zoneLow: number | null;
+  currentPrice: number | null;
+}
+
+/**
+ * Confirmation-attempt evidence row. Immutable child of the frozen parent scan
+ * evidence: every attempt is its own row keyed by pending_order_id and
+ * confirmation_attempt, so a later attempt never overwrites an earlier one.
+ * Observation only.
+ */
+export function buildConfirmationEvidenceRow(
+  context: ScanEvidenceContext & {
+    pendingOrderId: string;
+    confirmationAttempt: number;
+  },
+  observation: ConfirmationObservation,
+): EvidenceRow {
+  return {
+    user_id: context.userId,
+    bot_id: context.botId,
+    scan_cycle_id: context.scanCycleId,
+    symbol: context.symbol,
+    direction: context.direction,
+    observed_at: context.observedAt,
+    evaluated_at: context.evaluatedAt ?? context.observedAt,
+    trading_style: context.tradingStyle,
+    style_policy_version: context.stylePolicyVersion,
+    style_base_policy_hash: context.styleBasePolicyHash,
+    style_policy_hash: context.stylePolicyHash,
+    contract_version: ZONE_TF_EVIDENCE_CONTRACT_VERSION,
+    selected_timeframe: observation.timeframe,
+    final_reason: observation.reason,
+    evidence_source: "confirmation",
+    replay_run_id: context.replayRunId ?? null,
+    replay_provenance: context.replayProvenance ?? null,
+    parent_evidence_id: context.parentEvidenceId ?? null,
+    pending_order_id: context.pendingOrderId,
+    confirmation_attempt: context.confirmationAttempt,
+    slots: [{
+      slot: "low",
+      timeframe: observation.timeframe,
+      available: observation.candleCount > 0,
+      skippedReason: null,
+      candleCount: observation.candleCount,
+      reason: observation.reason,
+      confirmation: observation,
+      impulses: [],
+      pois: [],
+      candidates: [],
+      truncated: null,
+    }],
+    engine_options: {},
+    payload_truncated: false,
+    truncation_detail: null,
+  };
+}
+
+/** Most recent live-scan evidence row for a symbol/direction (frozen parent). */
+export async function findParentEvidenceId(
+  supabase: any,
+  key: {
+    userId: string;
+    botId: string;
+    symbol: string;
+    direction: string;
+    before?: string;
+  },
+): Promise<string | null> {
+  let query = supabase
+    .from("zone_timeframe_evidence")
+    .select("id")
+    .eq("user_id", key.userId)
+    .eq("bot_id", key.botId)
+    .eq("symbol", key.symbol)
+    .eq("direction", key.direction)
+    .eq("evidence_source", "live_scan")
+    .order("observed_at", { ascending: false })
+    .limit(1);
+  if (key.before) query = query.lte("observed_at", key.before);
+  const { data, error } = await query;
+  if (error || !data || data.length === 0) return null;
+  return data[0].id as string;
+}
+
 export function buildCompactSummary(row: EvidenceRow): Record<string, unknown> {
   const slots = (row.slots as SlotEvidence[]) ?? [];
   const rejectionCounts: Record<string, number> = {};
