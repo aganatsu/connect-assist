@@ -3093,14 +3093,6 @@ export type Database = {
       }
     }
     Functions: {
-      allocate_zone_confirmation_evidence_attempt: {
-        Args: {
-          p_bot_id: string
-          p_pending_order_id: string
-          p_user_id: string
-        }
-        Returns: number
-      }
       activate_direction_verdict: {
         Args: {
           p_agreement: number
@@ -3134,6 +3126,14 @@ export type Database = {
           p_user_id: string
         }
         Returns: Json
+      }
+      allocate_zone_confirmation_evidence_attempt: {
+        Args: {
+          p_bot_id: string
+          p_pending_order_id: string
+          p_user_id: string
+        }
+        Returns: number
       }
       claim_broker_execution: {
         Args: {
