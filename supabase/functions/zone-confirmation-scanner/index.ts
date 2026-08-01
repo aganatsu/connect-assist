@@ -39,6 +39,12 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
+import {
+  buildConfirmationEvidenceRow,
+  findParentEvidenceId,
+  nextConfirmationAttempt,
+  persistZoneTimeframeEvidence,
+} from "../_shared/zoneTimeframeEvidence.ts";
 import type { RuntimeConfig } from "../_shared/configMapper.ts";
 import {
   loadEffectiveRuntimeConfig,
@@ -205,6 +211,8 @@ Deno.serve(async (req) => {
 
   const startTime = Date.now();
   const operationRuns = new Map<string, string>();
+  // Observation-only Phase 1: one immutable evidence row per confirmation attempt.
+  const confirmScanCycleId = crypto.randomUUID();
   let supabase: any = null;
 
   try {
