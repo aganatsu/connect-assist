@@ -675,6 +675,9 @@ export function ZoneStoryPanel({
         {unifiedData.selectedTF ?? "—"} zone selected
         {unifiedData.scoreBreakdown.tfBonus >= 2.0 ? " (A+ setup)" : unifiedData.scoreBreakdown.tfBonus >= 1.0 ? " (B+ setup)" : ""}: {unifiedData.reason}
       </p>
+
+      {/* Observation-only per-timeframe evidence */}
+      <TimeframeEvidencePanel symbol={symbol} />
     </div>
   );
 }
