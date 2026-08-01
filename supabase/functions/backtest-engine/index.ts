@@ -1668,6 +1668,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
   // invocation. Network fetch time is not included in this scan-only budget.
   const MAX_SCAN_SLICE_MS = 650;
   const MAX_INVOCATION_MS = 120_000;
+  const requestedResumeAt = typeof body.__resumeAt === "string"
+    ? new Date(body.__resumeAt).getTime()
+    : Number.NaN;
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1690,7 +1693,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
   };
 
   try {
-    if (chunkIndex === 0) {
+    if (chunkIndex === 0 && !Number.isFinite(requestedResumeAt)) {
       await db.from("backtest_runs").update({
         status: "running",
         started_at: new Date().toISOString(),
@@ -1757,9 +1760,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     if (startMs >= endMs) {
       throw new Error("Invalid backtest date range. Start date must be before end date.");
     }
-    const requestedResumeAt = typeof body.__resumeAt === "string"
-      ? new Date(body.__resumeAt).getTime()
-      : Number.NaN;
     const scanStartMs = Number.isFinite(requestedResumeAt)
       ? Math.max(startMs, requestedResumeAt)
       : startMs;
@@ -1779,7 +1779,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}, research: ${researchMode}`);
 
     // ── Fetch Historical Data ──
-    await updateProgress(10, `Fetching candles for ${instruments.length} instruments...`);
+    if (!Number.isFinite(requestedResumeAt)) {
+      await updateProgress(10, `Fetching candles for ${instruments.length} instruments...`);
+    }
     const monthsSpan = Math.max(1, (endMs - startMs) / (30 * 24 * 3600 * 1000));
     const range = monthsSpan > 12 ? "2y" : monthsSpan > 6 ? "1y" : monthsSpan > 3 ? "6mo" : "3mo";
 
@@ -1854,6 +1856,17 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     const chunkSymbols = supportedInstruments.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
     const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
     const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
+    const resumeFraction = Number.isFinite(requestedResumeAt)
+      ? Math.max(
+        0,
+        Math.min(1, (scanStartMs - startMs) / Math.max(1, endMs - startMs)),
+      )
+      : 0;
+    const chunkResumeProgress = Math.min(
+      chunkProgressEnd - 1,
+      chunkProgressStart +
+        Math.round(resumeFraction * (chunkProgressEnd - chunkProgressStart)),
+    );
     console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks}: ${chunkSymbols.length} symbols [${chunkSymbols.join(", ")}]`);
 
     // Track unsupported only on first chunk to avoid double counting
@@ -1868,7 +1881,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       if (!SUPPORTED_SYMBOLS[symbol]) { diagnostics.skippedUnsupportedSymbol++; continue; }
       // Heartbeat before fetching candles to prevent stale detection during slow API calls
       await updateProgress(
-        10 + Math.round((chunkIndex / totalChunks) * 80),
+        chunkResumeProgress,
         `Chunk ${chunkIndex + 1}/${totalChunks}: fetching candles for ${symbol} (${_ci + 1}/${chunkSymbols.length})...`
       );
       const needsDedicatedM15 =
@@ -1903,7 +1916,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       console.log(`[backtest] ${symbol}: ${entryCandles.length} entry, ${dailyCandles.length} daily, ${h4Candles.length} 4H, ${h1Candles.length} 1H, ${m15Candles.length} 15m, ${weeklyCandles.length} W`);
       // Heartbeat after candle fetch completes
       await updateProgress(
-        10 + Math.round((chunkIndex / totalChunks) * 80),
+        chunkResumeProgress,
         `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} candles loaded — fetching SMT...`
       );
       // Fetch SMT correlated pair
@@ -1928,7 +1941,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     }
 
     // ── Fetch FOTSI Daily Candles + build per-day snapshot timeline ──
-    const baseProgress = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const baseProgress = chunkResumeProgress;
     await updateProgress(baseProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: building FOTSI timeline...`);
     const fotsiTimeline = new Map<string, FOTSIResult>();
     let fotsiCandleMap: Record<string, Candle[]> = {};
@@ -2002,7 +2015,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
+    await updateProgress(chunkResumeProgress, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
 
     // Seed state from prior chunks
     let balance = startingBalance;
