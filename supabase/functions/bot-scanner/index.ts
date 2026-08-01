@@ -9290,6 +9290,24 @@ async function runScanForUser(
   }
 
   scanCache.clear();
+  // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──
+  if (zoneEvidenceRows.length > 0) {
+    const evidenceResult = await persistZoneTimeframeEvidence(
+      supabase,
+      zoneEvidenceRows,
+      {
+        onError: (err: any, chunkSize: number) =>
+          console.warn(
+            `[scan ${scanCycleId}] timeframe evidence chunk of ${chunkSize} failed`
+            + ` (non-fatal): ${err?.message}`,
+          ),
+      },
+    );
+    console.log(
+      `[scan ${scanCycleId}] timeframe evidence: wrote ${evidenceResult.written}`
+      + ` rows, ${evidenceResult.failedChunks} failed chunks`,
+    );
+  }
   // ── Persist thesis conviction states to kv_cache ──
   if ((config as any).thesisConvictionEnabled && convictionStates.size > 0) {
     try {
