@@ -2704,9 +2704,174 @@ export type Database = {
         }
         Relationships: []
       }
+      zone_candidate_shadow_observations: {
+        Row: {
+          activation_eligible: boolean
+          bot_id: string
+          candidate_id: string
+          created_at: string
+          direction: string
+          entry_price: number
+          evidence_source: string
+          id: string
+          legacy_comparable_score: number
+          legacy_rank: number
+          legacy_winner: boolean
+          legacy_zone_score: number
+          local_confluence: Json
+          mae_pips: number | null
+          mfe_pips: number | null
+          observed_at: string
+          outcome_checked_at: string | null
+          outcome_status: string
+          price_reached_entry: boolean | null
+          rank_delta: number
+          ranking_disagreed: boolean
+          replay_contract_version: string | null
+          replay_run_id: string | null
+          scan_cycle_id: string
+          shadow_local_score: number
+          shadow_rank: number
+          shadow_ranking: Json
+          shadow_winner: boolean
+          sl_hit: boolean | null
+          stop_loss: number | null
+          style_base_policy_hash: string | null
+          style_policy_hash: string | null
+          style_policy_version: string | null
+          symbol: string
+          take_profit: number | null
+          tp_hit: boolean | null
+          tp_hit_time_minutes: number | null
+          trading_style: string
+          user_id: string
+          zone_high: number
+          zone_low: number
+          zone_type: string
+        }
+        Insert: {
+          activation_eligible?: boolean
+          bot_id?: string
+          candidate_id: string
+          created_at?: string
+          direction: string
+          entry_price: number
+          evidence_source?: string
+          id?: string
+          legacy_comparable_score: number
+          legacy_rank: number
+          legacy_winner?: boolean
+          legacy_zone_score: number
+          local_confluence: Json
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          observed_at?: string
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_reached_entry?: boolean | null
+          rank_delta: number
+          ranking_disagreed?: boolean
+          replay_contract_version?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id: string
+          shadow_local_score: number
+          shadow_rank: number
+          shadow_ranking: Json
+          shadow_winner?: boolean
+          sl_hit?: boolean | null
+          stop_loss?: number | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
+          symbol: string
+          take_profit?: number | null
+          tp_hit?: boolean | null
+          tp_hit_time_minutes?: number | null
+          trading_style: string
+          user_id: string
+          zone_high: number
+          zone_low: number
+          zone_type: string
+        }
+        Update: {
+          activation_eligible?: boolean
+          bot_id?: string
+          candidate_id?: string
+          created_at?: string
+          direction?: string
+          entry_price?: number
+          evidence_source?: string
+          id?: string
+          legacy_comparable_score?: number
+          legacy_rank?: number
+          legacy_winner?: boolean
+          legacy_zone_score?: number
+          local_confluence?: Json
+          mae_pips?: number | null
+          mfe_pips?: number | null
+          observed_at?: string
+          outcome_checked_at?: string | null
+          outcome_status?: string
+          price_reached_entry?: boolean | null
+          rank_delta?: number
+          ranking_disagreed?: boolean
+          replay_contract_version?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id?: string
+          shadow_local_score?: number
+          shadow_rank?: number
+          shadow_ranking?: Json
+          shadow_winner?: boolean
+          sl_hit?: boolean | null
+          stop_loss?: number | null
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
+          symbol?: string
+          take_profit?: number | null
+          tp_hit?: boolean | null
+          tp_hit_time_minutes?: number | null
+          trading_style?: string
+          user_id?: string
+          zone_high?: number
+          zone_low?: number
+          zone_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "zone_candidate_shadow_observations_replay_run_id_fkey"
+            columns: ["replay_run_id"]
+            isOneToOne: false
+            referencedRelation: "backtest_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
-      [_ in never]: never
+      zone_candidate_shadow_validation_summary: {
+        Row: {
+          activation_eligible: boolean | null
+          bot_id: string | null
+          disagreement_scans: number | null
+          enforcement: string | null
+          evidence_source: string | null
+          legacy_disagreement_samples: number | null
+          legacy_disagreement_win_rate: number | null
+          minimum_sample_ready: boolean | null
+          observed_scans: number | null
+          replay_runs: number | null
+          resolved_candidates: number | null
+          shadow_disagreement_samples: number | null
+          shadow_disagreement_win_rate: number | null
+          shadow_winner_avg_mae_pips: number | null
+          shadow_winner_avg_mfe_pips: number | null
+          symbol: string | null
+          trading_style: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       activate_direction_verdict: {
@@ -2848,6 +3013,20 @@ export type Database = {
           p_user_id: string
         }
         Returns: number
+      }
+      set_strategy_runtime_enforcement: {
+        Args: {
+          p_activation_scope: Json
+          p_actor_id?: string
+          p_bot_id: string
+          p_enabled: boolean
+          p_expected_revision?: number
+          p_feature_key: string
+          p_reason: string
+          p_user_id: string
+          p_variant_key: string
+        }
+        Returns: Json
       }
       strategy_activation_json_hash: {
         Args: { p_value: Json }
