@@ -308,7 +308,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const filteredTabs = query ? tabs.filter(t => matchedTabIds.has(t.id)) : tabs;
 
   const effectiveActiveTab =
-    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab)
+    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab as BotConfigTabId)
       ? filteredTabs[0].id
       : activeTab;
 
