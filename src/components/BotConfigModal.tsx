@@ -21,7 +21,7 @@ import { EnterTab } from "@/components/config/EnterTab";
 import { ExitTab } from "@/components/config/ExitTab";
 import { RiskTab } from "@/components/config/RiskTab";
 import { normalizeBotConfigForEditor } from "@/lib/botConfigEditor";
-import { searchBotConfigSettings } from "@/lib/botConfigSearch";
+import { searchBotConfigSettings, type BotConfigTabId } from "@/lib/botConfigSearch";
 
 // ─── Legacy Tab ID → New Tab ID Mapping ───────────────────────────────────────
 // Used to translate defaultTab props from other components that still use old IDs.
@@ -294,7 +294,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   // ─── Tabs & Search ──────────────────────────────────────────────
   if (!open) return null;
 
-  const tabs = [
+  const tabs: { id: BotConfigTabId; label: string; icon: typeof Globe }[] = [
     { id: "scan", label: "SCAN", icon: Globe },
     { id: "enter", label: "ENTER", icon: Target },
     { id: "exit", label: "EXIT", icon: Flag },
@@ -308,7 +308,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   const filteredTabs = query ? tabs.filter(t => matchedTabIds.has(t.id)) : tabs;
 
   const effectiveActiveTab =
-    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab)
+    query && filteredTabs.length > 0 && !matchedTabIds.has(activeTab as BotConfigTabId)
       ? filteredTabs[0].id
       : activeTab;
 
@@ -356,7 +356,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
                 RUNTIME VERIFIED
               </Badge>
-              <span>Source: {effectiveRuntime.provenance.source.replaceAll("_", " ")}</span>
+              <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
               <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
               <span>
                 Require sweep:{" "}

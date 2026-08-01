@@ -8,6 +8,7 @@
  */
 
 import { formatPipDisplay } from "@/lib/pipDisplay";
+import { TimeframeEvidencePanel } from "@/components/TimeframeEvidencePanel";
 
 /** Format ISO timestamp to readable AM/PM format: "Jul 15, 8:00 PM" */
 function formatTraceDate(iso: string): string {
@@ -675,6 +676,9 @@ export function ZoneStoryPanel({
         {unifiedData.selectedTF ?? "—"} zone selected
         {unifiedData.scoreBreakdown.tfBonus >= 2.0 ? " (A+ setup)" : unifiedData.scoreBreakdown.tfBonus >= 1.0 ? " (B+ setup)" : ""}: {unifiedData.reason}
       </p>
+
+      {/* Observation-only per-timeframe evidence */}
+      <TimeframeEvidencePanel symbol={symbol} />
     </div>
   );
 }
@@ -738,7 +742,7 @@ function humanizePolicyReason(reason: string): string {
     hard_block_rank_disagreement: "Hard block: the legacy winner was not the local-evidence winner.",
     hard_block_insufficient_local_score: "Hard block: local evidence did not reach the configured minimum.",
   };
-  return labels[reason] || reason.replaceAll("_", " ");
+  return labels[reason] || reason.replace(/_/g, " ");
 }
 
 export default ZoneStoryPanel;

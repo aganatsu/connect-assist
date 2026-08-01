@@ -39,6 +39,12 @@ import {
 import { resolveSymbol } from "../_shared/brokerSymbols.ts";
 import { metaFetch } from "../_shared/metaApiClient.ts";
 import { verifyCronCaller } from "../_shared/cronAuth.ts";
+import {
+  buildConfirmationEvidenceRow,
+  findParentEvidenceId,
+  nextConfirmationAttempt,
+  persistZoneTimeframeEvidence,
+} from "../_shared/zoneTimeframeEvidence.ts";
 import type { RuntimeConfig } from "../_shared/configMapper.ts";
 import {
   loadEffectiveRuntimeConfig,
@@ -205,6 +211,8 @@ Deno.serve(async (req) => {
 
   const startTime = Date.now();
   const operationRuns = new Map<string, string>();
+  // Observation-only Phase 1: one immutable evidence row per confirmation attempt.
+  const confirmScanCycleId = crypto.randomUUID();
   let supabase: any = null;
 
   try {
@@ -637,6 +645,75 @@ Deno.serve(async (req) => {
           : confirmationMethod === "indicators"
           ? !!indicatorConfirmation?.confirmed
           : !!confirmationSignal && !!indicatorConfirmation?.confirmed;
+
+        // ── Phase 1: confirmation-attempt evidence (observation only) ──
+        // Never feeds the confirmation decision below; failures are swallowed.
+        try {
+          const evidencePolicy = pendingPolicyResolution.policy;
+          const attempt = await nextConfirmationAttempt(supabase, {
+            userId,
+            botId: BOT_ID,
+            scanCycleId: confirmScanCycleId,
+            symbol: pending.symbol,
+            direction: pending.direction === "long" ? "bullish" : "bearish",
+            pendingOrderId: pending.id,
+          });
+          const parentEvidenceId = await findParentEvidenceId(supabase, {
+            userId,
+            botId: BOT_ID,
+            symbol: pending.symbol,
+            direction: pending.direction === "long" ? "bullish" : "bearish",
+            before: pending.placed_at ?? undefined,
+          });
+          const row = buildConfirmationEvidenceRow(
+            {
+              userId,
+              botId: BOT_ID,
+              scanCycleId: confirmScanCycleId,
+              symbol: pending.symbol,
+              direction: pending.direction === "long" ? "bullish" : "bearish",
+              observedAt: candles5m[candles5m.length - 1]?.datetime ||
+                new Date().toISOString(),
+              evaluatedAt: new Date().toISOString(),
+              tradingStyle: evidencePolicy.style,
+              stylePolicyVersion: evidencePolicy.contractVersion,
+              styleBasePolicyHash: evidencePolicy.basePolicyHash,
+              stylePolicyHash: evidencePolicy.policyHash,
+              parentEvidenceId,
+              pendingOrderId: pending.id,
+              confirmationAttempt: attempt,
+            },
+            {
+              timeframe: evidencePolicy.timeframes.runtimeEntry,
+              candleCount: candles5m.length,
+              confirmationMethod,
+              confirmationPassed,
+              reason: confirmationPassed
+                ? "confirmation_passed"
+                : `no_${confirmationMethod}_confirmation`,
+              chochTier: confirmationSignal?.tier ?? null,
+              chochType: confirmationSignal?.type ?? null,
+              indicatorsPassed: indicatorConfirmation?.passedCount ?? null,
+              indicatorsRequired: confirmationIndicatorMinimum ?? null,
+              hasRefinedZone,
+              zoneHigh: zoneHigh > 0 ? zoneHigh : null,
+              zoneLow: zoneLow > 0 ? zoneLow : null,
+              currentPrice: currentPrice ?? null,
+            },
+          );
+          await persistZoneTimeframeEvidence(supabase, [row], {
+            onError: (err: any) =>
+              console.warn(
+                `[zone-confirm] ${pending.symbol} confirmation evidence write`
+                + ` failed (non-fatal): ${err?.message}`,
+              ),
+          });
+        } catch (confirmEvidenceErr: any) {
+          console.warn(
+            `[zone-confirm] ${pending.symbol} confirmation evidence unavailable`
+            + ` (non-fatal): ${confirmEvidenceErr?.message}`,
+          );
+        }
 
         if (!confirmationPassed) {
           stillHunting++;

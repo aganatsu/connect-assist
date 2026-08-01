@@ -2847,6 +2847,164 @@ export type Database = {
           },
         ]
       }
+      zone_timeframe_evidence: {
+        Row: {
+          bot_id: string
+          confirmation_attempt: number
+          contract_version: string
+          created_at: string
+          direction: string
+          engine_options: Json
+          evaluated_at: string
+          evidence_source: string
+          final_reason: string | null
+          golden_replay_linked: boolean
+          has_disagreement: boolean
+          id: string
+          linked_setup_id: string | null
+          linked_trade_id: string | null
+          observed_at: string
+          parent_evidence_id: string | null
+          payload_truncated: boolean
+          pending_order_id: string
+          replay_provenance: string | null
+          replay_run_id: string | null
+          scan_cycle_id: string
+          selected_timeframe: string | null
+          slots: Json
+          style_base_policy_hash: string | null
+          style_policy_hash: string | null
+          style_policy_version: string | null
+          symbol: string
+          trading_style: string | null
+          truncation_detail: Json | null
+          user_id: string
+        }
+        Insert: {
+          bot_id: string
+          confirmation_attempt?: number
+          contract_version?: string
+          created_at?: string
+          direction: string
+          engine_options?: Json
+          evaluated_at?: string
+          evidence_source?: string
+          final_reason?: string | null
+          golden_replay_linked?: boolean
+          has_disagreement?: boolean
+          id?: string
+          linked_setup_id?: string | null
+          linked_trade_id?: string | null
+          observed_at?: string
+          parent_evidence_id?: string | null
+          payload_truncated?: boolean
+          pending_order_id?: string
+          replay_provenance?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id: string
+          selected_timeframe?: string | null
+          slots?: Json
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
+          symbol: string
+          trading_style?: string | null
+          truncation_detail?: Json | null
+          user_id: string
+        }
+        Update: {
+          bot_id?: string
+          confirmation_attempt?: number
+          contract_version?: string
+          created_at?: string
+          direction?: string
+          engine_options?: Json
+          evaluated_at?: string
+          evidence_source?: string
+          final_reason?: string | null
+          golden_replay_linked?: boolean
+          has_disagreement?: boolean
+          id?: string
+          linked_setup_id?: string | null
+          linked_trade_id?: string | null
+          observed_at?: string
+          parent_evidence_id?: string | null
+          payload_truncated?: boolean
+          pending_order_id?: string
+          replay_provenance?: string | null
+          replay_run_id?: string | null
+          scan_cycle_id?: string
+          selected_timeframe?: string | null
+          slots?: Json
+          style_base_policy_hash?: string | null
+          style_policy_hash?: string | null
+          style_policy_version?: string | null
+          symbol?: string
+          trading_style?: string | null
+          truncation_detail?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "zone_timeframe_evidence_parent_evidence_id_fkey"
+            columns: ["parent_evidence_id"]
+            isOneToOne: false
+            referencedRelation: "zone_timeframe_evidence"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      zone_timeframe_evidence_summary: {
+        Row: {
+          bot_id: string
+          created_at: string
+          direction: string
+          evidence_hash: string
+          evidence_id: string
+          final_reason: string | null
+          id: string
+          observed_at: string
+          rejection_code_counts: Json
+          scan_cycle_id: string
+          selected_timeframe: string | null
+          symbol: string
+          user_id: string
+          winner_candidate_id: string | null
+        }
+        Insert: {
+          bot_id: string
+          created_at?: string
+          direction: string
+          evidence_hash: string
+          evidence_id: string
+          final_reason?: string | null
+          id?: string
+          observed_at: string
+          rejection_code_counts?: Json
+          scan_cycle_id: string
+          selected_timeframe?: string | null
+          symbol: string
+          user_id: string
+          winner_candidate_id?: string | null
+        }
+        Update: {
+          bot_id?: string
+          created_at?: string
+          direction?: string
+          evidence_hash?: string
+          evidence_id?: string
+          final_reason?: string | null
+          id?: string
+          observed_at?: string
+          rejection_code_counts?: Json
+          scan_cycle_id?: string
+          selected_timeframe?: string | null
+          symbol?: string
+          user_id?: string
+          winner_candidate_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       zone_candidate_shadow_validation_summary: {

@@ -564,6 +564,184 @@ export function zoneQualityPercent(zone: RankedPOI): number {
   return Math.max(0, Math.min(100, (zone.totalScore / 9) * 100));
 }
 
+// ─── Observation-only measurement (Phase 1 evidence) ─────────────────────────
+
+export interface POIQualificationMeasurement {
+  poi: ImpulsePOI;
+  ageBars: number;
+  bodyRatio: number | null;
+  displacementRange: number | null;
+  displacementATRMultiple: number | null;
+  atr: number;
+  accepted: boolean;
+  rejection:
+    | {
+      code: "poi_age_above_max" | "ob_body_ratio_below_min" | "displacement_below_min_atr";
+      measured: number;
+      threshold: number;
+      comparator: ">" | "<";
+      explanation: string;
+    }
+    | null;
+}
+
+/**
+ * Observation-only mirror of `qualifyImpulsePOIs` that reports the measured
+ * value, the threshold and a structured rejection code per POI.
+ *
+ * Pure and side-effect free. It is never called on the trading path and never
+ * feeds scoring, ranking or gating — it exists so evidence can explain exactly
+ * why a candidate was dropped.
+ */
+export function measureImpulsePOIQualification(
+  candles: Candle[],
+  impulse: ImpulseLeg,
+  pois: ImpulsePOI[],
+  options?: Pick<ZoneEngineOptions, "maxAgeBars" | "minBodyRatio" | "minDisplacementATR">,
+): POIQualificationMeasurement[] {
+  const maxAgeBars = Math.max(0, Number(options?.maxAgeBars ?? 0));
+  const minBodyRatio = Math.max(0, Math.min(1, Number(options?.minBodyRatio ?? 0)));
+  const minDisplacementATR = Math.max(0, Number(options?.minDisplacementATR ?? 0));
+  const atr = minDisplacementATR > 0 ? calculateATR(candles) : 0;
+
+  return pois.map((poi) => {
+    const ageBars = Math.max(0, candles.length - 1 - poi.candleIndex);
+    const source = candles[poi.candleIndex];
+    let bodyRatio: number | null = null;
+    if (poi.type === "ob" && source) {
+      const range = Math.max(0, source.high - source.low);
+      bodyRatio = range > 0 ? Math.abs(source.close - source.open) / range : 0;
+    }
+
+    let displacementRange: number | null = null;
+    if (atr > 0) {
+      let displacement = source;
+      if (poi.type === "ob") {
+        const start = Math.min(candles.length - 1, poi.candleIndex + 1);
+        const end = Math.min(candles.length - 1, impulse.endIndex, poi.candleIndex + 3);
+        const directional = candles.slice(start, end + 1).filter((candle) =>
+          impulse.direction === "bullish"
+            ? candle.close > candle.open
+            : candle.close < candle.open
+        );
+        displacement = directional.slice().sort(
+          (a, b) => (b.high - b.low) - (a.high - a.low),
+        )[0] ?? candles[start];
+      }
+      displacementRange = displacement
+        ? Math.max(0, displacement.high - displacement.low)
+        : 0;
+    }
+
+    let rejection: POIQualificationMeasurement["rejection"] = null;
+    if (maxAgeBars > 0 && ageBars > maxAgeBars) {
+      rejection = {
+        code: "poi_age_above_max",
+        measured: ageBars,
+        threshold: maxAgeBars,
+        comparator: ">",
+        explanation: `POI age ${ageBars} bars exceeds maximum ${maxAgeBars}`,
+      };
+    } else if (
+      poi.type === "ob" && minBodyRatio > 0 && bodyRatio !== null &&
+      bodyRatio < minBodyRatio
+    ) {
+      rejection = {
+        code: "ob_body_ratio_below_min",
+        measured: Number(bodyRatio.toFixed(6)),
+        threshold: minBodyRatio,
+        comparator: "<",
+        explanation: `OB body ratio ${bodyRatio.toFixed(3)} below required ${minBodyRatio}`,
+      };
+    } else if (
+      minDisplacementATR > 0 && atr > 0 && displacementRange !== null &&
+      displacementRange < atr * minDisplacementATR
+    ) {
+      rejection = {
+        code: "displacement_below_min_atr",
+        measured: Number((displacementRange / atr).toFixed(6)),
+        threshold: minDisplacementATR,
+        comparator: "<",
+        explanation:
+          `Displacement ${(displacementRange / atr).toFixed(2)}x ATR below required ${minDisplacementATR}x`,
+      };
+    }
+
+    return {
+      poi,
+      ageBars,
+      bodyRatio: bodyRatio === null ? null : Number(bodyRatio.toFixed(6)),
+      displacementRange,
+      displacementATRMultiple: displacementRange !== null && atr > 0
+        ? Number((displacementRange / atr).toFixed(6))
+        : null,
+      atr,
+      accepted: rejection === null,
+      rejection,
+    };
+  });
+}
+
+export interface ImpulseLegCandidate {
+  leg: ImpulseLeg;
+  selected: boolean;
+  rejection:
+    | { code: "origin_broken_or_invalid"; explanation: string }
+    | null;
+}
+
+/**
+ * Observation-only enumeration of every impulse leg the engine considered for
+ * a direction, in the same order `findImpulseLeg` evaluates them. Pure; never
+ * used by the trading path.
+ */
+export function collectImpulseLegCandidates(
+  candles: Candle[],
+  direction: "bullish" | "bearish",
+  timeframe?: string,
+): ImpulseLegCandidate[] {
+  if (candles.length < 20) return [];
+  const structure = analyzeMarketStructure(candles);
+  const allBreaks = [...structure.bos, ...structure.choch]
+    .filter((b) => b.type === direction)
+    .sort((a, b) => b.index - a.index);
+
+  const out: ImpulseLegCandidate[] = [];
+  let selectedFound = false;
+  for (const bos of allBreaks) {
+    const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+    if (impulse && impulse.isValid) {
+      const startCandle = candles[impulse.startIndex];
+      const endCandle = candles[impulse.endIndex];
+      if (timeframe) impulse.timeframe = timeframe as ImpulseLeg["timeframe"];
+      if (startCandle?.datetime) impulse.startDate = startCandle.datetime.slice(0, 16);
+      if (endCandle?.datetime) impulse.endDate = endCandle.datetime.slice(0, 16);
+      impulse.spanBars = impulse.endIndex - impulse.startIndex;
+      out.push({ leg: impulse, selected: !selectedFound, rejection: null });
+      selectedFound = true;
+      continue;
+    }
+    out.push({
+      leg: {
+        high: bos.price,
+        low: bos.price,
+        direction,
+        startIndex: bos.index,
+        endIndex: bos.index,
+        isValid: false,
+        bosPrice: bos.price,
+      },
+      selected: false,
+      rejection: {
+        code: "origin_broken_or_invalid",
+        explanation:
+          `No valid swing origin for the ${direction} break at index ${bos.index}, or the origin was closed through after the break`,
+      },
+    });
+  }
+  return out;
+}
+
 // ─── 3. overlayFibOnPOIs ──────────────────────────────────────────────────────
 
 /**

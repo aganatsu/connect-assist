@@ -159,6 +159,11 @@ import {
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
+import {
+  buildScanEvidenceRow,
+  persistZoneTimeframeEvidence,
+  type EvidenceRow,
+} from "../_shared/zoneTimeframeEvidence.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
   evaluateZoneLocalEnforcement,
@@ -3501,6 +3506,9 @@ async function runScanForUser(
   // Daily candles change once/day, weekly once/week. Loading from DB saves
   // ~34 TwelveData API calls per cycle, keeping us within the 50/min limit.
   const cacheableRequests: Array<{ symbol: string; interval: string }> = [];
+  // Observation-only Phase 1 per-timeframe evidence for this scan cycle.
+  // Collected per pair, written in bounded awaited chunks after the loop.
+  const zoneEvidenceRows: EvidenceRow[] = [];
   for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) continue;
     cacheableRequests.push({ symbol: pair, interval: "1d" });
@@ -4536,6 +4544,55 @@ async function runScanForUser(
           console.warn(
             `[scan ${scanCycleId}] ${pair} zone shadow evidence unavailable`
             + ` (non-fatal): ${shadowStoreErr?.message}`,
+          );
+        }
+
+        // ── Phase 1: per-timeframe evidence (observation only) ──
+        // Records what the engine saw on every slot. Never feeds scoring,
+        // ranking, gating, configuration or execution.
+        try {
+          zoneEvidenceRows.push(buildScanEvidenceRow(
+            multiTF,
+            {
+              top: { timeframe: zoneTFLabels.top, candles: zoneDailyCandles ?? [] },
+              mid: { timeframe: zoneTFLabels.mid, candles: zoneH4Candles ?? [] },
+              low: { timeframe: zoneTFLabels.low, candles: zoneH1Candles ?? [] },
+            },
+            {
+              userId,
+              botId: BOT_ID,
+              scanCycleId,
+              symbol: pair,
+              direction: unifiedDir as "bullish" | "bearish",
+              observedAt: candles[candles.length - 1]?.datetime ||
+                new Date().toISOString(),
+              evaluatedAt: new Date().toISOString(),
+              tradingStyle: resolvedStyle,
+              stylePolicyVersion: pairStylePolicy.contractVersion,
+              styleBasePolicyHash: pairStylePolicy.basePolicyHash,
+              stylePolicyHash: pairStylePolicy.policyHash,
+              evidenceSource: "live_scan",
+            },
+            {
+              strictATRMult: pairConfig.marketFillStrictATRMult,
+              minQualityScore: pairConfig.zoneQualityThreshold,
+              maxAgeBars: pairConfig.zoneMaxAgeBars,
+              minBodyRatio: pairConfig.zoneMinBodyRatio,
+              minDisplacementATR: pairConfig.zoneMinDisplacementATR,
+              pipSize: (SPECS[pair] || SPECS["EUR/USD"]).pipSize,
+              fibMaxRetracement: pairConfig.fibMaxRetracement,
+              originOBRetest: pairConfig.originOBRetest,
+              evidenceContext: {
+                symbol: pair,
+                timeframe: zoneTFLabels.low,
+                observedAt: candles[candles.length - 1]?.datetime,
+              },
+            },
+          ));
+        } catch (tfEvidenceErr: any) {
+          console.warn(
+            `[scan ${scanCycleId}] ${pair} timeframe evidence build failed`
+            + ` (non-fatal): ${tfEvidenceErr?.message}`,
           );
         }
 
@@ -9233,6 +9290,24 @@ async function runScanForUser(
   }
 
   scanCache.clear();
+  // ── Phase 1: flush per-timeframe evidence in bounded, awaited chunks ──
+  if (zoneEvidenceRows.length > 0) {
+    const evidenceResult = await persistZoneTimeframeEvidence(
+      supabase,
+      zoneEvidenceRows,
+      {
+        onError: (err: any, chunkSize: number) =>
+          console.warn(
+            `[scan ${scanCycleId}] timeframe evidence chunk of ${chunkSize} failed`
+            + ` (non-fatal): ${err?.message}`,
+          ),
+      },
+    );
+    console.log(
+      `[scan ${scanCycleId}] timeframe evidence: wrote ${evidenceResult.written}`
+      + ` rows, ${evidenceResult.failedChunks} failed chunks`,
+    );
+  }
   // ── Persist thesis conviction states to kv_cache ──
   if ((config as any).thesisConvictionEnabled && convictionStates.size > 0) {
     try {
