@@ -294,7 +294,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
   // ─── Tabs & Search ──────────────────────────────────────────────
   if (!open) return null;
 
-  const tabs = [
+  const tabs: { id: BotConfigTabId; label: string; icon: typeof Globe }[] = [
     { id: "scan", label: "SCAN", icon: Globe },
     { id: "enter", label: "ENTER", icon: Target },
     { id: "exit", label: "EXIT", icon: Flag },
@@ -356,7 +356,7 @@ export function BotConfigModal({ open, onClose, connectionId, connectionName, de
               <Badge variant="outline" className="text-emerald-500 border-emerald-500/40">
                 RUNTIME VERIFIED
               </Badge>
-              <span>Source: {effectiveRuntime.provenance.source.replaceAll("_", " ")}</span>
+              <span>Source: {effectiveRuntime.provenance.source.replace(/_/g, " ")}</span>
               <span>Style: {effectiveRuntime.provenance.criticalSettings.tradingStyle}</span>
               <span>
                 Require sweep:{" "}

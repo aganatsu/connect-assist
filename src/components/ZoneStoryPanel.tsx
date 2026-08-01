@@ -738,7 +738,7 @@ function humanizePolicyReason(reason: string): string {
     hard_block_rank_disagreement: "Hard block: the legacy winner was not the local-evidence winner.",
     hard_block_insufficient_local_score: "Hard block: local evidence did not reach the configured minimum.",
   };
-  return labels[reason] || reason.replaceAll("_", " ");
+  return labels[reason] || reason.replace(/_/g, " ");
 }
 
 export default ZoneStoryPanel;
