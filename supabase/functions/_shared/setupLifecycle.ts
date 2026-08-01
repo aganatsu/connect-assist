@@ -58,6 +58,8 @@ export interface FrozenSetupStrategyContext {
   frozenAt: string;
   setupId: string;
   candidateId: string;
+  /** Exact observation-only source row captured during the originating scan. */
+  timeframeEvidenceId: string | null;
   symbol: string;
   direction: "long" | "short";
   stylePolicy: ResolvedStylePolicy;
@@ -199,6 +201,7 @@ function isResolvedStylePolicy(
 
 export function buildFrozenSetupStrategyContext(input: {
   identity: SetupLifecycleIdentity;
+  timeframeEvidenceId?: string | null;
   symbol: string;
   direction: "long" | "short";
   stylePolicy: ResolvedStylePolicy;
@@ -238,6 +241,7 @@ export function buildFrozenSetupStrategyContext(input: {
     frozenAt: input.frozenAt || new Date().toISOString(),
     setupId: input.identity.setupId,
     candidateId: input.identity.candidateId,
+    timeframeEvidenceId: input.timeframeEvidenceId || null,
     symbol: input.symbol,
     direction: input.direction,
     stylePolicy: input.stylePolicy,

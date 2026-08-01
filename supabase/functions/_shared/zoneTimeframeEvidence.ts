@@ -12,6 +12,7 @@ import {
   mapImpulsePOIs,
   measureImpulsePOIQualification,
   type ImpulseLeg,
+  type ImpulsePOI,
   type MultiTFZoneResult,
   type RankedPOI,
   type TFSlotLabels,
@@ -19,6 +20,7 @@ import {
   type ZoneEngineResult,
 } from "./impulseZoneEngine.ts";
 import { canonicalCandidateId } from "./zoneCandidateIdentity.ts";
+import { buildEntityId } from "./conceptEvidence.ts";
 
 export const ZONE_TF_EVIDENCE_CONTRACT_VERSION = "zone-tf-evidence.v1";
 
@@ -47,6 +49,7 @@ export const ENGINE_OPTION_ALLOWLIST = [
   "originOBRetest",
   "strictATRMult",
   "pipSize",
+  "zoneLifecycleV2.enabled",
 ] as const;
 
 export interface EvidenceLimits {
@@ -59,7 +62,7 @@ export interface EvidenceLimits {
 export const DEFAULT_EVIDENCE_LIMITS: EvidenceLimits = {
   maxLegsPerSlot: 8,
   maxPOIsPerSlot: 40,
-  maxCandidatesPerSlot: 10,
+  maxCandidatesPerSlot: 3,
   maxRowBytes: 96_000,
 };
 
@@ -73,12 +76,23 @@ export interface SlotEvidence {
   skippedReason: string | null;
   candleCount: number;
   reason: string;
+  rejections: Array<{
+    stage: "impulse" | "mapping" | "qualification" | "fib" | "bounds" | "quality" | "ranking";
+    code: string;
+    measured: number | null;
+    threshold: number | null;
+    comparator: string | null;
+    explanation: string;
+  }>;
   impulses: Array<{
+    impulseId: string;
     selected: boolean;
     direction: string;
     high: number;
     low: number;
     bosPrice: number;
+    breakType: "bos" | "choch" | null;
+    breakPrinted: boolean;
     startIndex: number;
     endIndex: number;
     startDate: string | null;
@@ -89,15 +103,22 @@ export interface SlotEvidence {
   }>;
   pois: Array<{
     candidateId: string;
+    impulseId: string;
     type: string;
     high: number;
     low: number;
     direction: string;
     candleIndex: number;
+    formationTime: string | null;
+    lifecycle: string | null;
     isOriginOB: boolean;
     ageBars: number;
     bodyRatio: number | null;
+    displacementRange: number | null;
     displacementATRMultiple: number | null;
+    fibLevel: number | null;
+    fibDepth: number | null;
+    distancePips: number | null;
     accepted: boolean;
     rejection:
       | { code: string; measured: number; threshold: number; comparator: string; explanation: string }
@@ -122,6 +143,7 @@ export interface SlotEvidence {
 }
 
 export interface ScanEvidenceContext {
+  evidenceId?: string;
   userId: string;
   botId: string;
   scanCycleId: string;
@@ -133,6 +155,7 @@ export interface ScanEvidenceContext {
   stylePolicyVersion: string | null;
   styleBasePolicyHash: string | null;
   stylePolicyHash: string | null;
+  stylePolicySnapshot?: Record<string, unknown> | null;
   evidenceSource?: EvidenceSource;
   replayRunId?: string | null;
   replayProvenance?: ReplayProvenance | null;
@@ -166,13 +189,30 @@ function legRecord(
   leg: ImpulseLeg,
   selected: boolean,
   rejection: { code: string; explanation: string } | null,
+  identity: { symbol: string; timeframe: string },
 ) {
+  const sourceCandleStart = leg.startDate ?? `idx:${leg.startIndex}`;
+  const sourceCandleEnd = leg.endDate ?? `idx:${leg.endIndex}`;
   return {
+    impulseId: buildEntityId({
+      concept: "impulse",
+      detector: { name: "impulseZone.findImpulseLeg", version: "1" },
+      symbol: identity.symbol,
+      timeframe: identity.timeframe,
+      sourceCandleStart,
+      sourceCandleEnd,
+      direction: leg.direction,
+      bounds: { low: leg.low, high: leg.high },
+      level: leg.bosPrice,
+      discriminator: `${leg.startIndex}:${leg.endIndex}`,
+    }),
     selected,
     direction: leg.direction,
     high: leg.high,
     low: leg.low,
     bosPrice: leg.bosPrice,
+    breakType: leg.breakType ?? null,
+    breakPrinted: Number.isFinite(leg.bosPrice),
     startIndex: leg.startIndex,
     endIndex: leg.endIndex,
     startDate: leg.startDate ?? null,
@@ -181,6 +221,94 @@ function legRecord(
     isValid: leg.isValid,
     rejection,
   };
+}
+
+function terminalRejections(
+  result: ZoneEngineResult,
+  options?: ZoneEngineOptions,
+): SlotEvidence["rejections"] {
+  const reason = result.reason || "";
+  const rejection = (
+    stage: SlotEvidence["rejections"][number]["stage"],
+    code: string,
+    explanation: string,
+    measured: number | null = null,
+    threshold: number | null = null,
+    comparator: string | null = null,
+  ): SlotEvidence["rejections"] => [{
+    stage,
+    code,
+    measured,
+    threshold,
+    comparator,
+    explanation,
+  }];
+
+  if (!result.impulse) {
+    return rejection(
+      "impulse",
+      "no_valid_impulse",
+      reason || "No valid structural impulse was selected",
+    );
+  }
+  if (reason.includes("no POIs")) {
+    return rejection(
+      "mapping",
+      "no_poi_inside_selected_impulse",
+      reason,
+    );
+  }
+  if (reason.includes("qualification rejected all")) {
+    return rejection(
+      "qualification",
+      "all_pois_failed_qualification",
+      reason,
+    );
+  }
+  if (reason.includes("none align with key Fib levels")) {
+    return rejection(
+      "fib",
+      "no_poi_in_fib_admission_range",
+      reason,
+      null,
+      options?.fibMaxRetracement ?? 0.786,
+      "<=",
+    );
+  }
+  if (reason.includes("none overlap with Daily zone")) {
+    return rejection(
+      "bounds",
+      "no_zone_overlap_with_parent_bounds",
+      reason,
+    );
+  }
+  if (reason.includes("none scored high enough")) {
+    return rejection(
+      "ranking",
+      "fib_score_below_minimum",
+      reason,
+      null,
+      1,
+      ">=",
+    );
+  }
+  if (reason.includes("below Bot Config minimum")) {
+    const measured = Number(reason.match(/quality ([\d.]+)%/)?.[1] ?? NaN);
+    const threshold = Number(
+      reason.match(/minimum ([\d.]+)%/)?.[1] ??
+        options?.minQualityScore ??
+        NaN,
+    );
+    return rejection(
+      "quality",
+      "zone_quality_below_minimum",
+      reason,
+      Number.isFinite(measured) ? measured : null,
+      Number.isFinite(threshold) ? threshold : null,
+      "<",
+    );
+  }
+  return [];
 }
 
 function candidateRecord(zone: RankedPOI, rank: number, symbol: string, timeframe: string) {
@@ -223,6 +351,7 @@ export function buildTimeframeEvidence(
         : "Slot not evaluated in this cycle",
       candleCount: candles.length,
       reason: result?.reason ?? "not_evaluated",
+      rejections: [],
       impulses: [],
       pois: [],
       candidates: [],
@@ -230,35 +359,109 @@ export function buildTimeframeEvidence(
     };
   }
 
-  const legCandidates = collectImpulseLegCandidates(candles, context.direction, timeframe);
-  let impulses = legCandidates.map((c) => legRecord(c.leg, c.selected, c.rejection));
+  const selectedLeg = result!.impulse;
+  const selectedImpulseRecord = selectedLeg
+    ? legRecord(
+      selectedLeg,
+      true,
+      null,
+      { symbol: context.symbol, timeframe },
+    )
+    : null;
+  const legCandidates = result!.evidence?.impulses ??
+    collectImpulseLegCandidates(candles, context.direction, timeframe);
+  let impulses = legCandidates.map((candidate) => {
+    const record = legRecord(candidate.leg, false, candidate.rejection, {
+      symbol: context.symbol,
+      timeframe,
+    });
+    record.selected =
+      record.impulseId === selectedImpulseRecord?.impulseId;
+    return record;
+  });
+  // The engine result is authoritative. If a future refactor makes the
+  // observation enumerator diverge, retain the exact selected leg instead of
+  // silently claiming that no leg was selected.
+  if (
+    selectedImpulseRecord &&
+    !impulses.some((impulse) =>
+      impulse.impulseId === selectedImpulseRecord.impulseId
+    )
+  ) {
+    impulses.unshift(selectedImpulseRecord);
+  }
+  if (selectedImpulseRecord) {
+    impulses = [
+      ...impulses.filter((impulse) => impulse.selected),
+      ...impulses.filter((impulse) => !impulse.selected),
+    ];
+  }
   if (impulses.length > limits.maxLegsPerSlot) {
     truncated.legs = impulses.length - limits.maxLegsPerSlot;
     impulses = impulses.slice(0, limits.maxLegsPerSlot);
   }
 
-  const selectedLeg = result!.impulse;
   let pois: SlotEvidence["pois"] = [];
   if (selectedLeg) {
-    const mapped = mapImpulsePOIs(candles, selectedLeg, {
-      originOBRetest: options?.originOBRetest,
-      zoneLifecycleV2: options?.zoneLifecycleV2,
-      evidenceContext: options?.evidenceContext
-        ? { ...options.evidenceContext, timeframe }
-        : { symbol: context.symbol, timeframe },
-    });
-    const measured = measureImpulsePOIQualification(candles, selectedLeg, mapped, options);
+    const selectedImpulseId = selectedImpulseRecord!.impulseId;
+    const mapped = result!.evidence?.mappedPOIs ??
+      mapImpulsePOIs(candles, selectedLeg, {
+        originOBRetest: options?.originOBRetest,
+        zoneLifecycleV2: options?.zoneLifecycleV2,
+        evidenceContext: options?.evidenceContext
+          ? { ...options.evidenceContext, timeframe }
+          : { symbol: context.symbol, timeframe },
+      });
+    const measured = result!.evidence?.qualificationMeasurements ??
+      measureImpulsePOIQualification(
+        candles,
+        selectedLeg,
+        mapped,
+        options,
+      );
+    const candidateIdFor = (poi: ImpulsePOI) =>
+      canonicalCandidateId(poi, { symbol: context.symbol, timeframe });
+    const rankedByCandidate = new Map(
+      (result!.evidence?.rankedZones ?? result!.allZones).map((zone) => [
+        candidateIdFor(zone.poi),
+        zone,
+      ]),
+    );
+    const currentPrice = result!.evidence?.currentPrice;
+    const pipSize = options?.pipSize ?? 0.0001;
     pois = measured.map((m) => ({
-      candidateId: canonicalCandidateId(m.poi, { symbol: context.symbol, timeframe }),
+      candidateId: candidateIdFor(m.poi),
+      impulseId: selectedImpulseId,
       type: m.poi.type,
       high: m.poi.high,
       low: m.poi.low,
       direction: m.poi.direction,
       candleIndex: m.poi.candleIndex,
+      formationTime:
+        m.poi.evidence?.sourceCandleStart ??
+        candles[m.poi.candleIndex]?.datetime ??
+        null,
+      lifecycle: m.poi.evidence?.lifecycle ?? null,
       isOriginOB: Boolean(m.poi.isOriginOB),
       ageBars: m.ageBars,
       bodyRatio: m.bodyRatio,
+      displacementRange: m.displacementRange,
       displacementATRMultiple: m.displacementATRMultiple,
+      fibLevel: rankedByCandidate.get(candidateIdFor(m.poi))?.fibLevel ??
+        null,
+      fibDepth: rankedByCandidate.get(candidateIdFor(m.poi))?.fibDepth ??
+        null,
+      distancePips: Number.isFinite(currentPrice)
+        ? (
+          currentPrice! >= Math.min(m.poi.low, m.poi.high) &&
+            currentPrice! <= Math.max(m.poi.low, m.poi.high)
+            ? 0
+            : Math.min(
+              Math.abs(currentPrice! - m.poi.low),
+              Math.abs(currentPrice! - m.poi.high),
+            ) / pipSize
+        )
+        : null,
       accepted: m.accepted,
       rejection: m.rejection,
     }));
@@ -290,6 +493,7 @@ export function buildTimeframeEvidence(
     skippedReason: null,
     candleCount: candles.length,
     reason: result!.reason,
+    rejections: terminalRejections(result!, options),
     impulses,
     pois,
     candidates,
@@ -298,6 +502,7 @@ export function buildTimeframeEvidence(
 }
 
 export interface EvidenceRow extends Record<string, unknown> {
+  id: string;
   user_id: string;
   bot_id: string;
   scan_cycle_id: string;
@@ -306,6 +511,29 @@ export interface EvidenceRow extends Record<string, unknown> {
   evidence_source: EvidenceSource;
   pending_order_id: string;
   confirmation_attempt: number;
+  event_linked?: boolean;
+}
+
+/**
+ * Add retention/link annotations after a pair decision has completed.
+ * These fields are never read by strategy code.
+ */
+export function annotateEvidenceLifecycle(
+  row: EvidenceRow,
+  detail: Record<string, any> | null | undefined,
+): EvidenceRow {
+  const status = String(detail?.status || "");
+  row.event_linked =
+    status.startsWith("staged_") ||
+    status.startsWith("zone_setup_") ||
+    status.startsWith("trade_placed");
+  row.linked_setup_id = detail?.linkedSetupId || null;
+  row.linked_trade_id = detail?.positionId || null;
+  const shadow = detail?.impulseZone?.bestZone?.shadowRanking || null;
+  row.has_disagreement = Boolean(
+    shadow && Number(shadow.legacyRank) !== Number(shadow.shadowRank),
+  );
+  return row;
 }
 
 /** Build the full row (header + slots) for one symbol/direction in one cycle. */
@@ -348,6 +576,7 @@ export function buildScanEvidenceRow(
   }
 
   let row: EvidenceRow = {
+    id: context.evidenceId ?? crypto.randomUUID(),
     user_id: context.userId,
     bot_id: context.botId,
     scan_cycle_id: context.scanCycleId,
@@ -359,6 +588,7 @@ export function buildScanEvidenceRow(
     style_policy_version: context.stylePolicyVersion,
     style_base_policy_hash: context.styleBasePolicyHash,
     style_policy_hash: context.stylePolicyHash,
+    style_policy_snapshot: context.stylePolicySnapshot ?? null,
     contract_version: ZONE_TF_EVIDENCE_CONTRACT_VERSION,
     selected_timeframe: multiTFResult.selectedTF,
     final_reason: multiTFResult.reason,
@@ -368,6 +598,7 @@ export function buildScanEvidenceRow(
     parent_evidence_id: context.parentEvidenceId ?? null,
     pending_order_id: context.pendingOrderId ?? NIL_UUID,
     confirmation_attempt: context.confirmationAttempt ?? 0,
+    event_linked: false,
     slots: slotEvidence,
     engine_options: pickEngineOptions(options),
     payload_truncated: payloadTruncated,
@@ -479,35 +710,37 @@ export async function persistZoneTimeframeEvidence(
 }
 
 /**
- * Next confirmation attempt number for a pending order within a scan cycle.
- * Every confirmation attempt persists as its own immutable row; a later
- * attempt is never collapsed into an earlier one.
+ * Atomically allocate the next confirmation attempt for a pending order.
+ * Every attempt persists as its own immutable row across edge invocations.
  */
 export async function nextConfirmationAttempt(
   supabase: any,
   key: {
     userId: string;
     botId: string;
-    scanCycleId: string;
     symbol: string;
     direction: string;
     pendingOrderId: string;
   },
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from("zone_timeframe_evidence")
-    .select("confirmation_attempt")
-    .eq("user_id", key.userId)
-    .eq("bot_id", key.botId)
-    .eq("scan_cycle_id", key.scanCycleId)
-    .eq("symbol", key.symbol)
-    .eq("direction", key.direction)
-    .eq("pending_order_id", key.pendingOrderId)
-    .eq("evidence_source", "confirmation")
-    .order("confirmation_attempt", { ascending: false })
-    .limit(1);
-  if (error || !data || data.length === 0) return 1;
-  return Number(data[0].confirmation_attempt ?? 0) + 1;
+  const { data: allocated, error: allocationError } = await supabase.rpc(
+    "allocate_zone_confirmation_evidence_attempt",
+    {
+      p_user_id: key.userId,
+      p_bot_id: key.botId,
+      p_pending_order_id: key.pendingOrderId,
+    },
+  );
+  if (allocationError) {
+    throw new Error(
+      `confirmation evidence attempt allocation failed: ${allocationError.message}`,
+    );
+  }
+  const attempt = Number(allocated);
+  if (!Number.isFinite(attempt) || attempt < 1) {
+    throw new Error("confirmation evidence attempt allocator returned an invalid value");
+  }
+  return attempt;
 }
 
 /** Compact, indefinitely-retained summary written before raw payload pruning. */
@@ -541,6 +774,7 @@ export function buildConfirmationEvidenceRow(
   observation: ConfirmationObservation,
 ): EvidenceRow {
   return {
+    id: context.evidenceId ?? crypto.randomUUID(),
     user_id: context.userId,
     bot_id: context.botId,
     scan_cycle_id: context.scanCycleId,
@@ -552,6 +786,7 @@ export function buildConfirmationEvidenceRow(
     style_policy_version: context.stylePolicyVersion,
     style_base_policy_hash: context.styleBasePolicyHash,
     style_policy_hash: context.stylePolicyHash,
+    style_policy_snapshot: context.stylePolicySnapshot ?? null,
     contract_version: ZONE_TF_EVIDENCE_CONTRACT_VERSION,
     selected_timeframe: observation.timeframe,
     final_reason: observation.reason,
@@ -568,6 +803,7 @@ export function buildConfirmationEvidenceRow(
       skippedReason: null,
       candleCount: observation.candleCount,
       reason: observation.reason,
+      rejections: [],
       confirmation: observation,
       impulses: [],
       pois: [],
@@ -611,15 +847,25 @@ export function buildCompactSummary(row: EvidenceRow): Record<string, unknown> {
   const slots = (row.slots as SlotEvidence[]) ?? [];
   const rejectionCounts: Record<string, number> = {};
   for (const slot of slots) {
+    for (const rejection of slot.rejections ?? []) {
+      rejectionCounts[rejection.code] =
+        (rejectionCounts[rejection.code] ?? 0) + 1;
+    }
     for (const poi of slot.pois) {
       if (poi.rejection) {
         rejectionCounts[poi.rejection.code] = (rejectionCounts[poi.rejection.code] ?? 0) + 1;
       }
     }
   }
-  const winner = slots
-    .flatMap((s) => s.candidates)
-    .sort((a, b) => b.totalScore - a.totalScore)[0];
+  const selectedSlot = slots.find((slot) =>
+    slot.timeframe === row.selected_timeframe
+  );
+  const winner = selectedSlot?.candidates.find((candidate) =>
+    candidate.rank === 1
+  ) ??
+    slots
+      .flatMap((slot) => slot.candidates)
+      .sort((a, b) => b.totalScore - a.totalScore)[0];
   return {
     selected_timeframe: row.selected_timeframe ?? null,
     winner_candidate_id: winner?.candidateId ?? null,

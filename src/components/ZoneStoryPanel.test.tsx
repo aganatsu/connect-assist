@@ -174,4 +174,25 @@ describe("ZoneStoryPanel zone-local explanations", () => {
     expect(screen.getByText("ALLOWED")).toBeTruthy();
     expect(screen.getByText(/Observation only/)).toBeTruthy();
   });
+
+  it("keeps timeframe diagnostics available when no impulse was found", () => {
+    render(
+      <ZoneStoryPanel
+        unifiedData={{
+          ...unifiedData,
+          state: "no_impulse",
+          hasZone: false,
+          impulse: null,
+          zone: null,
+          reason: "No valid impulse on any configured timeframe",
+        }}
+        symbol="GBP/USD"
+        direction="long"
+        isLiveContext
+      />,
+    );
+
+    expect(screen.getByText(/No Impulse/)).toBeTruthy();
+    expect(screen.getByText(/Timeframe Evidence/)).toBeTruthy();
+  });
 });

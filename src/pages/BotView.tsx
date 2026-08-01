@@ -1535,7 +1535,7 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                 // Parse enriched signal_reason JSON
                 let sr: any = null;
                 try { sr = JSON.parse(t.signalReason || "{}"); } catch {}
-                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot || sr.decisionContext);
+                const hasRichData = sr && (sr.regimeData || sr.confluenceStacking || sr.structureIntel || sr.factorScores || sr.impulseZone || sr.directionVerdict || sr.gamePlanSnapshot || sr.decisionContext || sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId);
 
                 return (
                 <tr className="bg-secondary/20 border-b border-border">
@@ -1577,7 +1577,14 @@ function TradeHistoryTable({ trades }: { trades: any[] }) {
                       {hasRichData ? (
                         <>
                           {/* Zone Story — consolidated impulse + unified zone narrative */}
-                          <ZoneStoryPanel unifiedData={sr.unifiedZone} gateData={sr.impulseZone} zoneLocalEnforcement={sr.zoneLocalEnforcement} symbol={t.symbol} />
+                          <ZoneStoryPanel
+                            unifiedData={sr.unifiedZone}
+                            gateData={sr.impulseZone}
+                            zoneLocalEnforcement={sr.zoneLocalEnforcement}
+                            symbol={t.symbol}
+                            direction={t.direction}
+                            timeframeEvidenceId={sr.timeframeEvidenceId || sr.frozenStrategyContext?.timeframeEvidenceId}
+                          />
                           {sr.decisionContext && (
                             <div className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 space-y-1">
                               <p className="text-[8px] text-primary uppercase tracking-wider font-bold">
@@ -2013,7 +2020,15 @@ function ScanSignalDetail({ signal: d }: { signal: any }) {
             </div>
           )}
           {/* Zone Story — consolidated impulse + unified zone narrative */}
-          <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} zoneLocalEnforcement={d.zoneLocalEnforcement} isLiveContext symbol={d.pair} />
+          <ZoneStoryPanel
+            unifiedData={d.unifiedZone}
+            gateData={d.impulseZone}
+            zoneLocalEnforcement={d.zoneLocalEnforcement}
+            isLiveContext
+            symbol={d.pair}
+            direction={d.direction}
+            timeframeEvidenceId={d.timeframeEvidenceId}
+          />
           {/* Direction Verdict */}
           {d.directionVerdict && !d.directionVerdict.error && (
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2221,7 +2236,15 @@ function ScanDetailInline({ signal: d }: { signal: any }) {
       )}
 
       {/* 4. Zone Story — consolidated impulse + unified zone narrative */}
-      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} zoneLocalEnforcement={d.zoneLocalEnforcement} isLiveContext symbol={d.pair} />
+      <ZoneStoryPanel
+        unifiedData={d.unifiedZone}
+        gateData={d.impulseZone}
+        zoneLocalEnforcement={d.zoneLocalEnforcement}
+        isLiveContext
+        symbol={d.pair}
+        direction={d.direction}
+        timeframeEvidenceId={d.timeframeEvidenceId}
+      />
       {/* Direction Verdict */}
       {d.directionVerdict && !d.directionVerdict.error && (
         <div className="flex items-center gap-1.5 flex-wrap">

@@ -39,6 +39,7 @@ export interface ImpulseLeg {
   endIndex: number;     // Index of the BOS candle
   isValid: boolean;     // Origin not broken (price hasn't retraced past the impulse start)
   bosPrice: number;     // Price level of the structure break
+  breakType?: "bos" | "choch";
   timeframe?: "D" | "4H" | "1H";  // Which timeframe produced this impulse
   startDate?: string;   // ISO date of the impulse start candle (e.g. "2026-05-20")
   endDate?: string;     // ISO date of the BOS candle
@@ -113,6 +114,17 @@ export interface ZoneEngineResult {
   impulse: ImpulseLeg | null;
   allZones: RankedPOI[];
   reason: string;         // Human-readable explanation of outcome
+  /** Present only when the observation-only collector is explicitly enabled. */
+  evidence?: ZoneEngineEvidenceSnapshot;
+}
+
+export interface ZoneEngineEvidenceSnapshot {
+  timeframe: string | null;
+  currentPrice: number;
+  impulses: ImpulseLegCandidate[];
+  mappedPOIs: ImpulsePOI[];
+  qualificationMeasurements: POIQualificationMeasurement[];
+  rankedZones: RankedPOI[];
 }
 
 export interface ZoneQualificationResult {
@@ -172,11 +184,18 @@ export function findImpulseLeg(
   candles: Candle[],
   direction: "bullish" | "bearish",
   timeframe?: "D" | "4H" | "1H",
+  collector?: (candidate: ImpulseLegCandidate) => void,
 ): ImpulseLeg | null {
   if (candles.length < 20) return null;
 
   const structure = analyzeMarketStructure(candles);
-  const allBreaks = [...structure.bos, ...structure.choch]
+  const allBreaks = [
+    ...structure.bos.map((item) => ({ ...item, breakType: "bos" as const })),
+    ...structure.choch.map((item) => ({
+      ...item,
+      breakType: "choch" as const,
+    })),
+  ]
     .filter(b => b.type === direction)
     .sort((a, b) => b.index - a.index); // Most recent first
 
@@ -184,7 +203,17 @@ export function findImpulseLeg(
 
   // Try each BOS from most recent to oldest
   for (const bos of allBreaks) {
-    const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
+    let emittedCandidate = false;
+    const impulse = validateImpulseFromBOS(
+      candles,
+      bos,
+      direction,
+      structure.swingPoints,
+      (candidate) => {
+        emittedCandidate = true;
+        collector?.(candidate);
+      },
+    );
     if (impulse && impulse.isValid) {
       // Enrich with timeframe metadata if provided
       if (timeframe) {
@@ -202,7 +231,32 @@ export function findImpulseLeg(
         impulse.endDate = endCandle.datetime.slice(0, 16);
       }
       impulse.spanBars = impulse.endIndex - impulse.startIndex;
+      collector?.({ leg: impulse, selected: true, rejection: null });
       return impulse;
+    }
+    if (!impulse && !emittedCandidate) {
+      collector?.({
+        leg: {
+          high: bos.price,
+          low: bos.price,
+          direction,
+          startIndex: bos.index,
+          endIndex: bos.index,
+          isValid: false,
+          bosPrice: bos.price,
+          breakType: bos.breakType,
+          timeframe,
+          startDate: candles[bos.index]?.datetime?.slice(0, 16),
+          endDate: candles[bos.index]?.datetime?.slice(0, 16),
+          spanBars: 0,
+        },
+        selected: false,
+        rejection: {
+          code: "origin_broken_or_invalid",
+          explanation:
+            `No valid swing origin for the ${direction} break at index ${bos.index}`,
+        },
+      });
     }
   }
 
@@ -215,9 +269,10 @@ export function findImpulseLeg(
  */
 function validateImpulseFromBOS(
   candles: Candle[],
-  bos: StructureBreak,
+  bos: StructureBreak & { breakType?: "bos" | "choch" },
   direction: "bullish" | "bearish",
   swingPoints: SwingPoint[],
+  collector?: (candidate: ImpulseLegCandidate) => void,
 ): ImpulseLeg | null {
   const bosIdx = bos.index;
 
@@ -276,8 +331,31 @@ function validateImpulseFromBOS(
         endIndex: endIdx,
         isValid: true,
         bosPrice: bos.price,
+        breakType: bos.breakType,
       };
     }
+    collector?.({
+      leg: {
+        high: impulseHigh,
+        low: impulseLow,
+        direction,
+        startIndex: startIdx,
+        endIndex: endIdx,
+        isValid: false,
+        bosPrice: bos.price,
+        breakType: bos.breakType,
+        timeframe: undefined,
+        startDate: candles[startIdx]?.datetime?.slice(0, 16),
+        endDate: candles[endIdx]?.datetime?.slice(0, 16),
+        spanBars: endIdx - startIdx,
+      },
+      selected: false,
+      rejection: {
+        code: "origin_broken_or_invalid",
+        explanation:
+          "Impulse origin was broken by a later candle close before evaluation",
+      },
+    });
   }
 
   return null;
@@ -700,45 +778,13 @@ export function collectImpulseLegCandidates(
   direction: "bullish" | "bearish",
   timeframe?: string,
 ): ImpulseLegCandidate[] {
-  if (candles.length < 20) return [];
-  const structure = analyzeMarketStructure(candles);
-  const allBreaks = [...structure.bos, ...structure.choch]
-    .filter((b) => b.type === direction)
-    .sort((a, b) => b.index - a.index);
-
   const out: ImpulseLegCandidate[] = [];
-  let selectedFound = false;
-  for (const bos of allBreaks) {
-    const impulse = validateImpulseFromBOS(candles, bos, direction, structure.swingPoints);
-    if (impulse && impulse.isValid) {
-      const startCandle = candles[impulse.startIndex];
-      const endCandle = candles[impulse.endIndex];
-      if (timeframe) impulse.timeframe = timeframe as ImpulseLeg["timeframe"];
-      if (startCandle?.datetime) impulse.startDate = startCandle.datetime.slice(0, 16);
-      if (endCandle?.datetime) impulse.endDate = endCandle.datetime.slice(0, 16);
-      impulse.spanBars = impulse.endIndex - impulse.startIndex;
-      out.push({ leg: impulse, selected: !selectedFound, rejection: null });
-      selectedFound = true;
-      continue;
-    }
-    out.push({
-      leg: {
-        high: bos.price,
-        low: bos.price,
-        direction,
-        startIndex: bos.index,
-        endIndex: bos.index,
-        isValid: false,
-        bosPrice: bos.price,
-      },
-      selected: false,
-      rejection: {
-        code: "origin_broken_or_invalid",
-        explanation:
-          `No valid swing origin for the ${direction} break at index ${bos.index}, or the origin was closed through after the break`,
-      },
-    });
-  }
+  findImpulseLeg(
+    candles,
+    direction,
+    timeframe as ImpulseLeg["timeframe"],
+    (candidate) => out.push(candidate),
+  );
   return out;
 }
 
@@ -1554,15 +1600,41 @@ export function findBestEntryZone(
   htfData?: HTFConfluenceData,
   options?: ZoneEngineOptions,
 ): ZoneEngineResult {
-  // Step 1: Find impulse leg
-  const impulse = findImpulseLeg(htfCandles, direction);
-  if (!impulse) {
+  const collectedImpulses: ImpulseLegCandidate[] = [];
+  let collectedPOIs: ImpulsePOI[] = [];
+  let collectedMeasurements: POIQualificationMeasurement[] = [];
+  let collectedRankedZones: RankedPOI[] = [];
+  const finish = (result: ZoneEngineResult): ZoneEngineResult => {
+    if (!options?.collectEvidence) return result;
     return {
+      ...result,
+      evidence: {
+        timeframe: options.evidenceContext?.timeframe ?? null,
+        currentPrice,
+        impulses: collectedImpulses,
+        mappedPOIs: collectedPOIs,
+        qualificationMeasurements: collectedMeasurements,
+        rankedZones: collectedRankedZones,
+      },
+    };
+  };
+
+  // Step 1: Find impulse leg
+  const impulse = findImpulseLeg(
+    htfCandles,
+    direction,
+    undefined,
+    options?.collectEvidence
+      ? (candidate) => collectedImpulses.push(candidate)
+      : undefined,
+  );
+  if (!impulse) {
+    return finish({
       bestZone: null,
       impulse: null,
       allZones: [],
       reason: `No valid ${direction} impulse leg found (no BOS or origin broken)`,
-    };
+    });
   }
 
   // Step 2: Map POIs within the impulse
@@ -1571,21 +1643,30 @@ export function findBestEntryZone(
     zoneLifecycleV2: options?.zoneLifecycleV2,
     evidenceContext: options?.evidenceContext,
   });
+  collectedPOIs = mappedPOIs;
   const qualification = qualifyImpulsePOIs(htfCandles, impulse, mappedPOIs, options);
+  if (options?.collectEvidence) {
+    collectedMeasurements = measureImpulsePOIQualification(
+      htfCandles,
+      impulse,
+      mappedPOIs,
+      options,
+    );
+  }
   const pois = qualification.accepted;
   if (pois.length === 0) {
     const rejected = Object.entries(qualification.rejected)
       .filter(([, count]) => count > 0)
       .map(([reason, count]) => `${reason}=${count}`)
       .join(", ");
-    return {
+    return finish({
       bestZone: null,
       impulse,
       allZones: [],
       reason: mappedPOIs.length === 0
         ? `Impulse found but no POIs (FVGs/OBs) detected within it`
         : `POIs found but Bot Config zone qualification rejected all (${rejected})`,
-    };
+    });
   }
 
   // Step 3: Overlay Fib and score by depth
@@ -1597,13 +1678,14 @@ export function findBestEntryZone(
     atr: zoneATR,
     evidenceContext: options?.evidenceContext,
   });
+  collectedRankedZones = rankedZones;
   if (rankedZones.length === 0) {
-    return {
+    return finish({
       bestZone: null,
       impulse,
       allZones: [],
       reason: `POIs found but none align with key Fib levels (50%-${((options?.fibMaxRetracement ?? 0.786) * 100).toFixed(1)}%${options?.originOBRetest ? " incl. origin OB" : ""})`,
-    };
+    });
   }
 
   // Step 3b: Filter by Daily zone bounds (if provided)
@@ -1615,13 +1697,14 @@ export function findBestEntryZone(
       // Overlap check: max(zone.low, daily.low) <= min(zone.high, daily.high)
       return Math.max(zLow, bounds.low) <= Math.min(zHigh, bounds.high);
     });
+    collectedRankedZones = rankedZones;
     if (rankedZones.length === 0) {
-      return {
+      return finish({
         bestZone: null,
         impulse,
         allZones: [],
         reason: `POIs found at Fib levels but none overlap with Daily zone [${bounds.low.toFixed(5)}-${bounds.high.toFixed(5)}]`,
-      };
+      });
     }
   }
 
@@ -1654,26 +1737,27 @@ export function findBestEntryZone(
   for (const zone of rankedZones) {
     zone.validationTrade = buildZoneValidationTrade(zone, impulse);
   }
+  collectedRankedZones = rankedZones;
 
   // Step 6: Rank and select best
   const bestZonePOI = rankAndSelectBestZone(rankedZones);
   if (!bestZonePOI) {
-    return {
+    return finish({
       bestZone: null,
       impulse,
       allZones: rankedZones,
       reason: `Zones found but none scored high enough (need fibScore >= 1, i.e., at 50% or deeper)`,
-    };
+    });
   }
   const minQualityScore = Math.max(0, Math.min(100, Number(options?.minQualityScore ?? 0)));
   const qualityPercent = zoneQualityPercent(bestZonePOI);
   if (qualityPercent < minQualityScore) {
-    return {
+    return finish({
       bestZone: null,
       impulse,
       allZones: rankedZones,
       reason: `Best zone quality ${qualityPercent.toFixed(1)}% is below Bot Config minimum ${minQualityScore.toFixed(1)}%`,
-    };
+    });
   }
 
   // Step 7: Check if current price is at the zone
@@ -1754,7 +1838,7 @@ export function findBestEntryZone(
     proximityLabel = `price ${distancePips.toFixed(1)} pips away`;
   }
 
-  return {
+  return finish({
     bestZone: {
       zone: bestZonePOI,
       impulse,
@@ -1768,13 +1852,18 @@ export function findBestEntryZone(
     impulse,
     allZones: rankedZones,
     reason: `Valid ${direction} zone found: ${bestZonePOI.poi.type.toUpperCase()} at Fib ${(bestZonePOI.fibLevel * 100).toFixed(1)}% (score ${bestZonePOI.totalScore}/9${bestZonePOI.htfLayers.length > 0 ? `, HTF: ${bestZonePOI.htfLayers.join("+")}` : ""}) — ${proximityLabel}`,
-  };
+  });
 }
 
 
 // ─── Options ─────────────────────────────────────────────────────────────────
 /** Options to override engine constants at runtime (config-driven). */
 export interface ZoneEngineOptions {
+  /**
+   * Attach an observation-only snapshot of the exact legs, POIs and ranked
+   * candidates traversed by this invocation. Defaults off.
+   */
+  collectEvidence?: boolean;
   /** ATR multiplier for strict proximity check (market fill). Default: 0.3 */
   strictATRMult?: number;
   /** Minimum normalized zone score (0-100). 0 disables this filter. */

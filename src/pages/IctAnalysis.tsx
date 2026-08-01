@@ -340,7 +340,15 @@ export default function IctAnalysis() {
                   <AccordionTrigger className="text-xs"><span className="flex items-center gap-2"><Target className="h-3.5 w-3.5" /> Zone Story</span></AccordionTrigger>
                   <AccordionContent>
                     <div className="bg-secondary/30 border border-border p-3">
-                      <ZoneStoryPanel unifiedData={d.unifiedZone} gateData={d.impulseZone} zoneLocalEnforcement={d.zoneLocalEnforcement} isLiveContext symbol={d.pair} />
+                      <ZoneStoryPanel
+                        unifiedData={d.unifiedZone}
+                        gateData={d.impulseZone}
+                        zoneLocalEnforcement={d.zoneLocalEnforcement}
+                        isLiveContext
+                        symbol={d.pair}
+                        direction={d.direction}
+                        timeframeEvidenceId={d.timeframeEvidenceId}
+                      />
                     </div>
                   </AccordionContent>
                 </AccordionItem>
