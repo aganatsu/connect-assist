@@ -18,9 +18,29 @@ Deno.test("backtest replay is explicit, persisted, and reported", () => {
   const engine = functionSource("backtest-engine/index.ts");
   assertStringIncludes(engine, "zoneLocalReplayEvidence = false");
   assertStringIncludes(engine, "persistZoneReplayEvidence(db");
+  assertStringIncludes(engine, "outcomeCandlesAfter(");
+  assertStringIncludes(engine, "MAX_SCAN_SLICE_MS = 650");
+  assertStringIncludes(engine, "__resumeAt: candle.datetime");
+  assertStringIncludes(engine, "symbolRuntimeState");
+  assertStringIncludes(engine, "position.entryBarIndex = rebasedIndex");
+  assertStringIncludes(engine, "cleanupZoneReplayEvidence(db, runId)");
   assertStringIncludes(engine, "ZONE_LOCAL_REPLAY_CONTRACT_VERSION");
   assertStringIncludes(engine, 'evidenceSource: "retrospective_replay"');
   assertStringIncludes(engine, "activationEligible: false");
+});
+
+Deno.test("only completed retrospective runs are published as evidence", () => {
+  const migration = repoSource(
+    "supabase/migrations/20260731190000_publish_completed_zone_replay_only.sql",
+  );
+  assertStringIncludes(
+    migration,
+    "replay.status = 'completed'",
+  );
+  assertStringIncludes(
+    migration,
+    "observation.evidence_source = 'forward_observation'",
+  );
 });
 
 Deno.test("retrospective replay is source-separated and never activation eligible", () => {

@@ -123,9 +123,15 @@ import { findBestEntryZoneMultiTF, type MultiTFZoneResult, type HTFConfluenceDat
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
 import { loadZoneLocalActivation } from "../_shared/zoneLocalActivationStore.ts";
 import {
+  cleanupZoneReplayEvidence,
   persistZoneReplayEvidence,
   ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
 } from "../_shared/zoneReplayEvidence.ts";
+import {
+  boundedCandlesBefore,
+  outcomeCandlesAfter,
+  utcDayStart,
+} from "../_shared/backtestCandleWindow.ts";
 import {
   zoneShadowDisagreementKey,
 } from "../_shared/zoneShadowObservationStore.ts";
@@ -334,6 +340,13 @@ interface OpenPosition {
     partialClose?: PartialCloseDecision | null;
     structureInvalidation?: StructureInvalidationEvidence | null;
   };
+}
+
+interface BacktestSymbolRuntimeState {
+  convictionStates: [string, ThesisConvictionState][];
+  lastConvictionSession: string;
+  activeGamePlan: SessionGamePlan | null;
+  lastGPSession: string;
 }
 
 // ─── Candle Fetching (Backtest-specific: date-range aware) ──────────
@@ -1650,7 +1663,11 @@ async function selfInvokeNextChunk(runId: string, body: any, chunkIndex: number)
 
 async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) {
   const INVOCATION_START = Date.now();
-  const MAX_INVOCATION_MS = 280_000; // 280s — leave 120s buffer before Supabase 400s wall-clock limit
+  // Supabase limits each request to roughly 2s of CPU time. Keep the
+  // computation slice comfortably below that limit and resume in a new
+  // invocation. Network fetch time is not included in this scan-only budget.
+  const MAX_SCAN_SLICE_MS = 650;
+  const MAX_INVOCATION_MS = 120_000;
   const db = getAdminClient();
   const updateProgress = async (progress: number, message: string) => {
     await db.from("backtest_runs").update({
@@ -1662,12 +1679,14 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
   };
 
   // Check if the run has been cancelled by the user
-  const isCancelled = async (): Promise<boolean> => {
+  const stoppedStatus = async (): Promise<"cancelled" | "failed" | null> => {
     const { data } = await db.from("backtest_runs")
       .select("status")
       .eq("id", runId)
       .single();
-    return data?.status === "cancelled";
+    return data?.status === "cancelled" || data?.status === "failed"
+      ? data.status
+      : null;
   };
 
   try {
@@ -1714,9 +1733,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     config.newsFilterEnabled = false;
     config.scanIntervalMinutes = 0;
     const { data: backtestOwner } = await db.from("backtest_runs")
-      .select("user_id")
+      .select("user_id,results")
       .eq("id", runId)
       .maybeSingle();
+    const priorPartialState = backtestOwner?.results?.partial_state || null;
     const zoneLocalActivation = backtestOwner?.user_id
       ? await loadZoneLocalActivation(db, {
         userId: backtestOwner.user_id,
@@ -1737,6 +1757,24 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     if (startMs >= endMs) {
       throw new Error("Invalid backtest date range. Start date must be before end date.");
     }
+    const requestedResumeAt = typeof body.__resumeAt === "string"
+      ? new Date(body.__resumeAt).getTime()
+      : Number.NaN;
+    const scanStartMs = Number.isFinite(requestedResumeAt)
+      ? Math.max(startMs, requestedResumeAt)
+      : startMs;
+    const earliestOpenEntryMs = Array.isArray(priorPartialState?.openPositions)
+      ? priorPartialState.openPositions.reduce(
+        (earliest: number, position: OpenPosition) => {
+          const entryMs = new Date(position.entryTime).getTime();
+          return Number.isFinite(entryMs) ? Math.min(earliest, entryMs) : earliest;
+        },
+        scanStartMs,
+      )
+      : scanStartMs;
+    const fetchStartDate = new Date(
+      Math.min(scanStartMs, earliestOpenEntryMs),
+    ).toISOString().slice(0, 10);
 
     console.log(`[backtest:${runId}] Starting: ${instruments.length} instruments, ${startDate} → ${endDate}, balance: $${startingBalance}, research: ${researchMode}`);
 
@@ -1775,6 +1813,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       skippedNoSLTP: 0,
       skippedImpulseNoZone: 0,
       skippedImpulseNotAtZone: 0,
+      skippedByPreGate: 0,
+      confluenceErrors: 0,
+      firstConfluenceError: null as string | null,
       signalsGenerated: 0,
       tradesOpened: 0,
       highestScoreSeen: 0,
@@ -1811,6 +1852,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     const supportedInstruments = instruments.filter((s: string) => SUPPORTED_SYMBOLS[s]);
     const totalChunks = Math.max(1, Math.ceil(supportedInstruments.length / CHUNK_SIZE));
     const chunkSymbols = supportedInstruments.slice(chunkIndex * CHUNK_SIZE, (chunkIndex + 1) * CHUNK_SIZE);
+    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
+    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks}: ${chunkSymbols.length} symbols [${chunkSymbols.join(", ")}]`);
 
     // Track unsupported only on first chunk to avoid double counting
@@ -1839,17 +1882,17 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         weeklyCandles,
         dedicatedM15Candles,
       ] = await Promise.all([
-        fetchHistoricalCandles(symbol, entryInterval, range, startDate, endDate),
-        fetchHistoricalCandles(symbol, "1d", "2y", startDate, endDate),
-        fetchHistoricalCandles(symbol, "4h", range, startDate, endDate),
-        fetchHistoricalCandles(symbol, "1h", range, startDate, endDate),
-        fetchHistoricalCandles(symbol, "1w", "2y", startDate, endDate),
+        fetchHistoricalCandles(symbol, entryInterval, range, fetchStartDate, endDate),
+        fetchHistoricalCandles(symbol, "1d", "2y", fetchStartDate, endDate),
+        fetchHistoricalCandles(symbol, "4h", range, fetchStartDate, endDate),
+        fetchHistoricalCandles(symbol, "1h", range, fetchStartDate, endDate),
+        fetchHistoricalCandles(symbol, "1w", "2y", fetchStartDate, endDate),
         needsDedicatedM15
           ? fetchHistoricalCandles(
             symbol,
             "15m",
             range,
-            startDate,
+            fetchStartDate,
             endDate,
           )
           : Promise.resolve([] as Candle[]),
@@ -1867,7 +1910,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       const smtPair = SMT_PAIRS[symbol];
       let smtCandles: Candle[] | undefined;
       if (smtPair && SUPPORTED_SYMBOLS[smtPair] && config.useSMT) {
-        smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, startDate, endDate);
+        smtCandles = await fetchHistoricalCandles(smtPair, entryInterval, range, fetchStartDate, endDate);
       }
       candleData[symbol] = {
         entry: entryCandles,
@@ -1891,15 +1934,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     let fotsiCandleMap: Record<string, Candle[]> = {};
 
     // Try to reuse cached FOTSI timeline from previous chunk OR warmup phase
-    let cachedFotsi: any = null;
-    {
-      const { data: runRow } = await db
-        .from("backtest_runs")
-        .select("results")
-        .eq("id", runId)
-        .maybeSingle();
-      cachedFotsi = runRow?.results?.partial_state?.fotsiTimeline || null;
-    }
+    const cachedFotsi = priorPartialState?.fotsiTimeline || null;
     if (cachedFotsi && Array.isArray(cachedFotsi)) {
       for (const [date, snap] of cachedFotsi) fotsiTimeline.set(date, snap);
       console.log(`[backtest:${runId}] FOTSI timeline restored: ${fotsiTimeline.size} snapshots`);
@@ -1962,16 +1997,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       } catch { btRateMap[symbol] = 1; }
     }
     // Merge with previously persisted rate map
-    let priorRateMap: Record<string, number> = {};
-    if (chunkIndex > 0) {
-      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
-      priorRateMap = rr?.results?.partial_state?.btRateMap || {};
-    }
+    const priorRateMap: Record<string, number> =
+      priorPartialState?.btRateMap || {};
     Object.assign(btRateMap, { ...priorRateMap, ...btRateMap });
 
     // ── Main Scan Loop ──
-    const chunkProgressStart = 10 + Math.round((chunkIndex / totalChunks) * 80);
-    const chunkProgressEnd = 10 + Math.round(((chunkIndex + 1) / totalChunks) * 80);
     await updateProgress(chunkProgressStart, `Chunk ${chunkIndex + 1}/${totalChunks}: running scan loop...`);
 
     // Seed state from prior chunks
@@ -1984,10 +2014,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     let tradeCounter = 0;
     let resumeSymbolIndex = 0; // For time-boxing: which symbol to resume from
     let resumeBarIndex = -1;   // For time-boxing: which bar to resume from (-1 = start from beginning)
+    let symbolRuntimeState: Record<string, BacktestSymbolRuntimeState> = {};
     // Always attempt to read partial_state: handles both multi-chunk continuation AND time-box re-invocation
     {
-      const { data: rr } = await db.from("backtest_runs").select("results").eq("id", runId).maybeSingle();
-      const ps = rr?.results?.partial_state;
+      const ps = priorPartialState;
       if (ps) {
         balance = ps.balance ?? startingBalance;
         peakBalance = ps.peakBalance ?? startingBalance;
@@ -1998,6 +2028,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         tradeCounter = ps.tradeCounter || 0;
         resumeSymbolIndex = ps.resumeSymbolIndex || 0;
         resumeBarIndex = ps.resumeBarIndex ?? -1;
+        symbolRuntimeState = ps.symbolRuntimeState || {};
         if (ps.diagnostics) {
           for (const k of Object.keys(ps.diagnostics)) {
             if (typeof (ps.diagnostics as any)[k] === "number") {
@@ -2019,12 +2050,20 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
     let lastProgressUpdate = Date.now();
 
     // Cancel check before scan loop
-    if (await isCancelled()) {
-      await db.from("backtest_runs").update({
-        status: "cancelled",
-        completed_at: new Date().toISOString(),
-        progress_message: "Cancelled before scan loop",
-      }).eq("id", runId);
+    const statusBeforeScan = await stoppedStatus();
+    if (statusBeforeScan) {
+      await cleanupZoneReplayEvidence(db, runId).catch((error) =>
+        console.warn(
+          `[backtest:${runId}] Replay cleanup failed:`,
+          error instanceof Error ? error.message : error,
+        )
+      );
+      if (statusBeforeScan === "cancelled") {
+        await db.from("backtest_runs").update({
+          completed_at: new Date().toISOString(),
+          progress_message: "Cancelled before scan loop",
+        }).eq("id", runId);
+      }
       return;
     }
 
@@ -2038,13 +2077,21 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
       // Cancel check between symbols
       if (completedSymbols > 0 && completedSymbols % 3 === 0) {
-        if (await isCancelled()) {
-          await db.from("backtest_runs").update({
-            status: "cancelled",
-            completed_at: new Date().toISOString(),
-            progress_message: `Cancelled after ${completedSymbols}/${symbolList.length} symbols (${allTrades.length} trades found)`,
-            results: allTrades.length > 0 ? { trades: allTrades.slice(0, 500), partial: true, cancelledAt: symbol } : null,
-          }).eq("id", runId);
+        const terminalStatus = await stoppedStatus();
+        if (terminalStatus) {
+          await cleanupZoneReplayEvidence(db, runId).catch((error) =>
+            console.warn(
+              `[backtest:${runId}] Replay cleanup failed:`,
+              error instanceof Error ? error.message : error,
+            )
+          );
+          if (terminalStatus === "cancelled") {
+            await db.from("backtest_runs").update({
+              completed_at: new Date().toISOString(),
+              progress_message: `Cancelled after ${completedSymbols}/${symbolList.length} symbols (${allTrades.length} trades found)`,
+              results: allTrades.length > 0 ? { trades: allTrades.slice(0, 500), partial: true, cancelledAt: symbol } : null,
+            }).eq("id", runId);
+          }
           return;
         }
       }
@@ -2061,17 +2108,36 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       } = candleData[symbol];
       if (entryCandles.length < 100) { diagnostics.skippedInsufficientData++; completedSymbols++; continue; }
 
+      // Candle arrays are fetched from a moving resume window. Rebase open
+      // position indices so hold-time and exit rules remain identical.
+      for (const position of openPositions) {
+        if (position.symbol !== symbol) continue;
+        const rebasedIndex = entryCandles.findIndex((entryCandle) =>
+          new Date(
+            entryCandle.datetime.endsWith("Z")
+              ? entryCandle.datetime
+              : entryCandle.datetime + "Z",
+          ).getTime() >= new Date(position.entryTime).getTime()
+        );
+        if (rebasedIndex >= 0) position.entryBarIndex = rebasedIndex;
+      }
+
       const spec = SPECS[symbol] || SPECS["EUR/USD"];
       const lookback = config.structureLookback || 100;
+      const restoredRuntime = symbolRuntimeState[symbol];
       // ── Thesis Conviction: in-memory state per (direction) ──
       // Tracks conviction across bars — resets on session change or trade open
-      const convictionStates = new Map<string, ThesisConvictionState>();
-      let lastConvictionSession: string = "";
+      const convictionStates = new Map<string, ThesisConvictionState>(
+        restoredRuntime?.convictionStates || [],
+      );
+      let lastConvictionSession: string =
+        restoredRuntime?.lastConvictionSession || "";
 
       // ── Game Plan: session-aware cache per symbol ──
       // Regenerate when session changes (same as bot-scanner's per-session approach)
-      let activeGamePlan: SessionGamePlan | null = null;
-      let lastGPSession: string = "";
+      let activeGamePlan: SessionGamePlan | null =
+        restoredRuntime?.activeGamePlan || null;
+      let lastGPSession: string = restoredRuntime?.lastGPSession || "";
       const mapSessionToGP = (sName: string): GPSessionName | null => {
         if (sName === "London") return "London";
         if (sName === "New York") return "New York";
@@ -2082,19 +2148,97 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
       // Find the start index (first candle >= startDate)
       const startIdx = entryCandles.findIndex(c => {
         const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
-        return cMs >= startMs;
+        return cMs >= scanStartMs;
       });
       let effectiveStart = Math.max(startIdx, lookback);
 
       // If resuming mid-symbol from a time-boxed invocation, skip to the resume bar
-      if (symIdx === resumeSymbolIndex && resumeBarIndex > 0) {
+      if (
+        !Number.isFinite(requestedResumeAt) &&
+        symIdx === resumeSymbolIndex &&
+        resumeBarIndex > 0
+      ) {
         effectiveStart = resumeBarIndex;
       }
 
+      const scanSliceStartedAt = performance.now();
       for (let i = effectiveStart; i < entryCandles.length; i++) {
         const candle = entryCandles[i];
         const candleMs = new Date(candle.datetime.endsWith("Z") ? candle.datetime : candle.datetime + "Z").getTime();
         if (candleMs > endMs) break;
+
+        const scanSliceElapsed = performance.now() - scanSliceStartedAt;
+        const invocationElapsed = Date.now() - INVOCATION_START;
+        if (
+          processedBars > 0 &&
+          (
+            scanSliceElapsed >= MAX_SCAN_SLICE_MS ||
+            invocationElapsed >= MAX_INVOCATION_MS
+          )
+        ) {
+          if (await stoppedStatus()) {
+            await cleanupZoneReplayEvidence(db, runId).catch((error) =>
+              console.warn(
+                `[backtest:${runId}] Replay cleanup failed:`,
+                error instanceof Error ? error.message : error,
+              )
+            );
+            return;
+          }
+          const symbolFraction = Math.max(
+            0,
+            Math.min(1, (candleMs - startMs) / Math.max(1, endMs - startMs)),
+          );
+          const progress = Math.min(
+            chunkProgressEnd - 1,
+            chunkProgressStart +
+              Math.round(
+                symbolFraction * (chunkProgressEnd - chunkProgressStart),
+              ),
+          );
+          symbolRuntimeState[symbol] = {
+            convictionStates: [...convictionStates.entries()],
+            lastConvictionSession,
+            activeGamePlan,
+            lastGPSession,
+          };
+          const partial_state = {
+            balance,
+            peakBalance,
+            openPositions,
+            allTrades,
+            blockedTrades,
+            goldenReplaySnapshots,
+            tradeCounter,
+            diagnostics,
+            btRateMap,
+            fotsiTimeline: [...fotsiTimeline.entries()],
+            resumeSymbolIndex: symIdx,
+            resumeBarIndex: -1,
+            resumeAt: candle.datetime,
+            symbolRuntimeState,
+          };
+          await db.from("backtest_runs").update({
+            progress,
+            progress_message:
+              `Checkpoint: continuing ${symbol} from ${candle.datetime}...`,
+            status: "running",
+            heartbeat_at: new Date().toISOString(),
+            results: { partial_state },
+          }).eq("id", runId);
+          console.log(
+            `[backtest:${runId}] CPU checkpoint at ${symbol}`
+              + ` bar ${i}/${entryCandles.length} after`
+              + ` ${Math.round(scanSliceElapsed)}ms scan time`,
+          );
+          await selfInvokeNextChunk(
+            runId,
+            { ...body, __resumeAt: candle.datetime },
+            chunkIndex,
+          );
+          return;
+        }
+
         processedBars++;
         diagnostics.totalCandlesEvaluated++;
 
@@ -2105,34 +2249,6 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
           await updateProgress(pct, `Chunk ${chunkIndex + 1}/${totalChunks}: ${symbol} bar ${i}/${entryCandles.length}...`);
           lastProgressUpdate = Date.now();
 
-          // ── TIME-BOX CHECK: if approaching wall-clock limit, persist state and self-invoke ──
-          if (Date.now() - INVOCATION_START > MAX_INVOCATION_MS) {
-            console.log(`[backtest:${runId}] Time-box hit at ${symbol} bar ${i}/${entryCandles.length}. Persisting and chaining.`);
-            const partial_state = {
-              balance,
-              peakBalance,
-              openPositions,
-              allTrades,
-              blockedTrades,
-              goldenReplaySnapshots,
-              tradeCounter,
-              diagnostics,
-              btRateMap,
-              fotsiTimeline: [...fotsiTimeline.entries()],
-              resumeSymbolIndex: symIdx,
-              resumeBarIndex: i,
-            };
-            await db.from("backtest_runs").update({
-              progress: Math.min(chunkProgressEnd - 1, chunkProgressStart + Math.round((processedBars / Math.max(1, totalBars)) * (chunkProgressEnd - chunkProgressStart))),
-              progress_message: `Time-box: continuing ${symbol} from bar ${i}...`,
-              status: "running",
-              heartbeat_at: new Date().toISOString(),
-              results: { partial_state },
-            }).eq("id", runId);
-            // Self-invoke the SAME chunk to continue from where we left off
-            await selfInvokeNextChunk(runId, body, chunkIndex);
-            return;
-          }
         }
 
         // ── Process exits first ──
@@ -2173,26 +2289,23 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         if (gpSession && gpSession !== lastGPSession) {
           lastGPSession = gpSession;
           try {
-            const gpDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < new Date(candleMs).toISOString().slice(0, 10));
-            const gpH4 = h4Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
+            const dayCutoffMs = utcDayStart(candleMs);
+            const gpDaily = boundedCandlesBefore(dailyCandles, dayCutoffMs, 120);
+            const gpH4 = boundedCandlesBefore(h4Candles, candleMs, 120);
             const gpEntry = entryCandles.slice(Math.max(0, i - 200), i);
-            const gpH1 = h1Candles.filter(c => new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs);
-            const gpM15 = m15Candles.filter(c =>
-              new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs
-            );
-            const gpWeekly = weeklyCandles.filter(c =>
-              new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime() < candleMs
-            );
+            const gpH1 = boundedCandlesBefore(h1Candles, candleMs, 200);
+            const gpM15 = boundedCandlesBefore(m15Candles, candleMs, 200);
+            const gpWeekly = boundedCandlesBefore(weeklyCandles, dayCutoffMs, 60);
             if (gpDaily.length >= 10 && gpEntry.length >= 10) {
               const gpRoleCandles = bindTimeframeCandles(
                 timeframeAuthority,
                 buildTimeframeCandleMap<Candle>([
                   { timeframe: entryInterval, candles: gpEntry },
-                  { timeframe: "15m", candles: gpM15.slice(-200) },
-                  { timeframe: "1h", candles: gpH1.slice(-200) },
-                  { timeframe: "4h", candles: gpH4.slice(-120) },
-                  { timeframe: "1d", candles: gpDaily.slice(-120) },
-                  { timeframe: "1w", candles: gpWeekly.slice(-60) },
+                  { timeframe: "15m", candles: gpM15 },
+                  { timeframe: "1h", candles: gpH1 },
+                  { timeframe: "4h", candles: gpH4 },
+                  { timeframe: "1d", candles: gpDaily },
+                  { timeframe: "1w", candles: gpWeekly },
                 ]),
               );
               const gpDecisionEvidence = buildStyleDecisionEvidence(
@@ -2222,9 +2335,10 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
         // ── Get relevant daily + weekly candles up to this date (no lookahead) ──
         const candleDateStr = new Date(candleMs).toISOString().slice(0, 10);
-        const relevantDaily = dailyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
+        const dayCutoffMs = utcDayStart(candleMs);
+        const relevantDaily = boundedCandlesBefore(dailyCandles, dayCutoffMs, 120);
         if (relevantDaily.length < 10) continue;
-        const relevantWeekly = weeklyCandles.filter(c => c.datetime.slice(0, 10) < candleDateStr);
+        const relevantWeekly = boundedCandlesBefore(weeklyCandles, dayCutoffMs, 60);
 
                 // ── Portfolio Pre-Gates (cheap checks before expensive analysis) ──
         // These gates only need portfolio state, not analysis results.
@@ -2236,11 +2350,11 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
             return "max_positions";
           // Gate 2: Max per symbol
           const symCount = openPositions.filter(p => p.symbol === symbol).length;
-          if (!checkMaxPerSymbol({ symbolPositionCount: symCount, maxPerSymbol: config.maxPerSymbol }).passed)
+          if (!checkMaxPerSymbol({ symbolPositionCount: symCount, maxPerSymbol: config.maxPerSymbol, symbol }).passed)
             return "max_per_symbol";
           // Gate 5: Max drawdown (circuit breaker)
           if (peakBalance > 0 && config.maxDrawdown > 0) {
-            if (!checkMaxDrawdown({ peakBalance, currentBalance: balance, maxDrawdownPercent: config.maxDrawdown }).passed)
+            if (!checkMaxDrawdown({ peakBalance, balance, maxDrawdown: config.maxDrawdown }).passed)
               return "max_drawdown";
           }
           // Gate 6: Daily loss limit
@@ -2279,18 +2393,9 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
 
         // ── Get relevant H4/H1 candles up to this candle time ──
-        const relevantH4 = h4Candles.filter(c => {
-          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
-          return cMs < candleMs;
-        });
-        const relevantH1 = h1Candles.filter(c => {
-          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
-          return cMs < candleMs;
-        });
-        const relevantM15 = m15Candles.filter(c => {
-          const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
-          return cMs < candleMs;
-        });
+        const relevantH4 = boundedCandlesBefore(h4Candles, candleMs, 120);
+        const relevantH1 = boundedCandlesBefore(h1Candles, candleMs, 200);
+        const relevantM15 = boundedCandlesBefore(m15Candles, candleMs, 200);
         const windowStart = Math.max(0, i - lookback);
         const analysisCandles = entryCandles.slice(windowStart, i + 1);
         const roleCandles = bindTimeframeCandles(
@@ -2385,10 +2490,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         // SMT data
         let smtResult: any = null;
         if (smtCandles && config.useSMT) {
-          const smtSlice = smtCandles.filter(c => {
-            const cMs = new Date(c.datetime.endsWith("Z") ? c.datetime : c.datetime + "Z").getTime();
-            return cMs <= candleMs;
-          }).slice(-lookback);
+          const smtSlice = boundedCandlesBefore(smtCandles, candleMs, lookback, true);
           if (smtSlice.length >= 30) {
             try {
               smtResult = detectSMTDivergence(symbol, analysisCandles, smtSlice);
@@ -2415,7 +2517,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         } else {
           (pairConfig as any)._gamePlanContext = null;
         }
-        (pairConfig as any).dolTPExtensionEnabled = config.dolTPExtensionEnabled !== false;
+        (pairConfig as any).dolTPExtensionEnabled =
+          (config as any).dolTPExtensionEnabled !== false;
         // ── Run Confluence Analysis ──
         let analysis: any;
         try {
@@ -2553,7 +2656,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
                   stylePolicyHash: replayZoneStylePolicy.policyHash,
                   observedAt: candle.datetime,
                   candidates: multiTF.allZones,
-                  candles: entryCandles,
+                  candles: outcomeCandlesAfter(entryCandles, candleMs),
                   pipSize: spec.pipSize,
                 });
                 if (replayEvidence.inserted > 0) {
@@ -3582,6 +3685,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         }
       }
 
+      delete symbolRuntimeState[symbol];
       completedSymbols++;
       // Update progress after each symbol completes
       const symPct = Math.min(90, 40 + Math.round((completedSymbols / symbolList.length) * 50));
@@ -3615,6 +3719,7 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         diagnostics,
         btRateMap,
         fotsiTimeline: [...fotsiTimeline.entries()],
+        symbolRuntimeState,
       };
       await db.from("backtest_runs").update({
         progress: chunkProgressEnd,
@@ -3623,7 +3728,8 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
         results: { partial_state },
       }).eq("id", runId);
       console.log(`[backtest:${runId}] Chunk ${chunkIndex + 1}/${totalChunks} done. Chaining to next.`);
-      await selfInvokeNextChunk(runId, body, chunkIndex + 1);
+      const { __resumeAt: _completedSymbolResume, ...nextChunkBody } = body;
+      await selfInvokeNextChunk(runId, nextChunkBody, chunkIndex + 1);
       return;
     }
 
@@ -3771,6 +3877,12 @@ async function runBacktestJob(runId: string, body: any, chunkIndex: number = 0) 
 
   } catch (err: any) {
     console.error(`[backtest:${runId}] FATAL:`, err);
+    await cleanupZoneReplayEvidence(db, runId).catch((cleanupError) =>
+      console.warn(
+        `[backtest:${runId}] Replay cleanup failed after fatal error:`,
+        cleanupError instanceof Error ? cleanupError.message : cleanupError,
+      )
+    );
     await db.from("backtest_runs").update({
       status: "failed",
       completed_at: new Date().toISOString(),
@@ -3876,6 +3988,12 @@ Deno.serve(async (req: Request) => {
           }).eq("id", runId);
           data.status = "failed";
           data.error_message = "Backtest engine stopped responding. The run may have exceeded time limits.";
+          await cleanupZoneReplayEvidence(db, runId).catch((cleanupError) =>
+            console.warn(
+              `[backtest:${runId}] Replay cleanup failed after stale run:`,
+              cleanupError instanceof Error ? cleanupError.message : cleanupError,
+            )
+          );
         }
       }
       // Also detect stale pending runs: if pending for >120s without any heartbeat, likely the
@@ -3891,6 +4009,12 @@ Deno.serve(async (req: Request) => {
           }).eq("id", runId);
           data.status = "failed";
           data.error_message = "Backtest engine failed to start. Please try again.";
+          await cleanupZoneReplayEvidence(db, runId).catch((cleanupError) =>
+            console.warn(
+              `[backtest:${runId}] Replay cleanup failed after stale pending run:`,
+              cleanupError instanceof Error ? cleanupError.message : cleanupError,
+            )
+          );
         }
       }
       return respond({
@@ -3945,6 +4069,12 @@ Deno.serve(async (req: Request) => {
         completed_at: new Date().toISOString(),
         progress_message: "Cancelled by user",
       }).eq("id", runId);
+      await cleanupZoneReplayEvidence(db, runId).catch((cleanupError) =>
+        console.warn(
+          `[backtest:${runId}] Replay cleanup failed after cancellation:`,
+          cleanupError instanceof Error ? cleanupError.message : cleanupError,
+        )
+      );
       return respond({ status: "cancelled", runId });
     }
 
@@ -4085,13 +4215,14 @@ Deno.serve(async (req: Request) => {
     // self-invoke a warmup phase that pre-fetches FOTSI, then chains to chunk 0.
     const warmupUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/backtest-engine`;
     const warmupKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const { __resumeAt: _untrustedResumeAt, ...startBody } = body;
     fetch(warmupUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "apikey": warmupKey,
       },
-      body: JSON.stringify({ ...body, action: "warmup", runId }),
+      body: JSON.stringify({ ...startBody, action: "warmup", runId }),
     }).catch(e => console.error(`[backtest:${runId}] warmup invoke error:`, e));
 
     return respond({ runId, status: "started", message: "Backtest queued" });

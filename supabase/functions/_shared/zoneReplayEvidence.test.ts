@@ -3,6 +3,7 @@ import {
   assertMatch,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  cleanupZoneReplayEvidence,
   deterministicReplayScanCycleId,
   persistZoneReplayEvidence,
   ZONE_LOCAL_REPLAY_CONTRACT_VERSION,
@@ -135,4 +136,32 @@ Deno.test("retrospective replay stores resolved non-activating evidence", async 
   );
   assertEquals(captured[0].outcome_status, "would_have_won");
   assertEquals(captured[0].price_reached_entry, true);
+});
+
+Deno.test("incomplete replay evidence can be removed by run identity", async () => {
+  const calls: Array<[string, string]> = [];
+  const client = {
+    from: () => ({
+      delete: () => ({
+        eq: (column: string, value: string) => {
+          calls.push([column, value]);
+          return {
+            eq: (nextColumn: string, nextValue: string) => {
+              calls.push([nextColumn, nextValue]);
+              return Promise.resolve({ error: null });
+            },
+          };
+        },
+      }),
+    }),
+  };
+
+  await cleanupZoneReplayEvidence(
+    client,
+    "40d0a10c-3055-4feb-ade2-560adf73df81",
+  );
+  assertEquals(calls, [
+    ["replay_run_id", "40d0a10c-3055-4feb-ade2-560adf73df81"],
+    ["evidence_source", "retrospective_replay"],
+  ]);
 });
