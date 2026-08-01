@@ -21,6 +21,11 @@ Deno.test("backtest replay is explicit, persisted, and reported", () => {
   assertStringIncludes(engine, "outcomeCandlesAfter(");
   assertStringIncludes(engine, "MAX_SCAN_SLICE_MS = 650");
   assertStringIncludes(engine, "__resumeAt: candle.datetime");
+  assertStringIncludes(
+    engine,
+    "chunkIndex === 0 && !Number.isFinite(requestedResumeAt)",
+  );
+  assertStringIncludes(engine, "chunkResumeProgress");
   assertStringIncludes(engine, "symbolRuntimeState");
   assertStringIncludes(engine, "position.entryBarIndex = rebasedIndex");
   assertStringIncludes(engine, "cleanupZoneReplayEvidence(db, runId)");
