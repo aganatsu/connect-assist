@@ -3506,6 +3506,9 @@ async function runScanForUser(
   // Daily candles change once/day, weekly once/week. Loading from DB saves
   // ~34 TwelveData API calls per cycle, keeping us within the 50/min limit.
   const cacheableRequests: Array<{ symbol: string; interval: string }> = [];
+  // Observation-only Phase 1 per-timeframe evidence for this scan cycle.
+  // Collected per pair, written in bounded awaited chunks after the loop.
+  const zoneEvidenceRows: EvidenceRow[] = [];
   for (const pair of scanOrder) {
     if (!SUPPORTED_SYMBOLS[pair]) continue;
     cacheableRequests.push({ symbol: pair, interval: "1d" });
