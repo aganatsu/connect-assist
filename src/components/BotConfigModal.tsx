@@ -21,7 +21,7 @@ import { EnterTab } from "@/components/config/EnterTab";
 import { ExitTab } from "@/components/config/ExitTab";
 import { RiskTab } from "@/components/config/RiskTab";
 import { normalizeBotConfigForEditor } from "@/lib/botConfigEditor";
-import { searchBotConfigSettings } from "@/lib/botConfigSearch";
+import { searchBotConfigSettings, type BotConfigTabId } from "@/lib/botConfigSearch";
 
 // ─── Legacy Tab ID → New Tab ID Mapping ───────────────────────────────────────
 // Used to translate defaultTab props from other components that still use old IDs.
