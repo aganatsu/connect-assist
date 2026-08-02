@@ -178,7 +178,7 @@ export function TimeframeEvidencePanel({
       let query = supabase
         .from("zone_timeframe_evidence")
         .select(
-          "id,symbol,direction,observed_at,trading_style,style_policy_snapshot,selected_timeframe,final_reason,slots,payload_truncated",
+          "id,symbol,direction,observed_at,trading_style,style_policy_snapshot,selected_timeframe,final_reason,slots,payload_truncated,canonical_detector_version,canonical_parity",
         );
 
       if (evidenceId) {
@@ -196,7 +196,7 @@ export function TimeframeEvidencePanel({
 
       const { data, error: queryError } = await query.limit(1);
       if (cancelled) return;
-      const exactRecord = (data?.[0] as EvidenceRecord) ?? null;
+      const exactRecord = (data?.[0] as unknown as EvidenceRecord) ?? null;
       setRecord(exactRecord);
       let resolvedError = queryError?.message ?? null;
       if (!queryError && !exactRecord && evidenceId) {
