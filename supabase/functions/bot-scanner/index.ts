@@ -2446,12 +2446,23 @@ async function runScanForUser(
             // Send Telegram notification: zone touched, hunting confirmation
             if (telegramChatIds.length > 0 && shouldNotify("zone_touched")) {
               const emoji = pending.direction === "long" ? "🟡" : "🟡";
+              const touchSR = parseSignalReason(pending.signal_reason);
               const msg = `${emoji} <b>Zone Touched — Hunting Confirmation</b>\n\n` +
-                `<b>Symbol:</b> ${pending.symbol}\n` +
-                `<b>Direction:</b> ${pending.direction.toUpperCase()}\n` +
-                `<b>Zone:</b> ${pending.entry_zone_type} [${parseFloat(pending.entry_zone_low || "0").toFixed(5)} - ${parseFloat(pending.entry_zone_high || "0").toFixed(5)}]\n` +
-                `<b>Waiting for:</b> ${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}\n` +
-                `<b>Entry Level:</b> ${entryPrice}`;
+                tgLine("Symbol", pending.symbol) +
+                tgLine("Direction", String(pending.direction).toUpperCase()) +
+                tgLine("Zone Range", `${pending.entry_zone_type} [${fmtPx(pending.entry_zone_low || "0", pending.symbol)} – ${fmtPx(pending.entry_zone_high || "0", pending.symbol)}]`) +
+                tgLine("Entry Level", fmtPx(entryPrice, pending.symbol)) +
+                tgLine("Planned SL", fmtPx(pending.stop_loss, pending.symbol)) +
+                tgLine("Planned TP", fmtPx(pending.take_profit, pending.symbol)) +
+                tgLine("Size", pending.size ? `${pending.size} lots` : null) +
+                tgLine("Score", pending.signal_score) +
+                tgLine("Waiting for", `${pending.direction === "short" ? "Bearish" : "Bullish"} ${pendingConfirmationLabel}`) +
+                tgLine("Waited in Zone Setup", durationLabel(pending.created_at)) +
+                "\n" +
+                zoneEvidenceLines(touchSR) +
+                directionVerdictLines(touchSR.directionVerdict) +
+                styleLadderLines(touchSR) +
+                watchlistOriginLines(touchSR);
               await Promise.all(telegramChatIds.map(async (chatId: string) => {
                 try {
                   await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
