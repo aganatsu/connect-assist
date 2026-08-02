@@ -7682,30 +7682,33 @@ async function runScanForUser(
             // TP method label
             const zoneTpMethod = pairConfig.tpMethod || "rr_ratio";
             const zoneTpLabel = zoneTpMethod === "rr_ratio" ? `R:R (${pairConfig.tpRatio || 2.0}:1)` : zoneTpMethod === "next_level" ? "Next Structure Level" : zoneTpMethod === "fixed_pips" ? "Fixed Pips" : `ATR \u00d7${pairConfig.tpATRMultiple || 2.0}`;
-            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>
-
-` +
-              `<b>Symbol:</b> ${pair}
-` +
-              `<b>Direction:</b> ${analysis.direction.toUpperCase()}
-` +
-              `<b>Zone Trigger:</b> ${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)
-` +
-              `<b>Current Price:</b> ${fmtPx(analysis.lastPrice, pair)}
-` +
-              `<b>Size:</b> ${limitSize} lots
-` +
-              `<b>SL:</b> ${fmtPx(limitSL, pair)}
-` +
-              `<b>TP:</b> ${fmtPx(limitTP, pair)} (${zoneTpLabel})
-` +
-              `<b>Score:</b> ${analysis.score.toFixed(1)}
-` +
-              `<b>Confirm Mode:</b> ${zoneConfLabel}
-` +
-              `<b>Confirmation:</b> ${unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone"}
-` +
-              `<b>Expires:</b> ${expiryMinutes}min` +
+            const zoneSR = { impulseZone: (detail as any).impulseZone || null };
+            const zoneRR = (() => {
+              const risk = Math.abs(limitEntry.price - limitSL);
+              return risk > 0 ? (Math.abs(limitTP - limitEntry.price) / risk).toFixed(2) : null;
+            })();
+            const msg = `${emoji} <b>${mode} Zone Setup ACTIVE</b>\n\n` +
+              tgLine("Symbol", pair) +
+              tgLine("Direction", analysis.direction.toUpperCase()) +
+              tgLine("Zone Trigger", `${fmtPx(limitEntry.price, pair)} (${limitEntry.zoneType} zone)`) +
+              tgLine("Zone Range", `${fmtPx(limitEntry.zoneLow, pair)} – ${fmtPx(limitEntry.zoneHigh, pair)}`) +
+              tgLine("Current Price", fmtPx(analysis.lastPrice, pair)) +
+              tgLine("Distance", `${(Math.abs(analysis.lastPrice - limitEntry.price) / (SPECS[pair] || SPECS["EUR/USD"]).pipSize).toFixed(1)} pips`) +
+              tgLine("Size", `${limitSize} lots`) +
+              tgLine("SL", fmtPx(limitSL, pair)) +
+              tgLine("TP", `${fmtPx(limitTP, pair)} (${zoneTpLabel})`) +
+              (zoneRR ? tgLine("Planned R:R", `${zoneRR}:1`) : "") +
+              tgLine("Score", analysis.score.toFixed(1)) +
+              tgLine("Session", analysis.session?.name) +
+              "\n" +
+              zoneEvidenceLines(zoneSR) +
+              directionVerdictLines((detail as any).directionVerdict) +
+              styleLadderLines({}, timeframeAuthority?.roles) +
+              crossTimeframeAuthorityLine(crossTimeframeAuthority) +
+              "\n" +
+              tgLine("Confirm Mode", zoneConfLabel) +
+              tgLine("Confirmation", unifiedZoneData?.confirmation ? `${unifiedZoneData.confirmation.type.replace(/_/g, " ")}${unifiedZoneData.confirmation.entryReady ? " \u2713" : " (pending)"} — ${unifiedZoneData.confirmation.detail}` : "Waiting for confirmation at zone") +
+              tgLine("Expires", `${expiryMinutes}min`) +
               (isPromotedFromStaging && existingStaged ? `
 
 📋 <b>From Watchlist</b> (${existingStaged.scan_cycles + 1} cycles)` : "");
