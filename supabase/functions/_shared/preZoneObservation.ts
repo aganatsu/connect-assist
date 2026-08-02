@@ -78,5 +78,9 @@ export function requiresFreshCandidateHandoff(
   nextExecutionEligible: boolean,
 ): boolean {
   if (!setup) return false;
-  return isPreZoneObservation(setup) !== !nextExecutionEligible;
+  // Observation -> executable must create a fresh candidate so incomplete
+  // evidence cannot be promoted in place. The reverse is intentionally not a
+  // handoff: a later scan failing to rediscover the zone does not erase the
+  // already-frozen executable thesis.
+  return isPreZoneObservation(setup) && nextExecutionEligible;
 }
