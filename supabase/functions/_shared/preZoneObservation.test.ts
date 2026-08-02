@@ -95,6 +95,19 @@ Deno.test("an observation can never be silently converted into an execution cand
   );
   assertEquals(
     requiresFreshCandidateHandoff({ execution_eligible: true }, false),
-    true,
+    false,
+  );
+});
+
+Deno.test("a frozen execution candidate survives a later no-zone observation", () => {
+  const executionCandidate = {
+    execution_eligible: true,
+    setup_type: "unified_zone_watch",
+    originating_zone: { low: 63_310, high: 63_627.66 },
+  };
+
+  assertEquals(
+    requiresFreshCandidateHandoff(executionCandidate, false),
+    false,
   );
 });
