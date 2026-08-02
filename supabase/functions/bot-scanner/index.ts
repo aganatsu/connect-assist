@@ -2010,12 +2010,26 @@ async function runScanForUser(
           const emoji = closeReason === "tp_hit" ? "🎯" : "🛑";
           const label = closeReason === "tp_hit" ? "TAKE PROFIT HIT" : "STOP LOSS HIT";
           const pnlEmoji = pnl >= 0 ? "✅" : "❌";
+          const closeSR = parseSignalReason(pos.signal_reason);
+          const closeOrigSL = closeSR.originalSL ?? pos.stop_loss;
+          const closeR = rMultiple(pos.entry_price, closeOrigSL, hitPrice, pos.direction);
           const msg = `${emoji} <b>${label}</b>\n\n` +
-            `<b>Symbol:</b> ${pos.symbol} (${pos.direction.toUpperCase()})\n` +
-            `<b>Entry:</b> ${pos.entry_price}\n` +
-            `<b>Exit:</b> ${hitPrice}\n` +
-            `<b>P&L:</b> ${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)\n` +
-            `<b>Size:</b> ${pos.size} lots`;
+            tgLine("Symbol", `${pos.symbol} (${String(pos.direction).toUpperCase()})`) +
+            tgLine("Entry", fmtPx(pos.entry_price, pos.symbol)) +
+            tgLine("Exit", fmtPx(hitPrice, pos.symbol)) +
+            tgLine("SL at close", fmtPx(pos.stop_loss, pos.symbol)) +
+            (String(closeOrigSL) !== String(pos.stop_loss) ? tgLine("Original SL", fmtPx(closeOrigSL, pos.symbol)) : "") +
+            tgLine("TP", fmtPx(pos.take_profit, pos.symbol)) +
+            tgLine("P&L", `${pnlEmoji} $${pnl.toFixed(2)} (${pnlPips.toFixed(1)} pips)`) +
+            (closeR !== null ? tgLine("R Multiple", `${closeR >= 0 ? "+" : ""}${closeR.toFixed(2)}R`) : "") +
+            tgLine("Size", `${pos.size} lots`) +
+            tgLine("Held", durationLabel(pos.open_time)) +
+            "\n" +
+            zoneEvidenceLines(closeSR) +
+            directionVerdictLines(closeSR.directionVerdict) +
+            styleLadderLines(closeSR) +
+            watchlistOriginLines(closeSR) +
+            tgLine("Setup", closeSR.setupType ? String(closeSR.setupType).toUpperCase() : null);
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
