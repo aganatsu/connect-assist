@@ -36,6 +36,14 @@ function ttlRemaining(stagedAt: string, ttlMinutes: number): { text: string; pct
   return { text: `${hrs}h ${mins}m left`, pct, urgent: false };
 }
 
+function displayResolutionReason(reason: string | null | undefined): string {
+  if (!reason) return "";
+  return reason.replace(
+    /^SL level breached/,
+    "Legacy protection level breached before entry",
+  );
+}
+
 // ── Score bar component ──
 function ScoreBar({ current, gate, watchThreshold }: { current: number; gate: number; watchThreshold: number }) {
   const barPct = Math.min(100, Math.max(0, current));
@@ -264,7 +272,17 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
           {(setup.entry_price || setup.sl_level || setup.tp_level) && (
             <div className="flex gap-3 text-[11px] font-mono mt-1">
               {setup.entry_price && <span className="text-foreground/60">Entry: <span className="text-foreground">{Number(setup.entry_price).toFixed(5)}</span></span>}
-              {setup.sl_level && <span className="text-foreground/60">SL: <span className="text-destructive">{Number(setup.sl_level).toFixed(5)}</span></span>}
+              {setup.sl_level && (
+                <span
+                  className="text-foreground/60"
+                  title="The price that invalidates this Watchlist thesis before a trade opens. It is not an active trade stop loss."
+                >
+                  Invalidation:{" "}
+                  <span className="text-destructive">
+                    {Number(setup.sl_level).toFixed(5)}
+                  </span>
+                </span>
+              )}
               {setup.tp_level && <span className="text-foreground/60">TP: <span className="text-success">{Number(setup.tp_level).toFixed(5)}</span></span>}
             </div>
           )}
@@ -408,7 +426,9 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                         </div>
                         {(s.invalidation_reason || s.lifecycle_reason) && (
                           <p className="text-[10px] text-foreground/55 leading-tight mt-0.5 pl-4">
-                            {s.invalidation_reason || s.lifecycle_reason}
+                            {displayResolutionReason(
+                              s.invalidation_reason || s.lifecycle_reason,
+                            )}
                           </p>
                         )}
                       </div>
