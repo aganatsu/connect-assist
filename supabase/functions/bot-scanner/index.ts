@@ -3309,7 +3309,18 @@ async function runScanForUser(
         );
         // Notify via Telegram
         if (telegramChatIds.length > 0 && shouldNotify("prop_firm_alert")) {
-          const msg = `🚨 PROP FIRM EMERGENCY\n\n${propFirmGateResult.reason}\n\nClosed ${closedCount} position(s) to protect account.`;
+          const pf: any = propFirmGateResult;
+          const msg = `🚨 <b>PROP FIRM EMERGENCY</b>\n\n` +
+            tgLine("Reason", pf.reason) +
+            tgLine("Positions Closed", closedCount) +
+            tgLine("Account Mode", isLiveMode ? "LIVE" : "PAPER") +
+            tgLine("Equity Used", brokerEquity != null ? `$${Number(brokerEquity).toFixed(2)} (broker)` : `$${Number(balance).toFixed(2)} (paper)`) +
+            tgLine("Daily P&L", pf.dailyPnl != null ? `$${Number(pf.dailyPnl).toFixed(2)}` : null) +
+            tgLine("Daily Loss Limit", pf.dailyLossLimit != null ? `$${Number(pf.dailyLossLimit).toFixed(2)}` : null) +
+            tgLine("Total Drawdown", pf.totalDrawdown != null ? `$${Number(pf.totalDrawdown).toFixed(2)}` : null) +
+            tgLine("Max Drawdown", pf.maxDrawdownLimit != null ? `$${Number(pf.maxDrawdownLimit).toFixed(2)}` : null) +
+            tgLine("Size Multiplier", pf.maxPositionSizeMultiplier) +
+            `\nAll exposure was flattened to protect the account.`;
           await Promise.all(telegramChatIds.map(async (chatId: string) => {
             try {
               await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/telegram-notify`, {
