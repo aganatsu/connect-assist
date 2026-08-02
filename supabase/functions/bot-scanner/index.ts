@@ -134,6 +134,10 @@ import {
   type WatchlistDirection,
 } from "../_shared/watchlistInvalidation.ts";
 import {
+  buildWatchlistLifecycleEvidence,
+  deriveWatchlistLifecyclePhase,
+} from "../_shared/watchlistLifecycleEvidence.ts";
+import {
   buildFrozenCrossTimeframeContext,
   loadCurrentEvidenceCertificateReferences,
   type EvidenceCertificateReference,
@@ -173,6 +177,7 @@ import {
 } from "../_shared/propFirmGate.ts";
 import { type HTFConfluenceData, type TFSlotLabels } from "../_shared/impulseZoneEngine.ts";
 import { findUnifiedZone, type UnifiedZoneResult } from "../_shared/unifiedZoneEngine.ts";
+import { evaluateStandaloneSweepGate } from "../_shared/standaloneSweepGate.ts";
 import { persistZoneShadowObservations } from "../_shared/zoneShadowObservationStore.ts";
 import {
   annotateEvidenceLifecycle,
@@ -1119,10 +1124,18 @@ Deno.serve(async (req) => {
       if (!userId) return respond({ error: "Unauthorized" }, 401);
       const setupId = body.setupId;
       if (!setupId) return respond({ error: "Missing setupId" }, 400);
+      const dismissedAt = new Date().toISOString();
       const { error: updateErr } = await adminClient.from("staged_setups").update({
         status: "invalidated",
         invalidation_reason: "Manually dismissed by user",
-        resolved_at: new Date().toISOString(),
+        lifecycle_reason: "Manually dismissed by user",
+        lifecycle_reason_code: "manual_dismissal",
+        lifecycle_evidence: buildWatchlistLifecycleEvidence({
+          reasonCode: "manual_dismissal",
+          observedAt: dismissedAt,
+          detail: { actor: "user" },
+        }),
+        resolved_at: dismissedAt,
       }).eq("id", setupId).eq("user_id", userId);
       if (updateErr) return respond({ error: updateErr.message }, 500);
       return respond({ success: true });
@@ -1810,10 +1823,24 @@ async function runScanForUser(
         const stagedAtMs = new Date(s.staged_at).getTime();
         const ttl = (s.ttl_minutes || stagingTTLMinutes) * 60_000;
         if (nowMs - stagedAtMs > ttl) {
+          const expiredAt = new Date().toISOString();
+          const ttlMinutes = s.ttl_minutes || stagingTTLMinutes;
           await supabase.from("staged_setups").update({
             status: "expired",
-            invalidation_reason: `TTL expired (${s.ttl_minutes || stagingTTLMinutes}min)`,
-            resolved_at: new Date().toISOString(),
+            invalidation_reason: `Watchlist time window expired (${ttlMinutes}min)`,
+            lifecycle_reason: `Watchlist time window expired (${ttlMinutes}min)`,
+            lifecycle_reason_code: "ttl_expired",
+            lifecycle_evidence: buildWatchlistLifecycleEvidence({
+              reasonCode: "ttl_expired",
+              observedAt: expiredAt,
+              frozenDirection: s.direction,
+              detail: {
+                stagedAt: s.staged_at,
+                ttlMinutes,
+                elapsedMinutes: (nowMs - stagedAtMs) / 60_000,
+              },
+            }),
+            resolved_at: expiredAt,
           }).eq("id", s.id);
           stagedExpired++;
           console.log(`[staging] Expired ${s.symbol} ${s.direction} — TTL ${s.ttl_minutes || stagingTTLMinutes}min exceeded`);
@@ -1831,8 +1858,12 @@ async function runScanForUser(
   }
   // Map for quick lookup: "SYMBOL:DIRECTION" → staged setup row
   const stagedMap = new Map<string, any>();
+  const stagedByPair = new Map<string, any[]>();
   for (const s of activeStagedSetups) {
     stagedMap.set(`${s.symbol}:${s.direction}`, s);
+    const pairRows = stagedByPair.get(s.symbol) || [];
+    pairRows.push(s);
+    stagedByPair.set(s.symbol, pairRows);
   }
   // ── Thesis Conviction Tracker: in-memory state per pair+direction ──
   // Persisted to kv_cache at end of scan cycle. Loaded from kv_cache at start.
@@ -4602,6 +4633,11 @@ async function runScanForUser(
             liquidityScore: unifiedResult.liquidity.liquidityScore,
             summary: unifiedResult.liquidity.summary,
             nearbyPools: unifiedResult.liquidity.nearbyPools.length,
+            entryTriggerState: unifiedResult.liquidity.entryTriggerState,
+            hasUnsweptEntryTrigger:
+              unifiedResult.liquidity.hasUnsweptEntryTrigger,
+            entryTrigger: unifiedResult.liquidity.entryTrigger,
+            gateReason: unifiedResult.liquidity.gateReason,
             sweepEvent: unifiedResult.liquidity.sweepEvent ? {
               level: unifiedResult.liquidity.sweepEvent.level,
               type: unifiedResult.liquidity.sweepEvent.type,
@@ -4620,7 +4656,7 @@ async function runScanForUser(
           reason: unifiedResult.reason,
           entryTriggerState: unifiedResult.liquidity?.entryTriggerState || null,
           hasUnsweptEntryTrigger:
-            unifiedResult.liquidity?.entryTriggerState === "unswept",
+            unifiedResult.liquidity?.hasUnsweptEntryTrigger === true,
           gatePolicy: {
             requireLiquiditySweep:
               pairConfig.requireLiquiditySweep === true,
@@ -5159,8 +5195,49 @@ async function runScanForUser(
         evidenceCertificates: _evidenceCertificateReferences,
         crossTimeframeAuthority,
       });
+    const currentWatchlistLifecycle = (executionEligible: boolean) => {
+      const lifecycleZoneData = (detail as any).unifiedZone;
+      const lifecycleReasonCode =
+        !executionEligible
+          ? "monitoring_pre_zone"
+          : lifecycleZoneData?.state === "waiting_for_sweep"
+          ? "waiting_for_local_sweep"
+          : lifecycleZoneData?.state === "waiting_for_reconfirmation"
+          ? "waiting_for_reconfirmation"
+          : "waiting_for_zone_confirmation";
+      const phase = deriveWatchlistLifecyclePhase({
+        executionEligible,
+        hasZone: lifecycleZoneData?.hasZone === true ||
+          !!(detail as any).impulseZone?.bestZone,
+        unifiedState: lifecycleZoneData?.state || null,
+        priceAtZone: lifecycleZoneData?.price?.atZone === true ||
+          (detail as any).impulseZone?.bestZone?.priceAtZone === true,
+        entryTriggerState:
+          lifecycleZoneData?.liquidity?.entryTriggerState || null,
+        confirmationReady:
+          lifecycleZoneData?.confirmation?.entryReady === true,
+      });
+      const lifecycleEvidence = buildWatchlistLifecycleEvidence({
+        reasonCode: lifecycleReasonCode,
+        phase: phase.phase,
+        milestones: phase.milestones,
+        observedPrice: analysis.lastPrice,
+        frozenDirection: analysis.direction as WatchlistDirection,
+        sweep: (detail as any).unifiedZone?.liquidity || null,
+        detail: {
+          unifiedState: lifecycleZoneData?.state || null,
+          selectedTimeframe: lifecycleZoneData?.selectedTF || null,
+        },
+      });
+      return {
+        lifecycleReasonCode,
+        lifecycleEvidence,
+        lifecyclePhase: phase.phase,
+      };
+    };
     const stagedDecisionFields = (
       originatingZone: Record<string, unknown> | null,
+      executionEligible = true,
     ) => {
       const setupId = crypto.randomUUID();
       const candidateId = crypto.randomUUID();
@@ -5186,6 +5263,11 @@ async function runScanForUser(
         confirmationMethod: pairConfig.confirmationMethod || "choch",
         indicatorMinCount: pairConfig.indicatorMinCount || 3,
       });
+      const {
+        lifecycleReasonCode,
+        lifecycleEvidence,
+        lifecyclePhase,
+      } = currentWatchlistLifecycle(executionEligible);
       (detail as any).linkedSetupId = setupId;
       return {
         id: setupId,
@@ -5220,48 +5302,88 @@ async function runScanForUser(
         style_base_policy_hash: pairStylePolicy.basePolicyHash,
         style_policy_hash: pairStylePolicy.policyHash,
         style_policy: pairStylePolicy,
+        lifecycle_phase: lifecyclePhase,
+        lifecycle_reason_code: lifecycleReasonCode,
+        lifecycle_reason: lifecycleReasonCode === "monitoring_pre_zone"
+          ? "Monitoring directional candidate; no executable zone is frozen"
+          : lifecycleEvidence.sweep
+          ? String(
+            (lifecycleEvidence.sweep as Record<string, unknown>).gateReason ||
+              "Frozen zone retained; waiting for price and confirmation",
+          )
+          : "Frozen zone retained; waiting for price and confirmation",
+        lifecycle_evidence: lifecycleEvidence,
       };
     };
     const stagedKey = analysis.direction ? `${pair}:${analysis.direction}` : null;
     const existingStaged = stagedKey ? stagedMap.get(stagedKey) : null;
-    // Also check for staged setups in the opposite direction that should be invalidated
+    const stagedCandidatesForPair = stagedByPair.get(pair) || [];
+
+    // A fresh direction disagreement is evidence for the next scan, not proof
+    // that a frozen Watchlist thesis has failed. Preserve the candidate until
+    // its own structural boundary, TTL, or an explicit lifecycle rule resolves
+    // it. This is especially important during an expected lower-TF retracement.
     if (analysis.direction && stagingEnabled) {
       const oppositeDir = analysis.direction === "long" ? "short" : "long";
       const oppositeStaged = stagedMap.get(`${pair}:${oppositeDir}`);
       if (oppositeStaged) {
-        // Direction flipped — invalidate the opposite staged setup
+        const continuityEvidence = buildWatchlistLifecycleEvidence({
+          reasonCode: "fresh_direction_disagreement_retained",
+          observedPrice: analysis.lastPrice,
+          frozenDirection: oppositeDir,
+          freshDirection: analysis.direction,
+          detail: {
+            candidateId:
+              oppositeStaged.candidate_id || oppositeStaged.id,
+            action: "retained",
+          },
+        });
+        (detail as any).frozenCandidateContinuity = {
+          candidateId: oppositeStaged.candidate_id || oppositeStaged.id,
+          frozenDirection: oppositeDir,
+          freshDirection: analysis.direction,
+          action: "retained",
+          reason:
+            "Fresh direction disagreement does not invalidate frozen zone structure",
+        };
         try {
           await supabase.from("staged_setups").update({
-            status: "invalidated",
-            invalidation_reason: `Direction reversed to ${analysis.direction} (score ${analysis.score.toFixed(1)}%)`,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", oppositeStaged.id);
-          stagedInvalidated++;
-          stagedMap.delete(`${pair}:${oppositeDir}`);
-          console.log(`[staging] Invalidated ${pair} ${oppositeDir} — direction reversed to ${analysis.direction}`);
+            lifecycle_reason:
+              `Frozen ${oppositeDir} candidate retained during fresh ${analysis.direction} scan`,
+            lifecycle_reason_code:
+              "fresh_direction_disagreement_retained",
+            lifecycle_evidence: continuityEvidence,
+            last_eval_at: continuityEvidence.observedAt,
+          }).eq("id", oppositeStaged.id).eq("user_id", userId);
         } catch (e: any) {
-          console.warn(`[staging] Failed to invalidate opposite staged ${pair} ${oppositeDir}: ${e?.message}`);
+          console.warn(
+            `[staging] Failed to record direction-disagreement continuity for ${pair}: ${e?.message}`,
+          );
         }
+        console.log(
+          `[staging] Retained frozen ${pair} ${oppositeDir} candidate during fresh ${analysis.direction} scan — awaiting structural resolution`,
+        );
       }
     }
 
-    // Watchlist invalidation is a structural thesis boundary, not an active
-    // trade stop loss. Re-derive legacy rows from their frozen zone before
-    // evaluating them so an old in-zone SL cannot prematurely kill a setup.
-    if (
-      existingStaged &&
-      existingStaged.execution_eligible !== false &&
-      existingStaged.sl_level &&
-      stagingEnabled
-    ) {
-      const storedLevel = parseFloat(existingStaged.sl_level);
+    // Evaluate every frozen candidate for the pair, even when the fresh scan is
+    // neutral or points the other way. Candidate lookup must not depend on a
+    // newly computed direction.
+    let matchingCandidateInvalidated = false;
+    for (const stagedCandidate of stagedCandidatesForPair) {
+      if (
+        stagedCandidate.execution_eligible === false ||
+        !stagedCandidate.sl_level ||
+        !stagingEnabled
+      ) continue;
+      const storedLevel = parseFloat(stagedCandidate.sl_level);
       const frozenImpulse =
-        existingStaged.analysis_snapshot?.impulseZone?.impulse ||
-        existingStaged.analysis_snapshot?.impulse ||
+        stagedCandidate.analysis_snapshot?.impulseZone?.impulse ||
+        stagedCandidate.analysis_snapshot?.impulse ||
         null;
       const invalidation = watchlistInvalidationFor(
-        existingStaged.direction as WatchlistDirection,
-        existingStaged.originating_zone,
+        stagedCandidate.direction as WatchlistDirection,
+        stagedCandidate.originating_zone,
         storedLevel,
         frozenImpulse,
       );
@@ -5271,49 +5393,89 @@ async function runScanForUser(
         Math.abs(boundaryLevel - storedLevel) > Number.EPSILON;
       const boundaryBreached = boundaryLevel !== null &&
         isWatchlistInvalidated(
-          existingStaged.direction as WatchlistDirection,
+          stagedCandidate.direction as WatchlistDirection,
           analysis.lastPrice,
           boundaryLevel,
         );
       if (boundaryBreached) {
         try {
+          const invalidatedAt = new Date().toISOString();
+          const lifecycleEvidence = buildWatchlistLifecycleEvidence({
+            reasonCode: "structural_boundary_breached",
+            observedAt: invalidatedAt,
+            observedPrice: analysis.lastPrice,
+            frozenDirection:
+              stagedCandidate.direction as WatchlistDirection,
+            freshDirection:
+              analysis.direction as WatchlistDirection | null,
+            invalidation,
+            detail: {
+              candidateId:
+                stagedCandidate.candidate_id || stagedCandidate.id,
+            },
+          });
+          const lifecycleReason =
+            `Structural invalidation breached before entry (price ${analysis.lastPrice.toFixed(5)} vs boundary ${boundaryLevel.toFixed(5)}; source ${invalidation.source})`;
           await supabase.from("staged_setups").update({
             status: "invalidated",
             sl_level: boundaryLevel,
-            invalidation_reason:
-              `Structural invalidation breached before entry (price ${analysis.lastPrice.toFixed(5)} vs boundary ${boundaryLevel.toFixed(5)}; source ${invalidation.source})`,
-            resolved_at: new Date().toISOString(),
-          }).eq("id", existingStaged.id).eq("user_id", userId);
+            invalidation_reason: lifecycleReason,
+            lifecycle_reason: lifecycleReason,
+            lifecycle_reason_code: "structural_boundary_breached",
+            lifecycle_evidence: lifecycleEvidence,
+            resolved_at: invalidatedAt,
+          }).eq("id", stagedCandidate.id).eq("user_id", userId);
           stagedInvalidated++;
-          stagedMap.delete(stagedKey!);
+          stagedMap.delete(`${pair}:${stagedCandidate.direction}`);
+          if (stagedCandidate.id === existingStaged?.id) {
+            matchingCandidateInvalidated = true;
+          }
           console.log(
-            `[staging] Invalidated ${pair} ${existingStaged.direction} — structural boundary breached (${analysis.lastPrice.toFixed(5)} vs ${boundaryLevel.toFixed(5)}, ${invalidation.source})`,
+            `[staging] Invalidated ${pair} ${stagedCandidate.direction} — structural boundary breached (${analysis.lastPrice.toFixed(5)} vs ${boundaryLevel.toFixed(5)}, ${invalidation.source})`,
           );
         } catch (e: any) {
           console.warn(
             `[staging] Failed to invalidate structurally breached ${pair}: ${e?.message}`,
           );
         }
-        detail.status = "staged_invalidated";
-        detail.reason =
-          `Staged setup invalidated — structural boundary breached before entry`;
-        detail.staging = {
-          action: "invalidated",
-          reason: "structural_invalidation_breached",
-          boundary: boundaryLevel,
-          source: invalidation.source,
-        };
-        scanDetails.push(detail);
-        continue;
+        if (stagedCandidate.id === existingStaged?.id) {
+          detail.status = "staged_invalidated";
+          detail.reason =
+            `Staged setup invalidated — structural boundary breached before entry`;
+          detail.staging = {
+            action: "invalidated",
+            reason: "structural_invalidation_breached",
+            boundary: boundaryLevel,
+            source: invalidation.source,
+          };
+        }
       } else if (boundaryChanged) {
         try {
+          const repairedAt = new Date().toISOString();
           await supabase.from("staged_setups").update({
             sl_level: boundaryLevel,
-            last_eval_at: new Date().toISOString(),
-          }).eq("id", existingStaged.id).eq("user_id", userId);
-          existingStaged.sl_level = boundaryLevel;
+            lifecycle_reason:
+              `Legacy Watchlist boundary repaired to frozen structural boundary ${boundaryLevel.toFixed(5)}`,
+            lifecycle_reason_code: "structural_boundary_repaired",
+            lifecycle_evidence: buildWatchlistLifecycleEvidence({
+              reasonCode: "structural_boundary_repaired",
+              observedAt: repairedAt,
+              observedPrice: analysis.lastPrice,
+              frozenDirection:
+                stagedCandidate.direction as WatchlistDirection,
+              freshDirection:
+                analysis.direction as WatchlistDirection | null,
+              invalidation,
+              detail: {
+                previousBoundary: storedLevel,
+                repairedBoundary: boundaryLevel,
+              },
+            }),
+            last_eval_at: repairedAt,
+          }).eq("id", stagedCandidate.id).eq("user_id", userId);
+          stagedCandidate.sl_level = boundaryLevel;
           console.log(
-            `[staging] Repaired ${pair} ${existingStaged.direction} Watchlist boundary ${storedLevel.toFixed(5)} → ${boundaryLevel.toFixed(5)} (${invalidation.source})`,
+            `[staging] Repaired ${pair} ${stagedCandidate.direction} Watchlist boundary ${storedLevel.toFixed(5)} → ${boundaryLevel.toFixed(5)} (${invalidation.source})`,
           );
         } catch (e: any) {
           console.warn(
@@ -5321,6 +5483,10 @@ async function runScanForUser(
           );
         }
       }
+    }
+    if (matchingCandidateInvalidated) {
+      scanDetails.push(detail);
+      continue;
     }
 
     // Apply FOTSI penalty (softened from hard veto to score reduction)
@@ -5495,7 +5661,8 @@ async function runScanForUser(
           executionEligible: false,
         };
       const setupType = executionEligible
-        ? unifiedZoneData?.state === "waiting_for_sweep"
+        ? unifiedZoneData?.state === "waiting_for_sweep" ||
+            unifiedZoneData?.state === "waiting_for_reconfirmation"
           ? "sweep_watch"
           : isCascade
           ? "cascade_zone_watch"
@@ -5524,9 +5691,22 @@ async function runScanForUser(
             setupId: existingStaged.id,
             userId,
             status: "invalidated",
-            reason: executionEligible
-              ? "Pre-zone observation resolved; complete zone requires a fresh execution candidate"
-              : "Frozen execution zone is no longer valid; continuing as a new observe-only candidate",
+            reason:
+              "Pre-zone observation resolved; complete zone requires a fresh execution candidate",
+            reasonCode: "pre_zone_handoff",
+            lifecycleEvidence: buildWatchlistLifecycleEvidence({
+              reasonCode: "pre_zone_handoff",
+              observedPrice: analysis.lastPrice,
+              frozenDirection:
+                existingStaged.direction as WatchlistDirection,
+              freshDirection:
+                analysis.direction as WatchlistDirection | null,
+              detail: {
+                fromExecutionEligible:
+                  !isPreZoneObservation(existingStaged),
+                toExecutionEligible: executionEligible,
+              },
+            }),
             evidence: {
               lifecycleVersion: "phase4.v1",
               setupId: existingStaged.id,
@@ -5549,6 +5729,7 @@ async function runScanForUser(
         }
       } else if (existingStaged) {
         try {
+          const lifecycle = currentWatchlistLifecycle(executionEligible);
           const { error: updateError } = await supabase.from(
             "staged_setups",
           ).update({
@@ -5569,6 +5750,18 @@ async function runScanForUser(
               })),
             scan_cycles: existingStaged.scan_cycles + 1,
             last_eval_at: new Date().toISOString(),
+            lifecycle_phase: lifecycle.lifecyclePhase,
+            lifecycle_reason_code: lifecycle.lifecycleReasonCode,
+            lifecycle_reason: !executionEligible
+              ? "Monitoring directional candidate; no executable zone is frozen"
+              : lifecycle.lifecycleEvidence.sweep
+              ? String(
+                (lifecycle.lifecycleEvidence.sweep as Record<string, unknown>)
+                  .gateReason ||
+                  "Frozen zone retained; waiting for price and confirmation",
+              )
+              : "Frozen zone retained; waiting for price and confirmation",
+            lifecycle_evidence: lifecycle.lifecycleEvidence,
             analysis_snapshot: {
               ...(existingStaged.analysis_snapshot || {}),
               latestObservation: {
@@ -5617,7 +5810,10 @@ async function runScanForUser(
         : resolvedStyle === "swing_trader"
         ? Math.max(stagingTTLMinutes, 480)
         : stagingTTLMinutes;
-      const decisionFields = stagedDecisionFields(originatingZone);
+      const decisionFields = stagedDecisionFields(
+        originatingZone,
+        executionEligible,
+      );
       const { error } = await supabase.from("staged_setups").insert({
         user_id: userId,
         bot_id: BOT_ID,
@@ -5725,9 +5921,13 @@ async function runScanForUser(
       const watchResult = await stageUnifiedWatch(true);
       detail.status = unifiedZoneData?.state === "waiting_for_sweep"
         ? "waiting_for_sweep"
+        : unifiedZoneData?.state === "waiting_for_reconfirmation"
+        ? "waiting_for_reconfirmation"
         : "waiting_for_unified_confirmation";
       detail.skipReason = unifiedZoneData?.state === "waiting_for_sweep"
-        ? "Unified zone is complete but liquidity has not swept and rejected yet"
+        ? "Unified zone is complete but its qualified local/internal liquidity trigger remains unswept"
+        : unifiedZoneData?.state === "waiting_for_reconfirmation"
+        ? "Unified zone remains valid, but the local sweep did not reject; a fresh trigger and confirmation are required"
         : "Unified zone is complete but its entry trigger is not ready";
       if (watchResult === "failed") {
         detail.status = "unified_watch_insert_failed";
@@ -5741,6 +5941,7 @@ async function runScanForUser(
       if (
         !watchResult &&
         existingStaged &&
+        isPreZoneObservation(existingStaged) &&
         (
           unifiedZoneData?.state === "no_zone" ||
           unifiedZoneData?.state === "no_impulse"
@@ -5753,6 +5954,22 @@ async function runScanForUser(
             status: "invalidated",
             reason:
               "Candidate no longer meets the pre-zone Watchlist quality floor",
+            reasonCode: "pre_zone_quality_lost",
+            lifecycleEvidence: buildWatchlistLifecycleEvidence({
+              reasonCode: "pre_zone_quality_lost",
+              observedPrice: analysis.lastPrice,
+              frozenDirection:
+                existingStaged.direction as WatchlistDirection,
+              freshDirection:
+                analysis.direction as WatchlistDirection | null,
+              score: analysis.score,
+              threshold: watchThreshold,
+              detail: {
+                unifiedState: unifiedZoneData?.state,
+                tier1Count:
+                  analysis.tieredScoring?.tier1Count ?? 0,
+              },
+            }),
             evidence: {
               lifecycleVersion: "phase4.v1",
               setupId: existingStaged.id,
@@ -5907,21 +6124,23 @@ async function runScanForUser(
         continue;
       }
 
-      // ── Standalone Sweep Gate: block if unswept inducement detected ──────
+      // ── Standalone Sweep Gate: obey the canonical local sweep state ─────
       // When requireLiquiditySweep is ON and this is a standalone entry (unified
       // gate did NOT pass), check whether the unified zone engine detected nearby
-      // liquidity pools that haven't been swept yet. If so, block the trade and
-      // watchlist it — same behavior as the unified path's waiting_for_sweep state.
+      // qualified local/internal liquidity trigger is not ready. Broad nearby
+      // pools are context only and cannot block an entry.
       if (pairConfig.requireLiquiditySweep && !unifiedGatePassed && unifiedZoneData?.liquidity) {
         const liq = unifiedZoneData.liquidity;
-        const hasSweepEvent = liq.sweepEvent !== null;
-        const sweepRejected = liq.sweepEvent?.rejected === true;
-        // Block if: pools exist near zone AND (no sweep occurred OR sweep was absorbed)
-        if (liq.nearbyPools > 0 && (!hasSweepEvent || !sweepRejected)) {
-          detail.status = "waiting_for_sweep";
-          detail.skipReason = `Standalone Sweep Gate: unswept inducement detected (${liq.summary || liq.nearbyPools + " pool(s)"}) — waiting for BSL/SSL sweep before entry`;
-          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${liq.nearbyPools} unswept pool(s) near zone, blocking standalone entry. Watchlisted.`);
-          // Stage as sweep_watch (same pattern as unified waiting_for_sweep)
+        const sweepGate = evaluateStandaloneSweepGate({
+          requireLiquiditySweep: pairConfig.requireLiquiditySweep,
+          unifiedGatePassed,
+          liquidity: liq,
+        });
+        if (sweepGate.blocked) {
+          detail.status = sweepGate.status;
+          detail.skipReason = sweepGate.reason;
+          console.log(`[scan ${scanCycleId}] ⏳ ${pair}: STANDALONE SWEEP GATE — ${sweepGate.reason}. Watchlisted.`);
+          // Stage as sweep_watch until the local sweep authority permits entry.
           if (stagingEnabled && analysis.direction && !isPaused) {
             try {
               if (!existingStaged) {
@@ -5938,6 +6157,8 @@ async function runScanForUser(
                   entry: izData.bestZone?.entry ?? analysis.lastPrice,
                   nearbyPools: liq.nearbyPools,
                   liquiditySummary: liq.summary || null,
+                  entryTriggerState: liq.entryTriggerState || null,
+                  entryTrigger: liq.entryTrigger || null,
                 };
                 const sweepWatchInvalidation = watchlistInvalidationFor(
                   analysis.direction as WatchlistDirection,
@@ -5970,9 +6191,16 @@ async function runScanForUser(
                   analysis_snapshot: {
                     score: analysis.score,
                     direction: analysis.direction,
-                    source: "standalone_sweep_gate",
+                    source: "standalone_local_sweep_gate",
                     unifiedZone: unifiedZoneData ? { state: unifiedZoneData.state, score: unifiedZoneData.unifiedScore, selectedTF: unifiedZoneData.selectedTF } : null,
-                    liquidity: { nearbyPools: liq.nearbyPools, summary: liq.summary, sweepEvent: liq.sweepEvent },
+                    liquidity: {
+                      nearbyPools: liq.nearbyPools,
+                      summary: liq.summary,
+                      gateReason: liq.gateReason,
+                      entryTriggerState: liq.entryTriggerState,
+                      entryTrigger: liq.entryTrigger,
+                      sweepEvent: liq.sweepEvent,
+                    },
                   },
                 });
                 stagedNew++;
@@ -6575,11 +6803,34 @@ async function runScanForUser(
       reason: string,
     ) => {
       if (!evidence || !existingStaged) return;
+      const phase = deriveWatchlistLifecyclePhase({
+        executionEligible: true,
+        hasZone: true,
+        unifiedState: (detail as any).unifiedZone?.state || "confirmed",
+        priceAtZone: true,
+        entryTriggerState:
+          (detail as any).unifiedZone?.liquidity?.entryTriggerState || null,
+        confirmationReady: true,
+      });
       await transitionStagedSetup(supabase, {
         setupId: existingStaged.id,
         userId,
         status: "qualified",
         reason,
+        reasonCode: "qualified",
+        lifecycleEvidence: buildWatchlistLifecycleEvidence({
+          reasonCode: "qualified",
+          phase: phase.phase,
+          milestones: phase.milestones,
+          observedPrice: analysis.lastPrice,
+          frozenDirection:
+            existingStaged.direction as WatchlistDirection,
+          freshDirection:
+            analysis.direction as WatchlistDirection | null,
+          score: analysis.score,
+          threshold: adjustedMinConfluence,
+          detail: { reason },
+        }),
         evidence,
       });
     };
@@ -6590,11 +6841,34 @@ async function runScanForUser(
     ) => {
       if (!evidence || !existingStaged) return;
       try {
+        const phase = deriveWatchlistLifecyclePhase({
+          executionEligible: true,
+          hasZone: true,
+          unifiedState: (detail as any).unifiedZone?.state || "confirmed",
+          priceAtZone: true,
+          entryTriggerState:
+            (detail as any).unifiedZone?.liquidity?.entryTriggerState || null,
+          confirmationReady: true,
+        });
         await transitionStagedSetup(supabase, {
           setupId: existingStaged.id,
           userId,
           status: "blocked_after_qualification",
           reason,
+          reasonCode: "blocked_after_qualification",
+          lifecycleEvidence: buildWatchlistLifecycleEvidence({
+            reasonCode: "blocked_after_qualification",
+            phase: phase.phase,
+            milestones: phase.milestones,
+            observedPrice: analysis.lastPrice,
+            frozenDirection:
+              existingStaged.direction as WatchlistDirection,
+            freshDirection:
+              analysis.direction as WatchlistDirection | null,
+            score: analysis.score,
+            threshold: adjustedMinConfluence,
+            detail: { reason },
+          }),
           evidence,
         });
         stagedMap.delete(stagedKey!);
@@ -9622,21 +9896,56 @@ async function runScanForUser(
           const ts = analysis.tieredScoring;
           const tierInfo = ts ? ` (T1:${ts.tier1Count}/4, T2:${ts.tier2Count}/5)` : "";
           detail.reason = `Score ${analysis.score.toFixed(1)}% < ${adjustedMinConfluence}% threshold${tierInfo}`;
-          // If score dropped below watch threshold, invalidate any existing staged setup
+          // A score drop is fresh-scan evidence, not structural invalidation of
+          // the frozen zone thesis. Keep the candidate watching until its
+          // boundary or TTL resolves it.
           if (existingStaged && analysis.score < watchThreshold && stagingEnabled) {
             try {
               await supabase.from("staged_setups").update({
-                status: "invalidated",
-                invalidation_reason: `Score dropped to ${analysis.score.toFixed(1)}% (below watch threshold ${watchThreshold}%)`,
-                resolved_at: new Date().toISOString(),
-              }).eq("id", existingStaged.id);
-              stagedInvalidated++;
-              stagedMap.delete(stagedKey!);
-              console.log(`[staging] Invalidated ${pair} ${existingStaged.direction} — score dropped below watch threshold`);
+                current_score: analysis.score,
+                current_factors: analysis.factors
+                  .filter((factor: any) => factor.present)
+                  .map((factor: any) => ({
+                    name: factor.name,
+                    weight: factor.weight,
+                    tier: factor.tier,
+                  })),
+                scan_cycles: existingStaged.scan_cycles + 1,
+                last_eval_at: new Date().toISOString(),
+                lifecycle_reason:
+                  `Frozen candidate retained: current scan ${analysis.score.toFixed(1)}% is below watch threshold ${watchThreshold}%`,
+                lifecycle_reason_code:
+                  "fresh_score_below_watch_threshold_retained",
+                lifecycle_evidence: buildWatchlistLifecycleEvidence({
+                  reasonCode:
+                    "fresh_score_below_watch_threshold_retained",
+                  observedPrice: analysis.lastPrice,
+                  frozenDirection:
+                    existingStaged.direction as WatchlistDirection,
+                  freshDirection:
+                    analysis.direction as WatchlistDirection | null,
+                  score: analysis.score,
+                  threshold: watchThreshold,
+                  detail: {
+                    candidateId:
+                      existingStaged.candidate_id || existingStaged.id,
+                  },
+                }),
+              }).eq("id", existingStaged.id).eq("user_id", userId);
+              console.log(
+                `[staging] Retained frozen ${pair} ${existingStaged.direction} candidate despite score drop to ${analysis.score.toFixed(1)}%`,
+              );
             } catch (e: any) {
-              console.warn(`[staging] Failed to invalidate ${pair}: ${e?.message}`);
+              console.warn(
+                `[staging] Failed to record score drop for frozen ${pair}: ${e?.message}`,
+              );
             }
-            detail.staging = { action: "invalidated", reason: "score_dropped" };
+            detail.staging = {
+              action: "retained",
+              reason: "fresh_score_below_watch_threshold",
+              frozenCandidateId:
+                existingStaged.candidate_id || existingStaged.id,
+            };
           }
         }
       } else {

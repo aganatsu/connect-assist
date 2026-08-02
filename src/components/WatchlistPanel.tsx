@@ -44,6 +44,123 @@ function displayResolutionReason(reason: string | null | undefined): string {
   );
 }
 
+const LIFECYCLE_REASON_LABELS: Record<string, string> = {
+  structural_boundary_breached: "STRUCTURE BROKEN",
+  structural_boundary_repaired: "BOUNDARY REPAIRED",
+  ttl_expired: "TIME WINDOW EXPIRED",
+  manual_dismissal: "DISMISSED",
+  pre_zone_handoff: "FRESH ZONE HANDOFF",
+  pre_zone_quality_lost: "PRE-ZONE QUALITY LOST",
+  qualified: "QUALIFIED",
+  blocked_after_qualification: "BLOCKED AFTER QUALIFICATION",
+  fresh_direction_disagreement_retained: "DIRECTION DISAGREEMENT — RETAINED",
+  fresh_score_below_watch_threshold_retained: "SCORE DROP — RETAINED",
+  waiting_for_local_sweep: "WAITING FOR LOCAL SWEEP",
+  waiting_for_reconfirmation: "WAITING FOR RECONFIRMATION",
+  waiting_for_zone_confirmation: "WAITING FOR ZONE CONFIRMATION",
+  monitoring_pre_zone: "MONITORING — NO FROZEN ZONE",
+  entry_authorized: "ENTRY AUTHORIZED",
+  position_managing: "POSITION MANAGING",
+  legacy_transition: "LEGACY RECORD",
+};
+
+const LIFECYCLE_PHASE_LABELS: Record<string, string> = {
+  monitoring_pre_zone: "MONITORING",
+  zone_discovered: "ZONE DISCOVERED",
+  approaching_zone: "APPROACHING",
+  at_zone: "AT ZONE",
+  local_trigger_active: "LOCAL TRIGGER ACTIVE",
+  local_trigger_swept: "LOCAL TRIGGER SWEPT",
+  sweep_rejected: "SWEEP REJECTED",
+  confirmation_ready: "CONFIRMATION READY",
+  entry_authorized: "ENTRY AUTHORIZED",
+  position_managing: "POSITION MANAGING",
+};
+
+function lifecycleReasonLabel(code: string | null | undefined): string {
+  if (!code) return "UNCLASSIFIED";
+  return LIFECYCLE_REASON_LABELS[code] ||
+    code.replace(/_/g, " ").toUpperCase();
+}
+
+function lifecyclePhaseLabel(phase: string | null | undefined): string {
+  if (!phase) return "PHASE UNAVAILABLE";
+  return LIFECYCLE_PHASE_LABELS[phase] ||
+    phase.replace(/_/g, " ").toUpperCase();
+}
+
+function formatEvidencePrice(value: unknown): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "—";
+  return Math.abs(parsed) >= 100 ? parsed.toFixed(3) : parsed.toFixed(5);
+}
+
+function LifecycleEvidenceSummary({
+  evidence,
+}: {
+  evidence: StagedSetup["lifecycle_evidence"];
+}) {
+  if (!evidence) return null;
+  const boundary = evidence.boundary;
+  const zone = boundary?.zone;
+  const sweep = evidence.sweep || null;
+  const sweepReason = sweep && typeof sweep.gateReason === "string"
+    ? sweep.gateReason
+    : null;
+  const milestones = Array.isArray(evidence.milestones)
+    ? evidence.milestones
+    : [];
+
+  return (
+    <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-foreground/60">
+      {milestones.length > 0 && (
+        <span className="sm:col-span-2">
+          Observed chain:{" "}
+          {milestones.map(lifecyclePhaseLabel).join(" → ")}
+        </span>
+      )}
+      {evidence.observedPrice != null && (
+        <span>Observed price: <strong className="font-mono text-foreground/80">{formatEvidencePrice(evidence.observedPrice)}</strong></span>
+      )}
+      {boundary?.level != null && (
+        <span>Boundary: <strong className="font-mono text-destructive">{formatEvidencePrice(boundary.level)}</strong></span>
+      )}
+      {zone?.low != null && zone?.high != null && (
+        <span>
+          Frozen zone:{" "}
+          <strong className="font-mono text-foreground/80">
+            {formatEvidencePrice(zone.low)}–{formatEvidencePrice(zone.high)}
+          </strong>
+        </span>
+      )}
+      {boundary?.bufferPrice != null && (
+        <span>Boundary buffer: <strong className="font-mono text-foreground/80">{formatEvidencePrice(boundary.bufferPrice)}</strong></span>
+      )}
+      {evidence.frozenDirection && (
+        <span>
+          Frozen direction:{" "}
+          <strong className="uppercase text-foreground/80">
+            {evidence.frozenDirection}
+          </strong>
+          {evidence.freshDirection &&
+            evidence.freshDirection !== evidence.frozenDirection &&
+            ` · fresh scan ${evidence.freshDirection.toUpperCase()}`}
+        </span>
+      )}
+      {evidence.score != null && (
+        <span>
+          Fresh score: <strong>{Number(evidence.score).toFixed(1)}%</strong>
+          {evidence.threshold != null &&
+            ` · threshold ${Number(evidence.threshold).toFixed(1)}%`}
+        </span>
+      )}
+      {sweepReason && (
+        <span className="sm:col-span-2">Liquidity: {sweepReason}</span>
+      )}
+    </div>
+  );
+}
+
 // ── Score bar component ──
 function ScoreBar({ current, gate, watchThreshold }: { current: number; gate: number; watchThreshold: number }) {
   const barPct = Math.min(100, Math.max(0, current));
@@ -140,6 +257,16 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
               className="text-[9px] h-4 px-1.5 border-emerald-500/40 text-emerald-300"
             >
               QUALIFIED
+            </Badge>
+          )}
+          {(setup.lifecycle_phase || setup.lifecycle_evidence?.phase) && (
+            <Badge
+              variant="outline"
+              className="text-[9px] h-4 px-1.5 border-violet-500/40 text-violet-300"
+            >
+              {lifecyclePhaseLabel(
+                setup.lifecycle_phase || setup.lifecycle_evidence?.phase,
+              )}
             </Badge>
           )}
         </div>
@@ -241,6 +368,16 @@ function StagedSetupCard({ setup, gate, onDismiss, isDismissing }: {
                 {setup.lifecycle_reason}
               </div>
             )}
+            {setup.lifecycle_reason_code && (
+              <div className="font-sans">
+                <Badge variant="outline" className="text-[8px] h-4 px-1 border-cyan-500/30 text-cyan-400">
+                  {lifecycleReasonLabel(setup.lifecycle_reason_code)}
+                </Badge>
+              </div>
+            )}
+            <LifecycleEvidenceSummary
+              evidence={setup.lifecycle_evidence}
+            />
             {setup.observation_parent_id && (
               <div className="font-sans text-foreground/55">
                 Fresh candidate from observation{" "}
@@ -425,11 +562,23 @@ export function WatchlistPanel({ confluenceGate }: { confluenceGate: number }) {
                         </div>
                         </div>
                         {(s.invalidation_reason || s.lifecycle_reason) && (
-                          <p className="text-[10px] text-foreground/55 leading-tight mt-0.5 pl-4">
-                            {displayResolutionReason(
-                              s.invalidation_reason || s.lifecycle_reason,
-                            )}
-                          </p>
+                          <div className="mt-0.5 pl-4">
+                            <div className="flex flex-wrap items-center gap-1">
+                              {s.lifecycle_reason_code && (
+                                <Badge variant="outline" className="text-[8px] h-4 px-1 border-cyan-500/30 text-cyan-400">
+                                  {lifecycleReasonLabel(s.lifecycle_reason_code)}
+                                </Badge>
+                              )}
+                              <p className="text-[10px] text-foreground/55 leading-tight">
+                                {displayResolutionReason(
+                                  s.invalidation_reason || s.lifecycle_reason,
+                                )}
+                              </p>
+                            </div>
+                            <LifecycleEvidenceSummary
+                              evidence={s.lifecycle_evidence}
+                            />
+                          </div>
                         )}
                       </div>
                     ))
