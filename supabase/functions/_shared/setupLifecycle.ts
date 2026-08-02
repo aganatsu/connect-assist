@@ -16,6 +16,11 @@ import type {
 import type {
   FrozenCrossTimeframeContext,
 } from "./frozenCrossTimeframeContext.ts";
+import {
+  WATCHLIST_LIFECYCLE_EVIDENCE_VERSION,
+  type WatchlistLifecycleEvidence,
+  type WatchlistLifecycleReasonCode,
+} from "./watchlistLifecycleEvidence.ts";
 
 export const SETUP_LIFECYCLE_VERSION = "phase4.v1";
 export const THESIS_VALIDATION_VERSION = "thesis.v1";
@@ -544,6 +549,8 @@ export async function transitionStagedSetup(
     userId: string;
     status: SetupLifecycleStatus;
     reason: string;
+    reasonCode?: WatchlistLifecycleReasonCode;
+    lifecycleEvidence?: WatchlistLifecycleEvidence | null;
     evidence?: Record<string, unknown> | null;
     pendingOrderId?: string | null;
     positionId?: string | null;
@@ -554,7 +561,15 @@ export async function transitionStagedSetup(
     p_user_id: input.userId,
     p_to_status: input.status,
     p_reason: input.reason,
-    p_evidence: input.evidence || {},
+    p_evidence: {
+      ...(input.evidence || {}),
+      reasonCode: input.reasonCode || "legacy_transition",
+      lifecycleEvidence: input.lifecycleEvidence || {
+        version: WATCHLIST_LIFECYCLE_EVIDENCE_VERSION,
+        reasonCode: input.reasonCode || "legacy_transition",
+        observedAt: new Date().toISOString(),
+      },
+    },
     p_pending_order_id: input.pendingOrderId || null,
     p_position_id: input.positionId || null,
   });
